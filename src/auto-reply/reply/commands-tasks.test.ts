@@ -1,3 +1,4 @@
+// Tests task command routing and persisted task state replies.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -6,8 +7,8 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -26,15 +27,23 @@ vi.mock("../../agents/agent-scope.js", async () => {
 
 const baseCfg = baseCommandTestConfig;
 
-async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
+async function buildTasksReplyForTest(params: { agentId?: string; sessionKey?: string } = {}) {
   const commandParams = buildCommandTestParams("/tasks", baseCfg);
-  return await buildTasksReply({
-    ...commandParams,
-    sessionKey: params.sessionKey ?? commandParams.sessionKey,
-  });
+  const result = await handleTasksCommand(
+    {
+      ...commandParams,
+      agentId: params.agentId ?? commandParams.agentId,
+      sessionKey: params.sessionKey ?? commandParams.sessionKey,
+    },
+    true,
+  );
+  if (!result?.reply) {
+    throw new Error("expected /tasks reply");
+  }
+  return result.reply;
 }
 
-describe("buildTasksReply", () => {
+describe("handleTasksCommand task board", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
@@ -105,6 +114,29 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("🟢 Video generation");
     expect(reply.text).toContain("CLI · running");
     expect(reply.text).toContain("Queued video generation");
+  });
+
+  it("lists session-backed image generation tasks for the current session", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "image_generation",
+      sourceId: "image_generate:openai",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:main",
+      runId: "tool:image_generate:tasks-visible",
+      label: "Image generation",
+      task: "blue square icon",
+      progressSummary: "Queued image generation",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("Current session: 1 active · 1 total");
+    expect(reply.text).toContain("🟢 Image generation");
+    expect(reply.text).toContain("CLI · running");
+    expect(reply.text).toContain("Queued image generation");
   });
 
   it("sanitizes leaked internal runtime context from visible task details", async () => {
@@ -244,9 +276,7 @@ describe("buildTasksReply", () => {
     });
     vi.mocked(resolveSessionAgentId).mockReturnValue("target");
 
-    const commandParams = buildCommandTestParams("/tasks", baseCfg);
-    const reply = await buildTasksReply({
-      ...commandParams,
+    const reply = await buildTasksReplyForTest({
       agentId: "main",
       sessionKey: "agent:target:empty-session",
     });

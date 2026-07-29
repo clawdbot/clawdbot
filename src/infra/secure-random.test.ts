@@ -1,3 +1,4 @@
+// Covers secure random helper outputs.
 import { Buffer } from "node:buffer";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

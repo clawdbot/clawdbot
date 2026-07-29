@@ -1,4 +1,8 @@
-export type ToolCallShapedTextDetection = {
+// Tool-call shaped text helpers detect malformed text that resembles tool calls.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
+
+type ToolCallShapedTextDetection = {
   kind: "json_tool_call" | "xml_tool_call" | "bracketed_tool_call" | "react_action";
   toolName?: string;
 };
@@ -8,20 +12,6 @@ const TOOL_TEXT_PREFILTER_RE =
 const MAX_SCAN_CHARS = 20_000;
 const MAX_JSON_CANDIDATES = 20;
 const MAX_JSON_CANDIDATE_CHARS = 8_000;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function readToolName(record: Record<string, unknown>): string | undefined {
   return (
@@ -47,7 +37,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
     return null;
   }
 
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return null;
   }
@@ -63,7 +53,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
     return { kind: "json_tool_call" };
   }
 
-  const functionRecord = asRecord(record.function);
+  const functionRecord = asOptionalRecord(record.function);
   if (functionRecord) {
     const toolName = readToolName(functionRecord);
     if (toolName && hasToolArgs(functionRecord)) {
@@ -115,6 +105,8 @@ function findBalancedJsonEnd(text: string, start: number): number | null {
   let inString = false;
   let escaped = false;
   for (let index = start + 1; index < text.length; index += 1) {
+    // Cap candidate size so diagnostic scans cannot spend unbounded time on prose
+    // that happens to contain many braces.
     if (index - start > MAX_JSON_CANDIDATE_CHARS) {
       return null;
     }
@@ -226,6 +218,7 @@ function detectReactAction(text: string): ToolCallShapedTextDetection | null {
   return { kind: "react_action", toolName: match[1] };
 }
 
+/** Detects assistant-visible text that looks like an unexecuted tool call instead of prose. */
 export function detectToolCallShapedText(text: string): ToolCallShapedTextDetection | null {
   const trimmed = text.slice(0, MAX_SCAN_CHARS).trim();
   if (!trimmed || !TOOL_TEXT_PREFILTER_RE.test(trimmed)) {

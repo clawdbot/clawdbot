@@ -1,3 +1,4 @@
+// Telegram tests cover dm access plugin behavior.
 import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +32,7 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: withTelegramApiErrorLoggingMock,
 }));
 
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { normalizeAllowFrom } from "./bot-access.js";
 let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
 
@@ -158,13 +159,15 @@ describe("enforceTelegramDmAccess", () => {
     expect(firstCall?.[0]).toBe(42);
     const sentText = typeof firstCall?.[1] === "string" ? firstCall[1] : "";
     expect(sentText).toContain("Pairing code:");
-    expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    expect(firstCall?.[2]).toEqual({ parse_mode: "HTML" });
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         chatId: "42",
         senderUserId: "12345",
         username: "tester",
-      }),
+        firstName: "Test",
+        lastName: undefined,
+      },
       "telegram pairing request",
     );
   });

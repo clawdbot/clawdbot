@@ -1,3 +1,4 @@
+/** Tests OAuth policy handling while collecting auth-profile secrets. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -7,7 +8,7 @@ import {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
-function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): OpenClawConfig {
+function withAuthProfileMode(mode: "api_key" | "aws-sdk" | "oauth" | "token"): OpenClawConfig {
   return {
     auth: {
       profiles: {
@@ -64,9 +65,10 @@ describe("secrets runtime oauth auth-profile SecretRef policy", () => {
     });
 
     const resolved = snapshot.authStores[0]?.store.profiles["anthropic:default"];
-    expect(resolved).toMatchObject({
-      type: "token",
-      token: "token-value",
-    });
+    expect(resolved?.type).toBe("token");
+    if (resolved?.type !== "token") {
+      throw new Error("expected token auth profile");
+    }
+    expect(resolved?.token).toBe("token-value");
   });
 });

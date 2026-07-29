@@ -1,37 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
-import {
-  createBlockReplyContentKey,
-  createBlockReplyPayloadKey,
-  createBlockReplyPipeline,
-} from "./block-reply-pipeline.js";
+/** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
-describe("createBlockReplyPayloadKey", () => {
-  it("produces different keys for payloads differing only by replyToId", () => {
-    const a = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-1" });
-    const b = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-2" });
-    const c = createBlockReplyPayloadKey({ text: "hello world" });
-    expect(a).not.toBe(b);
-    expect(a).not.toBe(c);
+const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
+  new Promise((resolve) => {
+    if (!signal || signal.aborted) {
+      resolve();
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(), { once: true });
   });
 
-  it("produces different keys for payloads with different text", () => {
-    const a = createBlockReplyPayloadKey({ text: "hello" });
-    const b = createBlockReplyPayloadKey({ text: "world" });
-    expect(a).not.toBe(b);
-  });
+beforeEach(() => {
+  vi.useRealTimers();
+});
 
-  it("produces different keys for payloads with different media", () => {
-    const a = createBlockReplyPayloadKey({ text: "hello", mediaUrl: "file:///a.png" });
-    const b = createBlockReplyPayloadKey({ text: "hello", mediaUrl: "file:///b.png" });
-    expect(a).not.toBe(b);
-  });
-
-  it("trims whitespace from text for key comparison", () => {
-    const a = createBlockReplyPayloadKey({ text: "  hello  " });
-    const b = createBlockReplyPayloadKey({ text: "hello" });
-    expect(a).toBe(b);
-  });
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("createBlockReplyContentKey", () => {
@@ -42,9 +29,52 @@ describe("createBlockReplyContentKey", () => {
     expect(a).toBe(b);
     expect(a).toBe(c);
   });
+
+  it("keeps rich content in the reply-independent content key", () => {
+    const a = createBlockReplyContentKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+      replyToId: "post-1",
+    });
+    const b = createBlockReplyContentKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+      replyToId: "post-2",
+    });
+    const c = createBlockReplyContentKey({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
+      },
+      replyToId: "post-1",
+    });
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {
+  it("does not count reasoning or commentary as a terminal reply", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "reasoning", isReasoning: true });
+    pipeline.enqueue({ text: "commentary", isCommentary: true });
+    pipeline.enqueue({ audioAsVoice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.didStreamTerminalReply?.()).toBe(false);
+
+    pipeline.enqueue({ text: "final answer" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStreamTerminalReply?.()).toBe(true);
+  });
+
   it("keeps separate deliveries for same text with different replyToId", async () => {
     const sent: Array<{ text?: string; replyToId?: string }> = [];
     const pipeline = createBlockReplyPipeline({
@@ -76,6 +106,31 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     // Final payload with no replyToId should be recognized as already sent
     expect(pipeline.hasSentPayload({ text: "response text" })).toBe(true);
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
+    expect(pipeline.hasSentExactPayload?.({ text: "response text" })).toBe(true);
+    expect(pipeline.hasSentExactPayload?.({ text: "response text", replyToId: "other-id" })).toBe(
+      true,
+    );
+  });
+
+  it("keeps exact payload evidence separate from streamed text coverage", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "constx=1" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "const x = 1" })).toBe(true);
+    expect(pipeline.hasSentExactPayload?.({ text: "const x = 1" })).toBe(false);
+    expect(
+      pipeline.hasSentExactPayload?.({
+        text: "constx=1",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("tracks media URLs delivered via block replies", async () => {
@@ -84,7 +139,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       timeoutMs: 5000,
     });
 
-    expect(pipeline.getSentMediaUrls()).toEqual([]);
+    expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
 
     pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
     pipeline.enqueue({ mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
@@ -94,6 +149,109 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       "file:///a.ogg",
       "file:///b.ogg",
       "file:///c.ogg",
+    ]);
+  });
+
+  it("keeps separate deliveries for distinct rich-only payloads", async () => {
+    const sent: Array<{ presentation?: unknown }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ presentation: payload.presentation });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+      },
+    });
+    pipeline.enqueue({
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
+      },
+    });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(2);
+  });
+
+  it("bypasses text coalescing for rich-only payloads", async () => {
+    const sent: Array<{ presentation?: unknown }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ presentation: payload.presentation });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: "\n\n",
+      },
+    });
+
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    pipeline.enqueue({ presentation });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ presentation }]);
+  });
+
+  it("merges coalesced text into a following media payload", async () => {
+    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue({ text: "Preview" });
+    pipeline.enqueue({ text: "below" });
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "Preview below", mediaUrls: ["file:///photo.png"] }]);
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
+    expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
+  });
+
+  it("keeps media separate across assistant message boundaries", async () => {
+    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "First block" }, { assistantMessageIndex: 0 }),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ mediaUrls: ["file:///photo.png"] }, { assistantMessageIndex: 1 }),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([
+      { text: "First block", mediaUrls: undefined },
+      { text: undefined, mediaUrls: ["file:///photo.png"] },
     ]);
   });
 
@@ -107,7 +265,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     pipeline.enqueue({ text: "world" });
     await pipeline.flush({ force: true });
 
-    expect(pipeline.getSentMediaUrls()).toEqual([]);
+    expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
   });
 
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {
@@ -131,16 +289,43 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
     expect(sent).toEqual(["Alpha", "Beta"]);
   });
+
+  it("preserves assistant metadata on coalesced text flushes", async () => {
+    const sent: Array<{ assistantMessageIndex?: number; text?: string }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({
+          assistantMessageIndex: getReplyPayloadMetadata(payload)?.assistantMessageIndex,
+          text: payload.text,
+        });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 100,
+        maxChars: 200,
+        idleMs: 1000,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 0 }));
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Beta" }, { assistantMessageIndex: 0 }));
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ assistantMessageIndex: 0, text: "Alpha Beta" }]);
+  });
 });
 
 describe("createBlockReplyPipeline content coverage dedup", () => {
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {
+      onBlockReply: async (_payload, options) => {
         callCount += 1;
         if (callCount === 3) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await waitForAbort(options?.abortSignal);
         }
       },
       timeoutMs: 1,
@@ -149,7 +334,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
     pipeline.enqueue({ text: "Third paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
@@ -157,12 +344,14 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   });
 
   it("does not match final assembled text with content that was not streamed", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {
+      onBlockReply: async (_payload, options) => {
         callCount += 1;
         if (callCount === 2) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await waitForAbort(options?.abortSignal);
         }
       },
       timeoutMs: 1,
@@ -170,11 +359,44 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
     expect(pipeline.hasSentPayload({ text: "First paragraph.\n\nSecond paragraph." })).toBe(false);
+  });
+
+  it("keeps status notices out of streamed final-content accounting", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "1. Inspect\n2. Patch", isStatusNotice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "1. Inspect\n2. Patch" })).toBe(false);
+  });
+
+  it("does not let a status notice de-dupe later matching assistant content", async () => {
+    const sent: Array<{ text?: string; isStatusNotice?: boolean }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, isStatusNotice: payload.isStatusNotice });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "same text", isStatusNotice: true });
+    pipeline.enqueue({ text: "same text" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "same text", isStatusNotice: true }, { text: "same text" }]);
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "same text" })).toBe(true);
   });
 
   it("does not suppress media payloads through streamed text coverage", async () => {
@@ -201,5 +423,31 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     await pipeline.flush({ force: true });
 
     expect(pipeline.hasSentPayload({ text: "summary" })).toBe(false);
+  });
+
+  it("clamps oversized delivery timeouts before arming timers", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const observedTimeouts: number[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        observedTimeouts.push(options?.timeoutMs ?? 0);
+        await waitForAbort(options?.abortSignal);
+      },
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    });
+
+    pipeline.enqueue({ text: "slow block" });
+    const flushing = pipeline.flush({ force: true });
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(observedTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await flushing;
+
+    expect(pipeline.isAborted()).toBe(true);
+    setTimeoutSpy.mockRestore();
   });
 });

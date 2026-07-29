@@ -1,4 +1,6 @@
+// Hook update helpers refresh installed hook records and config references.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
@@ -8,16 +10,19 @@ import {
   type HookNpmIntegrityDriftParams,
   resolveHookInstallDir,
 } from "./install.js";
-import { recordHookInstall } from "./installs.js";
+import { readHookInstalls, recordHookInstall } from "./installs.js";
 
-export type HookPackUpdateLogger = {
+/** Logger contract for hook pack update operations. */
+type HookPackUpdateLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
-export type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
+/** Per-pack update status emitted by updateNpmInstalledHookPacks. */
+type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type HookPackUpdateOutcome = {
+/** Outcome for one hook pack update attempt. */
+type HookPackUpdateOutcome = {
   hookId: string;
   status: HookPackUpdateStatus;
   message: string;
@@ -25,13 +30,15 @@ export type HookPackUpdateOutcome = {
   nextVersion?: string;
 };
 
-export type HookPackUpdateSummary = {
+/** Aggregate update result with the possibly updated config. */
+type HookPackUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
   outcomes: HookPackUpdateOutcome[];
 };
 
-export type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
+/** Integrity drift payload enriched with hook pack identity and dry-run state. */
+type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
   hookId: string;
   resolvedSpec?: string;
   resolvedVersion?: string;
@@ -65,6 +72,7 @@ function createHookPackUpdateIntegrityDriftHandler(params: {
   };
 }
 
+/** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
   logger?: HookPackUpdateLogger;
@@ -74,7 +82,7 @@ export async function updateNpmInstalledHookPacks(params: {
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
-  const installs = params.config.hooks?.internal?.installs ?? {};
+  const installs = readHookInstalls();
   const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
   const outcomes: HookPackUpdateOutcome[] = [];
   let next = params.config;
@@ -100,6 +108,8 @@ export async function updateNpmInstalledHookPacks(params: {
     }
 
     const effectiveSpec = params.specOverrides?.[hookId] ?? record.spec;
+    // Only enforce the stored integrity when the update uses the same spec.
+    // Spec overrides intentionally resolve a new tarball identity.
     const expectedIntegrity =
       effectiveSpec === record.spec
         ? expectedIntegrityForUpdate(record.spec, record.integrity)
@@ -126,6 +136,7 @@ export async function updateNpmInstalledHookPacks(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec({
+      config: params.config,
       spec: effectiveSpec,
       mode: "update",
       dryRun: params.dryRun,
@@ -175,9 +186,7 @@ export async function updateNpmInstalledHookPacks(params: {
       spec: effectiveSpec,
       installPath: result.targetDir,
       version: nextVersion,
-      resolvedName: result.npmResolution?.name,
-      resolvedSpec: result.npmResolution?.resolvedSpec,
-      integrity: result.npmResolution?.integrity,
+      ...buildNpmResolutionFields(result.npmResolution),
       hooks: result.hooks,
     });
     changed = true;

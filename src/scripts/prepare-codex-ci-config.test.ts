@@ -1,3 +1,4 @@
+// Codex CI config script tests cover generated CI configuration files.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

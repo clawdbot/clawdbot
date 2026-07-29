@@ -1,7 +1,15 @@
+/**
+ * Resolves MCP transport command, environment, and timeout configuration.
+ */
+import {
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -12,9 +20,14 @@ import {
   resolveStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
+// Resolves raw MCP server config into the transport shape used by bundle MCP
+// runtime startup. Stdio is preferred when launch config is valid; otherwise
+// HTTP/SSE transports are attempted with normalized timeout fields.
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
+  requestTimeoutMs: number;
+  supportsParallelToolCalls: boolean;
 };
 
 type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
@@ -31,22 +44,70 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
+  auth?: "oauth";
+  oauth?: Record<string, unknown>;
+  sslVerify?: boolean;
+  clientCert?: string;
+  clientKey?: string;
 };
 
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
+  if (!rawServer || typeof rawServer !== "object") {
+    return undefined;
+  }
+  const record = rawServer as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
 
 function getConnectionTimeoutMs(rawServer: unknown): number {
-  if (
-    rawServer &&
-    typeof rawServer === "object" &&
-    typeof (rawServer as { connectionTimeoutMs?: unknown }).connectionTimeoutMs === "number" &&
-    (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs > 0
-  ) {
-    return (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs;
+  const milliseconds = getPositiveNumber(rawServer, ["connectionTimeoutMs"]);
+  if (milliseconds) {
+    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
   }
   return DEFAULT_CONNECTION_TIMEOUT_MS;
+}
+
+export function resolveMcpRequestTimeoutMs(
+  rawServer: unknown,
+  fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
+): number {
+  const milliseconds = getPositiveNumber(rawServer, ["requestTimeoutMs"]);
+  if (milliseconds) {
+    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+  return resolvePositiveTimerTimeoutMs(fallbackMs, DEFAULT_REQUEST_TIMEOUT_MS);
+}
+
+function getBooleanField(rawServer: unknown, keys: readonly string[]): boolean | undefined {
+  if (!rawServer || typeof rawServer !== "object") {
+    return undefined;
+  }
+  const record = rawServer as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function getStringField(rawServer: unknown, keys: readonly string[]): string | undefined {
+  if (!rawServer || typeof rawServer !== "object") {
+    return undefined;
+  }
+  return readTrimmedStringAlias(rawServer as Record<string, unknown>, keys);
 }
 
 function getRequestedTransport(rawServer: unknown): string {
@@ -97,11 +158,35 @@ function resolveHttpTransportConfig(
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
+    ...(rawServer &&
+    typeof rawServer === "object" &&
+    (rawServer as { auth?: unknown }).auth === "oauth"
+      ? { auth: "oauth" as const }
+      : {}),
+    ...(rawServer &&
+    typeof rawServer === "object" &&
+    (rawServer as { oauth?: unknown }).oauth &&
+    typeof (rawServer as { oauth?: unknown }).oauth === "object" &&
+    !Array.isArray((rawServer as { oauth?: unknown }).oauth)
+      ? { oauth: (rawServer as { oauth: Record<string, unknown> }).oauth }
+      : {}),
+    ...(getBooleanField(rawServer, ["sslVerify"]) !== undefined
+      ? { sslVerify: getBooleanField(rawServer, ["sslVerify"]) }
+      : {}),
+    ...(getStringField(rawServer, ["clientCert"])
+      ? { clientCert: getStringField(rawServer, ["clientCert"]) }
+      : {}),
+    ...(getStringField(rawServer, ["clientKey"])
+      ? { clientKey: getStringField(rawServer, ["clientKey"]) }
+      : {}),
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
   };
 }
 
+/** Resolve one MCP server's launch transport config, or null when unsupported. */
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
@@ -118,6 +203,8 @@ export function resolveMcpTransportConfig(
     },
   });
   if (stdioLaunch.ok) {
+    // A command-bearing server is always treated as stdio even when HTTP-ish
+    // aliases are present, matching existing MCP config precedence.
     return {
       kind: "stdio",
       transportType: "stdio",
@@ -127,6 +214,8 @@ export function resolveMcpTransportConfig(
       cwd: stdioLaunch.config.cwd,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+      requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+      supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
     };
   }
 

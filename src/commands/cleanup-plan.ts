@@ -1,3 +1,4 @@
+// Resolves cleanup inputs from current OpenClaw config and state paths.
 import {
   getRuntimeConfig,
   resolveConfigPath,
@@ -7,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 
+/** Build the cleanup plan for the current runtime config/state/credential paths on disk. */
 export function resolveCleanupPlanFromDisk(): {
   cfg: OpenClawConfig;
   stateDir: string;

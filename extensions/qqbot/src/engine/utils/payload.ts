@@ -10,7 +10,7 @@
 import type { ChatScope } from "../types.js";
 
 /** Structured reminder payload emitted by the model. */
-export interface CronReminderPayload {
+interface CronReminderPayload {
   type: "cron_reminder";
   content: string;
   targetType: ChatScope;
@@ -42,6 +42,18 @@ const CRON_PREFIX = "QQBOT_CRON:";
 
 function formatErr(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
+function decodeStrictBase64Utf8(value: string): string {
+  const buffer = Buffer.from(value, "base64");
+  if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    throw new Error("Cron payload body is not valid base64");
+  }
+  return buffer.toString("utf-8");
 }
 
 /** Parse model output that may start with the QQ Bot structured payload prefix. */
@@ -114,7 +126,7 @@ export function decodeCronPayload(message: string): {
   }
 
   try {
-    const jsonString = Buffer.from(base64Content, "base64").toString("utf-8");
+    const jsonString = decodeStrictBase64Utf8(base64Content);
     const payload = JSON.parse(jsonString) as CronReminderPayload;
 
     if (payload.type !== "cron_reminder") {

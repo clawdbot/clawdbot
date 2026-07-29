@@ -1,3 +1,6 @@
+/**
+ * Tests webhook target registration, matching, and request pipeline helpers.
+ */
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -85,7 +88,7 @@ describe("registerWebhookTarget", () => {
     expect(onFirstPathTarget).toHaveBeenCalledTimes(1);
     expect(onFirstPathTarget).toHaveBeenCalledWith({
       path: "/hook",
-      target: expect.objectContaining({ id: "A", path: "/hook" }),
+      target: registeredA.target,
     });
 
     registeredB.unregister();
@@ -147,13 +150,13 @@ describe("registerWebhookTargetWithPluginRoute", () => {
     });
 
     expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toEqual(
-      expect.objectContaining({
-        pluginId: "demo",
-        path: "/hook",
-        source: "demo-webhook",
-      }),
-    );
+    const route = registry.httpRoutes[0];
+    if (!route) {
+      throw new Error("expected plugin route to be registered");
+    }
+    expect(route.pluginId).toBe("demo");
+    expect(route.path).toBe("/hook");
+    expect(route.source).toBe("demo-webhook");
 
     registeredA.unregister();
     expect(registry.httpRoutes).toHaveLength(1);

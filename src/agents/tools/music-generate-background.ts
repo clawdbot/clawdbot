@@ -1,4 +1,8 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+/**
+ * Music generation background task facade.
+ *
+ * Binds shared detached media-task lifecycle behavior to music_generate labels and completion messages.
+ */
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -7,7 +11,8 @@ import {
 
 export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
 
-const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
+/** Shared lifecycle configured with music-specific status text and event metadata. */
+export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   toolName: "music_generate",
   taskKind: MUSIC_GENERATION_TASK_KIND,
   label: "Music generation",
@@ -19,30 +24,22 @@ const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   completionLabel: "music",
 });
 
+/** Creates a queued music-generation background task run. */
 export const createMusicGenerationTaskRun = (
   ...params: Parameters<typeof musicGenerationTaskLifecycle.createTaskRun>
 ) => musicGenerationTaskLifecycle.createTaskRun(...params);
 
+/** Records progress for an active music-generation task. */
 export const recordMusicGenerationTaskProgress = (
   ...params: Parameters<typeof musicGenerationTaskLifecycle.recordTaskProgress>
 ) => musicGenerationTaskLifecycle.recordTaskProgress(...params);
 
+/** Marks a music-generation task complete and stores generated attachment metadata. */
 export const completeMusicGenerationTaskRun = (
   ...params: Parameters<typeof musicGenerationTaskLifecycle.completeTaskRun>
 ) => musicGenerationTaskLifecycle.completeTaskRun(...params);
 
+/** Marks a music-generation task failed and emits task status updates. */
 export const failMusicGenerationTaskRun = (
   ...params: Parameters<typeof musicGenerationTaskLifecycle.failTaskRun>
 ) => musicGenerationTaskLifecycle.failTaskRun(...params);
-
-export async function wakeMusicGenerationTaskCompletion(params: {
-  config?: OpenClawConfig;
-  handle: MusicGenerationTaskHandle | null;
-  status: "ok" | "error";
-  statusLabel: string;
-  result: string;
-  mediaUrls?: string[];
-  statsLine?: string;
-}) {
-  await musicGenerationTaskLifecycle.wakeTaskCompletion(params);
-}

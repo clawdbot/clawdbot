@@ -1,10 +1,17 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+/**
+ * Agent harness tool/message hook helpers.
+ *
+ * Harnesses use this to dispatch after-tool-call and before-message-write hooks
+ * while isolating hook failures from the runtime path.
+ */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { consumeAdjustedParamsForToolCall } from "../pi-tools.before-tool-call.js";
+import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
 
+/** Runs best-effort after-tool-call hooks for a completed tool invocation. */
 export async function runAgentHarnessAfterToolCallHook(params: {
   toolName: string;
   toolCallId: string;
@@ -12,20 +19,23 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  channelId?: string;
   startArgs: Record<string, unknown>;
   result?: unknown;
   error?: string;
   startedAt?: number;
 }): Promise<void> {
+  const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
+  // Hooks should see adjusted tool params when before_tool_call rewrote them.
+  const resolvedArgs =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? (adjustedArgs as Record<string, unknown>)
+      : params.startArgs;
+  const eventArgs = structuredClone(resolvedArgs);
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("after_tool_call")) {
     return;
   }
-  const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
-  const eventArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : params.startArgs;
   try {
     await hookRunner.runAfterToolCall(
       {
@@ -43,6 +53,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         ...(params.runId ? { runId: params.runId } : {}),
+        ...(params.channelId ? { channelId: params.channelId } : {}),
         toolCallId: params.toolCallId,
       },
     );
@@ -51,6 +62,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   }
 }
 
+/** Runs before-message-write hooks and returns the possibly rewritten message. */
 export function runAgentHarnessBeforeMessageWriteHook(params: {
   message: AgentMessage;
   agentId?: string;

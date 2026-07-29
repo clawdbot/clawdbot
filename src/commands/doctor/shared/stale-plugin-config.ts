@@ -1,16 +1,24 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+// Doctor scanner and repair for plugin/channel config that references missing plugins.
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+} from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { asObjectRecord } from "./object.js";
+import {
+  filterRepairableStalePluginHits,
+  type StalePluginSurface,
+} from "./stale-plugin-repair-preservation.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
-
-type StalePluginSurface = "allow" | "entries" | "slot" | "channel" | "heartbeat" | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
@@ -21,6 +29,7 @@ type StalePluginConfigHit = {
 
 type StalePluginRegistryState = {
   knownIds: Set<string>;
+  officialIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
   hasDiscoveryErrors: boolean;
@@ -30,13 +39,21 @@ function collectPluginRegistryState(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const environment = env ?? process.env;
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
   const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
-    env: env ?? process.env,
+    env: environment,
   }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+  // Official catalog config remains valid even when its package is not installed yet.
+  const officialIds = new Set(
+    listOfficialExternalPluginCatalogEntries()
+      .map((entry) => normalizePluginId(resolveOfficialExternalPluginId(entry) ?? ""))
+      .filter(Boolean),
+  );
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
     const normalized = normalizePluginId(pluginId);
@@ -45,7 +62,9 @@ function collectPluginRegistryState(
     }
   }
   try {
-    for (const pluginId of Object.keys(loadInstalledPluginIndexInstallRecordsSync({ env }))) {
+    for (const pluginId of Object.keys(
+      loadInstalledPluginIndexInstallRecordsSync({ env: environment }),
+    )) {
       const normalized = normalizePluginId(pluginId);
       if (normalized) {
         installedIds.add(normalized);
@@ -65,12 +84,14 @@ function collectPluginRegistryState(
   }
   return {
     knownIds,
+    officialIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
     hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
   };
 }
 
+/** Return true when plugin discovery errors should pause stale-plugin auto-removal. */
 export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -81,6 +102,7 @@ export function isStalePluginAutoRepairBlocked(
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
+/** Scan plugin/channel config surfaces for ids no longer present in manifests or installs. */
 export function scanStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -88,7 +110,8 @@ export function scanStalePluginConfig(
   if (cfg.plugins?.enabled === false) {
     return [];
   }
-  return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, env));
+  const environment = env ?? process.env;
+  return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, environment));
 }
 
 function scanStalePluginConfigWithState(
@@ -96,32 +119,40 @@ function scanStalePluginConfigWithState(
   registryState: StalePluginRegistryState,
 ): StalePluginConfigHit[] {
   const plugins = asObjectRecord(cfg.plugins);
-  const { knownIds } = registryState;
+  const { knownIds, officialIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
 
-  const allow = Array.isArray(plugins?.allow) ? plugins.allow : [];
-  for (const rawPluginId of allow) {
-    if (typeof rawPluginId !== "string") {
-      continue;
+  for (const surface of ["allow", "deny"] as const) {
+    const list = Array.isArray(plugins?.[surface]) ? plugins[surface] : [];
+    for (const rawPluginId of list) {
+      if (typeof rawPluginId !== "string") {
+        continue;
+      }
+      const pluginId = normalizePluginId(rawPluginId);
+      if (
+        !pluginId ||
+        knownIds.has(pluginId) ||
+        officialIds.has(pluginId) ||
+        registryState.knownChannelIds.has(pluginId)
+      ) {
+        continue;
+      }
+      hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
+      staleEvidenceIds.add(pluginId);
     }
-    const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
-      continue;
-    }
-    hits.push({
-      pluginId: rawPluginId,
-      pathLabel: "plugins.allow",
-      surface: "allow",
-    });
-    staleEvidenceIds.add(pluginId);
   }
 
   const entries = asObjectRecord(plugins?.entries);
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+      if (
+        !pluginId ||
+        knownIds.has(pluginId) ||
+        officialIds.has(pluginId) ||
+        registryState.knownChannelIds.has(pluginId)
+      ) {
         continue;
       }
       hits.push({
@@ -225,14 +256,15 @@ function collectDependentChannelConfigHits(
       surface: "heartbeat",
     });
   }
-  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
-    const target = agent?.heartbeat?.target;
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
+    const target = heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
     }
     hits.push({
       pluginId: target,
-      pathLabel: `agents.list.${index}.heartbeat.target`,
+      pathLabel: `${path}.heartbeat.target`,
       surface: "heartbeat",
     });
   }
@@ -260,9 +292,13 @@ function collectDependentChannelConfigHits(
   return hits;
 }
 
-function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
-  if (hit.surface === "allow" || hit.surface === "entries") {
-    return `- ${hit.pathLabel}: stale plugin reference "${hit.pluginId}" was found.`;
+// Policy-list hits collapse into one grouped warning line instead of one line per path.
+const isPolicySurfaceHit = (hit: StalePluginConfigHit) =>
+  hit.surface === "allow" || hit.surface === "deny" || hit.surface === "entries";
+
+function formatStalePluginHitWarning(hit: StalePluginConfigHit): string | null {
+  if (isPolicySurfaceHit(hit)) {
+    return null;
   }
   if (hit.surface === "slot") {
     return `- ${hit.pathLabel}: slot references missing plugin "${hit.pluginId}".`;
@@ -276,15 +312,28 @@ function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
   return `- ${hit.pathLabel}: model override references missing channel plugin "${hit.pluginId}".`;
 }
 
+/** Format warnings for stale plugin config hits. */
 export function collectStalePluginConfigWarnings(params: {
   hits: StalePluginConfigHit[];
   doctorFixCommand: string;
   autoRepairBlocked?: boolean;
+  surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
 }): string[] {
-  if (params.hits.length === 0) {
+  const hits = filterRepairableStalePluginHits(params);
+  if (hits.length === 0) {
     return [];
   }
-  const lines = params.hits.map((hit) => formatStalePluginHitWarning(hit));
+  const policyPluginIds = [
+    ...new Set(hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
+  ].toSorted((a, b) => a.localeCompare(b));
+  const lines = hits
+    .map((hit) => formatStalePluginHitWarning(hit))
+    .filter((line): line is string => line !== null);
+  if (policyPluginIds.length > 0) {
+    lines.unshift(
+      `- Stale plugin references (plugins.allow/deny/entries): ${policyPluginIds.join(", ")}.`,
+    );
+  }
   if (params.autoRepairBlocked) {
     lines.push(
       `- Auto-removal is paused because plugin discovery currently has errors. Fix plugin discovery first, then rerun "${params.doctorFixCommand}".`,
@@ -297,9 +346,14 @@ export function collectStalePluginConfigWarnings(params: {
   return lines.map((line) => sanitizeForLog(line));
 }
 
+/** Remove stale plugin ids and dangling channel references when discovery is healthy. */
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  params?: {
+    preservePluginIds?: Iterable<string>;
+    surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
+  },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -307,12 +361,17 @@ export function maybeRepairStalePluginConfig(
   if (cfg.plugins?.enabled === false) {
     return { config: cfg, changes: [] };
   }
-  const registryState = collectPluginRegistryState(cfg, env);
+  const environment = env ?? process.env;
+  const registryState = collectPluginRegistryState(cfg, environment);
   if (registryState.hasDiscoveryErrors) {
     return { config: cfg, changes: [] };
   }
 
-  const hits = scanStalePluginConfigWithState(cfg, registryState);
+  const hits = filterRepairableStalePluginHits({
+    hits: scanStalePluginConfigWithState(cfg, registryState),
+    preservePluginIds: params?.preservePluginIds,
+    surfacePreservePluginIds: params?.surfacePreservePluginIds,
+  });
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
@@ -325,6 +384,14 @@ export function maybeRepairStalePluginConfig(
     const staleAllowIds = new Set(allowIds.map((pluginId) => normalizePluginId(pluginId)));
     nextPlugins.allow = nextPlugins.allow.filter(
       (pluginId) => typeof pluginId !== "string" || !staleAllowIds.has(normalizePluginId(pluginId)),
+    );
+  }
+
+  const denyIds = hits.filter((hit) => hit.surface === "deny").map((hit) => hit.pluginId);
+  if (denyIds.length > 0 && Array.isArray(nextPlugins?.deny)) {
+    const staleDenyIds = new Set(denyIds.map((pluginId) => normalizePluginId(pluginId)));
+    nextPlugins.deny = nextPlugins.deny.filter(
+      (pluginId) => typeof pluginId !== "string" || !staleDenyIds.has(normalizePluginId(pluginId)),
     );
   }
 
@@ -363,6 +430,11 @@ export function maybeRepairStalePluginConfig(
   if (allowIds.length > 0) {
     changes.push(
       `- plugins.allow: removed ${allowIds.length} stale plugin id${allowIds.length === 1 ? "" : "s"} (${allowIds.join(", ")})`,
+    );
+  }
+  if (denyIds.length > 0) {
+    changes.push(
+      `- plugins.deny: removed ${denyIds.length} stale plugin id${denyIds.length === 1 ? "" : "s"} (${denyIds.join(", ")})`,
     );
   }
   if (entryIds.length > 0) {
@@ -439,8 +511,8 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
   ) {
     delete defaultsHeartbeat.target;
   }
-  for (const agent of config.agents?.list ?? []) {
-    const heartbeat = agent.heartbeat;
+  for (const { agent } of listMutableCodexRouteAgentEntries(config)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
     if (
       heartbeat &&
       typeof heartbeat.target === "string" &&

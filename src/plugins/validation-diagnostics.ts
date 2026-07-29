@@ -1,5 +1,7 @@
+// Formats plugin validation diagnostics from manifest and config checks.
 import type { PluginDiagnostic } from "./manifest-types.js";
 
+/** Pushes a normalized plugin validation diagnostic. */
 export function pushPluginValidationDiagnostic(params: {
   level: PluginDiagnostic["level"];
   pluginId: string;

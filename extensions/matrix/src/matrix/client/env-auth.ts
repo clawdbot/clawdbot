@@ -1,3 +1,4 @@
+// Matrix plugin module implements env auth behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 

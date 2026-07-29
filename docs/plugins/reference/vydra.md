@@ -16,7 +16,7 @@ Adds Vydra model provider support to OpenClaw.
 
 ## Surface
 
-providers: vydra; contracts: imageGenerationProviders, speechProviders, videoGenerationProviders
+providers: `vydra`; contracts: `imageGenerationProviders`, `speechProviders`, `videoGenerationProviders`
 
 ## Related docs
 

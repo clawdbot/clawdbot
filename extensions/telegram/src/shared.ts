@@ -1,3 +1,4 @@
+// Telegram plugin module implements shared behavior.
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
@@ -7,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
@@ -91,7 +92,7 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   }
   const accounts = cfg.channels?.telegram?.accounts;
   const hasConfiguredAccounts =
-    !!accounts &&
+    Boolean(accounts) &&
     typeof accounts === "object" &&
     !Array.isArray(accounts) &&
     Object.keys(accounts).length > 0;
@@ -134,6 +135,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
 export function createTelegramPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
   | "id"
@@ -147,10 +149,12 @@ export function createTelegramPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "setupContract"
   | "secrets"
 > {
   const base = createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     meta: {
       ...getChatChannelMeta(TELEGRAM_CHANNEL),
       quickstartAllowFrom: true,
@@ -245,9 +249,10 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            !!inspected.token?.trim() &&
+            inspected.tokenStatus !== "missing" &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
+          tokenStatus: inspected.tokenStatus,
         };
       },
     },

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// Covers browser sandbox security audit findings.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
 import { collectSandboxDangerousConfigFindings } from "./audit-extra.sync.js";
@@ -14,7 +15,34 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
+function requireFinding(
+  checkId: "sandbox.browser_container.hash_epoch_stale",
+  findings: Array<{ checkId: string; severity: string; detail: string }>,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding`);
+  }
+  return finding;
+}
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("security audit sandbox browser findings", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
@@ -49,10 +77,8 @@ describe("security audit sandbox browser findings", () => {
 
     expect(hasFinding("sandbox.browser_container.hash_label_missing", "warn", findings)).toBe(true);
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(true);
-    const staleEpoch = findings.find(
-      (finding) => finding.checkId === "sandbox.browser_container.hash_epoch_stale",
-    );
-    expect(staleEpoch?.detail).toContain("openclaw-sbx-browser-old");
+    const staleEpoch = requireFinding("sandbox.browser_container.hash_epoch_stale", findings);
+    expect(staleEpoch.detail).toContain("openclaw-sbx-browser-old");
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
@@ -65,6 +91,80 @@ describe("security audit sandbox browser findings", () => {
       false,
     );
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(false);
+  });
+
+  it("bounds sandbox browser Docker probes that do not return", async () => {
+    let probeSignal: AbortSignal | undefined;
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+
+    vi.useFakeTimers();
+    const findingsPromise = collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 250,
+      execDockerRawFn: async (_args, opts) => {
+        probeSignal = opts?.signal;
+        markProbeStarted();
+        return await new Promise((_, reject) => {
+          opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      },
+    });
+    await probeStarted;
+    await vi.advanceTimersByTimeAsync(250);
+
+    const findings = await findingsPromise;
+
+    expect(probeSignal?.aborted).toBe(true);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "sandbox.browser_container.docker_probe_timeout",
+        severity: "warn",
+      }),
+    ]);
+  });
+
+  it("stops probing remaining sandbox browser containers after a Docker timeout", async () => {
+    const calls: string[] = [];
+    let markHungProbeStarted!: () => void;
+    const hungProbeStarted = new Promise<void>((resolve) => {
+      markHungProbeStarted = resolve;
+    });
+
+    vi.useFakeTimers();
+    const findingsPromise = collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 250,
+      execDockerRawFn: async (args, opts) => {
+        calls.push(`${args[0] ?? ""}:${args.at(-1) ?? ""}`);
+        if (args[0] === "ps") {
+          return {
+            stdout: Buffer.from("openclaw-sbx-browser-hung\nopenclaw-sbx-browser-next\n"),
+            stderr: Buffer.alloc(0),
+            code: 0,
+          };
+        }
+        markHungProbeStarted();
+        return await new Promise((_, reject) => {
+          opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      },
+    });
+    await hungProbeStarted;
+    await vi.advanceTimersByTimeAsync(250);
+
+    const findings = await findingsPromise;
+
+    expect(calls).toEqual(["ps:{{.Names}}", "inspect:openclaw-sbx-browser-hung"]);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "sandbox.browser_container.docker_probe_timeout",
+      }),
+    ]);
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {
@@ -115,8 +215,8 @@ describe("security audit sandbox browser findings", () => {
         },
       },
     } satisfies OpenClawConfig);
-    expect(findings.some((f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted")).toBe(
-      false,
+    expect(findings.map((finding) => finding.checkId)).not.toContain(
+      "sandbox.browser_cdp_bridge_unrestricted",
     );
   });
 });

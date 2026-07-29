@@ -1,3 +1,5 @@
+// Invalidates installed plugin index entries after activation metadata changes.
+import { hasConfigPathActivationMetadataMigration } from "./installed-plugin-index-config-path-scope.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type {
   InstalledPluginIndex,
@@ -45,6 +47,14 @@ export function diffInstalledPluginIndexInvalidationReasons(
     }
     if (previousPlugin.enabled !== currentPlugin.enabled) {
       reasons.add("policy-changed");
+    }
+    if (
+      hasConfigPathActivationMetadataMigration({
+        previous: previousPlugin,
+        current: currentPlugin,
+      })
+    ) {
+      reasons.add("migration");
     }
     if (previousPlugin.manifestHash !== currentPlugin.manifestHash) {
       reasons.add("stale-manifest");

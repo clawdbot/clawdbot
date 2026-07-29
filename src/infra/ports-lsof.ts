@@ -1,3 +1,4 @@
+// Uses lsof output to map listening ports to local processes.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 

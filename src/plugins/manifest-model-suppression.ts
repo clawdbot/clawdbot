@@ -1,10 +1,11 @@
+// Resolves model suppression metadata declared by plugin manifests.
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  buildModelCatalogMergeKey,
   planManifestModelCatalogSuppressions,
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
@@ -93,14 +94,20 @@ function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
-  if (when.providerConfigApiIn?.length && configuredProvider?.api) {
+  if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
-    if (!allowedApis.has(configuredProvider.api)) {
+    const effectiveApi = configuredProvider
+      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
+      : params.provider;
+    if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
   }
   if (when.baseUrlHosts?.length) {
     const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    if (!baseUrlHost && !params.baseUrl && !configuredProvider?.baseUrl) {
+      return true;
+    }
     if (!baseUrlHost) {
       return false;
     }
@@ -158,33 +165,4 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
       }),
     };
   };
-}
-
-/**
- * Resolves whether a built-in model should be suppressed based on manifest declarations.
- *
- * Note: This function instantiates a fresh resolver on every call, which incurs a full
- * filesystem scan of the manifest registry. For hot paths (like building the model catalog),
- * instantiate and reuse `buildManifestBuiltInModelSuppressionResolver` instead.
- */
-export function resolveManifestBuiltInModelSuppression(params: {
-  provider?: string | null;
-  id?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  baseUrl?: string | null;
-  unconditionalOnly?: boolean;
-}) {
-  const resolver = buildManifestBuiltInModelSuppressionResolver({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return resolver({
-    provider: params.provider,
-    id: params.id,
-    baseUrl: params.baseUrl,
-    unconditionalOnly: params.unconditionalOnly,
-  });
 }

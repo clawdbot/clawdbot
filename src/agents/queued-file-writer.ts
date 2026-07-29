@@ -1,13 +1,34 @@
-import nodeFs from "node:fs";
+/**
+ * Per-path queued append writer for logs and transcripts.
+ *
+ * Serializes writes, bounds queue/file growth, and exposes diagnostics for stuck-write probes.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { appendRegularFile } from "../infra/fs-safe.js";
 
-export type QueuedFileWriteResult = "queued" | "dropped";
+/**
+ * Serializes append-only writes per file path.
+ *
+ * Callers can enqueue log/transcript lines without awaiting each write; the
+ * writer preserves order and exposes queue diagnostics for stuck-write probes.
+ */
+export type QueuedFileWriterDiagnostics = {
+  pendingWrites: number;
+  queuedBytes: number;
+  activeOperation: "idle" | "mkdir" | "yield" | "file-append";
+  activeWriteBytes?: number;
+  maxFileBytes?: number;
+  maxQueuedBytes?: number;
+  yieldBeforeWrite: boolean;
+};
 
+/** Append writer handle shared by callers that target the same path. */
 export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => unknown;
   flush: () => Promise<void>;
+  describeQueue?: () => QueuedFileWriterDiagnostics;
 };
 
 type QueuedFileWriterOptions = {
@@ -16,103 +37,17 @@ type QueuedFileWriterOptions = {
   yieldBeforeWrite?: boolean;
 };
 
-type QueuedFileAppendFlagConstants = Pick<
-  typeof nodeFs.constants,
-  "O_APPEND" | "O_CREAT" | "O_WRONLY"
-> &
-  Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
-
-export function resolveQueuedFileAppendFlags(
-  constants: QueuedFileAppendFlagConstants = nodeFs.constants,
-): number {
-  const noFollow = constants.O_NOFOLLOW;
-  return (
-    constants.O_CREAT |
-    constants.O_APPEND |
-    constants.O_WRONLY |
-    (typeof noFollow === "number" ? noFollow : 0)
-  );
-}
-
-async function assertNoSymlinkParents(filePath: string): Promise<void> {
-  const resolvedDir = path.resolve(path.dirname(filePath));
-  const parsed = path.parse(resolvedDir);
-  const relativeParts = path.relative(parsed.root, resolvedDir).split(path.sep).filter(Boolean);
-  let current = parsed.root;
-  for (const part of relativeParts) {
-    current = path.join(current, part);
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) {
-      if (path.dirname(current) === parsed.root) {
-        continue;
-      }
-      throw new Error(`Refusing to write queued log under symlinked directory: ${current}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`Refusing to write queued log under non-directory: ${current}`);
-    }
-  }
-}
-
-function verifyStableOpenedFile(params: {
-  preOpenStat?: nodeFs.Stats;
-  postOpenStat: nodeFs.Stats;
-  filePath: string;
-}): void {
-  if (!params.postOpenStat.isFile()) {
-    throw new Error(`Refusing to write queued log to non-file: ${params.filePath}`);
-  }
-  if (params.postOpenStat.nlink > 1) {
-    throw new Error(`Refusing to write queued log to hardlinked file: ${params.filePath}`);
-  }
-  const pre = params.preOpenStat;
-  if (pre && (pre.dev !== params.postOpenStat.dev || pre.ino !== params.postOpenStat.ino)) {
-    throw new Error(`Refusing to write queued log after file changed: ${params.filePath}`);
-  }
-}
-
 async function safeAppendFile(
   filePath: string,
   line: string,
   options: QueuedFileWriterOptions,
 ): Promise<void> {
-  await assertNoSymlinkParents(filePath);
-
-  let preOpenStat: nodeFs.Stats | undefined;
-  try {
-    const stat = await fs.lstat(filePath);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Refusing to write queued log through symlink: ${filePath}`);
-    }
-    if (!stat.isFile()) {
-      throw new Error(`Refusing to write queued log to non-file: ${filePath}`);
-    }
-    preOpenStat = stat;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
-    }
-  }
-  const lineBytes = Buffer.byteLength(line, "utf8");
-  if (
-    options.maxFileBytes !== undefined &&
-    (preOpenStat?.size ?? 0) + lineBytes > options.maxFileBytes
-  ) {
-    return;
-  }
-
-  const handle = await fs.open(filePath, resolveQueuedFileAppendFlags(), 0o600);
-  try {
-    const stat = await handle.stat();
-    verifyStableOpenedFile({ preOpenStat, postOpenStat: stat, filePath });
-    if (options.maxFileBytes !== undefined && stat.size + lineBytes > options.maxFileBytes) {
-      return;
-    }
-    await handle.chmod(0o600);
-    await handle.appendFile(line, "utf8");
-  } finally {
-    await handle.close();
-  }
+  await appendRegularFile({
+    filePath,
+    content: line,
+    maxFileBytes: options.maxFileBytes,
+    rejectSymlinkParents: true,
+  });
 }
 
 function waitForImmediate(): Promise<void> {
@@ -121,6 +56,7 @@ function waitForImmediate(): Promise<void> {
   });
 }
 
+/** Returns the cached writer for a path or creates a new ordered append queue. */
 export function getQueuedFileWriter(
   writers: Map<string, QueuedFileWriter>,
   filePath: string,
@@ -134,7 +70,10 @@ export function getQueuedFileWriter(
   const dir = path.dirname(filePath);
   const ready = fs.mkdir(dir, { recursive: true, mode: 0o700 }).catch(() => undefined);
   let queue: Promise<unknown> = Promise.resolve();
+  let pendingWrites = 0;
   let queuedBytes = 0;
+  let activeOperation: QueuedFileWriterDiagnostics["activeOperation"] = "idle";
+  let activeWriteBytes: number | undefined;
 
   const writer: QueuedFileWriter = {
     filePath,
@@ -144,22 +83,49 @@ export function getQueuedFileWriter(
         options.maxQueuedBytes !== undefined &&
         queuedBytes + lineBytes > options.maxQueuedBytes
       ) {
+        // Backpressure is lossy by design for diagnostics/log queues; callers can inspect "dropped".
         return "dropped";
       }
+      pendingWrites += 1;
       queuedBytes += lineBytes;
       queue = queue
-        .then(() => ready)
-        .then(() => (options.yieldBeforeWrite ? waitForImmediate() : undefined))
-        .then(() => safeAppendFile(filePath, line, options))
+        .then(async () => {
+          activeOperation = "mkdir";
+          await ready;
+        })
+        .then(async () => {
+          if (options.yieldBeforeWrite) {
+            activeOperation = "yield";
+            await waitForImmediate();
+          }
+        })
+        .then(async () => {
+          activeOperation = "file-append";
+          activeWriteBytes = lineBytes;
+          await safeAppendFile(filePath, line, options);
+        })
         .catch(() => undefined)
         .finally(() => {
+          pendingWrites = Math.max(0, pendingWrites - 1);
           queuedBytes = Math.max(0, queuedBytes - lineBytes);
+          activeWriteBytes = undefined;
+          // Preserve the current operation while more writes are chained behind this one.
+          activeOperation = pendingWrites > 0 ? activeOperation : "idle";
         });
       return "queued";
     },
     flush: async () => {
       await queue;
     },
+    describeQueue: () => ({
+      pendingWrites,
+      queuedBytes,
+      activeOperation,
+      activeWriteBytes,
+      maxFileBytes: options.maxFileBytes,
+      maxQueuedBytes: options.maxQueuedBytes,
+      yieldBeforeWrite: options.yieldBeforeWrite === true,
+    }),
   };
 
   writers.set(filePath, writer);

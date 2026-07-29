@@ -1,3 +1,4 @@
+// Status scan tests cover fast scan defaults, memory setup, gateway probes, and status aggregation.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
@@ -14,6 +15,7 @@ const mocks = {
   ...createStatusScanSharedMocks("status-scan"),
   buildChannelsTable: vi.fn(),
   callGateway: vi.fn(),
+  getStatusCommandSecretTargetIds: vi.fn(() => new Set<string>()),
 };
 
 let originalForceStderr: boolean;
@@ -69,35 +71,69 @@ function configureScanStatus(
     details: [],
   });
   mocks.callGateway.mockResolvedValue(null);
+  mocks.getStatusCommandSecretTargetIds.mockReturnValue(new Set<string>());
+}
+
+function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls[0]?.[0];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
+function firstBuildChannelsTableCall(): unknown[] {
+  const call = mocks.buildChannelsTable.mock.calls[0];
+  if (!call) {
+    throw new Error("expected buildChannelsTable call");
+  }
+  return call;
 }
 
 describe("scanStatus", () => {
   it("passes sourceConfig into buildChannelsTable for summary-mode status output", async () => {
+    const sourceConfig = createStatusScanConfig({
+      marker: "source",
+      plugins: { enabled: false },
+    });
+    const resolvedConfig = createStatusScanConfig({
+      marker: "resolved",
+      plugins: { enabled: false },
+    });
     configureScanStatus({
-      sourceConfig: createStatusScanConfig({
-        marker: "source",
-        plugins: { enabled: false },
-      }),
-      resolvedConfig: createStatusScanConfig({
-        marker: "resolved",
-        plugins: { enabled: false },
-      }),
+      hasConfiguredChannels: true,
+      sourceConfig,
+      resolvedConfig,
       summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
     await scanStatus({ json: false }, {} as never);
 
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.objectContaining({ marker: "resolved" }),
-      expect.objectContaining({
-        includeSetupFallbackPlugins: true,
-        sourceConfig: expect.objectContaining({ marker: "source" }),
-      }),
-    );
+    expect(mocks.getStatusSummary).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      sourceConfig,
+      includeChannelSummary: false,
+    });
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
+      resolvedConfig,
+      {
+        showSecrets: true,
+        includeSetupFallbackPlugins: false,
+        sourceConfig,
+        liveChannelStatus: null,
+        credentialResolutionSkipped: true,
+      },
+    ]);
   });
 
-  it("keeps default text status off live channel status while keeping configured channel setup fallback", async () => {
-    configureScanStatus({ hasConfiguredChannels: true });
+  it("keeps default text status off live channel status and channel setup fallback for fast path", async () => {
+    const cfg = createStatusScanConfig();
+    configureScanStatus({
+      hasConfiguredChannels: true,
+      sourceConfig: cfg,
+      resolvedConfig: cfg,
+    });
     mocks.probeGateway.mockResolvedValue({
       ok: true,
       url: "ws://127.0.0.1:18789",
@@ -112,17 +148,46 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: false }, {} as never);
 
-    expect(mocks.callGateway).not.toHaveBeenCalledWith(
-      expect.objectContaining({ method: "channels.status" }),
-    );
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ includeSetupFallbackPlugins: true }),
-    );
+    expect(
+      mocks.callGateway.mock.calls.some(([call]) => {
+        return (call as { method?: unknown } | undefined)?.method === "channels.status";
+      }),
+    ).toBe(false);
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      fetchGit: false,
+      includeRegistry: false,
+      updateConfigChannel: null,
+    });
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(cfg, process.env, {
+      includeChannelTargets: false,
+    });
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
+      cfg,
+      {
+        showSecrets: true,
+        includeSetupFallbackPlugins: false,
+        sourceConfig: cfg,
+        liveChannelStatus: null,
+        credentialResolutionSkipped: true,
+      },
+    ]);
   });
 
   it("uses live channel status and setup fallback for deep text status", async () => {
-    configureScanStatus({ hasConfiguredChannels: true });
+    const cfg = createStatusScanConfig();
+    const liveChannelStatus = {
+      ok: true,
+      accounts: [],
+      checkedAt: "2026-05-09T07:30:00.000Z",
+    };
+    configureScanStatus({
+      hasConfiguredChannels: true,
+      sourceConfig: cfg,
+      resolvedConfig: cfg,
+    });
+    mocks.callGateway.mockResolvedValue(liveChannelStatus);
     mocks.probeGateway.mockResolvedValue({
       ok: true,
       url: "ws://127.0.0.1:18789",
@@ -137,16 +202,26 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: false, deep: true, timeoutMs: 5000 }, {} as never);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "channels.status",
-        timeoutMs: 2500,
-      }),
-    );
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ includeSetupFallbackPlugins: true }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(firstCallArg(mocks.callGateway, "callGateway args")).toStrictEqual({
+      config: cfg,
+      method: "channels.status",
+      params: {
+        probe: false,
+        timeoutMs: 5000,
+      },
+      timeoutMs: 2500,
+    });
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
+      cfg,
+      {
+        showSecrets: true,
+        sourceConfig: cfg,
+        includeSetupFallbackPlugins: true,
+        liveChannelStatus,
+      },
+    ]);
   });
 
   it("skips channel plugin preload for status --json with no channel config", async () => {
@@ -236,14 +311,9 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: expect.any(Object),
-          }),
-        }),
-      }),
+    expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(firstCallArg(mocks.getMemorySearchManager, "memory search manager args")).toStrictEqual({
+      cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
     });
@@ -270,12 +340,18 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ detailLevel: "presence" }),
-    );
-    expect(mocks.callGateway).not.toHaveBeenCalledWith(
-      expect.objectContaining({ method: "channels.status" }),
-    );
+    expect(mocks.probeGateway).toHaveBeenCalledOnce();
+    expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
+      url: "ws://127.0.0.1:18789",
+      auth: {},
+      timeoutMs: 2500,
+      detailLevel: "presence",
+    });
+    expect(
+      mocks.callGateway.mock.calls.some(([call]) => {
+        return (call as { method?: unknown } | undefined)?.method === "channels.status";
+      }),
+    ).toBe(false);
   });
 
   it("keeps status --json on read-only channel metadata when channel auth is env-only", async () => {

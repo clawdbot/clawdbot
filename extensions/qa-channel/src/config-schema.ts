@@ -1,8 +1,10 @@
+// Qa Channel helper module supports config schema behavior.
 import {
-  ToolPolicySchema,
   buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 
 const QaChannelActionConfigSchema = z
   .object({
@@ -13,13 +15,12 @@ const QaChannelActionConfigSchema = z
   })
   .strict();
 
-const QaChannelGroupConfigSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema.optional(),
-    toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
-  })
-  .strict();
+const QaChannelGroupConfigSchema = buildGroupEntrySchema().omit({
+  skills: true,
+  enabled: true,
+  allowFrom: true,
+  systemPrompt: true,
+});
 
 const QaChannelAccountConfigSchema = z
   .object({
@@ -38,9 +39,8 @@ const QaChannelAccountConfigSchema = z
   })
   .strict();
 
-const QaChannelConfigSchema = QaChannelAccountConfigSchema.extend({
-  accounts: z.record(z.string(), QaChannelAccountConfigSchema.partial()).optional(),
-  defaultAccount: z.string().optional(),
-}).strict();
+const QaChannelConfigSchema = buildMultiAccountChannelSchema(QaChannelAccountConfigSchema, {
+  accountSchema: QaChannelAccountConfigSchema.partial(),
+});
 
 export const qaChannelPluginConfigSchema = buildChannelConfigSchema(QaChannelConfigSchema);

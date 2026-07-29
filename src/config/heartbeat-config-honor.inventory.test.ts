@@ -1,3 +1,4 @@
+// Audits heartbeat config coverage across inventory entries.
 import { describe, expect, it } from "vitest";
 import {
   auditConfigHonorInventory,
@@ -12,9 +13,6 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "every",
   "model",
   "prompt",
-  "includeSystemPromptSection",
-  "ackMaxChars",
-  "suppressToolErrorWarnings",
   "timeoutSeconds",
   "lightContext",
   "isolatedSession",
@@ -22,7 +20,6 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "to",
   "accountId",
   "directPolicy",
-  "includeReasoning",
 ] as const;
 
 describe("heartbeat config-honor inventory", () => {
@@ -40,10 +37,10 @@ describe("heartbeat config-honor inventory", () => {
       rows: HEARTBEAT_CONFIG_HONOR_INVENTORY,
     });
 
-    expect(audit.missingKeys).toEqual([]);
-    expect(audit.extraKeys).toEqual([]);
-    expect(audit.missingSchemaPaths).toEqual([]);
-    expect(audit.missingFiles).toEqual([]);
-    expect(audit.missingProofs).toEqual([]);
+    expect(audit.missingKeys).toStrictEqual([]);
+    expect(audit.extraKeys).toStrictEqual([]);
+    expect(audit.missingSchemaPaths).toStrictEqual([]);
+    expect(audit.missingFiles).toStrictEqual([]);
+    expect(audit.missingProofs).toStrictEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Inventories core plugin imports that cross into bundled extension files.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -158,6 +159,9 @@ function shouldSkipFile(filePath) {
   );
 }
 
+/**
+ * Cached inventory of src/plugins imports that cross into bundled extensions.
+ */
 export const collectPluginExtensionImportBoundaryInventory = createCachedAsync(async () => {
   const files = (await collectTypeScriptFilesFromRoots(scanRoots))
     .filter((filePath) => !shouldSkipFile(filePath))
@@ -177,10 +181,16 @@ export const collectPluginExtensionImportBoundaryInventory = createCachedAsync(a
   });
 });
 
+/**
+ * Cached expected plugin-extension import inventory baseline.
+ */
 export const readExpectedInventory = createCachedAsync(async () =>
   JSON.parse(await fs.readFile(baselinePath, "utf8")),
 );
 
+/**
+ * Diffs expected and actual plugin-extension boundary inventory entries.
+ */
 export function diffInventory(expected, actual) {
   return diffInventoryEntries(expected, actual, compareEntries);
 }
@@ -199,9 +209,12 @@ function formatEntry(entry) {
   return `${entry.file}:${entry.line} [${entry.kind}] ${entry.reason} (${entry.specifier} -> ${entry.resolvedPath})`;
 }
 
-export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.slice(2), io) {
+/**
+ * Runs the plugin-extension import boundary baseline check.
+ */
+async function runPluginExtensionImportBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
-    argv,
+    argv: argv ?? process.argv.slice(2),
     io,
     collectActual: collectPluginExtensionImportBoundaryInventory,
     readExpected: readExpectedInventory,
@@ -211,7 +224,10 @@ export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.
   });
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+/**
+ * Entrypoint wrapper for the plugin-extension import boundary check.
+ */
+export async function main(argv, io) {
   const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
   if (!io && exitCode !== 0) {
     process.exit(exitCode);

@@ -1,3 +1,4 @@
+// Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
   buildCronEventPrompt,
@@ -174,5 +175,55 @@ describe("heartbeat event classification", () => {
     { value: "exec finished: ok", expected: true },
   ])("classifies relayable exec completion events for %j", ({ value, expected }) => {
     expect(isRelayableExecCompletionEvent(value)).toBe(expected);
+  });
+});
+
+describe("isExecCompletionEvent", () => {
+  it("matches maybeNotifyOnExit (backgrounded allowlisted commands) events", () => {
+    // Word-based session slugs (createSessionSlug)
+    expect(isExecCompletionEvent("Exec completed (amber-at, code 0) :: some output")).toBe(true);
+    expect(isExecCompletionEvent("Exec completed (calm-del, code 0)")).toBe(true);
+    expect(isExecCompletionEvent("Exec failed (brisk-no, code 1) :: error text")).toBe(true);
+    expect(isExecCompletionEvent("Exec failed (fresh-ke, signal SIGTERM)")).toBe(true);
+    // Hex-style IDs also accepted
+    expect(isExecCompletionEvent("Exec completed (abc12345, code 0)")).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isExecCompletionEvent("EXEC COMPLETED (abc12345, code 0)")).toBe(true);
+    expect(isExecCompletionEvent("exec failed (abc12345, code 2)")).toBe(true);
+  });
+
+  it("does not match non-exec events", () => {
+    expect(isExecCompletionEvent("Exec running (gateway id=g1, session=s1, >5s): ls")).toBe(false);
+    expect(isExecCompletionEvent("Exec denied (gateway id=g1, reason): rm -rf /")).toBe(false);
+    expect(isExecCompletionEvent("Heartbeat wake")).toBe(false);
+    expect(isExecCompletionEvent("")).toBe(false);
+  });
+
+  it("does not false-positive on free-form cron text containing exec phrases", () => {
+    expect(isExecCompletionEvent("Nightly backup exec failed – see logs")).toBe(false);
+    expect(isExecCompletionEvent("Cron: check if exec completed successfully")).toBe(false);
+    expect(isExecCompletionEvent("exec killed the process manually")).toBe(false);
+    expect(isExecCompletionEvent("Exec finished weekly backup checks")).toBe(false);
+    // Parenthesized false positive from review feedback — must not match mid-string
+    expect(isExecCompletionEvent("Nightly backup exec failed (see logs)")).toBe(false);
+    expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
+  });
+});
+
+describe("buildExecEventPrompt truncation", () => {
+  it("does not split surrogate pairs in long event text", () => {
+    const safePrefix = "x".repeat(7_999);
+    const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
+
+    expect(result).toContain(`${safePrefix}\n\n[truncated]`);
+    expect(result).not.toContain("🚀tail");
+  });
+
+  it("passes through short event text unchanged", () => {
+    const result = buildExecEventPrompt(["hello"]);
+    expect(result).toContain("hello");
+    expect(result).not.toContain("[truncated]");
   });
 });

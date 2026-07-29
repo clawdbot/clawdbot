@@ -1,3 +1,8 @@
+/** Runs gateway discovery, optional SSH tunneling, and per-target probes. */
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
@@ -5,17 +10,17 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import { pickGatewaySelfPresence } from "../gateway-presence.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
-  pickGatewaySelfPresence,
   resolveAuthForTarget,
   resolveProbeBudgetMs,
   type GatewayConfigSummary,
   type GatewayStatusTarget,
 } from "./helpers.js";
 
+/** Single gateway status target plus probe details and derived display metadata. */
 export type GatewayStatusProbedTarget = {
   target: GatewayStatusTarget;
   probe: Awaited<ReturnType<typeof probeGateway>>;
@@ -24,6 +29,7 @@ export type GatewayStatusProbedTarget = {
   authDiagnostics: string[];
 };
 
+/** Probes configured, explicit, and optionally SSH-discovered gateway targets. */
 export async function runGatewayStatusProbePass(params: {
   cfg: OpenClawConfig;
   opts: {
@@ -90,6 +96,8 @@ export async function runGatewayStatusProbePass(params: {
     });
   }
 
+  // Prefer the concurrently-started tunnel, but allow auto-discovered SSH
+  // targets to start after Bonjour finishes.
   const tunnel =
     tunnelFirst ||
     (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
@@ -131,7 +139,6 @@ export async function runGatewayStatusProbePass(params: {
             target.kind === "localLoopback" && target.url.startsWith("wss://")
               ? params.localTlsFingerprint
               : undefined,
-          preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {
@@ -156,7 +163,7 @@ export async function runGatewayStatusProbePass(params: {
       try {
         await tunnel.stop();
       } catch {
-        // best-effort
+        // Status output must not fail just because tunnel cleanup races process exit.
       }
     }
   }

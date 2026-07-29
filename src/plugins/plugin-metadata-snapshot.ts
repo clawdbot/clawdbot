@@ -1,20 +1,47 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
+import {
+  getActiveDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpanSync,
+} from "../infra/diagnostics-timeline.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  loadInstalledPluginIndexWithDiscovery,
+  type InstalledPluginIndex,
+} from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
+  ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
+import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+
+const PLUGIN_METADATA_ENV_KEYS = [
+  "APPDATA",
+  "HOME",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
+  "OPENCLAW_HOME",
+  "OPENCLAW_NIX_MODE",
+  "OPENCLAW_STATE_DIR",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+] as const;
 export type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataManifestView,
@@ -23,7 +50,66 @@ export type {
   PluginMetadataSnapshotMetrics,
   PluginMetadataSnapshotOwnerMaps,
   PluginMetadataSnapshotRegistryDiagnostic,
+  ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
+
+function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    PLUGIN_METADATA_ENV_KEYS.flatMap((key) => {
+      const value = env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+}
+
+export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
+  return hashJson(pickPluginMetadataEnv(env));
+}
+
+function throwReadonlyPluginMetadataMutation(): never {
+  throw new TypeError("Plugin metadata snapshots are immutable");
+}
+
+function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  if (value instanceof Map) {
+    for (const [key, entry] of value) {
+      freezeSnapshotValue(key, seen);
+      freezeSnapshotValue(entry, seen);
+    }
+    Object.defineProperties(value, {
+      clear: { value: throwReadonlyPluginMetadataMutation },
+      delete: { value: throwReadonlyPluginMetadataMutation },
+      set: { value: throwReadonlyPluginMetadataMutation },
+    });
+    return Object.freeze(value);
+  }
+  if (value instanceof Set) {
+    for (const entry of value) {
+      freezeSnapshotValue(entry, seen);
+    }
+    Object.defineProperties(value, {
+      add: { value: throwReadonlyPluginMetadataMutation },
+      clear: { value: throwReadonlyPluginMetadataMutation },
+      delete: { value: throwReadonlyPluginMetadataMutation },
+    });
+    return Object.freeze(value);
+  }
+  for (const entry of Object.values(value)) {
+    freezeSnapshotValue(entry, seen);
+  }
+  return Object.freeze(value);
+}
+
+function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
+  return freezeSnapshotValue(snapshot);
+}
 
 function resolvePluginMetadataControlPlaneFingerprint(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
@@ -47,6 +133,10 @@ function indexesMatch(
   );
 }
 
+function cloneSnapshotInput<T>(value: T): T {
+  return value && typeof value === "object" ? structuredClone(value) : value;
+}
+
 function normalizeInstalledPluginIndex(index: InstalledPluginIndex): InstalledPluginIndex {
   return {
     version: index.version ?? 1,
@@ -55,26 +145,47 @@ function normalizeInstalledPluginIndex(index: InstalledPluginIndex): InstalledPl
     migrationVersion: index.migrationVersion ?? 1,
     policyHash: index.policyHash ?? "",
     generatedAtMs: index.generatedAtMs ?? 0,
-    installRecords: index.installRecords ?? {},
-    plugins: index.plugins ?? [],
-    diagnostics: index.diagnostics ?? [],
+    installRecords: cloneSnapshotInput(index.installRecords ?? {}),
+    plugins: (index.plugins ?? []).map(cloneSnapshotInput),
+    diagnostics: (index.diagnostics ?? []).map(cloneSnapshotInput),
     ...(index.warning ? { warning: index.warning } : {}),
     ...(index.refreshReason ? { refreshReason: index.refreshReason } : {}),
   } as InstalledPluginIndex;
 }
 
+function resolvePluginMetadataSnapshotPluginIds(params: {
+  index: InstalledPluginIndex;
+  params: LoadPluginMetadataSnapshotParams;
+}): string[] | undefined {
+  const direct = normalizePluginIdScope(params.params.pluginIds);
+  if (direct !== undefined) {
+    return direct;
+  }
+  return normalizePluginIdScope(params.params.pluginIdScope?.resolve({ index: params.index }));
+}
+
 export function isPluginMetadataSnapshotCompatible(params: {
   snapshot: Pick<
     PluginMetadataSnapshot,
-    "configFingerprint" | "index" | "policyHash" | "workspaceDir"
+    "configFingerprint" | "index" | "pluginIds" | "policyHash" | "workspaceDir"
   >;
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  allowScopedSnapshot?: boolean;
+  pluginIds?: readonly string[];
   workspaceDir?: string;
   index?: InstalledPluginIndex;
 }): boolean {
   const env = params.env ?? process.env;
+  const requestedPluginIds = normalizePluginIdScope(params.pluginIds);
+  const snapshotPluginIds = normalizePluginIdScope(params.snapshot.pluginIds);
+  const scopeMatches =
+    snapshotPluginIds === undefined ||
+    params.allowScopedSnapshot === true ||
+    (requestedPluginIds !== undefined &&
+      serializePluginIdScope(snapshotPluginIds) === serializePluginIdScope(requestedPluginIds));
   return (
+    scopeMatches &&
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
@@ -93,6 +204,9 @@ export function isPluginMetadataSnapshotCompatible(params: {
 function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: string): void {
   const existing = owners.get(ownedId);
   if (existing) {
+    if (existing.includes(pluginId)) {
+      return;
+    }
     existing.push(pluginId);
     return;
   }
@@ -126,6 +240,19 @@ function buildPluginMetadataOwnerMaps(
     }
     for (const providerId of plugin.providers ?? []) {
       appendOwner(providers, providerId, plugin.id);
+    }
+    for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+      const alias = normalizeProviderId(rawAlias);
+      const targetProvider = normalizeProviderId(target);
+      if (
+        alias &&
+        targetProvider &&
+        (plugin.providers ?? []).some(
+          (providerId) => normalizeProviderId(providerId) === targetProvider,
+        )
+      ) {
+        appendOwner(providers, alias, plugin.id);
+      }
     }
     for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
       appendOwner(modelCatalogProviders, providerId, plugin.id);
@@ -161,6 +288,7 @@ function buildPluginMetadataOwnerMaps(
     setupProviders: freezeOwnerMap(setupProviders),
     commandAliases: freezeOwnerMap(commandAliases),
     contracts: freezeOwnerMap(contracts),
+    ...buildPluginMetadataProviderFacts(plugins),
   };
 }
 
@@ -173,11 +301,12 @@ export function listPluginOriginsFromMetadataSnapshot(
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
-  return measureDiagnosticsTimelineSpanSync(
+  const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
+  const snapshot = measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.scan",
     () => loadPluginMetadataSnapshotImpl(params),
     {
-      phase: "startup",
+      phase: activeTimelineSpan?.phase ?? "startup",
       config: params.config,
       env: params.env,
       attributes: {
@@ -186,6 +315,61 @@ export function loadPluginMetadataSnapshot(
       },
     },
   );
+  return measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.freeze",
+    () => freezePluginMetadataSnapshot(snapshot),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        indexPluginCount: snapshot.index.plugins.length,
+        manifestPluginCount: snapshot.plugins.length,
+      },
+    },
+  );
+}
+
+export function resolvePluginMetadataSnapshot(
+  params: ResolvePluginMetadataSnapshotParams,
+): PluginMetadataSnapshot {
+  const canUseCurrentSnapshot =
+    params.allowCurrent !== false &&
+    params.stateDir === undefined &&
+    params.preferPersisted !== false;
+  if (canUseCurrentSnapshot) {
+    const current = getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
+      ...(params.pluginIdScope !== undefined ? { pluginIdScope: params.pluginIdScope } : {}),
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.allowWorkspaceScopedCurrent === true
+        ? { allowWorkspaceScopedSnapshot: true }
+        : {}),
+    });
+    if (!current) {
+      return loadPluginMetadataSnapshot(params);
+    }
+    if (!params.index) {
+      return current;
+    }
+    if (
+      isPluginMetadataSnapshotCompatible({
+        snapshot: current,
+        config: params.config,
+        env: params.env,
+        allowScopedSnapshot: params.pluginIds !== undefined || params.pluginIdScope !== undefined,
+        workspaceDir:
+          params.workspaceDir ??
+          (params.allowWorkspaceScopedCurrent === true ? current.workspaceDir : undefined),
+        index: params.index,
+      })
+    ) {
+      return current;
+    }
+  }
+  return loadPluginMetadataSnapshot(params);
 }
 
 function loadPluginMetadataSnapshotImpl(
@@ -193,37 +377,29 @@ function loadPluginMetadataSnapshotImpl(
 ): PluginMetadataSnapshot {
   const totalStartedAt = performance.now();
   const registryStartedAt = performance.now();
-  const registryResult = loadPluginRegistrySnapshotWithMetadata({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-    env: params.env,
-    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-    ...(params.index ? { index: params.index } : {}),
-  }) ?? {
-    source: "derived" as const,
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  };
+  const registryResult =
+    loadPluginRegistrySnapshotWithMetadata({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+      env: params.env,
+      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+      ...(params.index ? { index: params.index } : {}),
+    }) ?? deriveBootstrapPluginRegistrySnapshot(params);
   const registrySnapshotMs = performance.now() - registryStartedAt;
   const index = normalizeInstalledPluginIndex(registryResult.snapshot);
+  const pluginIds = resolvePluginMetadataSnapshotPluginIds({ params, index });
   const manifestStartedAt = performance.now();
-  const manifestRegistry =
-    index.plugins.length === 0
-      ? loadPluginManifestRegistry({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          diagnostics: [...index.diagnostics],
-          installRecords: index.installRecords,
-        })
-      : loadPluginManifestRegistryForInstalledIndex({
-          index,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          includeDisabled: true,
-        });
+  // Empty installed indexes are authoritative; bootstrap first derives a real
+  // index so every manifest and scope follows the same immutable graph.
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    ...(pluginIds !== undefined ? { pluginIds } : {}),
+    includeDisabled: true,
+  });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
   const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
@@ -234,6 +410,7 @@ function loadPluginMetadataSnapshotImpl(
 
   return {
     policyHash: index.policyHash,
+    registrySource: registryResult.source,
     configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
       config: params.config,
       env: params.env,
@@ -241,6 +418,7 @@ function loadPluginMetadataSnapshotImpl(
       policyHash: index.policyHash,
       workspaceDir: params.workspaceDir,
     }),
+    ...(pluginIds !== undefined ? { pluginIds } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
     registryDiagnostics: registryResult.diagnostics,
@@ -258,5 +436,16 @@ function loadPluginMetadataSnapshotImpl(
       indexPluginCount: index.plugins.length,
       manifestPluginCount: manifestRegistry.plugins.length,
     },
+    discovery: registryResult.discovery,
   };
+}
+
+function deriveBootstrapPluginRegistrySnapshot(params: LoadPluginMetadataSnapshotParams): {
+  source: "derived";
+  snapshot: InstalledPluginIndex;
+  diagnostics: [];
+  discovery: ReturnType<typeof loadInstalledPluginIndexWithDiscovery>["discovery"];
+} {
+  const { index, discovery } = loadInstalledPluginIndexWithDiscovery(params);
+  return { source: "derived", snapshot: index, diagnostics: [], discovery };
 }

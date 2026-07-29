@@ -1,4 +1,4 @@
-import type { SkillSnapshot } from "../agents/skills.js";
+// Trajectory metadata helpers capture environment metadata for trajectory files.
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -12,8 +12,11 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
 
+// Runtime metadata capture for trajectory events. This records enough config,
+// plugin, skill, and prompt context to explain a run after logs are exported.
 type BuildTrajectoryRunMetadataParams = {
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
@@ -47,8 +50,10 @@ type BuildTrajectoryArtifactsParams = {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  timedOutByRunBudget: boolean;
   promptError?: string;
   promptErrorSource?: string | null;
+  terminalError?: string;
   usage?: unknown;
   promptCache?: unknown;
   compactionCount: number;
@@ -59,7 +64,7 @@ type BuildTrajectoryArtifactsParams = {
     completedCount: number;
     activeCount: number;
   };
-  toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
   didSendViaMessagingTool: boolean;
   successfulCronAdds: number;
   messagingToolSentTexts: string[];
@@ -137,6 +142,8 @@ function buildPluginsFromManifest(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }) {
+  // Startup captures can happen before runtime activation. Fall back to the
+  // manifest snapshot so exported runs still show configured plugin surfaces.
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config ?? {},
     workspaceDir: params.workspaceDir,
@@ -176,9 +183,15 @@ function buildSkillsCapture(
   if (!skillsSnapshot) {
     return undefined;
   }
+  const filteredResolvedSkills =
+    skillsSnapshot.resolvedSkills?.filter(
+      (skill) => typeof skill.name === "string" && skill.name.length > 0,
+    ) ?? [];
   const entries =
-    skillsSnapshot.resolvedSkills && skillsSnapshot.resolvedSkills.length > 0
-      ? skillsSnapshot.resolvedSkills.map((skill) => ({
+    // Prefer resolved skill files when available; older call sites may only
+    // have the summarized skill catalog, which is still useful for support.
+    filteredResolvedSkills.length > 0
+      ? filteredResolvedSkills.map((skill) => ({
           id: skill.name,
           name: skill.name,
           description: skill.description,
@@ -189,17 +202,19 @@ function buildSkillsCapture(
           disableModelInvocation: skill.disableModelInvocation,
           available: true,
         }))
-      : skillsSnapshot.skills.map((skill) => ({
-          id: skill.name,
-          name: skill.name,
-          primaryEnv: skill.primaryEnv,
-          requiredEnv: skill.requiredEnv,
-          available: true,
-        }));
+      : skillsSnapshot.skills
+          .filter((skill) => typeof skill.name === "string" && skill.name.length > 0)
+          .map((skill) => ({
+            id: skill.name,
+            name: skill.name,
+            primaryEnv: skill.primaryEnv,
+            requiredEnv: skill.requiredEnv,
+            available: true,
+          }));
   return {
     snapshotVersion: skillsSnapshot.version,
     skillFilter: toSortedUniqueStrings(skillsSnapshot.skillFilter),
-    entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
+    entries: entries.toSorted((left, right) => (left.name ?? "").localeCompare(right.name ?? "")),
   };
 }
 
@@ -293,6 +308,8 @@ export function buildTrajectoryRunMetadata(
   };
 }
 
+// Completion artifact schema mirrored into trajectory export artifacts.json.
+// Keep field names close to runtime event data to make bundle diffs readable.
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {
@@ -305,8 +322,10 @@ export function buildTrajectoryArtifacts(
     idleTimedOut: params.idleTimedOut,
     timedOutDuringCompaction: params.timedOutDuringCompaction,
     timedOutDuringToolExecution: params.timedOutDuringToolExecution,
+    timedOutByRunBudget: params.timedOutByRunBudget,
     promptError: params.promptError,
     promptErrorSource: params.promptErrorSource,
+    terminalError: params.terminalError,
     usage: params.usage,
     promptCache: params.promptCache,
     compactionCount: params.compactionCount,

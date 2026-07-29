@@ -1,3 +1,4 @@
+/** Shared command-handler test harness and config fixtures. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import type { MsgContext } from "../templating.js";
@@ -75,6 +76,15 @@ export function configureInMemoryTaskRegistryStoreForTests(): void {
     },
   });
 }
+
+export type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
 
 export function buildPluginsCommandParams(params: {
   commandBodyNormalized: string;

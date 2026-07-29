@@ -1,3 +1,4 @@
+// Lmstudio API module exposes the plugin public contract.
 export {
   buildLmstudioAuthHeaders,
   buildLmstudioModelName,
@@ -22,6 +23,7 @@ export {
   normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
+  prepareAppGuidedLmstudioSetup,
   prepareLmstudioDynamicModels,
   promptAndConfigureLmstudioInteractive,
   resolveLmstudioConfiguredApiKey,

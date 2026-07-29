@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+// Covers diagnostics timeline event writing and spans.
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent,
-  flushDiagnosticsTimelineForTest,
   isDiagnosticsTimelineEnabled,
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -28,14 +28,34 @@ async function createTimelineEnv() {
 }
 
 async function readTimeline(path: string) {
-  await flushDiagnosticsTimelineForTest();
+  await Promise.resolve();
   return (await readFile(path, "utf8"))
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+function eventRecord(events: Record<string, unknown>[], index: number): Record<string, unknown> {
+  const event = events[index];
+  if (!event) {
+    throw new Error(`Expected diagnostics event at index ${index}`);
+  }
+  return event;
+}
+
+function attributesRecord(event: Record<string, unknown>): Record<string, unknown> {
+  if (
+    !event.attributes ||
+    typeof event.attributes !== "object" ||
+    Array.isArray(event.attributes)
+  ) {
+    throw new Error("Expected diagnostics event attributes");
+  }
+  return event.attributes as Record<string, unknown>;
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -122,21 +142,36 @@ describe("diagnostics timeline", () => {
     );
 
     const [event] = await readTimeline(path);
-    expect(event).toMatchObject({
-      schemaVersion: "openclaw.diagnostics.v1",
-      type: "mark",
-      name: "gateway.ready",
-      runId: "run-1",
-      envName: "env-1",
-      phase: "startup",
-      attributes: {
-        ok: true,
-        count: 2,
-      },
-    });
-    expect(event?.timestamp).toEqual(expect.any(String));
-    expect(event?.pid).toEqual(expect.any(Number));
-    expect((event?.attributes as Record<string, unknown>).ignored).toBeUndefined();
+    expect(event?.schemaVersion).toBe("openclaw.diagnostics.v1");
+    expect(event?.type).toBe("mark");
+    expect(event?.name).toBe("gateway.ready");
+    expect(event?.runId).toBe("run-1");
+    expect(event?.envName).toBe("env-1");
+    expect(event?.phase).toBe("startup");
+    const attributes = attributesRecord(event ?? {});
+    expect(attributes.ok).toBe(true);
+    expect(attributes.count).toBe(2);
+    expect(event?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
+    expect(event?.pid).toBe(process.pid);
+    expect(attributes.ignored).toBeUndefined();
+  });
+
+  it("routes timeline write failures through the captured console boundary once", async () => {
+    const { env, path } = await createTimelineEnv();
+    await mkdir(dirname(path), { recursive: true });
+    const blockingFile = join(dirname(path), "blocked");
+    await writeFile(blockingFile, "not a directory");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failingEnv = {
+      ...env,
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: join(blockingFile, "timeline.jsonl"),
+    };
+
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "first" }, { env: failingEnv });
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "second" }, { env: failingEnv });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failed to write timeline event"));
   });
 
   it("records span start and end events around successful work", async () => {
@@ -155,20 +190,18 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
-      type: "span.start",
-      name: "runtimeDeps.stage",
-      phase: "startup",
-      attributes: { pluginCount: 3 },
-    });
-    expect(events[1]).toMatchObject({
-      type: "span.end",
-      name: "runtimeDeps.stage",
-      phase: "startup",
-      attributes: { pluginCount: 3 },
-    });
-    expect(events[1]?.spanId).toBe(events[0]?.spanId);
-    expect(events[1]?.durationMs).toEqual(expect.any(Number));
+    const start = eventRecord(events, 0);
+    const end = eventRecord(events, 1);
+    expect(start.type).toBe("span.start");
+    expect(start.name).toBe("runtimeDeps.stage");
+    expect(start.phase).toBe("startup");
+    expect(attributesRecord(start).pluginCount).toBe(3);
+    expect(end.type).toBe("span.end");
+    expect(end.name).toBe("runtimeDeps.stage");
+    expect(end.phase).toBe("startup");
+    expect(attributesRecord(end).pluginCount).toBe(3);
+    expect(end.spanId).toBe(start.spanId);
+    expect(end.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("records span error events and rethrows failures", async () => {
@@ -186,13 +219,36 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({
-      type: "span.error",
-      name: "plugins.load",
-      phase: "startup",
-      errorName: "TypeError",
-      errorMessage: "bad plugin",
-    });
+    const errorEvent = eventRecord(events, 1);
+    expect(errorEvent.type).toBe("span.error");
+    expect(errorEvent.name).toBe("plugins.load");
+    expect(errorEvent.phase).toBe("startup");
+    expect(errorEvent.errorName).toBe("TypeError");
+    expect(errorEvent.errorMessage).toBe("bad plugin");
+  });
+
+  it("can omit sensitive span error messages", async () => {
+    const { env, path } = await createTimelineEnv();
+
+    await expect(
+      measureDiagnosticsTimelineSpan(
+        "secrets.prepare",
+        () => {
+          throw new Error('Secret provider "prod" failed for ref "TOKEN_ID"');
+        },
+        { env, omitErrorMessage: true, phase: "startup" },
+      ),
+    ).rejects.toThrow("TOKEN_ID");
+
+    const events = await readTimeline(path);
+    expect(events).toHaveLength(2);
+    const errorEvent = eventRecord(events, 1);
+    expect(errorEvent.type).toBe("span.error");
+    expect(errorEvent.name).toBe("secrets.prepare");
+    expect(errorEvent.errorName).toBe("Error");
+    expect(errorEvent.errorMessage).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain("TOKEN_ID");
+    expect(JSON.stringify(events)).not.toContain("prod");
   });
 
   it("records synchronous spans", async () => {
@@ -206,13 +262,46 @@ describe("diagnostics timeline", () => {
     expect(result).toBe(42);
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
-      type: "span.start",
-      name: "plugins.metadata.scan",
-    });
-    expect(events[1]).toMatchObject({
-      type: "span.end",
-      name: "plugins.metadata.scan",
-    });
+    const start = eventRecord(events, 0);
+    const end = eventRecord(events, 1);
+    expect(start.type).toBe("span.start");
+    expect(start.name).toBe("plugins.metadata.scan");
+    expect(end.type).toBe("span.end");
+    expect(end.name).toBe("plugins.metadata.scan");
+  });
+
+  it("lets nested spans inherit the active timeline phase and parent span", async () => {
+    const { env, path } = await createTimelineEnv();
+
+    const result = await measureDiagnosticsTimelineSpan(
+      "reply.run_agent_turn",
+      () =>
+        measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
+          env,
+        }),
+      {
+        env,
+        phase: "agent-turn",
+      },
+    );
+
+    expect(result).toBe(42);
+    const events = await readTimeline(path);
+    expect(events).toHaveLength(4);
+    const [parentStart, childStart, childEnd, parentEnd] = events;
+    expect(parentStart?.type).toBe("span.start");
+    expect(parentStart?.name).toBe("reply.run_agent_turn");
+    expect(parentStart?.phase).toBe("agent-turn");
+    expect(childStart?.type).toBe("span.start");
+    expect(childStart?.name).toBe("plugins.metadata.scan");
+    expect(childStart?.phase).toBe("agent-turn");
+    expect(childStart?.parentSpanId).toBe(parentStart?.spanId);
+    expect(childEnd?.type).toBe("span.end");
+    expect(childEnd?.name).toBe("plugins.metadata.scan");
+    expect(childEnd?.phase).toBe("agent-turn");
+    expect(childEnd?.parentSpanId).toBe(parentStart?.spanId);
+    expect(parentEnd?.type).toBe("span.end");
+    expect(parentEnd?.name).toBe("reply.run_agent_turn");
+    expect(parentEnd?.phase).toBe("agent-turn");
   });
 });

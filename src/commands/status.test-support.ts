@@ -1,14 +1,15 @@
+// Status test support builds reusable gateway, update, heartbeat, and service fixtures for command tests.
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
-import type { StatusSummary } from "./status.types.js";
 
 type StatusCommandOverviewRowsParams = Parameters<typeof buildStatusCommandOverviewRows>[0];
 type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportData>[0];
@@ -116,6 +117,10 @@ const baseStatusSummary = {
         updatedAt: 1,
         age: 5_000,
         model: "gpt-5.5",
+        configuredModel: "openai/gpt-5.5",
+        selectedModel: "openai/gpt-5.5",
+        modelSelectionReason: null,
+        runtime: "OpenClaw Default",
         totalTokens: 12_000,
         totalTokensFresh: true,
         remainingTokens: 4_000,

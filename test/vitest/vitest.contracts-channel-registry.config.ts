@@ -1,3 +1,4 @@
+// Vitest contracts channel registry config wires the contracts channel registry test shard.
 import {
   channelRegistryContractPatterns,
   createContractsVitestConfig,

@@ -1,7 +1,11 @@
+// Doctor config-flow tests cover config repair, migration, stripping, and validation orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -11,6 +15,21 @@ import {
 type TerminalNote = (message: string, title?: string) => void;
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
+const callGatewayMock = vi.hoisted(() => vi.fn());
+const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
+const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
+const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
+  vi.fn<(cfg: unknown) => string[]>(() => []),
+);
+const noteImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
+  vi.fn<(cfg: unknown) => void>((cfg) => {
+    const warnings = collectImplicitFallbackClobberWarningsMock(cfg);
+    if (warnings.length > 0) {
+      terminalNoteMock(warnings.join("\n"), "Doctor warnings");
+    }
+  }),
+);
 const legacyConfigMigrationForTest = vi.hoisted(() => {
   function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
@@ -211,9 +230,30 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   };
 });
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: terminalNoteMock,
 }));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("./doctor/repair-sequencing.js", async () => {
+  const actual = await vi.importActual<typeof import("./doctor/repair-sequencing.js")>(
+    "./doctor/repair-sequencing.js",
+  );
+  return {
+    ...actual,
+    runDoctorRepairSequence: (params: unknown) => {
+      if (runDoctorRepairSequenceMock.getMockImplementation()) {
+        return runDoctorRepairSequenceMock(params);
+      }
+      return actual.runDoctorRepairSequence(
+        params as Parameters<typeof actual.runDoctorRepairSequence>[0],
+      );
+    },
+  };
+});
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: vi.fn(
@@ -325,7 +365,7 @@ vi.mock("../config/legacy.js", () => {
         addIssue(
           issues,
           ["memorySearch"],
-          'memorySearch is legacy; use agents.defaults.memorySearch. Run "openclaw doctor --fix".',
+          'memorySearch is legacy; use memory.search. Run "openclaw doctor --fix".',
         );
       }
       const gateway = asRecord(root.gateway);
@@ -523,73 +563,118 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
     "name",
     "token",
     "tokenFile",
+    "botId",
+    "secret",
     "botToken",
-    "appToken",
-    "account",
-    "signalNumber",
-    "authDir",
-    "cliPath",
-    "dbPath",
-    "httpUrl",
-    "httpHost",
-    "httpPort",
     "webhookPath",
     "webhookUrl",
-    "webhookSecret",
-    "service",
-    "region",
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceName",
-    "url",
-    "code",
     "dmPolicy",
     "allowFrom",
     "groupPolicy",
     "groupAllowFrom",
     "defaultTo",
   ]);
-  const fallbackSingleAccountKeys: Record<string, readonly string[]> = {
-    telegram: ["streaming"],
+  const legacyCommonSingleAccountKeys = new Set([
+    "accessToken",
+    "appToken",
+    "httpUrl",
+    "password",
+    "userId",
+    "webhookSecret",
+  ]);
+  const declaredSingleAccountKeys: Record<string, readonly string[]> = {
+    discord: [],
+    imessage: ["cliPath", "dbPath", "service", "region"],
+    irc: ["password"],
+    matrix: [
+      "homeserver",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+      "encryption",
+    ],
+    mattermost: [],
+    "nextcloud-talk": ["rooms"],
+    signal: ["signalNumber", "account", "cliPath", "httpUrl", "httpHost", "httpPort"],
+    slack: ["appToken"],
+    telegram: ["streaming", "webhookSecret"],
+    tlon: ["url", "code"],
+    twitch: ["accessToken"],
+    whatsapp: ["authDir"],
+    zalo: ["webhookSecret", "tokenFile"],
   };
   const namedAccountPromotionKeys: Record<string, readonly string[]> = {
+    matrix: [
+      "name",
+      "homeserver",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+      "encryption",
+    ],
     telegram: ["botToken", "tokenFile"],
   };
 
+  const resolveKeys = ({
+    channelKey,
+    channel,
+  }: {
+    channelKey: string;
+    channel: Record<string, unknown>;
+  }) => {
+    const accounts =
+      channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
+        ? (channel.accounts as Record<string, unknown>)
+        : {};
+    const hasNamedAccounts = Object.keys(accounts).some(Boolean);
+    const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
+    const hasDeclarations = Object.hasOwn(declaredSingleAccountKeys, channelKey);
+    const declaredKeys = declaredSingleAccountKeys[channelKey];
+    return Object.entries(channel)
+      .filter(([key, value]) => {
+        if (key === "accounts" || key === "enabled" || value === undefined) {
+          return false;
+        }
+        const isKnownKey =
+          commonSingleAccountKeys.has(key) ||
+          (hasDeclarations
+            ? (declaredKeys?.includes(key) ?? false)
+            : legacyCommonSingleAccountKeys.has(key));
+        if (!isKnownKey) {
+          return false;
+        }
+        if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
+          return false;
+        }
+        return true;
+      })
+      .map(([key]) => key);
+  };
+
   return {
-    resolveSingleAccountKeysToMove: ({
-      channelKey,
-      channel,
-    }: {
+    resolveSingleAccountKeysToMove: resolveKeys,
+    resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
-    }) => {
-      const accounts =
-        channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
-          ? (channel.accounts as Record<string, unknown>)
-          : {};
-      const hasNamedAccounts = Object.keys(accounts).some(Boolean);
-      const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
-      return Object.entries(channel)
-        .filter(([key, value]) => {
-          if (key === "accounts" || key === "enabled" || value === undefined) {
-            return false;
-          }
-          const isKnownKey =
-            commonSingleAccountKeys.has(key) ||
-            (fallbackSingleAccountKeys[channelKey]?.includes(key) ?? false);
-          if (!isKnownKey) {
-            return false;
-          }
-          if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
-            return false;
-          }
-          return true;
-        })
-        .map(([key]) => key);
-    },
+    }) => ({
+      keysToMove: resolveKeys(params),
+      shouldDeferPromotion:
+        !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&
+        Object.keys(params.channel).some(
+          (key) =>
+            !commonSingleAccountKeys.has(key) &&
+            !legacyCommonSingleAccountKeys.has(key) &&
+            !["accounts", "defaultAccount", "enabled"].includes(key),
+        ),
+    }),
   };
 });
 
@@ -626,6 +711,58 @@ vi.mock("./doctor/shared/stale-plugin-config.js", () => ({
   })),
 }));
 
+vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
+  collectBundledProviderAllowlistPolicyWarnings: vi.fn(() => []),
+  collectPluginToolAllowlistWarnings: vi.fn(() => []),
+}));
+
+vi.mock("../doctor-plugin-registry.js", () => ({
+  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(async () => undefined),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
+}));
+
+vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
+  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(async () => ({
+    detected: [],
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/context-engine-host-compat.js", () => ({
+  maybeRepairContextEngineHostCompatibility: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
+  repairMissingConfiguredPluginInstalls: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+    failedPluginIds: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: vi.fn(async () => []),
+}));
+
+vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
+  cleanupLegacyPluginDependencyState: vi.fn(async () => ({
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
+  repairStaleOAuthProfileShadows: vi.fn(async () => ({
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 vi.mock("./doctor/channel-capabilities.js", () => {
   const byChannel = {
     googlechat: {
@@ -643,7 +780,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {
@@ -664,6 +801,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
       channelName && channelName in byChannel
         ? byChannel[channelName as keyof typeof byChannel]
         : fallback,
+    resolveDoctorChannelAccountIds: () => undefined,
   };
 });
 
@@ -679,7 +817,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     return Boolean(
       talk &&
       ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
-        Object.prototype.hasOwnProperty.call(talk, key),
+        Object.hasOwn(talk, key),
       ),
     );
   }
@@ -853,6 +991,14 @@ vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
 });
 
 vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: vi.fn(() => undefined),
+  resolvePluginSetupRegistry: vi.fn(() => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  })),
   resolvePluginSetupAutoEnableReasons: vi.fn(() => []),
   runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
     config,
@@ -1086,65 +1232,71 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
     ];
   }
 
-  return {
-    collectDoctorPreviewWarnings: vi.fn(
-      async ({
-        cfg,
-      }: {
-        cfg: {
-          channels?: Record<string, unknown>;
-          plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
-        };
-        doctorFixCommand: string;
-      }) => {
-        const warnings: string[] = [];
-        const telegram = asRecord(cfg.channels?.telegram);
-        if (telegram) {
-          const telegramBlocked =
-            cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
-          if (telegramBlocked) {
-            warnings.push(
-              cfg.plugins?.enabled === false
-                ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
-                : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
-            );
-          } else {
+  async function collectWarnings({
+    cfg,
+  }: {
+    cfg: {
+      channels?: Record<string, unknown>;
+      plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
+    };
+    doctorFixCommand: string;
+  }): Promise<string[]> {
+    const warnings: string[] = [];
+    const telegram = asRecord(cfg.channels?.telegram);
+    if (telegram) {
+      const telegramBlocked =
+        cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
+      if (telegramBlocked) {
+        warnings.push(
+          cfg.plugins?.enabled === false
+            ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
+            : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
+        );
+      } else {
+        warnings.push(
+          ...telegramFirstTimeWarnings({
+            account: telegram,
+            prefix: "channels.telegram",
+          }),
+        );
+        const accounts = asRecord(telegram.accounts);
+        for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
+          const account = asRecord(accountRaw);
+          if (account) {
             warnings.push(
               ...telegramFirstTimeWarnings({
-                account: telegram,
-                prefix: "channels.telegram",
+                account,
+                parent: telegram,
+                prefix: `channels.telegram.accounts.${accountId}`,
               }),
             );
-            const accounts = asRecord(telegram.accounts);
-            for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-              const account = asRecord(accountRaw);
-              if (account) {
-                warnings.push(
-                  ...telegramFirstTimeWarnings({
-                    account,
-                    parent: telegram,
-                    prefix: `channels.telegram.accounts.${accountId}`,
-                  }),
-                );
-              }
-            }
           }
         }
-        const imessage = asRecord(cfg.channels?.imessage);
-        if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
-          warnings.push(
-            '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
-          );
-        }
-        return warnings;
-      },
-    ),
+      }
+    }
+    const imessage = asRecord(cfg.channels?.imessage);
+    if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
+      warnings.push(
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
+      );
+    }
+    return warnings;
+  }
+
+  return {
+    collectDoctorPreviewNotes: vi.fn(async (params) => {
+      collectDoctorPreviewNotesParamsMock(params);
+      return {
+        infoNotes: [],
+        warningNotes: await collectWarnings(params),
+      };
+    }),
   };
 });
 
 vi.mock("./doctor-config-preflight.js", async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
   const {
     collectRelevantDoctorPluginIds,
     listPluginDoctorLegacyConfigRules,
@@ -1156,8 +1308,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   function resolveConfigPath() {
     const stateDir =
       process.env.OPENCLAW_STATE_DIR ||
-      (process.env.HOME ? path.join(process.env.HOME, ".openclaw") : "");
-    return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
+      (process.env.HOME ? pathLocal.join(process.env.HOME, ".openclaw") : "");
+    return process.env.OPENCLAW_CONFIG_PATH || pathLocal.join(stateDir, "openclaw.json");
   }
 
   function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
@@ -1198,34 +1350,48 @@ vi.mock("./doctor-config-preflight.js", async () => {
   }
 
   return {
-    runDoctorConfigPreflight: vi.fn(async () => {
+    runDoctorConfigPreflight: vi.fn(async (options: unknown) => {
+      runDoctorConfigPreflightOptionsMock(options);
       const injected = getDoctorConfigInputForTest();
       const configPath = injected?.path ?? resolveConfigPath();
-      let parsed: Record<string, unknown> = injected?.config
-        ? structuredClone(injected.config)
-        : {};
+      let parsed: Record<string, unknown> = injected?.parsed
+        ? structuredClone(injected.parsed)
+        : injected?.config
+          ? structuredClone(injected.config)
+          : {};
+      let injectedEffectiveConfig = injected?.config ? structuredClone(injected.config) : parsed;
       let exists = injected?.exists ?? false;
       if (!injected) {
         try {
-          parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+          parsed = JSON.parse(await fsLocal.readFile(configPath, "utf-8")) as Record<
+            string,
+            unknown
+          >;
           exists = true;
+          injectedEffectiveConfig = parsed;
         } catch {
           parsed = {};
+          injectedEffectiveConfig = parsed;
         }
       }
+      const sourceConfigBeforeMigrations = injected?.sourceConfigBeforeMigrations
+        ? structuredClone(injected.sourceConfigBeforeMigrations)
+        : injectedEffectiveConfig;
       if (injected?.preflightMode === "fast") {
         return {
           snapshot: {
             exists,
             path: configPath,
             parsed,
-            config: parsed,
-            sourceConfig: parsed,
+            agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+            sourceConfigBeforeMigrations,
+            config: injectedEffectiveConfig,
+            sourceConfig: injectedEffectiveConfig,
             valid: true,
             warnings: [],
             legacyIssues: [],
           },
-          baseConfig: parsed,
+          baseConfig: injectedEffectiveConfig,
         };
       }
       if (injected?.preflightMode === "issues") {
@@ -1241,13 +1407,15 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
-            config: parsed,
-            sourceConfig: parsed,
+            agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+            sourceConfigBeforeMigrations,
+            config: injectedEffectiveConfig,
+            sourceConfig: injectedEffectiveConfig,
             valid: legacyIssues.length === 0,
             warnings: [],
             legacyIssues,
           },
-          baseConfig: parsed,
+          baseConfig: injectedEffectiveConfig,
         };
       }
       const legacyIssues = findLegacyConfigIssues(
@@ -1264,6 +1432,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
           exists,
           path: configPath,
           parsed,
+          agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+          sourceConfigBeforeMigrations,
           config: effectiveConfig,
           sourceConfig: effectiveConfig,
           valid: legacyIssues.length === 0,
@@ -1311,9 +1481,12 @@ vi.mock("./doctor-config-analysis.js", () => {
   }
 
   return {
+    collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
     formatConfigPath,
+    noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
       const next = structuredClone(config);
@@ -1338,7 +1511,10 @@ vi.mock("./doctor-config-analysis.js", () => {
 });
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
   autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
+  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
+  migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
 }));
 
 function resetTerminalNoteMock() {
@@ -1352,7 +1528,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -1377,15 +1559,51 @@ type RepairedDiscordPolicy = {
 };
 
 describe("doctor config flow", () => {
+  beforeAll(async () => {
+    await Promise.all([
+      import("../config/plugin-auto-enable.js"),
+      import("./doctor/repair-sequencing.js"),
+      import("./doctor/shared/channel-doctor.js"),
+      import("./doctor/shared/legacy-config-issues.js"),
+      import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
+      import("./doctor/shared/preview-warnings.js"),
+      import("./doctor/shared/hooks-token-reuse-repair.js"),
+    ]);
+    await collectDoctorWarnings({
+      channels: {
+        slack: {
+          dangerouslyAllowNameMatching: true,
+          accounts: { work: { allowFrom: ["alice"] } },
+        },
+      },
+    });
+    await collectDoctorWarnings({
+      channels: {
+        googlechat: {
+          groupPolicy: "allowlist",
+          accounts: { work: { groupPolicy: "allowlist" } },
+        },
+      },
+    });
+  });
+
   beforeEach(() => {
     terminalNoteMock.mockClear();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValue({});
+    runDoctorRepairSequenceMock.mockReset();
+    collectDoctorPreviewNotesParamsMock.mockClear();
+    collectImplicitFallbackClobberWarningsMock.mockClear();
+    collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
+    noteImplicitFallbackClobberWarningsMock.mockClear();
+    runDoctorConfigPreflightOptionsMock.mockClear();
   });
 
   it("preserves invalid config for doctor repairs", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
         gateway: { auth: { mode: "token", token: 123 } },
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: { default: true } } },
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1393,6 +1611,433 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("plans persistence of the injected main roster during doctor repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: {
+          entries: { main: { default: true, workspace: "/tmp/migrated-main" } },
+        },
+        gateway: { mode: "local" },
+      },
+      parsedConfig: { gateway: { mode: "local" } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.entries).toEqual({
+      main: { default: true, workspace: "/tmp/migrated-main" },
+    });
+  });
+
+  it("removes a legacy list when Doctor persists keyed roster entries", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] } },
+      parsedConfig: {
+        agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] },
+      },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.entries).toEqual({
+      ops: { default: true, workspace: "/srv/ops" },
+    });
+    expect(result.cfg.agents).not.toHaveProperty("list");
+  });
+
+  it("materializes ambient roles for a multi-agent configured default", async () => {
+    const config = {
+      agents: {
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { telegram: { enabled: true } },
+      talk: { provider: "test" },
+    };
+    const result = await runDoctorConfigWithInput({
+      config,
+      parsedConfig: config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.bindings).toEqual([
+      { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+    ]);
+    expect(result.cfg.agents?.defaults).toMatchObject({
+      heartbeat: { agentId: "ops" },
+      systemAgent: { agentId: "ops" },
+    });
+    expect(result.cfg.talk).toMatchObject({ provider: "test", agentId: "ops" });
+  });
+
+  it("preserves shared all-agent heartbeat enrollment during materialization", async () => {
+    const config = {
+      agents: {
+        defaults: { heartbeat: { every: "1h" } },
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { telegram: { enabled: true } },
+      talk: { provider: "test" },
+    };
+    const result = await runDoctorConfigWithInput({
+      config,
+      parsedConfig: config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.defaults?.heartbeat).toEqual({ every: "1h" });
+    expect(result.cfg.agents?.defaults?.heartbeat).not.toHaveProperty("agentId");
+    expect(result.cfg.agents?.defaults?.systemAgent).toEqual({ agentId: "ops" });
+  });
+
+  it("does not rematerialize explicit roles or touch single-agent configs", async () => {
+    const materialized = {
+      agents: {
+        defaults: {
+          heartbeat: { agentId: "ops" },
+          systemAgent: { agentId: "ops" },
+        },
+        entries: { ops: { default: true }, research: {} },
+      },
+      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+      channels: { telegram: { enabled: true } },
+      talk: { provider: "test", agentId: "ops" },
+    };
+    const secondRun = await runDoctorConfigWithInput({
+      config: materialized,
+      parsedConfig: materialized,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const singleAgent = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { ops: { default: true } } },
+        channels: { telegram: { enabled: true } },
+        talk: { provider: "test" },
+      },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(secondRun.shouldWriteConfig).toBe(false);
+    expect(singleAgent.shouldWriteConfig).toBe(false);
+  });
+
+  it("preserves malformed keyed entries for schema validation during repair", async () => {
+    const agents = { entries: { main: {}, broken: null as never } };
+    const result = await runDoctorConfigWithInput({
+      config: { agents },
+      parsedConfig: { agents },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.entries).toEqual({
+      main: { default: true },
+      broken: null,
+    });
+  });
+
+  it("detects a legacy roster after environment resolution", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { ops: { default: true } } } },
+      parsedConfig: { agents: { list: [{ id: "${AGENT_ID}", default: true }] } },
+      sourceConfigBeforeMigrations: {
+        agents: { list: [{ id: "ops", default: true }] },
+      },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents).toEqual({ entries: { ops: { default: true } } });
+  });
+
+  it("preserves a roster supplied by an included config during repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { ops: { default: true } } } },
+      parsedConfig: { $include: "./agents.json" },
+      agentRosterIncludeOwned: true,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.cfg.agents?.entries).toEqual({ ops: { default: true } });
+  });
+
+  it("preserves ownership of an explicitly empty included roster", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { main: { default: true } } } },
+      parsedConfig: { $include: "./agents.json" },
+      sourceConfigBeforeMigrations: { agents: { entries: {} } },
+      agentRosterIncludeOwned: true,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+  });
+
+  it("persists an injected roster when a root include contributes only channels", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { main: { default: true } } },
+        channels: { telegram: { enabled: true } },
+      },
+      parsedConfig: { $include: "./channels.json" },
+      sourceConfigBeforeMigrations: { channels: { telegram: { enabled: true } } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+  });
+
+  it("repairs a locally authored roster when unrelated includes exist", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: {
+          defaults: { workspace: "/tmp/ops" },
+          entries: { main: { default: true } },
+        },
+      },
+      parsedConfig: { $include: "./channels.json", agents: { entries: {} } },
+      sourceConfigBeforeMigrations: {
+        channels: { telegram: { enabled: true } },
+        agents: { entries: {} },
+      },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents).toEqual({
+      defaults: { workspace: "/tmp/ops" },
+      entries: { main: { default: true } },
+    });
+  });
+
+  it("repairs a missing roster when only a nested channel include exists", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { main: { default: true } } } },
+      parsedConfig: { channels: { $include: "./channels.json" } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+  });
+
+  it("does not persist an implicit roster when no config file exists", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { main: { default: true } } } },
+      exists: false,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+  });
+
+  it("enables Doctor-only state migrations only for explicit repair", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: false }),
+    );
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: true }),
+    );
+  });
+
+  it("collects plugin blocker previews from the pre-auto-enable config", async () => {
+    await runDoctorConfigWithInput({
+      config: {
+        plugins: {
+          allow: ["existing-plugin"],
+        },
+        tools: {
+          alsoAllow: ["browser"],
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(collectDoctorPreviewNotesParamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["existing-plugin", "browser"],
+          }),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["existing-plugin"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("reloads gateway secrets and refreshes auth status after auth profile repairs", async () => {
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
+      warningNotes: [],
+      authProfilesRepaired: true,
+    }));
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  });
+
+  it("does not refresh gateway before writing a config-only auth repair", async () => {
+    runDoctorRepairSequenceMock.mockImplementation(
+      async (params: {
+        state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
+      }) => {
+        const repaired = { ...params.state.candidate, auth: { order: {} } };
+        return {
+          state: {
+            ...params.state,
+            cfg: repaired,
+            candidate: repaired,
+            pendingChanges: true,
+          },
+          changeNotes: ["Removed a stale configured auth order."],
+          warningNotes: [],
+          authProfilesRepaired: false,
+        };
+      },
+    );
+
+    const result = await runDoctorConfigWithInput({
+      config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.auth?.order).toEqual({});
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps doctor repair silent when gateway secrets reload fails", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: ["Removed stale OAuth auth profile shadow openai-codex."],
+      warningNotes: [],
+      authProfilesRepaired: true,
+    }));
+
+    await expect(
+      runDoctorConfigWithInput({
+        config: {},
+        repair: true,
+        run: loadAndMaybeMigrateDoctorConfig,
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  });
+
+  it("previews and repairs hooks token reuse of gateway auth", async () => {
+    const config = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "shared-gateway-token-1234567890",
+        },
+      },
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+      },
+    };
+    const previewNotes = resetTerminalNoteMock();
+    const preview = await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(preview.shouldWriteConfig).toBe(false);
+    expect(preview.cfg.hooks?.token).toBe("shared-gateway-token-1234567890");
+    expect(
+      previewNotes.mock.calls.some(
+        ([message, title]) =>
+          title === "Doctor changes preview" &&
+          message.includes("Rotated hooks.token because it reused active Gateway"),
+      ),
+    ).toBe(true);
+    expect(
+      previewNotes.mock.calls.some(
+        ([message, title]) =>
+          title === "Doctor" &&
+          message.includes("openclaw doctor --fix") &&
+          message.includes("rotate hooks.token"),
+      ),
+    ).toBe(true);
+
+    const repair = await runDoctorConfigWithInput({
+      config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repair.shouldWriteConfig).toBe(true);
+    expect(repair.cfg.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
+    expect(repair.cfg.hooks?.token).not.toBe("shared-gateway-token-1234567890");
   });
 
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
@@ -1409,6 +2054,43 @@ describe("doctor config flow", () => {
       },
     });
     expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+  });
+
+  it("emits implicit fallback clobber warnings from the loaded config", async () => {
+    collectImplicitFallbackClobberWarningsMock.mockReturnValueOnce([
+      '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+    ]);
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+        entries: { ops: { default: true, model: "openai/gpt-5.3" } },
+      },
+    };
+
+    await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
+    const [warningParams] = expectDefined(
+      (
+        noteImplicitFallbackClobberWarningsMock.mock.calls as unknown as Array<
+          [{ agents?: unknown }]
+        >
+      )[0],
+      "(noteImplicitFallbackClobberWarningsMock.mock.calls as unknown as Array<\n        [{ agents?: unknown }]\n      >)[0] test invariant",
+    );
+    expect(warningParams.agents).toStrictEqual(config.agents);
+    const doctorWarnings = terminalNoteMock.mock.calls
+      .filter(([, title]) => title === "Doctor warnings")
+      .map(([message]) => message);
+    expect(doctorWarnings.join("\n")).toContain("clobbers agents.defaults.model.fallbacks");
   });
 
   it("warns when hooks transformsDir points outside the hook transforms root", async () => {
@@ -1433,6 +2115,38 @@ describe("doctor config flow", () => {
     expect(warning).toContain("/virtual/.openclaw/workspace/skills/linear-webhook");
     expect(warning).toContain("/virtual/.openclaw/hooks/transforms");
     expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
+  });
+
+  it("warns when internal hook entries include unsupported loader keys", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        internal: {
+          entries: {
+            "custom-hook": {
+              enabled: true,
+              handler: "./hooks/custom.ts",
+              extraDirs: ["./hooks"],
+              env: { OPENCLAW_CUSTOM_HOOK: "1" },
+            },
+            "valid-hook": {
+              enabled: true,
+              paths: ["./tracked"],
+            },
+            "null-hook": null,
+          },
+        },
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.internal.entries.custom-hook:");
+    expect(warning).toContain(
+      "unsupported loader keys handler, extraDirs will not load hook modules",
+    );
+    expect(warning).toContain("bootstrap-extra-files for session bootstrap content");
+    expect(warning).toContain("Doctor cannot rewrite this automatically");
+    expect(warning).not.toContain("hooks.internal.entries.valid-hook");
+    expect(warning).not.toContain("hooks.internal.entries.null-hook");
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
@@ -1625,7 +2339,7 @@ describe("doctor config flow", () => {
       config: {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: { default: true } } },
         session: {
           maintenance: {
             rotateBytes: "10mb",
@@ -1658,14 +2372,16 @@ describe("doctor config flow", () => {
     });
     const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
     expect(browser.relayBindHost).toBeUndefined();
+    // driver "extension" is the live Chrome extension relay driver; repair keeps it.
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    ).toBe("extension");
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
-  it("preserves commitments config on repair", async () => {
+  it("removes retired commitments config on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
@@ -1677,11 +2393,8 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(result.cfg.commitments).toEqual({
-      enabled: true,
-      maxPerDay: 2,
-    });
-  });
+    expect(result.cfg).not.toHaveProperty("commitments");
+  }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
@@ -2016,8 +2729,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2161,23 +2874,52 @@ describe("doctor config flow", () => {
         expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
         expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
         expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
-        expect(cfg.channels.discord.guilds["100"].users).toEqual(["111"]);
-        expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
-        expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
-        expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.guilds["100"],
+            'cfg.channels.discord.guilds["100"] test invariant',
+          ).users,
+        ).toEqual(["111"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.guilds["100"],
+            'cfg.channels.discord.guilds["100"] test invariant',
+          ).roles,
+        ).toEqual(["222"]);
+        const defaultGuild = expectDefined(
+          cfg.channels.discord.guilds["100"],
+          "default Discord guild",
+        );
+        const generalChannel = expectDefined(
+          defaultGuild.channels.general,
+          "general Discord channel",
+        );
+        expect(generalChannel.users).toEqual(["333"]);
+        expect(generalChannel.roles).toEqual(["444"]);
         expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
         expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
         expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
         expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
         expect(cfg.channels.discord.accounts.work.execApprovals.approvers).toEqual(["888"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual(["999"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual(["1010"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.users).toEqual([
-          "1111",
-        ]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles).toEqual([
-          "1212",
-        ]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.accounts.work.guilds["200"],
+            'cfg.channels.discord.accounts.work.guilds["200"] test invariant',
+          ).users,
+        ).toEqual(["999"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.accounts.work.guilds["200"],
+            'cfg.channels.discord.accounts.work.guilds["200"] test invariant',
+          ).roles,
+        ).toEqual(["1010"]);
+        const workGuild = expectDefined(
+          cfg.channels.discord.accounts.work.guilds["200"],
+          "work Discord guild",
+        );
+        const helpChannel = expectDefined(workGuild.channels.help, "help Discord channel");
+        expect(helpChannel.users).toEqual(["1111"]);
+        expect(helpChannel.roles).toEqual(["1212"]);
       },
       { skipSessionCleanup: true },
     );
@@ -2209,7 +2951,83 @@ describe("doctor config flow", () => {
     };
 
     expect(cfg.channels.discord.allowFrom).toBeUndefined();
-    expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
+    expect(
+      expectDefined(
+        cfg.channels.discord.accounts.default,
+        "cfg.channels.discord.accounts.default test invariant",
+      ).allowFrom,
+    ).toEqual(["123"]);
+  });
+
+  it("defers absent-plugin promotion instead of creating a partial default account", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          "uninstalled-demo": {
+            dmPolicy: "allowlist",
+            appToken: "covered-legacy-key",
+            customAuth: "plugin-owned",
+            accounts: {
+              work: { enabled: true },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const channel = (
+      result.cfg as unknown as {
+        channels: Record<
+          string,
+          {
+            dmPolicy?: string;
+            appToken?: string;
+            customAuth?: string;
+            accounts?: Record<string, unknown>;
+          }
+        >;
+      }
+    ).channels["uninstalled-demo"];
+    expect(channel?.dmPolicy).toBe("allowlist");
+    expect(channel?.appToken).toBe("covered-legacy-key");
+    expect(channel?.customAuth).toBe("plugin-owned");
+    expect(channel?.accounts).toEqual({ work: { enabled: true } });
+  });
+
+  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          "legacy-demo": {
+            dmPolicy: "allowlist",
+            appToken: "legacy-app-token",
+            accounts: {
+              work: { enabled: true },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const channel = (
+      result.cfg as unknown as {
+        channels: Record<
+          string,
+          { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+        >;
+      }
+    ).channels["legacy-demo"];
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
@@ -2262,8 +3080,7 @@ describe("doctor config flow", () => {
     const result = await withTempHome(
       async (home) => {
         const configDir = path.join(home, ".openclaw");
-        const credentialsDir = path.join(configDir, "credentials");
-        await fs.mkdir(credentialsDir, { recursive: true });
+        await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
           path.join(configDir, "openclaw.json"),
           JSON.stringify(
@@ -2280,11 +3097,11 @@ describe("doctor config flow", () => {
           ),
           "utf-8",
         );
-        await fs.writeFile(
-          path.join(credentialsDir, "telegram-allowFrom.json"),
-          JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
-          "utf-8",
-        );
+        writeChannelPairingStateSnapshot("telegram", {
+          version: 1,
+          requests: [],
+          allowFrom: { default: ["12345"] },
+        });
         return await loadAndMaybeMigrateDoctorConfig({
           options: { nonInteractive: true, repair: true },
           confirm: async () => false,
@@ -2292,6 +3109,7 @@ describe("doctor config flow", () => {
       },
       { skipSessionCleanup: true },
     );
+    closeOpenClawStateDatabaseForTest();
 
     const cfg = result.cfg as {
       channels: {
@@ -2432,28 +3250,18 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
-      model: "anthropic/claude-3-5-haiku-20241022",
-      every: "30m",
-    });
+    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
     expect(cfg.gateway?.bind).toBe("lan");
     expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
+    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
+    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
+    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
+    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {
@@ -2535,7 +3343,7 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("agents.defaults.heartbeat");
       expect(legacyMessages).toContain("channels.defaults.heartbeat");
       expect(legacyMessages).toContain("memorySearch:");
-      expect(legacyMessages).toContain("agents.defaults.memorySearch");
+      expect(legacyMessages).toContain("use memory.search");
       expect(legacyMessages).toContain("gateway.bind:");
       expect(legacyMessages).toContain("gateway.bind host aliases");
       expect(legacyMessages).toContain("channels.telegram.groupMentionsOnly:");
@@ -2564,6 +3372,52 @@ describe("doctor config flow", () => {
             message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes preview");
+      expect(changeTitles).not.toContain("Doctor changes");
+      const previewPanel = noteSpy.mock.calls.find(
+        ([message, title]) =>
+          title === "Doctor changes preview" && message.includes("Moved heartbeat to"),
+      );
+      expect(previewPanel).toBeDefined();
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes");
+      expect(changeTitles).not.toContain("Doctor changes preview");
     } finally {
       noteSpy.mockClear();
     }
@@ -2617,6 +3471,19 @@ describe("doctor config flow", () => {
                     modelId: "eleven_v3",
                   },
                 },
+                realtime: {
+                  provider: "openai",
+                  providers: {
+                    openai: {
+                      model: "gpt-realtime",
+                    },
+                  },
+                  model: "gpt-realtime",
+                  speakerVoice: "cedar",
+                  mode: "realtime",
+                  transport: "gateway-relay",
+                  brain: "agent-consult",
+                },
               },
             },
             null,
@@ -2641,7 +3508,7 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }
@@ -2669,3 +3536,4 @@ describe("doctor config flow", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

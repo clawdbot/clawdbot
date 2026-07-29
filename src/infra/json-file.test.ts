@@ -1,3 +1,4 @@
+// Covers JSON file load/save behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -166,19 +167,25 @@ describe("json-file helpers", () => {
         const linkPath = path.join(root, "config-link.json");
         fs.symlinkSync(targetPath, linkPath);
 
-        expect(() => saveJsonFile(linkPath, SAVED_PAYLOAD)).toThrow(
-          expect.objectContaining({ code: "ENOENT" }),
-        );
+        let saveError: unknown;
+        try {
+          saveJsonFile(linkPath, SAVED_PAYLOAD);
+        } catch (error) {
+          saveError = error;
+        }
+        if (saveError === undefined) {
+          throw new Error("Expected saveJsonFile to fail");
+        }
+        expect((saveError as { code?: unknown }).code).toBe("ENOENT");
         expect(fs.existsSync(missingTargetDir)).toBe(false);
         expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
       });
     },
   );
 
-  it("falls back to copy when rename-based overwrite fails", async () => {
+  it("preserves payload when rename-based overwrite reports EPERM", async () => {
     await withJsonPath(({ root, pathname }) => {
       writeExistingJson(pathname);
-      const copySpy = vi.spyOn(fs, "copyFileSync");
       const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
         const err = new Error("EPERM") as NodeJS.ErrnoException;
         err.code = "EPERM";
@@ -187,8 +194,7 @@ describe("json-file helpers", () => {
 
       saveJsonFile(pathname, SAVED_PAYLOAD);
 
-      expect(renameSpy).toHaveBeenCalledOnce();
-      expect(copySpy).toHaveBeenCalledOnce();
+      expect(renameSpy).toHaveBeenCalled();
       expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
       expect(fs.readdirSync(root)).toEqual(["config.json"]);
     });

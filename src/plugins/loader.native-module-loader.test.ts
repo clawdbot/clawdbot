@@ -1,3 +1,4 @@
+/** Verifies plugin loader behavior for native module loading and resolver hooks. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,6 +126,7 @@ describe("createPluginModuleLoader", () => {
 
     loadOpenClawPlugins({
       cache: false,
+      installRecords: {},
       workspaceDir: pluginRoot,
       onlyPluginIds: ["demo"],
       config: {
@@ -138,7 +140,7 @@ describe("createPluginModuleLoader", () => {
       },
     });
 
-    expect(sourceLoaderCalls).toEqual([]);
+    expect(sourceLoaderCalls).toStrictEqual([]);
   });
 
   it("loads packaged JavaScript without creating a module loader", async () => {
@@ -154,6 +156,8 @@ describe("createPluginModuleLoader", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      installRecords: {},
+      onlyPluginIds: ["npm-demo"],
       config: {
         plugins: {
           enabled: true,
@@ -171,6 +175,6 @@ describe("createPluginModuleLoader", () => {
     });
 
     expect(registry.plugins.find((plugin) => plugin.id === "npm-demo")?.status).toBe("loaded");
-    expect(sourceLoaderCalls).toEqual([]);
+    expect(sourceLoaderCalls).toStrictEqual([]);
   });
 });

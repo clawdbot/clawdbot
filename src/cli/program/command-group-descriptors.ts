@@ -1,23 +1,25 @@
+// Descriptor-to-lazy-command-group adapters used by core and sub-CLI registration.
 import type { Command } from "commander";
+import type { MachineOutputResolver } from "../machine-output-argv.js";
 
+/** Descriptor for one root command placeholder. */
 export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  machineOutput?: MachineOutputResolver;
+  hidden?: boolean;
+  parentDefaultHelp?: boolean;
 };
 
+/** Group spec that names the placeholders owned by one registrar. */
 export type CommandGroupDescriptorSpec<TRegister> = {
   commandNames: readonly string[];
   register: TRegister;
 };
 
-export type ImportedCommandGroupDefinition<TRegisterArgs, TModule> = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<TModule>;
-  register: (module: TModule, args: TRegisterArgs) => Promise<void> | void;
-};
-
-export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
+/** Resolved group entry after descriptor lookup. */
+type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
   placeholders: TDescriptor[];
   register: TRegister;
 };
@@ -33,7 +35,8 @@ function buildDescriptorIndex<TDescriptor extends NamedCommandDescriptor>(
   return new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
 }
 
-export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
+/** Resolve named command-group specs into descriptor-backed entries. */
+function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
   descriptors: readonly TDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
 ): ResolvedCommandGroupEntry<TDescriptor, TRegister>[] {
@@ -50,6 +53,7 @@ export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescr
   }));
 }
 
+/** Build lazy command-group entries with a mapped program registrar. */
 export function buildCommandGroupEntries<TRegister>(
   descriptors: readonly NamedCommandDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
@@ -61,6 +65,7 @@ export function buildCommandGroupEntries<TRegister>(
   }));
 }
 
+/** Define a lazy group that imports its module at registration time. */
 export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
   commandNames: readonly string[],
   loadModule: () => Promise<TModule>,
@@ -75,47 +80,13 @@ export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
   };
 }
 
-export function defineImportedCommandGroupSpecs<TRegisterArgs, TModule>(
-  definitions: readonly ImportedCommandGroupDefinition<TRegisterArgs, TModule>[],
-): CommandGroupDescriptorSpec<(args: TRegisterArgs) => Promise<void>>[] {
-  return definitions.map((definition) =>
-    defineImportedCommandGroupSpec(
-      definition.commandNames,
-      definition.loadModule,
-      definition.register,
-    ),
-  );
-}
-
-type ProgramCommandRegistrar = (program: Command) => Promise<void> | void;
 type AnyImportedProgramCommandGroupDefinition = {
   commandNames: readonly string[];
   loadModule: () => Promise<Record<string, unknown>>;
   exportName: string;
 };
 
-export type ImportedProgramCommandGroupDefinition<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
-> = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<TModule>;
-  exportName: TKey;
-};
-
-export function defineImportedProgramCommandGroupSpec<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
->(
-  definition: ImportedProgramCommandGroupDefinition<TModule, TKey>,
-): CommandGroupDescriptorSpec<(program: Command) => Promise<void>> {
-  return defineImportedCommandGroupSpec(
-    definition.commandNames,
-    definition.loadModule,
-    (module, program: Command) => module[definition.exportName](program),
-  );
-}
-
+/** Map program-level imported command definitions to lazy specs with export validation. */
 export function defineImportedProgramCommandGroupSpecs(
   definitions: readonly AnyImportedProgramCommandGroupDefinition[],
 ): CommandGroupDescriptorSpec<(program: Command) => Promise<void>>[] {

@@ -1,3 +1,4 @@
+/** Tests manifest owner availability policy for bundled, workspace, and installed plugins. */
 import { describe, expect, it } from "vitest";
 import { normalizePluginsConfig } from "./config-state.js";
 import {

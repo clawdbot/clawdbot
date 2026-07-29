@@ -34,7 +34,9 @@ export async function resolveTargetIdAfterNavigate(opts: {
     const first = pickReplacement(await opts.listTabs());
     currentTargetId = first.targetId;
     if (first.shouldRetry) {
-      await new Promise((r) => setTimeout(r, opts.retryDelayMs ?? 800));
+      await new Promise((r) => {
+        setTimeout(r, opts.retryDelayMs ?? 800);
+      });
       currentTargetId = pickReplacement(await opts.listTabs(), {
         allowSingleTabFallback: true,
       }).targetId;

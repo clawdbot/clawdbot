@@ -1,11 +1,11 @@
+// Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
-import { isValueToken } from "../infra/cli-root-options.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
@@ -15,12 +15,8 @@ type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
-function isCommandLocalProfileOption(out: string[]): boolean {
-  const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
-  return primary === "qa" && secondary === "matrix";
-}
-
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+  // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
 
@@ -39,19 +35,19 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
-      if (isCommandLocalProfileOption(out)) {
+      const next = args[index + 1];
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
+      const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+      if (primary === "qa" && secondary === "matrix") {
         out.push(arg);
-        if (arg === "--profile" && isValueToken(args[index + 1])) {
-          out.push(args[index + 1]);
-          return { kind: "handled", consumedNext: true };
+        if (consumedNext && next !== undefined) {
+          out.push(next);
         }
-        return { kind: "handled" };
+        return { kind: "handled", consumedNext };
       }
       if (sawDev) {
         return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
-      const next = args[index + 1];
-      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (!value) {
         return { kind: "error", error: "--profile requires a value" };
       }
@@ -95,16 +91,41 @@ export function applyCliProfileEnv(params: {
     return;
   }
 
-  // Convenience only: fill defaults, never override explicit env values.
+  const inheritedProfile = normalizeOptionalString(env.OPENCLAW_PROFILE) ?? "default";
+  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
+  const existingConfigPath = normalizeOptionalString(env.OPENCLAW_CONFIG_PATH);
+  const inheritedProfileStateDir = resolveProfileStateDir(inheritedProfile, env, homedir);
+  const selectedProfileStateDir = resolveProfileStateDir(profile, env, homedir);
+  const switchesInheritedProfile = inheritedProfileStateDir !== selectedProfileStateDir;
+  const switchesInheritedProfileState = Boolean(
+    existingStateDir &&
+    switchesInheritedProfile &&
+    resolveHomeRelativePath(existingStateDir, {
+      env: env as NodeJS.ProcessEnv,
+      homedir,
+    }) === inheritedProfileStateDir,
+  );
+  const replacesInheritedProfileConfig = Boolean(
+    switchesInheritedProfile &&
+    (!existingStateDir || switchesInheritedProfileState) &&
+    existingConfigPath &&
+    resolveHomeRelativePath(existingConfigPath, {
+      env: env as NodeJS.ProcessEnv,
+      homedir,
+    }) === path.join(inheritedProfileStateDir, "openclaw.json"),
+  );
+
+  // A service's canonical profile paths are inherited defaults, not custom overrides.
+  // Switch them together so an explicit profile cannot mutate the service's profile.
   env.OPENCLAW_PROFILE = profile;
 
-  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
-  const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
-  if (!existingStateDir) {
+  const stateDir =
+    existingStateDir && !switchesInheritedProfileState ? existingStateDir : selectedProfileStateDir;
+  if (!existingStateDir || switchesInheritedProfileState) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
-  if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
+  if (!existingConfigPath || replacesInheritedProfileConfig) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 

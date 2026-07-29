@@ -1,6 +1,16 @@
+/**
+ * Browser CLI management commands for lifecycle, profiles, tabs, and doctor
+ * checks.
+ */
 import type { Command } from "commander";
+import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import { runCommandWithRuntime } from "../core-api.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  callBrowserRequest,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -9,11 +19,13 @@ import {
   shortenHomePath,
   type BrowserCreateProfileResult,
   type BrowserDeleteProfileResult,
+  type BrowserImportProfileResult,
   type BrowserResetProfileResult,
   type BrowserStatus,
   type BrowserTab,
   type BrowserTransport,
   type ProfileStatus,
+  type SystemProfileInfo,
 } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
@@ -22,6 +34,7 @@ type BrowserDoctorCheck = {
   name: string;
   ok: boolean;
   detail?: string;
+  warning?: boolean;
 };
 
 function resolveProfileQuery(
@@ -44,6 +57,12 @@ function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
   }
   defaultRuntime.writeJson(payload);
   return true;
+}
+
+function sanitizeTableCell(value: string): string {
+  // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
+  // terminal escapes into the printed table.
+  return value.replace(/\p{Cc}/gu, " ");
 }
 
 async function callTabAction(
@@ -112,6 +131,10 @@ function runBrowserCommand(action: () => Promise<void>) {
   });
 }
 
+function parseTabIndex(value: string): number {
+  return parseBrowserPositiveIntegerValue(value) ?? Number.NaN;
+}
+
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   if (json) {
     defaultRuntime.writeJson({ tabs });
@@ -124,20 +147,43 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   defaultRuntime.log(
     tabs
       .map((t, i) => {
-        const alias = [t.tabId, t.label ? `label:${t.label}` : undefined].filter(Boolean).join(" ");
-        return `${i + 1}. ${t.title || "(untitled)"}${alias ? ` [${alias}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
+        const labelHandle = t.label ? `label:${t.label}` : undefined;
+        const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
+        const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
+          .filter(Boolean)
+          .join(" ");
+        return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
       })
       .join("\n"),
   );
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
-  return `${check.ok ? "OK" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+  const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
+  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+}
+
+function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const errorRecord = error as Error & { code?: unknown };
+  return (
+    errorRecord.name === "GatewaySecretRefUnavailableError" ||
+    errorRecord.code === "GATEWAY_SECRET_REF_UNAVAILABLE"
+  );
+}
+
+function formatBrowserDoctorGatewayError(error: unknown): string {
+  if (!isGatewaySecretRefUnavailableErrorShape(error)) {
+    return String(error);
+  }
+  return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
 }
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null = null;
+  let status: BrowserStatus | null;
 
   try {
     status = await fetchBrowserStatus(parent, profile);
@@ -150,7 +196,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     checks.push({
       name: "gateway",
       ok: false,
-      detail: String(err),
+      detail: formatBrowserDoctorGatewayError(err),
     });
     return { ok: false, checks };
   }
@@ -172,6 +218,14 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
       : "not running; run `openclaw browser start`",
   });
+  if (status.graphics) {
+    checks.push({
+      name: "graphics",
+      ok: true,
+      warning: status.graphics.status === "unavailable",
+      detail: formatBrowserGraphicsSummary(status.graphics),
+    });
+  }
 
   try {
     const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
@@ -207,7 +261,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       checks.push({
         name: "tabs",
         ok: true,
-        detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use target ${tabs[0].suggestedTargetId}` : ""}`,
+        detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use tab reference ${tabs[0].suggestedTargetId}` : ""}`,
       });
     } catch (err) {
       checks.push({
@@ -257,33 +311,49 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   return { ok: checks.every((check) => check.ok), checks, status };
 }
 
+type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";
+
 function usesChromeMcpTransport(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: BrowserProfileDriver;
 }): boolean {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
+function usesExtensionTransport(params: {
+  transport?: BrowserTransport;
+  driver?: BrowserProfileDriver;
+}): boolean {
+  return params.transport === "extension" || params.driver === "extension";
+}
+
 function formatBrowserConnectionSummary(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: BrowserProfileDriver;
   isRemote?: boolean;
   cdpPort?: number | null;
   cdpUrl?: string | null;
   userDataDir?: string | null;
 }): string {
   if (usesChromeMcpTransport(params)) {
+    if (params.cdpUrl) {
+      return `transport: chrome-mcp, cdpUrl: ${redactCdpUrl(params.cdpUrl)}`;
+    }
     const userDataDir = params.userDataDir ? shortenHomePath(params.userDataDir) : null;
     return userDataDir
       ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
       : "transport: chrome-mcp";
   }
+  if (usesExtensionTransport(params)) {
+    return `transport: extension, relayPort: ${params.cdpPort ?? "(unset)"}`;
+  }
   if (params.isRemote) {
-    return `cdpUrl: ${params.cdpUrl ?? "(unset)"}`;
+    return `cdpUrl: ${params.cdpUrl ? redactCdpUrl(params.cdpUrl) : "(unset)"}`;
   }
   return `port: ${params.cdpPort ?? "(unset)"}`;
 }
 
+/** Registers Browser lifecycle, profile, tab, and doctor commands. */
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -313,9 +383,11 @@ export function registerBrowserManageCommands(
                   `cdpPort: ${status.cdpPort ?? "(unset)"}`,
                   `cdpUrl: ${redactCdpUrl(status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`)}`,
                 ]
-              : status.userDataDir
-                ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
-                : []),
+              : status.cdpUrl
+                ? [`cdpUrl: ${redactCdpUrl(status.cdpUrl)}`]
+                : status.userDataDir
+                  ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
+                  : []),
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
@@ -323,6 +395,9 @@ export function registerBrowserManageCommands(
               status.headlessSource ? ` (${status.headlessSource})` : ""
             }`,
             `profileColor: ${status.color}`,
+            ...(status.graphics
+              ? [`graphics: ${formatBrowserGraphicsSummary(status.graphics)}`]
+              : []),
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
         );
@@ -472,7 +547,7 @@ export function registerBrowserManageCommands(
   tab
     .command("label")
     .description("Assign a friendly label to a tab")
-    .argument("<targetId>", "Target id, tab id, label, or unique target id prefix")
+    .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .argument("<label>", "Friendly label")
     .action(async (targetId: string, label: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -482,49 +557,50 @@ export function registerBrowserManageCommands(
         if (printJsonResult(parent, result)) {
           return;
         }
-        const tab = (result as { tab?: BrowserTab }).tab;
-        defaultRuntime.log(`labeled tab ${tab?.tabId ?? targetId} as ${tab?.label ?? label}`);
+        const tabValue = (result as { tab?: BrowserTab }).tab;
+        defaultRuntime.log(
+          `labeled tab ${tabValue?.tabId ?? targetId} as ${tabValue?.label ?? label}`,
+        );
       });
     });
 
   tab
     .command("select")
     .description("Focus tab by index (1-based)")
-    .argument("<index>", "Tab index (1-based)", (v: string) => Number(v))
+    .argument("<index>", "Tab index (1-based)", parseTabIndex)
     .action(async (index: number, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      if (!Number.isFinite(index) || index < 1) {
-        defaultRuntime.error(danger("index must be a positive number"));
+      if (!Number.isSafeInteger(index) || index < 1) {
+        defaultRuntime.error(danger("index must be a positive integer"));
         defaultRuntime.exit(1);
         return;
       }
       await runBrowserCommand(async () => {
         const result = await callTabAction(parent, profile, {
           action: "select",
-          index: Math.floor(index) - 1,
+          index: index - 1,
         });
         if (printJsonResult(parent, result)) {
           return;
         }
-        defaultRuntime.log(`selected tab ${Math.floor(index)}`);
+        defaultRuntime.log(`selected tab ${index}`);
       });
     });
 
   tab
     .command("close")
     .description("Close tab by index (1-based); default: first tab")
-    .argument("[index]", "Tab index (1-based)", (v: string) => Number(v))
+    .argument("[index]", "Tab index (1-based)", parseTabIndex)
     .action(async (index: number | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const idx =
-        typeof index === "number" && Number.isFinite(index) ? Math.floor(index) - 1 : undefined;
-      if (typeof idx === "number" && idx < 0) {
-        defaultRuntime.error(danger("index must be >= 1"));
+      if (typeof index === "number" && (!Number.isSafeInteger(index) || index < 1)) {
+        defaultRuntime.error(danger("index must be a positive integer"));
         defaultRuntime.exit(1);
         return;
       }
+      const idx = typeof index === "number" ? index - 1 : undefined;
       await runBrowserCommand(async () => {
         const result = await callTabAction(parent, profile, { action: "close", index: idx });
         if (printJsonResult(parent, result)) {
@@ -543,7 +619,7 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const tab = await callBrowserRequest<BrowserTab>(
+        const tabLocal = await callBrowserRequest<BrowserTab>(
           parent,
           {
             method: "POST",
@@ -553,19 +629,19 @@ export function registerBrowserManageCommands(
           },
           { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
         );
-        if (printJsonResult(parent, tab)) {
+        if (printJsonResult(parent, tabLocal)) {
           return;
         }
         defaultRuntime.log(
-          `opened: ${tab.url}\n${tab.tabId ? `tab: ${tab.tabId}\n` : ""}${tab.label ? `label: ${tab.label}\n` : ""}id: ${tab.targetId}`,
+          `opened: ${tabLocal.url}\n${tabLocal.tabId ? `tab: ${tabLocal.tabId}\n` : ""}${tabLocal.label ? `label: ${tabLocal.label}\n` : ""}id: ${tabLocal.targetId}`,
         );
       });
     });
 
   browser
     .command("focus")
-    .description("Focus a tab by target id, tab id, label, or unique target id prefix")
-    .argument("<targetId>", "Target id, tab id, label, or unique target id prefix")
+    .description("Focus a tab by tab reference")
+    .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (targetId: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -589,8 +665,8 @@ export function registerBrowserManageCommands(
 
   browser
     .command("close")
-    .description("Close a tab (target id optional)")
-    .argument("[targetId]", "Target id, tab id, label, or unique target id prefix (optional)")
+    .description("Close a tab (tab reference optional)")
+    .argument("[targetId]", `${BROWSER_TAB_REFERENCE_HELP} (optional)`)
     .action(async (targetId: string | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -664,11 +740,89 @@ export function registerBrowserManageCommands(
     });
 
   browser
+    .command("system-profiles")
+    .description("List Chrome-family profiles available for cookie import")
+    .option("--browser <browser>", "System browser (chrome|brave|edge|chromium); omit to list all")
+    .action(async (opts: { browser?: string }, cmd) => {
+      const parent = parentOpts(cmd);
+      await runBrowserCommand(async () => {
+        const result = await callBrowserRequest<{ systemProfiles: SystemProfileInfo[] }>(
+          parent,
+          {
+            method: "GET",
+            path: "/system-profiles",
+            query: opts.browser ? { browser: opts.browser } : undefined,
+          },
+          { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        );
+        const systemProfiles = result.systemProfiles ?? [];
+        if (printJsonResult(parent, { systemProfiles })) {
+          return;
+        }
+        if (systemProfiles.length === 0) {
+          defaultRuntime.log("No system browser profiles found.");
+          return;
+        }
+        defaultRuntime.log("browser\tid\tname\thasCookies");
+        defaultRuntime.log(
+          systemProfiles
+            .map((profile) =>
+              [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
+                .map(sanitizeTableCell)
+                .join("\t"),
+            )
+            .join("\n"),
+        );
+      });
+    });
+
+  browser
+    .command("import-profile")
+    .description("Import cookies from a macOS Chrome-family profile")
+    .option("--browser <browser>", "System browser (chrome|brave|edge|chromium)", "chrome")
+    .option("--system <profile>", "System profile directory", "Default")
+    .option("--into <profile>", "Managed target profile", "imported")
+    .option("--domains <domains>", "Comma-separated domain filter")
+    .action(
+      async (opts: { browser: string; system: string; into: string; domains?: string }, cmd) => {
+        const parent = parentOpts(cmd);
+        await runBrowserCommand(async () => {
+          const domains = opts.domains
+            ?.split(",")
+            .map((domain) => domain.trim())
+            .filter(Boolean);
+          const result = await callBrowserRequest<BrowserImportProfileResult>(
+            parent,
+            {
+              method: "POST",
+              path: "/profiles/import",
+              body: {
+                browser: opts.browser,
+                systemProfile: opts.system,
+                into: opts.into,
+                domains,
+              },
+            },
+            { timeoutMs: 120_000 },
+          );
+          if (printJsonResult(parent, result)) {
+            return;
+          }
+          defaultRuntime.log(
+            info(
+              `Imported cookies into "${result.into}": ${result.cookies.imported}/${result.cookies.total} imported, ${result.cookies.failed} failed, ${result.cookies.skipped} skipped; ${result.domains.length} domains`,
+            ),
+          );
+        });
+      },
+    );
+
+  browser
     .command("create-profile")
     .description("Create a new browser profile")
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
-    .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
+    .option("--cdp-url <url>", "DevTools endpoint URL (http/https/ws/wss)")
     .option("--user-data-dir <path>", "User data dir for existing-session Chromium attach")
     .option("--driver <driver>", "Profile driver (openclaw|existing-session). Default: openclaw")
     .action(
@@ -739,3 +893,4 @@ export function registerBrowserManageCommands(
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+// Discord plugin module implements embeds behavior.
 import type { APIEmbed } from "discord-api-types/v10";
 
 function clean<T extends Record<string, unknown>>(value: T): T {

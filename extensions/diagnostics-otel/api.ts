@@ -1,3 +1,4 @@
+// Diagnostics Otel API module exposes the plugin public contract.
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -10,6 +11,7 @@ export {
   parseDiagnosticTraceparent,
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   type DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 export { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";

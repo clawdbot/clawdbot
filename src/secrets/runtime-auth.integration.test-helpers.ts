@@ -1,7 +1,10 @@
+/** Shared isolation helpers for auth-profile backed secrets runtime integration tests. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
+
+/** Shared integration helpers for auth-profile backed secrets runtime tests. */
 export {
   asConfig,
   createOpenAIFileRuntimeConfig,
@@ -20,6 +23,8 @@ const secretsRuntimePluginMocks = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => []),
 }));
 
+// Mock plugin-provided auth/web surfaces so auth integration tests only cover
+// the configured stores and fixtures they explicitly install.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock,
 }));
@@ -29,6 +34,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock,
 }));
 
+/** Start an isolated secrets runtime test with plugin auth/web discovery disabled. */
 export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReset();
   secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
@@ -44,6 +50,7 @@ export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot
   return envSnapshot;
 }
 
+/** Restore env, mocks, config caches, and secrets runtime snapshot state. */
 export function endSecretsRuntimeIsolationForTest(envSnapshot: SecretsRuntimeEnvSnapshot) {
   vi.restoreAllMocks();
   envSnapshot.restore();

@@ -1,3 +1,5 @@
+// Formats compact timing summaries for changed-check command groups.
+/** Format a duration in milliseconds for command summaries. */
 export function formatMs(durationMs) {
   if (durationMs < 1000) {
     return `${Math.round(durationMs)}ms`;
@@ -5,6 +7,7 @@ export function formatMs(durationMs) {
   return `${(durationMs / 1000).toFixed(2)}s`;
 }
 
+/** Print a stderr timing summary for a list of named command results. */
 export function printTimingSummary(label, timings, options = {}) {
   if (options.skipWhenAllOk && timings.every((timing) => timing.status === 0)) {
     return;

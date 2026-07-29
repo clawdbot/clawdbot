@@ -1,4 +1,7 @@
-import type { RenderTableOptions, TableColumn } from "../terminal/table.js";
+// Renders the standard `openclaw status` report from prebuilt section data.
+// Report data assembly stays separate so tests can validate rows without terminal formatting.
+
+import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
 import {
   buildStatusChannelsTableSection,
   buildStatusHealthSection,
@@ -9,6 +12,7 @@ import {
 } from "./status-all/report-sections.js";
 import { appendStatusReportSections } from "./status-all/text-report.js";
 
+/** Builds terminal lines for the standard status report. */
 export async function buildStatusCommandReportLines(params: {
   heading: (text: string) => string;
   muted: (text: string) => string;
@@ -17,8 +21,10 @@ export async function buildStatusCommandReportLines(params: {
   overviewRows: Array<{ Item: string; Value: string }>;
   showTaskMaintenanceHint: boolean;
   taskMaintenanceHint: string;
+  retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
+  modelSelectionLines: string[];
   securityAuditLines: string[];
   channelsColumns: readonly TableColumn[];
   channelsRows: Array<Record<string, string>>;
@@ -47,7 +53,17 @@ export async function buildStatusCommandReportLines(params: {
       },
       {
         kind: "raw",
-        body: params.showTaskMaintenanceHint ? ["", params.muted(params.taskMaintenanceHint)] : [],
+        body:
+          params.showTaskMaintenanceHint || params.retainedLostTaskLine
+            ? [
+                "",
+                // Raw section keeps maintenance hints directly below the overview table.
+                ...(params.showTaskMaintenanceHint
+                  ? [params.muted(params.taskMaintenanceHint)]
+                  : []),
+                ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
+              ]
+            : [],
         skipIfEmpty: true,
       },
       {
@@ -63,25 +79,43 @@ export async function buildStatusCommandReportLines(params: {
       },
       {
         kind: "lines",
+        title: "Model selection",
+        body: params.modelSelectionLines,
+        skipIfEmpty: true,
+      },
+      {
+        kind: "lines",
         title: "Security audit",
         body: params.securityAuditLines,
       },
-      {
-        ...buildStatusChannelsTableSection({
-          width: params.width,
-          renderTable: params.renderTable,
-          columns: params.channelsColumns,
-          rows: params.channelsRows,
-        }),
-      },
-      {
-        ...buildStatusSessionsSection({
-          width: params.width,
-          renderTable: params.renderTable,
-          columns: params.sessionsColumns,
-          rows: params.sessionsRows,
-        }),
-      },
+      params.channelsRows.length === 0
+        ? {
+            kind: "lines",
+            title: "Channels",
+            body: [params.muted("No channels configured")],
+          }
+        : {
+            ...buildStatusChannelsTableSection({
+              width: params.width,
+              renderTable: params.renderTable,
+              columns: params.channelsColumns,
+              rows: params.channelsRows,
+            }),
+          },
+      params.sessionsRows.length === 0
+        ? {
+            kind: "lines",
+            title: "Sessions",
+            body: [params.muted("No sessions")],
+          }
+        : {
+            ...buildStatusSessionsSection({
+              width: params.width,
+              renderTable: params.renderTable,
+              columns: params.sessionsColumns,
+              rows: params.sessionsRows,
+            }),
+          },
       {
         ...buildStatusSystemEventsSection({
           width: params.width,

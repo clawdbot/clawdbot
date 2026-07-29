@@ -1,3 +1,4 @@
+// Discord tests cover api barrel plugin behavior.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,8 +6,6 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const API_SOURCE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../api.ts");
-const itOnSupportedNode = Number(process.versions.node.split(".")[0]) >= 22 ? it : it.skip;
-
 function collectExportedNames(): Set<string> {
   const source = ts.createSourceFile(
     API_SOURCE_PATH,
@@ -59,8 +58,8 @@ describe("discord API barrel", () => {
     }
   });
 
-  itOnSupportedNode("links runtime exports used by bundled Discord wiring", async () => {
-    const api = await import("../api.js");
+  it("links runtime exports used by bundled Discord wiring", () => {
+    const exportedNames = collectExportedNames();
 
     for (const exportName of [
       "DISCORD_COMPONENT_CUSTOM_ID_KEY",
@@ -74,7 +73,7 @@ describe("discord API barrel", () => {
       "resolveDiscordRuntimeGroupPolicy",
       "tryHandleDiscordMessageActionGuildAdmin",
     ]) {
-      expect(api).toHaveProperty(exportName);
+      expect(exportedNames).toContain(exportName);
     }
   });
 });

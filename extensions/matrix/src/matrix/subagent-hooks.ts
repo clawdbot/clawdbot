@@ -1,3 +1,4 @@
+// Matrix plugin module implements subagent hooks behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   getSessionBindingService,

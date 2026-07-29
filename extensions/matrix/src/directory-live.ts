@@ -1,3 +1,4 @@
+// Matrix plugin module implements directory live behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

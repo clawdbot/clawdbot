@@ -1,10 +1,11 @@
 {
   "id": "diffs",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "name": "Diffs",
-  "description": "Read-only diff viewer and file renderer for agents.",
+  "description": "OpenClaw read-only diff viewer plugin and file renderer for agents.",
+  "catalog": { "featured": true, "order": 40 },
   "contracts": {
     "tools": ["diffs"]
   },
@@ -75,6 +76,10 @@
       "label": "Default Output Mode",
       "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, file for PNG/PDF, or both."
     },
+    "defaults.ttlSeconds": {
+      "label": "Default Artifact TTL",
+      "help": "Default lifetime in seconds for diff viewer and file artifacts. Maximum: 21600."
+    },
     "security.allowRemoteViewer": {
       "label": "Allow Remote Viewer",
       "help": "Allow non-loopback access to diff viewer URLs when the token path is known."
@@ -141,8 +146,7 @@
           },
           "fileFormat": {
             "type": "string",
-            "enum": ["png", "pdf"],
-            "default": "png"
+            "enum": ["png", "pdf"]
           },
           "format": {
             "type": "string",
@@ -151,8 +155,7 @@
           },
           "fileQuality": {
             "type": "string",
-            "enum": ["standard", "hq", "print"],
-            "default": "standard"
+            "enum": ["standard", "hq", "print"]
           },
           "fileScale": {
             "type": "number",
@@ -190,6 +193,12 @@
             "type": "string",
             "enum": ["view", "image", "file", "both"],
             "default": "both"
+          },
+          "ttlSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600,
+            "default": 1800
           }
         }
       },

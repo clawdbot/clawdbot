@@ -1,14 +1,29 @@
+/**
+ * Nodes command action executor.
+ *
+ * Handles non-media node reads/actions and guarded raw command invocation through Gateway.
+ */
 import crypto from "node:crypto";
-import { parseTimeoutMs } from "../../cli/parse-timeout.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { jsonResult, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
+  ["computer.act", "computer"],
+  ["mobile.ui.observe", "mobile_ui"],
+  ["mobile.ui.act", "mobile_ui"],
+]);
 
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
@@ -23,12 +38,14 @@ export type NodeCommandAction =
   | keyof typeof NODE_READ_ACTION_COMMANDS
   | "notifications_action"
   | "location_get"
+  | "which"
   | "invoke";
 
 export async function executeNodeCommandAction(params: {
   action: NodeCommandAction;
   input: Record<string, unknown>;
   gatewayOpts: GatewayCallOptions;
+  agentSessionKey?: string;
   allowMediaInvokeCommands?: boolean;
   mediaInvokeActions: Record<string, string>;
 }): Promise<
@@ -86,21 +103,14 @@ export async function executeNodeCommandAction(params: {
     }
     case "location_get": {
       const node = readStringParam(params.input, "node", { required: true });
-      const maxAgeMs =
-        typeof params.input.maxAgeMs === "number" && Number.isFinite(params.input.maxAgeMs)
-          ? params.input.maxAgeMs
-          : undefined;
+      const maxAgeMs = readNonNegativeIntegerParam(params.input, "maxAgeMs");
       const desiredAccuracy =
         params.input.desiredAccuracy === "coarse" ||
         params.input.desiredAccuracy === "balanced" ||
         params.input.desiredAccuracy === "precise"
           ? params.input.desiredAccuracy
           : undefined;
-      const locationTimeoutMs =
-        typeof params.input.locationTimeoutMs === "number" &&
-        Number.isFinite(params.input.locationTimeoutMs)
-          ? params.input.locationTimeoutMs
-          : undefined;
+      const locationTimeoutMs = readPositiveIntegerParam(params.input, "locationTimeoutMs");
       const payload = await invokeNodeCommandPayload({
         gatewayOpts: params.gatewayOpts,
         node,
@@ -113,6 +123,17 @@ export async function executeNodeCommandAction(params: {
       });
       return jsonResult(payload);
     }
+    case "which": {
+      const node = readStringParam(params.input, "node", { required: true });
+      const bins = readStringArrayParam(params.input, "bins", { required: true });
+      const payload = await invokeNodeCommandPayload({
+        gatewayOpts: params.gatewayOpts,
+        node,
+        command: "system.which",
+        commandParams: { bins },
+      });
+      return jsonResult(payload);
+    }
     case "invoke": {
       const node = readStringParam(params.input, "node", { required: true });
       const nodeId = await resolveNodeId(params.gatewayOpts, node);
@@ -121,6 +142,12 @@ export async function executeNodeCommandAction(params: {
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+        );
+      }
+      const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized);
+      if (dedicatedTool) {
+        throw new Error(
+          `invokeCommand "${invokeCommand}" cannot be invoked through the generic nodes surface; use the dedicated ${dedicatedTool} tool`,
         );
       }
       const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];
@@ -155,13 +182,14 @@ export async function executeNodeCommandAction(params: {
           });
         }
       }
-      const invokeTimeoutMs = parseTimeoutMs(params.input.invokeTimeoutMs);
+      const invokeTimeoutMs = readPositiveIntegerParam(params.input, "invokeTimeoutMs");
       const raw = await callGatewayTool("node.invoke", params.gatewayOpts, {
         nodeId,
         command: invokeCommand,
         params: invokeParams,
         timeoutMs: invokeTimeoutMs,
         idempotencyKey: crypto.randomUUID(),
+        ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
       });
       return jsonResult(raw ?? {});
     }
@@ -182,5 +210,5 @@ async function invokeNodeCommandPayload(params: {
     params: params.commandParams ?? {},
     idempotencyKey: crypto.randomUUID(),
   });
-  return raw?.payload ?? {};
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
 }

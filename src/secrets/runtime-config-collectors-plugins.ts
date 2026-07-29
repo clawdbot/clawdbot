@@ -1,3 +1,5 @@
+/** Collects plugin config secret refs from runtime plugin metadata. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -6,12 +8,17 @@ import {
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import {
-  collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
+
+function parsePluginConfigArrayIndex(segment: string): number | undefined {
+  return parseConfigPathArrayIndex(segment);
+}
 
 /**
  * Walk manifest-declared plugin config SecretRef surfaces and collect
@@ -24,10 +31,15 @@ import { isRecord } from "./shared.js";
  * installed). This prevents resolution failures for SecretRefs belonging to
  * non-loadable plugins from blocking startup or preflight validation.
  */
+/** Collects SecretRef assignments from plugin-owned config contract paths. */
 export function collectPluginConfigAssignments(params: {
+  /** Mutable config snapshot whose plugin config values will receive resolved secrets. */
   config: OpenClawConfig;
+  /** Defaults from the source config, used while matching manifest-declared SecretInput paths. */
   defaults: SecretDefaults | undefined;
+  /** Resolver context that receives assignments and inactive-surface warnings. */
   context: ResolverContext;
+  /** Optional installed plugin roots; missing IDs are treated as stale inactive config. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
@@ -39,6 +51,7 @@ export function collectPluginConfigAssignments(params: {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
+    params.context.env,
   );
   const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
     .filter(([, origin]) => origin === "bundled")
@@ -121,7 +134,7 @@ export function collectPluginConfigAssignments(params: {
 function collectConfiguredPluginSecretAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
-  secretPaths: ReadonlyArray<{ path: string; expected?: "string" }>;
+  secretPaths: ReadonlyArray<{ path: string; expected?: "string"; ownerKind?: "route" }>;
   active: boolean;
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
@@ -141,8 +154,8 @@ function collectConfiguredPluginSecretAssignments(params: {
 
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
-      // collectSecretInputAssignment ignores them.
-      collectSecretInputAssignment({
+      // collectRuntimeSecretInputAssignment ignores them.
+      collectRuntimeSecretInputAssignment({
         value: match.value,
         path: fullPath,
         expected: secretPath.expected ?? "string",
@@ -150,6 +163,17 @@ function collectConfiguredPluginSecretAssignments(params: {
         context: params.context,
         active: params.active,
         inactiveReason: `plugin "${params.pluginId}": ${params.inactiveReason}`,
+        ...(secretPath.ownerKind
+          ? {
+              owner: {
+                ownerKind: secretPath.ownerKind,
+                ownerId: fullPath,
+                requiredForGateway: false,
+                disposition: "isolate" as const,
+                contract: params.pluginConfig,
+              },
+            }
+          : {}),
         apply: createPluginConfigAssignmentApply(params.pluginConfig, match.path),
       });
     }
@@ -161,19 +185,16 @@ function createPluginConfigAssignmentApply(
   relativePath: string,
 ): (value: unknown) => void {
   return (value) => {
-    const segments = relativePath
-      .replace(/\[(\d+)\]/g, ".$1")
-      .split(".")
-      .map((segment) => segment.trim())
-      .filter(Boolean);
+    // Manifest paths use dotted/bracket notation; assignment writes need concrete object/array steps.
+    const segments = normalizeStringEntries(relativePath.replace(/\[(\d+)\]/g, ".$1").split("."));
     if (segments.length === 0) {
       return;
     }
     let current: unknown = pluginConfig;
     for (const segment of segments.slice(0, -1)) {
       if (Array.isArray(current)) {
-        const index = Number.parseInt(segment, 10);
-        current = Number.isInteger(index) ? current[index] : undefined;
+        const index = parsePluginConfigArrayIndex(segment);
+        current = index !== undefined && index < current.length ? current[index] : undefined;
         continue;
       }
       current = isRecord(current) ? current[segment] : undefined;
@@ -183,8 +204,8 @@ function createPluginConfigAssignmentApply(
       return;
     }
     if (Array.isArray(current)) {
-      const index = Number.parseInt(finalSegment, 10);
-      if (Number.isInteger(index) && index >= 0 && index < current.length) {
+      const index = parsePluginConfigArrayIndex(finalSegment);
+      if (index !== undefined && index < current.length) {
         current[index] = value;
       }
       return;

@@ -1,5 +1,8 @@
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+// Nextcloud Talk plugin module implements gateway behavior.
+import {
+  createAccountStatusSink,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   clearAccountEntryFields,
@@ -29,7 +32,7 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
       setStatus: ctx.setStatus,
     });
 
-    await runStoppablePassiveMonitor({
+    await runPassiveAccountLifecycle({
       abortSignal: ctx.abortSignal,
       start: async () =>
         await monitorNextcloudTalkProvider({
@@ -39,6 +42,9 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
           abortSignal: ctx.abortSignal,
           statusSink,
         }),
+      stop: async (monitor) => {
+        await monitor.stop();
+      },
     });
   },
   logoutAccount: async ({ accountId, cfg }) => {

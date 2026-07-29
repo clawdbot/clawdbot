@@ -1,9 +1,21 @@
+// Container target tests cover CLI container target parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
   maybeRunCliInContainer,
   parseCliContainerArgs,
   resolveCliContainerTarget,
 } from "./container-target.js";
+
+function requireSpawnCall(
+  spawnSync: ReturnType<typeof vi.fn>,
+  index: number,
+): [string, string[], unknown?] {
+  const call = spawnSync.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected spawnSync call ${index}`);
+  }
+  return call as [string, string[], unknown?];
+}
 
 describe("parseCliContainerArgs", () => {
   it("extracts a root --container flag before the command", () => {
@@ -110,6 +122,27 @@ describe("maybeRunCliInContainer", () => {
     expect(maybeRunCliInContainer(["node", "openclaw", "status"], { env: {} })).toEqual({
       handled: false,
       argv: ["node", "openclaw", "status"],
+    });
+  });
+
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("preserves exit code $exitCode when the container child exits from $signal", (testCase) => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 0, stdout: "true\n" })
+      .mockReturnValueOnce({ status: 1, stdout: "" })
+      .mockReturnValueOnce({ status: null, signal: testCase.signal });
+
+    expect(
+      maybeRunCliInContainer(["node", "openclaw", "status"], {
+        env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
+        spawnSync,
+      }),
+    ).toEqual({
+      handled: true,
+      exitCode: testCase.exitCode,
     });
   });
 
@@ -356,12 +389,12 @@ describe("maybeRunCliInContainer", () => {
       spawnSync,
     });
 
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
-      "podman",
-      expect.arrayContaining(["OPENCLAW_PROXY_URL=http://127.0.0.1:3128"]),
-      expect.anything(),
-    );
+    const podmanCall = requireSpawnCall(spawnSync, 2);
+    expect(podmanCall[0]).toBe("podman");
+    expect(podmanCall[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
+    if (podmanCall[2] === undefined) {
+      throw new Error("Expected podman spawn options");
+    }
   });
 
   it("executes through podman when the named container is running", () => {
@@ -394,7 +427,7 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       3,
@@ -447,7 +480,7 @@ describe("maybeRunCliInContainer", () => {
       2,
       "docker",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       3,
@@ -504,13 +537,13 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
       "docker",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       3,
@@ -558,13 +591,13 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
       "docker",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
   });
 
@@ -669,7 +702,7 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "flag-demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
   });
 

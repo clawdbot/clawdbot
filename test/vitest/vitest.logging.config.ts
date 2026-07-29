@@ -1,3 +1,4 @@
+// Vitest logging config wires the logging test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createLoggingVitestConfig(env?: Record<string, string | undefined>) {

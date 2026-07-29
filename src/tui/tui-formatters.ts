@@ -1,7 +1,13 @@
+// Formats terminal-safe strings for TUI messages and status surfaces.
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import type { SessionGoal } from "../config/sessions/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
-import { stripAnsi } from "../terminal/ansi.js";
+import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -16,6 +22,7 @@ const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
 const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
@@ -24,6 +31,16 @@ const RTL_ISOLATE_END = "\u2069";
 const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
 // Inline code spans with balanced backtick run (`code`, ``co`de``, ...).
 const INLINE_CODE_RE = /(`+)(?:(?!\1).)+?\1/g;
+
+/** Keep routing/provider/profile details in session state, not the compact footer. */
+export function formatModelFooter(params: {
+  model?: string | null;
+  thinkingLevel?: string | null;
+}): string {
+  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
+  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
+}
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -51,17 +68,6 @@ function stripControlChars(text: string): string {
     }
   }
   return sanitized;
-}
-
-function chunkToken(token: string, maxChars: number): string[] {
-  if (token.length <= maxChars) {
-    return [token];
-  }
-  const chunks: string[] = [];
-  for (let i = 0; i < token.length; i += maxChars) {
-    chunks.push(token.slice(i, i + maxChars));
-  }
-  return chunks;
 }
 
 function isCopySensitiveToken(token: string): boolean {
@@ -107,12 +113,18 @@ function normalizeLongTokenForDisplay(token: string): string {
   if (isCopySensitiveToken(token)) {
     return token;
   }
+  // CJK text naturally appears without spaces between words. Inserting spaces
+  // into long CJK runs makes assistant prose render with visible artifacts such
+  // as "苦难 者". Let the TUI renderer wrap these runs at grapheme boundaries.
+  if (CJK_SCRIPT_RE.test(token)) {
+    return token;
+  }
   // Pure symbol/punctuation runs (table borders made of `─`, `=`, `-`) carry
   // no copyable identifier; chunking would corrupt the visible structure.
   if (!ALPHANUMERIC_RE.test(token)) {
     return token;
   }
-  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+  return chunkTextByBreakResolver(token, MAX_TOKEN_CHARS, () => MAX_TOKEN_CHARS).join(" ");
 }
 
 type Segment = { kind: "prose" | "code"; text: string };
@@ -184,7 +196,7 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b");
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);
@@ -208,6 +220,11 @@ export function sanitizeRenderableText(text: string): string {
       )
     : redacted;
   return applyRtlIsolation(tokenSafe);
+}
+
+/** Render error causes without exposing secrets or terminal control sequences. */
+export function formatTuiErrorMessage(error: unknown): string {
+  return sanitizeRenderableText(formatErrorMessage(error));
 }
 
 export function resolveFinalAssistantText(params: {
@@ -354,10 +371,36 @@ export function extractContentFromMessage(message: unknown): string {
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
   const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
-  if (visible) {
-    return visible;
+  const pairingQr = extractPairingQrTerminalText(record);
+  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
+  if (content) {
+    return content;
   }
   return formatAssistantErrorFromRecord(record);
+}
+
+function extractPairingQrTerminalText(record: Record<string, unknown>): string {
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const blockRecord = block as Record<string, unknown>;
+    if (
+      blockRecord.type === "openclaw_pairing_qr" &&
+      typeof blockRecord.terminalText === "string"
+    ) {
+      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
+      if (text) {
+        parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
@@ -389,6 +432,37 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
   });
 }
 
+function extractUserAttachmentText(record: Record<string, unknown>): string {
+  const attachments: string[] = [];
+  if (Array.isArray(record.content)) {
+    for (const block of record.content) {
+      const entry = asMessageRecord(block);
+      if (entry?.type === "image") {
+        attachments.push("Attached image");
+      } else if (entry?.type === "attachment") {
+        const attachment = asMessageRecord(entry.attachment);
+        const label =
+          typeof attachment?.label === "string"
+            ? sanitizeRenderableText(attachment.label).trim()
+            : "";
+        attachments.push(
+          label && label !== "Attached file" ? `Attached file: ${label}` : "Attached file",
+        );
+      }
+    }
+  }
+  if (attachments.length > 0) {
+    return attachments.join("\n");
+  }
+
+  // Gateway-persisted attachment-only turns keep blank content and carry
+  // their authoritative attachments in __openclaw.media instead.
+  return (readPersistedMediaFacts(record) ?? [])
+    .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
+    .map((fact) => (isImageMediaFact(fact) ? "Attached image" : "Attached file"))
+    .join("\n");
+}
+
 export function extractTextFromMessage(
   message: unknown,
   opts?: { includeThinking?: boolean },
@@ -410,6 +484,10 @@ export function extractTextFromMessage(
       return stripLeadingInboundMetadata(text);
     }
     return text;
+  }
+
+  if (record.role === "user") {
+    return extractUserAttachmentText(record);
   }
 
   const errorText = formatAssistantErrorFromRecord(record);
@@ -439,6 +517,36 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
+}
+
+function formatGoalUsage(goal: SessionGoal): string | null {
+  if (goal.tokenBudget === undefined) {
+    return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
+  }
+  return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
+}
+
+export function formatGoalFooter(goal?: SessionGoal): string | null {
+  if (!goal) {
+    return null;
+  }
+  const usage = formatGoalUsage(goal);
+  const suffix = usage ? ` (${usage})` : "";
+  switch (goal.status) {
+    case "active":
+      return `Pursuing goal${suffix}`;
+    case "paused":
+      return "Goal paused (/goal resume)";
+    case "blocked":
+      return "Goal blocked (/goal resume)";
+    case "usage_limited":
+      return "Goal hit usage limits (/goal resume)";
+    case "budget_limited":
+      return `Goal unmet${suffix}`;
+    case "complete":
+      return `Goal achieved${suffix}`;
+  }
+  return null;
 }
 
 export function formatContextUsageLine(params: {

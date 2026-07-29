@@ -1,6 +1,6 @@
 ---
 name: taskflow
-description: Coordinate multi-step detached tasks as one durable TaskFlow job with owner context, state, waits, and child tasks.
+description: "Coordinate multi-step detached tasks as one durable TaskFlow job with owner context, state, waits, and child tasks."
 metadata: { "openclaw": { "emoji": "🪝" } }
 ---
 
@@ -130,9 +130,9 @@ taskFlow.finish({
 
 Use the flow runtime for state and task linkage. Keep decisions in the authoring layer:
 
-- `business` → post to Slack and wait
-- `personal` → notify the owner now
-- `later` → append to an end-of-day summary bucket
+- `business` -> post to Slack and wait
+- `personal` -> notify the owner now
+- `later` -> append to an end-of-day summary bucket
 
 ## Operational pattern
 

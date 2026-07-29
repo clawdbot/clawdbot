@@ -1,3 +1,4 @@
+// Plugin hook helpers discover hooks contributed by installed plugins.
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +19,7 @@ type PluginHookDirEntry = {
   pluginId: string;
 };
 
+/** Resolve hook directories declared by active plugin manifests. */
 export function resolvePluginHookDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
@@ -68,6 +70,8 @@ export function resolvePluginHookDirs(params: {
     if (!memoryDecision.enabled) {
       continue;
     }
+    // Memory plugin hooks follow the same slot winner as runtime memory
+    // providers so disabled memory implementations cannot register hooks.
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
     }
@@ -82,6 +86,8 @@ export function resolvePluginHookDirs(params: {
         log.warn(`plugin hook path not found (${record.id}): ${candidate}`);
         continue;
       }
+      // Manifest hook paths are plugin-owned code. Require realpath containment
+      // so symlinks cannot register hook handlers outside the plugin root.
       if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
         log.warn(`plugin hook path escapes plugin root (${record.id}): ${candidate}`);
         continue;

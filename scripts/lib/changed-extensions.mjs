@@ -1,3 +1,4 @@
+// Resolves changed bundled extension ids from git diff paths.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -70,11 +71,23 @@ function listChangedPaths(base, head = "HEAD") {
     .filter((line) => line.length > 0);
 }
 
-function hasExtensionPackage(extensionId) {
-  return fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json"));
+function listAvailableExtensionIdsFromGit() {
+  const packageFiles = runGit([
+    "ls-files",
+    "--",
+    `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`,
+  ])
+    .split("\n")
+    .map((line) => normalizeRelative(line.trim()))
+    .filter((line) => line.length > 0);
+  return packageFiles
+    .map((file) => file.match(new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/package\\.json$`)))
+    .filter((match) => match)
+    .map((match) => match[1])
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listAvailableExtensionIds() {
+function listAvailableExtensionIdsFromDirectory() {
   const extensionsDir = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
   if (!fs.existsSync(extensionsDir)) {
     return [];
@@ -84,11 +97,24 @@ export function listAvailableExtensionIds() {
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .filter((extensionId) => hasExtensionPackage(extensionId))
+    .filter((extensionId) =>
+      fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json")),
+    )
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** List bundled extension ids available in git or the local extensions directory. */
+export function listAvailableExtensionIds() {
+  try {
+    return listAvailableExtensionIdsFromGit();
+  } catch {
+    return listAvailableExtensionIdsFromDirectory();
+  }
+}
+
+/** Map changed paths to bundled extension ids, ignoring unknown extension-like paths. */
 export function detectChangedExtensionIds(changedPaths) {
+  const availableExtensionIds = new Set(listAvailableExtensionIds());
   const extensionIds = new Set();
 
   for (const rawPath of changedPaths) {
@@ -102,14 +128,14 @@ export function detectChangedExtensionIds(changedPaths) {
     );
     if (extensionMatch) {
       const extensionId = extensionMatch[1];
-      if (hasExtensionPackage(extensionId)) {
+      if (availableExtensionIds.has(extensionId)) {
         extensionIds.add(extensionId);
       }
       continue;
     }
 
     const pairedCoreMatch = relativePath.match(/^src\/([^/]+)(?:\/|$)/);
-    if (pairedCoreMatch && hasExtensionPackage(pairedCoreMatch[1])) {
+    if (pairedCoreMatch && availableExtensionIds.has(pairedCoreMatch[1])) {
       extensionIds.add(pairedCoreMatch[1]);
     }
   }
@@ -117,6 +143,7 @@ export function detectChangedExtensionIds(changedPaths) {
   return [...extensionIds].toSorted((left, right) => left.localeCompare(right));
 }
 
+/** List changed bundled extension ids between a resolved base and head revision. */
 export function listChangedExtensionIds(params = {}) {
   const head = params.head ?? "HEAD";
   const unavailableBaseBehavior = params.unavailableBaseBehavior ?? "error";

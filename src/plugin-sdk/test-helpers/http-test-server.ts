@@ -1,6 +1,8 @@
+// Plugin SDK test helper for temporary local HTTP servers.
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 
+/** Run an ephemeral loopback HTTP server for the duration of an async test callback. */
 export async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
   const server = createServer(handler);
   await new Promise<void>((resolve) => {
@@ -13,6 +15,11 @@ export async function withServer(handler: RequestListener, fn: (baseUrl: string)
   try {
     await fn(`http://127.0.0.1:${address.port}`);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    // Hanging-response tests must still release active sockets when their assertion fails.
+    server.closeAllConnections();
+    await closed;
   }
 }

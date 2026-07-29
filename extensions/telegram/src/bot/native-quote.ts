@@ -1,3 +1,4 @@
+// Telegram plugin module implements native quote behavior.
 import type { TelegramTextEntity } from "./body-helpers.js";
 
 const TELEGRAM_NATIVE_QUOTE_MAX_LENGTH = 1024;

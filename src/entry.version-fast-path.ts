@@ -1,3 +1,4 @@
+// Handles fast version output before the full CLI graph loads.
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 
@@ -8,7 +9,7 @@ export function tryHandleRootVersionFastPath(
     moduleUrl?: string;
     output?: (message: string) => void;
     exit?: (code?: number) => void;
-    onError?: (error: unknown) => void;
+    onError?: (error: unknown) => void | Promise<void>;
     resolveVersion?: () => Promise<{
       VERSION: string;
       resolveCommitHash: (params: { moduleUrl: string }) => string | null;
@@ -25,12 +26,21 @@ export function tryHandleRootVersionFastPath(
   const exit = deps.exit ?? ((code?: number) => process.exit(code));
   const onError =
     deps.onError ??
-    ((error: unknown) => {
-      console.error(
-        "[openclaw] Failed to resolve version:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
-      process.exitCode = 1;
+    (async (error: unknown) => {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      const message = `[openclaw] Failed to resolve version: ${detail}\n`;
+      try {
+        const [{ loadCliDotEnv }, { formatConsoleDiagnosticBlock }] = await Promise.all([
+          import("./cli/dotenv.js"),
+          import("./logging/json-console-line.js"),
+        ]);
+        loadCliDotEnv({ quiet: true });
+        process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
+      } catch {
+        process.stderr.write(message);
+      } finally {
+        exit(1);
+      }
     });
   const resolveVersion =
     deps.resolveVersion ??

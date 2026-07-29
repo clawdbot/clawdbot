@@ -1,6 +1,8 @@
+// Channel option tests cover channel command option parsing and config resolution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing, resolveCliChannelOptions } from "./channel-options.js";
-import { __testing as startupMetadataTesting } from "./startup-metadata.js";
+import { formatCliChannelOptions, resolveCliChannelOptions } from "./channel-options.js";
+import { testing } from "./channel-options.test-support.js";
+import { testing as startupMetadataTesting } from "./startup-metadata.test-support.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -17,39 +19,38 @@ vi.mock("node:fs", async () => {
   };
 });
 
-vi.mock("../channels/ids.js", () => ({
-  CHAT_CHANNEL_ORDER: ["quietchat", "forum"],
-}));
-
 describe("resolveCliChannelOptions", () => {
   beforeEach(() => {
-    __testing.resetPrecomputedChannelOptionsForTests();
+    testing.resetPrecomputedChannelOptionsForTests();
     startupMetadataTesting.clearStartupMetadataCache();
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    __testing.resetPrecomputedChannelOptionsForTests();
+    testing.resetPrecomputedChannelOptionsForTests();
     delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 
-  it("uses precomputed startup metadata when available", async () => {
+  it("uses precomputed startup metadata when available", () => {
     readFileSyncMock.mockReturnValue(
-      JSON.stringify({ channelOptions: ["cached", "quietchat", "cached"] }),
+      JSON.stringify({ channelOptions: ["cached", "", false, "quietchat", "cached"] }),
     );
 
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
+    expect(formatCliChannelOptions(["all"])).toBe("all|cached|quietchat");
   });
 
-  it("falls back to core channel order when metadata is missing", async () => {
+  it("falls back to generic channel text when metadata is missing", () => {
     readFileSyncMock.mockImplementation(() => {
       throw new Error("ENOENT");
     });
 
-    expect(resolveCliChannelOptions()).toEqual(["quietchat", "forum"]);
+    expect(resolveCliChannelOptions()).toEqual([]);
+    expect(formatCliChannelOptions()).toBe("channel");
+    expect(formatCliChannelOptions(["all"])).toBe("all");
   });
 
-  it("ignores external catalog env during CLI bootstrap", async () => {
+  it("ignores external catalog env during CLI bootstrap", () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
     readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "quietchat"] }));
 

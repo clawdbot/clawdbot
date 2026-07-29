@@ -1,4 +1,5 @@
-import { type WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+// Perplexity API module exposes the plugin public contract.
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
   createPerplexityWebSearchProviderBase,
   resolvePerplexityWebSearchRuntimeMetadata,

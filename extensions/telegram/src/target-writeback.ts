@@ -1,18 +1,20 @@
+// Telegram plugin module implements target writeback behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "openclaw/plugin-sdk/config-mutation";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   loadCronStore,
   resolveCronStorePath,
   saveCronStore,
 } from "openclaw/plugin-sdk/cron-store-runtime";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
@@ -21,13 +23,6 @@ import {
 
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
 const TELEGRAM_ADMIN_SCOPE = "operator.admin";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined {
   const normalized = normalizeTelegramLookupTarget(raw);
@@ -147,6 +142,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   resolvedChatId: string;
   verbose?: boolean;
   gatewayClientScopes?: readonly string[];
+  trustedInternalWriteback?: boolean;
 }): Promise<void> {
   const raw = params.rawTarget.trim();
   if (!raw) {
@@ -160,10 +156,10 @@ export async function maybePersistResolvedTelegramTarget(params: {
     return;
   }
   const { matchKey, resolvedTarget } = rewrite;
-  if (
-    Array.isArray(params.gatewayClientScopes) &&
-    !params.gatewayClientScopes.includes(TELEGRAM_ADMIN_SCOPE)
-  ) {
+  const hasGatewayAdminScope = params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) === true;
+  const trustedInternalWriteback =
+    params.gatewayClientScopes === undefined && params.trustedInternalWriteback === true;
+  if (!hasGatewayAdminScope && !trustedInternalWriteback) {
     writebackLogger.warn(
       `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
     );
@@ -196,7 +192,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storePath = resolveCronStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronStorePath();
     const store = await loadCronStore(storePath);
     let cronChanged = false;
     for (const job of store.jobs) {

@@ -1,3 +1,4 @@
+// Telegram tests cover bot handlers plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramInboundDebounceConversationKey,

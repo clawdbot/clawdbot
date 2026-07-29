@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Routing binding helpers resolve configured channel and agent route bindings.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
@@ -8,6 +10,8 @@ import {
 } from "./binding-scope.js";
 import { normalizeAgentId } from "./session-key.js";
 
+// Public binding helpers used by routing UI/diagnostics. They expose concrete
+// account ids derived from configured agent route bindings.
 export function listBindings(cfg: OpenClawConfig): AgentRouteBinding[] {
   return listRouteBindings(cfg);
 }
@@ -58,6 +62,8 @@ export function buildChannelAccountBindings(cfg: OpenClawConfig) {
     if (!resolved) {
       continue;
     }
+    // Map shape is channel -> agent -> accounts so callers can answer both
+    // "what accounts exist here" and "which accounts are bound to this agent".
     const byAgent = map.get(resolved.channelId) ?? new Map<string, string[]>();
     const list = byAgent.get(resolved.agentId) ?? [];
     if (!list.includes(resolved.accountId)) {
@@ -75,7 +81,7 @@ export function resolvePreferredAccountId(params: {
   boundAccounts: string[];
 }): string {
   if (params.boundAccounts.length > 0) {
-    return params.boundAccounts[0];
+    return expectDefined(params.boundAccounts[0], "bound accounts entry at 0");
   }
   return params.defaultAccountId;
 }

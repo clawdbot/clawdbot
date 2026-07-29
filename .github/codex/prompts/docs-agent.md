@@ -12,7 +12,7 @@ Hard limits:
 - Do not change production code, tests, package metadata, generated baselines, lockfiles, or CI config.
 - Keep changes minimal and factual.
 - Use "plugin/plugins" in user-facing docs/UI/changelog; `extensions/` is only the internal workspace layout.
-- Do not add a changelog entry unless the docs update describes a user-facing behavior/API change from the triggering commit.
+- Do not add `CHANGELOG.md` entries during normal docs work. Capture user-facing release-note context in the PR body or commit message instead.
 
 Allowed paths:
 

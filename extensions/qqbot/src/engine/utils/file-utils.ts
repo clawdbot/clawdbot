@@ -1,11 +1,19 @@
+// Qqbot helper module supports file utils behavior.
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
+import {
+  openLocalFileSafely,
+  readRegularFile,
+  statRegularFileSync,
+} from "openclaw/plugin-sdk/security-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { MediaFileType } from "../types.js";
 import { formatErrorMessage } from "./format.js";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-normalize.js";
+import { normalizeOptionalString } from "./string-normalize.js";
 
 /** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -57,10 +65,12 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   "*.tencentcos.com",
 ];
 
-export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
+const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
   allowRfc2544BenchmarkRange: true,
 };
+
+const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 /** Result of local file-size validation. */
 interface FileSizeCheckResult {
@@ -72,17 +82,20 @@ interface FileSizeCheckResult {
 /** Validate that a file is within the allowed upload size. */
 export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): FileSizeCheckResult {
   try {
-    const stat = fs.statSync(filePath);
-    if (stat.size > maxSize) {
-      const sizeMB = (stat.size / (1024 * 1024)).toFixed(1);
+    const result = statRegularFileSync(filePath);
+    if (result.missing) {
+      throw Object.assign(new Error(`File not found: ${filePath}`), { code: "ENOENT" });
+    }
+    if (result.stat.size > maxSize) {
+      const sizeMB = (result.stat.size / (1024 * 1024)).toFixed(1);
       const limitMB = (maxSize / (1024 * 1024)).toFixed(0);
       return {
         ok: false,
-        size: stat.size,
+        size: result.stat.size,
         error: `File is too large (${sizeMB}MB); QQ Bot API limit is ${limitMB}MB`,
       };
     }
-    return { ok: true, size: stat.size };
+    return { ok: true, size: result.stat.size };
   } catch (err) {
     return {
       ok: false,
@@ -94,59 +107,38 @@ export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): File
 
 /** Read file contents asynchronously. */
 export async function readFileAsync(filePath: string): Promise<Buffer> {
-  return fs.promises.readFile(filePath);
+  return (await readRegularFile({ filePath })).buffer;
 }
 
 /** Check file readability asynchronously. */
 export async function fileExistsAsync(filePath: string): Promise<boolean> {
+  const opened = await openLocalFileSafely({ filePath }).catch(() => null);
+  if (!opened) {
+    return false;
+  }
   try {
-    await fs.promises.access(filePath, fs.constants.R_OK);
     return true;
   } catch {
     return false;
+  } finally {
+    await opened.handle.close().catch(() => undefined);
   }
 }
 
 /** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes}B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+  });
 }
 
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  return MIME_TYPES[ext] ?? "application/octet-stream";
+  return mimeTypeFromFilePath(filePath) ?? "application/octet-stream";
 }
-
-/** Canonical ext → MIME table. Single source of truth. */
-const MIME_TYPES: Record<string, string> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".bmp": "image/bmp",
-  ".mp4": "video/mp4",
-  ".mov": "video/quicktime",
-  ".avi": "video/x-msvideo",
-  ".mkv": "video/x-matroska",
-  ".webm": "video/webm",
-  ".pdf": "application/pdf",
-  ".doc": "application/msword",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".xls": "application/vnd.ms-excel",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".zip": "application/zip",
-  ".tar": "application/x-tar",
-  ".gz": "application/gzip",
-  ".txt": "text/plain",
-};
 
 /** Extensions accepted as image uploads by the QQ Bot media pipeline. */
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
@@ -160,11 +152,12 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bm
  * `data:image/...;base64,` URL).
  */
 export function getImageMimeType(filePath: string): string | null {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+  const ext = path.extname(filePath).toLowerCase();
   if (!IMAGE_EXTENSIONS.has(ext)) {
     return null;
   }
-  return MIME_TYPES[ext] ?? null;
+  const mime = mimeTypeFromFilePath(filePath);
+  return mime?.startsWith("image/") ? mime : null;
 }
 
 /** Download a remote file into a local directory. */
@@ -192,6 +185,7 @@ export async function downloadFile(
       url: parsedUrl.toString(),
       filePathHint: originalFilename,
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+      responseHeaderTimeoutMs: QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     });
 
     let filename = normalizeOptionalString(originalFilename) ?? "";

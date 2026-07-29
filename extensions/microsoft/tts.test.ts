@@ -1,25 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// Microsoft tests cover tts plugin behavior.
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 let edgeTTS: typeof import("./tts.js").edgeTTS;
 
-function createEdgeTTSDeps(
-  ttsPromise: (text: string, filePath: string) => Promise<void>,
-  onConstruct?: () => void,
-) {
-  return {
-    EdgeTTS: class {
-      constructor() {
-        onConstruct?.();
-      }
-
-      ttsPromise(text: string, filePath: string) {
-        return ttsPromise(text, filePath);
-      }
-    },
-  };
+function createEdgeTTSClient(ttsPromise: (text: string, filePath: string) => Promise<void>) {
+  return { ttsPromise };
 }
 
 const baseEdgeConfig = {
@@ -43,13 +31,12 @@ describe("edgeTTS empty audio validation", () => {
     }
   });
 
-  it("rejects blank text before constructing Edge TTS", async () => {
+  it("rejects blank text before calling Edge TTS", async () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
-    const onConstruct = vi.fn();
-    const deps = createEdgeTTSDeps(async (_text: string, filePath: string) => {
+    const ttsPromise = vi.fn(async (_text: string, filePath: string) => {
       writeFileSync(filePath, Buffer.from([0xff]));
-    }, onConstruct);
+    });
 
     await expect(
       edgeTTS(
@@ -59,10 +46,10 @@ describe("edgeTTS empty audio validation", () => {
           config: baseEdgeConfig,
           timeoutMs: 10000,
         },
-        deps,
+        createEdgeTTSClient(ttsPromise),
       ),
     ).rejects.toThrow("Microsoft TTS text cannot be empty");
-    expect(onConstruct).not.toHaveBeenCalled();
+    expect(ttsPromise).not.toHaveBeenCalled();
   });
 
   it("throws after one retry when the output file stays empty", async () => {
@@ -70,7 +57,7 @@ describe("edgeTTS empty audio validation", () => {
     const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
-    const deps = createEdgeTTSDeps(async (text: string, filePath: string) => {
+    const tts = createEdgeTTSClient(async (text: string, filePath: string) => {
       calls.push(text);
       writeFileSync(filePath, "");
     });
@@ -83,7 +70,7 @@ describe("edgeTTS empty audio validation", () => {
           config: baseEdgeConfig,
           timeoutMs: 10000,
         },
-        deps,
+        tts,
       ),
     ).rejects.toThrow("Edge TTS produced empty audio file after retry");
     expect(calls).toEqual(["Hello", "Hello"]);
@@ -92,8 +79,10 @@ describe("edgeTTS empty audio validation", () => {
   it("succeeds when the output file has content", async () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
+    let stagedPath = "";
 
-    const deps = createEdgeTTSDeps(async (_text: string, filePath: string) => {
+    const tts = createEdgeTTSClient(async (_text: string, filePath: string) => {
+      stagedPath = filePath;
       writeFileSync(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
 
@@ -105,9 +94,14 @@ describe("edgeTTS empty audio validation", () => {
           config: baseEdgeConfig,
           timeoutMs: 10000,
         },
-        deps,
+        tts,
       ),
     ).resolves.toBeUndefined();
+    expect(stagedPath).not.toBe(outputPath);
+    expect(path.basename(stagedPath)).toContain(path.basename(outputPath));
+    expect(path.basename(stagedPath)).toMatch(/\.part$/);
+    expect(readFileSync(outputPath)).toEqual(Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    expect(existsSync(stagedPath)).toBe(false);
   });
 
   it("retries once when the first output file is empty", async () => {
@@ -115,7 +109,7 @@ describe("edgeTTS empty audio validation", () => {
     const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
-    const deps = createEdgeTTSDeps(async (text: string, filePath: string) => {
+    const tts = createEdgeTTSClient(async (text: string, filePath: string) => {
       calls.push(text);
       writeFileSync(filePath, calls.length === 1 ? "" : Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
@@ -128,7 +122,7 @@ describe("edgeTTS empty audio validation", () => {
           config: baseEdgeConfig,
           timeoutMs: 10000,
         },
-        deps,
+        tts,
       ),
     ).resolves.toBeUndefined();
     expect(calls).toEqual(["Hello", "Hello"]);
@@ -139,7 +133,7 @@ describe("edgeTTS empty audio validation", () => {
     const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
-    const deps = createEdgeTTSDeps(async (text: string, filePath: string) => {
+    const tts = createEdgeTTSClient(async (text: string, filePath: string) => {
       calls.push(text);
       if (calls.length === 2) {
         writeFileSync(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
@@ -154,7 +148,7 @@ describe("edgeTTS empty audio validation", () => {
           config: baseEdgeConfig,
           timeoutMs: 10000,
         },
-        deps,
+        tts,
       ),
     ).resolves.toBeUndefined();
     expect(calls).toEqual(["Hello", "Hello"]);
@@ -165,7 +159,7 @@ describe("edgeTTS empty audio validation", () => {
     const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
-    const deps = createEdgeTTSDeps(async (text: string) => {
+    const tts = createEdgeTTSClient(async (text: string) => {
       calls.push(text);
       throw new Error("upstream timeout");
     });
@@ -178,7 +172,7 @@ describe("edgeTTS empty audio validation", () => {
           config: baseEdgeConfig,
           timeoutMs: 10000,
         },
-        deps,
+        tts,
       ),
     ).rejects.toThrow("upstream timeout");
     expect(calls).toEqual(["Hello"]);

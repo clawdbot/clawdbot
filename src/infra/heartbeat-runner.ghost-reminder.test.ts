@@ -1,18 +1,24 @@
-import fs from "node:fs/promises";
+// Covers heartbeat handling of queued reminder system events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
+import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
+  seedSessionStore,
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
   resetSystemEventsForTest();
+  resetCronActiveJobs();
 });
 
 afterEach(() => {
@@ -35,6 +41,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     storePath: string;
     target?: "telegram" | "none";
     isolatedSession?: boolean;
+    activeHours?: boolean;
   }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -44,6 +51,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
             every: "5m",
             target: params.target ?? "telegram",
             ...(params.isolatedSession === true ? { isolatedSession: true } : {}),
+            ...(params.activeHours === true
+              ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" as const } }
+              : {}),
           },
         },
       },
@@ -83,17 +93,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
     sessionKey: string,
     overrides: Record<string, unknown>,
   ): Promise<void> => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "telegram",
-          ...overrides,
-        },
-      }),
-    );
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "sid",
+      updatedAt: Date.now(),
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: "-100155462274",
+      ...overrides,
+    });
   };
 
   const expectCronEventPrompt = (
@@ -103,12 +110,63 @@ describe("Ghost reminder bug (issue #13317)", () => {
     } | null,
     reminderText: string,
   ) => {
-    expect(calledCtx).not.toBeNull();
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).toContain(reminderText);
-    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-    expect(calledCtx?.Body).not.toContain("heartbeat poll");
+    if (calledCtx === null || typeof calledCtx.Body !== "string") {
+      throw new Error("Expected cron event prompt body");
+    }
+    expect(calledCtx.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx.Body).toContain(reminderText);
+    expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+    expect(calledCtx.Body).not.toContain("heartbeat poll");
+  };
+
+  const mockCallAt = (
+    mock: { mock: { calls: Array<readonly unknown[]> } },
+    index: number,
+    label: string,
+  ): readonly unknown[] => {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  };
+
+  const getFirstReplyContext = (
+    replySpy: ReturnType<typeof vi.fn>,
+  ): {
+    Provider?: string;
+    SessionKey?: string;
+    MessageThreadId?: number;
+    Body?: string;
+  } => {
+    const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
+    if (!ctx || typeof ctx !== "object") {
+      throw new Error("expected heartbeat reply context");
+    }
+    return ctx as {
+      Provider?: string;
+      SessionKey?: string;
+      MessageThreadId?: number;
+      Body?: string;
+    };
+  };
+
+  const expectTelegramSend = (
+    sendTelegram: ReturnType<typeof vi.fn>,
+    params: {
+      to: string;
+      text: string;
+      messageThreadId?: number;
+    },
+  ) => {
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    const [to, text, options] = mockCallAt(sendTelegram, 0, "Telegram send");
+    expect(to).toBe(params.to);
+    expect(text).toBe(params.text);
+    expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
+      params.messageThreadId,
+    );
   };
 
   const runCronReminderCase = async (
@@ -117,7 +175,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: { Provider?: string; Body?: string; ForceSenderIsOwnerFalse?: boolean } | null;
+    calledCtx: { Provider?: string; Body?: string } | null;
   }> => {
     return runHeartbeatCase({
       tmpPrefix,
@@ -134,6 +192,16 @@ describe("Ghost reminder bug (issue #13317)", () => {
     enqueue: (sessionKey: string) => void;
     target?: "telegram" | "none";
     isolatedSession?: boolean;
+    source?: "cron";
+    intent?: "immediate";
+    activeCronJobId?: string;
+    owningCronJobId?: string;
+    replaceOwningCronMarker?: boolean;
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+    cronLaneDepth?: number;
+    cronNestedLaneDepth?: number;
+    activeHours?: boolean;
+    nowMs?: number;
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -141,7 +209,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       Provider?: string;
       Body?: string;
       SessionKey?: string;
-      ForceSenderIsOwnerFalse?: boolean;
     } | null;
     sessionKey: string;
     replyCallCount: number;
@@ -154,23 +221,62 @@ describe("Ghost reminder bug (issue #13317)", () => {
           storePath,
           target: params.target,
           isolatedSession: params.isolatedSession,
+          activeHours: params.activeHours,
         });
         params.enqueue(sessionKey);
-        const result = await runHeartbeatOnce({
-          cfg,
-          agentId: "main",
-          reason: params.reason,
-          deps: {
-            getReplyFromConfig: getReplySpy,
-            telegram: sendTelegram,
-          },
-        });
-        const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
-          Provider?: string;
-          Body?: string;
-          SessionKey?: string;
-          ForceSenderIsOwnerFalse?: boolean;
-        } | null;
+        const owningCronJobMarker = params.owningCronJobId
+          ? markCronJobActive(params.owningCronJobId)
+          : undefined;
+        const replacementCronJobMarker =
+          params.replaceOwningCronMarker && params.owningCronJobId
+            ? markCronJobActive(params.owningCronJobId)
+            : undefined;
+        const unrelatedCronJobMarker =
+          params.activeCronJobId && params.activeCronJobId !== params.owningCronJobId
+            ? markCronJobActive(params.activeCronJobId)
+            : undefined;
+        let result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
+        try {
+          result = await runHeartbeatOnce({
+            cfg,
+            agentId: "main",
+            reason: params.reason,
+            source: params.source,
+            intent: params.intent,
+            ...(params.source ? { sessionKey } : {}),
+            ...(owningCronJobMarker ? { owningCronJobMarker } : {}),
+            ...(params.owningCronLaneTaskMarker
+              ? { owningCronLaneTaskMarker: params.owningCronLaneTaskMarker }
+              : {}),
+            deps: {
+              getReplyFromConfig: getReplySpy,
+              telegram: sendTelegram,
+              nowMs: () => params.nowMs ?? Date.now(),
+              ...(params.cronLaneDepth === undefined && params.cronNestedLaneDepth === undefined
+                ? {}
+                : {
+                    getQueueSize: (lane?: string) =>
+                      lane === CommandLane.Cron
+                        ? (params.cronLaneDepth ?? 0)
+                        : lane === CommandLane.CronNested
+                          ? (params.cronNestedLaneDepth ?? 0)
+                          : 0,
+                  }),
+            },
+          });
+        } finally {
+          if (params.activeCronJobId && unrelatedCronJobMarker) {
+            clearCronJobActive(params.activeCronJobId, unrelatedCronJobMarker);
+          }
+          if (params.owningCronJobId && owningCronJobMarker) {
+            if (replacementCronJobMarker) {
+              clearCronJobActive(params.owningCronJobId, replacementCronJobMarker);
+            }
+            clearCronJobActive(params.owningCronJobId, owningCronJobMarker);
+          }
+        }
+        const calledCtx =
+          getReplySpy.mock.calls.length === 0 ? null : getFirstReplyContext(getReplySpy);
         return {
           result,
           sendTelegram,
@@ -181,35 +287,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
       { prefix: params.tmpPrefix },
     );
-  };
-
-  const expectUntrustedEventOwnership = async (params: {
-    tmpPrefix: string;
-    reason: "hook:wake" | "interval";
-    isolatedSession?: boolean;
-    forceSenderIsOwnerFalse: boolean;
-  }): Promise<void> => {
-    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
-      tmpPrefix: params.tmpPrefix,
-      replyText: "Handled internally",
-      reason: params.reason,
-      target: "none",
-      isolatedSession: params.isolatedSession,
-      enqueue: (sessionKey) => {
-        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
-          sessionKey,
-          trusted: false,
-        });
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("heartbeat");
-    if (params.isolatedSession === true) {
-      expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    }
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(params.forceSenderIsOwnerFalse);
-    expect(sendTelegram).not.toHaveBeenCalled();
   };
 
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
@@ -238,6 +315,30 @@ describe("Ghost reminder bug (issue #13317)", () => {
     );
     expect(result.status).toBe("ran");
     expectCronEventPrompt(calledCtx, "Reminder: Check Base Scout results");
+    expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("runs the tagged cron payload outside heartbeat active hours", async () => {
+    const reminderText = "Reminder: Send the overnight report";
+    const { result, sendTelegram, calledCtx, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-quiet-hours-",
+      replyText: "Overnight report sent",
+      reason: "cron:overnight-report",
+      source: "cron",
+      intent: "immediate",
+      activeHours: true,
+      nowMs: Date.UTC(2025, 0, 1, 7, 0, 0),
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent(reminderText, {
+          sessionKey,
+          contextKey: "cron:overnight-report",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replyCallCount).toBe(1);
+    expectCronEventPrompt(calledCtx, reminderText);
     expect(sendTelegram).toHaveBeenCalled();
   });
 
@@ -273,6 +374,206 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("delivers a targeted cron event while its owning job is active", async () => {
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-active-job-",
+      replyText: "Handled the reminder",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      activeCronJobId: "nightly-report",
+      owningCronJobId: "nightly-report",
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expectCronEventPrompt(calledCtx, "Reminder: Send the nightly report");
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
+
+  it("still blocks an owning cron wake while the nested cron lane is busy", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-owner-nested-lane-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      cronNestedLaneDepth: 1,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("still blocks an owning cron wake while unrelated cron lane work is queued", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-owner-unrelated-lane-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      cronLaneDepth: 1,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("ignores only the exact command lane task that owns the cron wake", async () => {
+    await enqueueCommandInLane(CommandLane.Cron, async (owningCronLaneTaskMarker) => {
+      const ownTaskOnly = await runHeartbeatCase({
+        tmpPrefix: "openclaw-cron-owner-exact-lane-",
+        replyText: "Handled the reminder",
+        reason: "cron:nightly-report",
+        source: "cron",
+        intent: "immediate",
+        owningCronJobId: "nightly-report",
+        owningCronLaneTaskMarker,
+        cronLaneDepth: 1,
+        enqueue: (key) => {
+          enqueueSystemEvent("Reminder: Send the nightly report", {
+            sessionKey: key,
+            contextKey: "cron:nightly-report",
+          });
+        },
+      });
+      expect(ownTaskOnly.result.status).toBe("ran");
+
+      const unrelatedTaskQueued = await runHeartbeatCase({
+        tmpPrefix: "openclaw-cron-owner-second-lane-",
+        replyText: "must not run",
+        reason: "cron:nightly-report",
+        source: "cron",
+        intent: "immediate",
+        owningCronJobId: "nightly-report",
+        owningCronLaneTaskMarker,
+        cronLaneDepth: 2,
+        enqueue: (key) => {
+          enqueueSystemEvent("Reminder: Send the nightly report", {
+            sessionKey: key,
+            contextKey: "cron:nightly-report",
+          });
+        },
+      });
+      expect(unrelatedTaskQueued.result).toEqual({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+      });
+      expect(unrelatedTaskQueued.replyCallCount).toBe(0);
+    });
+  });
+
+  it("does not let a stale command lane task marker bypass cron pressure", async () => {
+    let staleMarker: CommandLaneTaskMarker | undefined;
+    await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
+      staleMarker = marker;
+    });
+    if (!staleMarker) {
+      throw new Error("expected command lane marker");
+    }
+
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-owner-stale-lane-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      owningCronLaneTaskMarker: staleMarker,
+      cronLaneDepth: 1,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("does not let a stale owner marker bypass its replacement", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-replaced-owner-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      replaceOwningCronMarker: true,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("still blocks an owning cron wake while an unrelated job is active", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-unrelated-active-job-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      activeCronJobId: "different-job",
+      owningCronJobId: "nightly-report",
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("still blocks a cron wake that claims no owning job while a job is active", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-unowned-wake-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      activeCronJobId: "nightly-report",
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
   });
 
   it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {
@@ -315,12 +616,18 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(second.status).toBe("ran");
       expect(getReplySpy).toHaveBeenCalledTimes(2);
 
-      const firstCtx = getReplySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
-      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      const firstCtx = mockCallAt(getReplySpy, 0, "first heartbeat reply")[0] as {
+        Provider?: string;
+        Body?: string;
+      };
+      const secondCtx = mockCallAt(getReplySpy, 1, "second heartbeat reply")[0] as {
+        Provider?: string;
+        Body?: string;
+      };
       expect(firstCtx.Provider).toBe("cron-event");
       expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
       expect(secondCtx.Provider).toBe("heartbeat");
-      expect(secondCtx.Body).toContain("Read HEARTBEAT.md");
+      expect(secondCtx.Body).toContain("Heartbeat monitor scratch:");
       expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
     });
   });
@@ -349,13 +656,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
       reason: "exec-event",
       target: "none",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
       },
     });
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -366,13 +672,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
       replyText: "Deploy succeeded",
       reason: "exec-event",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
       },
     });
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -410,7 +715,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -430,42 +734,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
     expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
     expect(sendTelegram).not.toHaveBeenCalled();
-  });
-
-  it("forces owner downgrade for untrusted hook:wake system events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-untrusted-",
-      reason: "hook:wake",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("forces owner downgrade for untrusted interval events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-untrusted-",
-      reason: "interval",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("does not force owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-untrusted-isolated-",
-      reason: "hook:wake",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
-  });
-
-  it("does not force owner downgrade for isolated interval runs with only base-session untrusted events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-untrusted-isolated-",
-      reason: "interval",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
   });
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
@@ -484,15 +753,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {});
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -521,12 +782,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "-100155462274",
-        "Restart complete",
-        expect.objectContaining({ messageThreadId: 42 }),
-      );
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+        messageThreadId: 42,
+      });
     });
   });
 
@@ -563,17 +823,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: `${sessionKey}:heartbeat`,
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram.mock.calls[0]?.[0]).toBe("-100155462274");
-      const options = sendTelegram.mock.calls[0]?.[2] as { messageThreadId?: number } | undefined;
-      expect(options?.messageThreadId).toBeUndefined();
+      expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+      });
     });
   });
   it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
@@ -592,18 +846,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        lastTo: "telegram:-1003774691294:topic:2175",
+        lastThreadId: 2175,
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -614,7 +860,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
       enqueueSystemEvent("Exec completed (review-run, code 0) :: review-worker spawn finished", {
         sessionKey,
-        trusted: false,
         deliveryContext: {
           channel: "telegram",
           to: "telegram:-1003774691294:topic:47",
@@ -634,12 +879,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "telegram:-1003774691294:topic:47",
-        "The review-worker spawn finished successfully.",
-        expect.objectContaining({ messageThreadId: 47 }),
-      );
+      expectTelegramSend(sendTelegram, {
+        to: "telegram:-1003774691294:topic:47",
+        text: "The review-worker spawn finished successfully.",
+        messageThreadId: 47,
+      });
     });
   });
 
@@ -659,18 +903,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        lastTo: "telegram:-1003774691294:topic:2175",
+        lastThreadId: 2175,
+      });
 
       const sendTelegram = vi.fn();
       const getReplySpy = vi.fn().mockResolvedValue({
@@ -678,7 +914,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
       enqueueSystemEvent("Exec completed (review-run, code 0)", {
         sessionKey,
-        trusted: false,
         deliveryContext: {
           channel: "telegram",
           to: "telegram:-1003774691294:topic:47",
@@ -698,13 +933,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(getReplySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          Body: expect.stringContaining("no command output was found"),
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(getFirstReplyContext(getReplySpy).Body).toContain("no command output was found");
       expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
@@ -740,20 +969,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: `${sessionKey}:heartbeat`,
-          MessageThreadId: 42,
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "-100155462274",
-        "Topic heartbeat",
-        expect.objectContaining({ messageThreadId: 42 }),
-      );
+      const replyCtx = getFirstReplyContext(replySpy);
+      expect(replyCtx.SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expect(replyCtx.MessageThreadId).toBe(42);
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Topic heartbeat",
+        messageThreadId: 42,
+      });
     });
   });
 });

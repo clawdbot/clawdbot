@@ -1,6 +1,8 @@
+// Qa Lab tests cover suite runtime flow plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
+const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForTransportOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForChannelOutboundMessage = vi.hoisted(() => vi.fn());
@@ -17,16 +19,20 @@ const waitForQaChannelReady = vi.hoisted(() => vi.fn());
 const patchConfig = vi.hoisted(() => vi.fn());
 const applyConfig = vi.hoisted(() => vi.fn());
 const readConfigSnapshot = vi.hoisted(() => vi.fn());
+const restartGatewayWithConfigPatch = vi.hoisted(() => vi.fn());
 const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
 const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
+const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
 const startAgentRun = vi.hoisted(() => vi.fn());
 const waitForAgentRun = vi.hoisted(() => vi.fn());
+const waitForAgentHistoryReply = vi.hoisted(() => vi.fn());
 const listCronJobs = vi.hoisted(() => vi.fn());
 const findManagedDreamingCronJob = vi.hoisted(() => vi.fn());
 const waitForCronRunCompletion = vi.hoisted(() => vi.fn());
@@ -38,6 +44,7 @@ const callPluginToolsMcp = vi.hoisted(() => vi.fn());
 const runAgentPrompt = vi.hoisted(() => vi.fn());
 const ensureImageGenerationConfigured = vi.hoisted(() => vi.fn());
 const handleQaAction = vi.hoisted(() => vi.fn());
+const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
 const extractQaToolPayload = vi.hoisted(() => vi.fn());
 const browserRequest = vi.hoisted(() => vi.fn());
 const waitForBrowserReady = vi.hoisted(() => vi.fn());
@@ -52,11 +59,16 @@ const webEvaluate = vi.hoisted(() => vi.fn());
 const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
 const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
-const hasModelSwitchContinuityEvidence = vi.hoisted(() => vi.fn());
-const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
+const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
+const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
+const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
+}));
+
+vi.mock("./scenario-flow-runner.js", () => ({
+  runScenarioFlow,
 }));
 
 vi.mock("./suite-runtime-transport.js", () => ({
@@ -80,6 +92,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   patchConfig,
   applyConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
 }));
 
 vi.mock("./suite-runtime-agent.js", () => ({
@@ -87,11 +100,14 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  seedQaSessionTranscript,
+  readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,
   startAgentRun,
   waitForAgentRun,
+  waitForAgentHistoryReply,
   listCronJobs,
   findManagedDreamingCronJob,
   readDoctorMemoryStatus,
@@ -134,18 +150,50 @@ vi.mock("./extract-tool-payload.js", () => ({
   extractQaToolPayload,
 }));
 
+vi.mock("./runtime-tool-fixture.js", () => ({
+  runRuntimeToolFixture,
+}));
+
 vi.mock("./model-switch-eval.js", () => ({
-  hasModelSwitchContinuityEvidence,
+  hasModelSwitchContinuitySignal,
 }));
 
-vi.mock("./runtime-api.js", () => ({
-  qaChannelPlugin,
+vi.mock("./gateway-log-sentinel.js", () => ({
+  scanGatewayLogSentinels,
+  assertNoGatewayLogSentinels,
 }));
 
-import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 describe("qa suite runtime flow", () => {
+  it("records intentional scenario skips without running later steps", async () => {
+    const laterStep = vi.fn();
+    const result = await runQaSuiteScenarioSteps("requires group credentials", [
+      {
+        name: "Prepare WhatsApp",
+        run: async () => {
+          throw new QaSuiteScenarioSkipError("requires groupJid in the credential payload");
+        },
+      },
+      { name: "Run scenario", run: laterStep },
+    ]);
+
+    expect(result).toMatchObject({
+      status: "skip",
+      details: "requires groupJid in the credential payload",
+      steps: [
+        {
+          name: "Prepare WhatsApp",
+          status: "skip",
+          details: "requires groupJid in the credential payload",
+        },
+      ],
+    });
+    expect(laterStep).not.toHaveBeenCalled();
+  });
+
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
     const env = {
       lab: { baseUrl: "http://127.0.0.1:4444" },
@@ -159,8 +207,15 @@ describe("qa suite runtime flow", () => {
         createGatewayConfig: vi.fn(),
         buildAgentDelivery: vi.fn(),
         requiredPluginIds: [],
+        supportedActions: [],
         handleAction: vi.fn(),
         createReportNotes: vi.fn(),
+        reset: vi.fn(),
+        sendInbound: vi.fn(),
+        sendNativeCommand: vi.fn(),
+        waitForNoOutbound: vi.fn(),
+        waitForOutbound: vi.fn(),
+        waitForOutboundSequence: vi.fn(),
         state: {
           reset: vi.fn(),
           getSnapshot: vi.fn(),
@@ -170,30 +225,20 @@ describe("qa suite runtime flow", () => {
           searchMessages: vi.fn(),
           waitFor: vi.fn(),
         },
-        capabilities: {
-          waitForOutboundMessage: vi.fn(),
-          waitForCondition: vi.fn(),
-          getNormalizedMessageState: vi.fn(),
-          resetNormalizedMessageState: vi.fn(),
-          sendInboundMessage: vi.fn(),
-          injectOutboundMessage: vi.fn(),
-          readNormalizedMessage: vi.fn(),
-          executeGenericAction: vi.fn(),
-          waitForReady: vi.fn(),
-          assertNoFailureReplies: vi.fn(),
-        },
+        waitForCondition: vi.fn(),
       },
+      outputDir: "/artifacts",
       repoRoot: "/repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5-mini",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
-    } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
+    } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
-      sourcePath: "qa/scenarios/session-memory-ranking.md",
+      sourcePath: "qa/scenarios/session-memory-ranking.yaml",
       surface: "qa-channel",
       objective: "test",
       successCriteria: ["test"],
@@ -210,7 +255,7 @@ describe("qa suite runtime flow", () => {
     const resolveQaLiveTurnTimeoutMs = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
-    const result = createQaSuiteScenarioFlowApi({
+    const result = await runQaSuiteScenarioDefinition({
       env,
       scenario,
       runScenario,
@@ -234,10 +279,18 @@ describe("qa suite runtime flow", () => {
         runScenario: typeof runScenario;
         waitForQaChannelReady: typeof waitForQaChannelReady;
         waitForOutboundMessage: typeof waitForOutboundMessage;
+        markGatewayLogCursor: () => number;
+        assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
+        readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
+        seedQaSessionTranscript: typeof seedQaSessionTranscript;
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
-        qaChannelPlugin: typeof qaChannelPlugin;
+        waitForAgentHistoryReply: typeof waitForAgentHistoryReply;
+        runRuntimeToolFixture: (
+          envArg: typeof env,
+          configArg: Record<string, unknown>,
+        ) => Promise<unknown>;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
       constants: {
@@ -251,10 +304,26 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
     expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
+    expect(call.deps.markGatewayLogCursor()).toBe(0);
+    expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
+    expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
+    expect(call.deps.seedQaSessionTranscript).toBe(seedQaSessionTranscript);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
+    expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
-    expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
+    await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
+    expect(runRuntimeToolFixture).toHaveBeenCalledWith(
+      env,
+      { toolName: "read" },
+      {
+        createSession,
+        readEffectiveTools,
+        runAgentPrompt,
+        fetchJson,
+        ensureImageGenerationConfigured,
+      },
+    );
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",
@@ -262,7 +331,7 @@ describe("qa suite runtime flow", () => {
     });
 
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
-    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai" });
+    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
 });

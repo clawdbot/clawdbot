@@ -1,3 +1,4 @@
+// Searxng tests cover searxng search provider plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSearxngBaseUrl,
@@ -92,6 +93,46 @@ describe("searxng web search provider", () => {
     });
   });
 
+  it("forwards the execution abort signal to the SearXNG client", async () => {
+    const provider = createSearxngWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
+
+    expect(runSearxngSearch).toHaveBeenCalledWith({
+      config: { test: true },
+      query: "openclaw docs",
+      count: undefined,
+      categories: undefined,
+      language: undefined,
+      signal: controller.signal,
+    });
+  });
+
+  it("rejects fractional and out-of-range counts before searching", async () => {
+    const provider = createSearxngWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    await expect(tool.execute({ query: "openclaw docs", count: 11 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    expect(runSearxngSearch).not.toHaveBeenCalled();
+  });
+
   it("reads base URL from plugin config SecretRef, then env var, stripping trailing slashes", () => {
     expect(
       resolveSearxngBaseUrl(
@@ -155,8 +196,12 @@ describe("searxng web search provider", () => {
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
     const config = {} as Record<string, unknown>;
+    const setConfiguredCredentialValue = provider.setConfiguredCredentialValue;
+    if (!setConfiguredCredentialValue) {
+      throw new Error("Expected SearXNG provider setConfiguredCredentialValue");
+    }
 
-    provider.setConfiguredCredentialValue!(config, "http://search.local:9000");
+    setConfiguredCredentialValue(config, "http://search.local:9000");
 
     expect(
       (

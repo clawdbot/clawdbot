@@ -1,3 +1,6 @@
 * text=auto eol=lf
 CLAUDE.md -text
 src/gateway/server-methods/CLAUDE.md -text
+ui/src/i18n/.i18n/* linguist-generated
+ui/src/i18n/locales/*.ts linguist-generated
+ui/src/i18n/locales/en.ts -linguist-generated

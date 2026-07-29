@@ -1,3 +1,4 @@
+// Whatsapp tests cover outbound adapter.sendpayload plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { whatsappOutbound } from "./outbound-adapter.js";
 
@@ -38,16 +39,12 @@ describe("whatsappOutbound sendPayload", () => {
       deps: { sendWhatsApp },
     });
 
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "5511999999999@c.us",
-      "Before\n\nAfter\n",
-      expect.objectContaining({
-        verbose: false,
-        cfg: {},
-        accountId: undefined,
-        gifPlayback: undefined,
-      }),
-    );
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "Before\n\nAfter\n", {
+      verbose: false,
+      cfg: {},
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
   });
 
   it("trims leading whitespace for direct media captions", async () => {
@@ -89,20 +86,32 @@ describe("whatsappOutbound sendPayload", () => {
       deps: { sendWhatsApp },
     });
 
-    expect(sendWhatsApp).toHaveBeenNthCalledWith(1, "5511999999999@c.us", "hello", {
-      verbose: false,
-      cfg: {},
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
-    expect(sendWhatsApp).toHaveBeenNthCalledWith(2, "5511999999999@c.us", "caption", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/test.png",
-      mediaLocalRoots: undefined,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "5511999999999@c.us",
+      "hello",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      2,
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/test.png",
+        mediaLocalRoots: undefined,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("preserves audioAsVoice from payload media sends", async () => {
@@ -116,15 +125,20 @@ describe("whatsappOutbound sendPayload", () => {
       deps: { sendWhatsApp },
     });
 
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "voice", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaLocalRoots: undefined,
-      audioAsVoice: true,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "voice",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/voice.ogg",
+        mediaLocalRoots: undefined,
+        audioAsVoice: true,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("drops blank mediaUrls before sending payload media", async () => {
@@ -142,14 +156,19 @@ describe("whatsappOutbound sendPayload", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaLocalRoots: undefined,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/voice.ogg",
+        mediaLocalRoots: undefined,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("skips whitespace-only text payloads", async () => {

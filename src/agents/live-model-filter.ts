@@ -1,8 +1,14 @@
+/**
+ * Live model sweep filtering and prioritization.
+ * Curates modern high-signal and small-model refs while preserving provider
+ * spread and explicit operator selections for live test lanes.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ModelRef = {
   provider?: string | null;
@@ -10,31 +16,53 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-6",
+  "anthropic/claude-opus-5",
+  "anthropic/claude-opus-4-8",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
+  "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
-  "google/gemini-3-flash-preview",
+  "google/gemini-3.5-flash",
+  "cohere/command-a-plus-05-2026",
+  "moonshot/kimi-k3",
+  "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
-  "minimax/minimax-m2.7",
-  "openai/gpt-5.2",
-  "openai-codex/gpt-5.2",
+  "minimax/minimax-m3",
+  "openai/gpt-5.6",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-4.3",
+  "xai/grok-4.5",
+  "xai/grok-4.20-0309-reasoning",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-  "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/glm-5p1",
-  "minimax-portal/minimax-m2.7",
+  "minimax-portal/minimax-m3",
 ] as const;
 
+const SMALL_LIVE_MODEL_PRIORITY = [
+  "lmstudio/qwen/qwen3.5-9b",
+  "vllm/qwen/qwen3-8b",
+  "sglang/qwen/qwen3-8b",
+  "ollama/gemma3:4b",
+  "openrouter/qwen/qwen3.5-9b",
+  "openrouter/z-ai/glm-5.1",
+  "openrouter/z-ai/glm-5",
+  "zai/glm-5.1",
+] as const;
+
+/** Default cap for high-signal live model sweeps. */
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
-const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
+/** Default cap for the small-model live smoke lane. */
+export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
+const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli"]);
+const DIRECT_OPENAI_HIGH_SIGNAL_LIVE_MODEL_IDS = new Set([
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+]);
 const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
   "fireworks",
   "google",
@@ -44,6 +72,9 @@ const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
+);
+const SMALL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
+  SMALL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
 );
 const HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER = new Map<string, Set<string>>();
 for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
@@ -99,7 +130,7 @@ function isPreGemini3ModelId(id: string): boolean {
 
 function isMutableLatestAliasLiveModelRef(id: string): boolean {
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
-  return modelName.endsWith("-latest");
+  return /(?:^|-)latest(?:-|$)/.test(modelName);
 }
 
 function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
@@ -113,7 +144,6 @@ function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
   }
   return (
     provider === "openai" ||
-    provider === "openai-codex" ||
     provider === "codex-cli" ||
     provider === "opencode" ||
     provider === "github-copilot" ||
@@ -126,8 +156,8 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
     return false;
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
-  if (provider === "openai" || provider === "openai-codex") {
-    return modelName !== "gpt-5.2";
+  if (provider === "openai") {
+    return !DIRECT_OPENAI_HIGH_SIGNAL_LIVE_MODEL_IDS.has(modelName);
   }
   return !modelName.startsWith("gpt-5.2");
 }
@@ -149,6 +179,7 @@ function isUnsupportedCuratedProviderLiveModelRef(provider: string, id: string):
   return !(HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.get(provider)?.has(id) ?? false);
 }
 
+/** Return whether a provider/model ref is modern enough for live checks. */
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -169,6 +200,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
   return false;
 }
 
+/** Return whether a provider/model ref belongs in high-signal live sweeps. */
 export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -196,6 +228,39 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   return isHighSignalClaudeModelId(id);
 }
 
+/** Return whether a ref is explicitly prioritized for high-signal live sweeps. */
+export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
+  return hasPrioritizedLiveModelRef(HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX, ref);
+}
+
+/** Return whether a ref belongs to the curated small-model live lane. */
+export function isSmallLiveModelRef(ref: ModelRef): boolean {
+  return hasPrioritizedLiveModelRef(SMALL_LIVE_MODEL_PRIORITY_INDEX, ref);
+}
+
+/** List high-signal priority refs in priority order. */
+export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
+  return listPrioritizedLiveModelRefs(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);
+}
+
+/** List small-model priority refs in priority order. */
+export function listPrioritizedSmallLiveModelRefs(): Array<{ provider: string; id: string }> {
+  return listPrioritizedLiveModelRefs(SMALL_LIVE_MODEL_PRIORITY);
+}
+
+function listPrioritizedLiveModelRefs(
+  priority: readonly string[],
+): Array<{ provider: string; id: string }> {
+  return priority.map((key) => {
+    const separatorIndex = key.indexOf("/");
+    return {
+      provider: key.slice(0, separatorIndex),
+      id: key.slice(separatorIndex + 1),
+    };
+  });
+}
+
+/** Decide whether default high-signal sweeps should skip a provider. */
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   provider?: string | null;
   useExplicitModels: boolean;
@@ -219,6 +284,8 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
       return false;
     }
     if (requestedProvider) {
+      // If a user asked for a sibling provider owned by the same plugin, keep
+      // this provider eligible so owner-scoped filters do not hide coverage.
       const sharesOwner = params.resolveProviderOwners
         ? (params.resolveProviderOwners(requestedProvider) ?? []).some((owner) =>
             (params.resolveProviderOwners?.(provider) ?? []).includes(owner),
@@ -240,13 +307,18 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   return true;
 }
 
-function toCanonicalHighSignalLiveModelKey(ref: ModelRef): string | null {
+function toCanonicalLiveModelKey(ref: ModelRef): string | null {
   const provider = normalizeProviderId(ref.provider ?? "");
   const rawId = normalizeLowercaseStringOrEmpty(ref.id);
   if (!provider || !rawId) {
     return null;
   }
   return `${provider}/${rawId}`;
+}
+
+function hasPrioritizedLiveModelRef(index: ReadonlyMap<string, number>, ref: ModelRef): boolean {
+  const key = toCanonicalLiveModelKey(ref);
+  return key !== null && index.has(key);
 }
 
 function capByProviderSpread<T>(
@@ -292,11 +364,38 @@ function capByProviderSpread<T>(
   return selected;
 }
 
+/** Select high-signal live items by explicit priority, then provider spread. */
 export function selectHighSignalLiveItems<T>(
   items: T[],
   maxItems: number,
   refOf: (item: T) => ModelRef,
   providerOf: (item: T) => string,
+): T[] {
+  return selectPrioritizedLiveItems(
+    items,
+    maxItems,
+    refOf,
+    providerOf,
+    HIGH_SIGNAL_LIVE_MODEL_PRIORITY,
+  );
+}
+
+/** Select small live items by explicit priority, then provider spread. */
+export function selectSmallLiveItems<T>(
+  items: T[],
+  maxItems: number,
+  refOf: (item: T) => ModelRef,
+  providerOf: (item: T) => string,
+): T[] {
+  return selectPrioritizedLiveItems(items, maxItems, refOf, providerOf, SMALL_LIVE_MODEL_PRIORITY);
+}
+
+function selectPrioritizedLiveItems<T>(
+  items: T[],
+  maxItems: number,
+  refOf: (item: T) => ModelRef,
+  providerOf: (item: T) => string,
+  priority: readonly string[],
 ): T[] {
   if (maxItems <= 0 || items.length <= maxItems) {
     return items;
@@ -304,12 +403,12 @@ export function selectHighSignalLiveItems<T>(
 
   const remaining = [...items];
   const selected: T[] = [];
-  for (const preferredKey of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
+  for (const preferredKey of priority) {
     if (selected.length >= maxItems) {
       break;
     }
     const preferredIndex = remaining.findIndex(
-      (item) => toCanonicalHighSignalLiveModelKey(refOf(item)) === preferredKey,
+      (item) => toCanonicalLiveModelKey(refOf(item)) === preferredKey,
     );
     if (preferredIndex < 0) {
       continue;
@@ -327,6 +426,7 @@ export function selectHighSignalLiveItems<T>(
   return [...selected, ...capByProviderSpread(remaining, maxItems - selected.length, providerOf)];
 }
 
+/** Resolve the high-signal live model cap from CLI/config inputs. */
 export function resolveHighSignalLiveModelLimit(params: {
   rawMaxModels?: string;
   useExplicitModels: boolean;
@@ -334,8 +434,7 @@ export function resolveHighSignalLiveModelLimit(params: {
 }): number {
   const trimmed = params.rawMaxModels?.trim();
   if (trimmed) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    return parseStrictNonNegativeInteger(trimmed) ?? 0;
   }
   if (params.useExplicitModels) {
     return 0;
@@ -343,8 +442,9 @@ export function resolveHighSignalLiveModelLimit(params: {
   return params.defaultLimit ?? DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT;
 }
 
+/** Return the priority index for a high-signal live ref, if prioritized. */
 export function getHighSignalLiveModelPriorityIndex(ref: ModelRef): number | null {
-  const key = toCanonicalHighSignalLiveModelKey(ref);
+  const key = toCanonicalLiveModelKey(ref);
   if (!key) {
     return null;
   }

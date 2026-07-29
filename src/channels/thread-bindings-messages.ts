@@ -1,5 +1,10 @@
+/**
+ * Channel-neutral thread-binding message builders shared by plugins, ACP focus, and subagent flows.
+ * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
   "Session ended. Messages here will no longer be routed.";
@@ -15,6 +20,7 @@ function normalizeThreadBindingDurationMs(raw: unknown): number {
   return durationMs;
 }
 
+/** Formats thread-binding timeout durations for compact user-facing messages. */
 export function formatThreadBindingDurationLabel(durationMs: number): string {
   if (durationMs <= 0) {
     return "disabled";
@@ -29,6 +35,7 @@ export function formatThreadBindingDurationLabel(durationMs: number): string {
   return `${totalMinutes}m`;
 }
 
+/** Builds the native thread name for a focused thread-bound session. */
 export function resolveThreadBindingThreadName(params: {
   agentId?: string;
   label?: string;
@@ -36,9 +43,11 @@ export function resolveThreadBindingThreadName(params: {
   const label = normalizeOptionalString(params.label);
   const base = label || normalizeOptionalString(params.agentId) || "agent";
   const raw = `🤖 ${base}`.replace(/\s+/g, " ").trim();
-  return raw.slice(0, 100);
+  // Native channel thread names have tight limits; keep generated names bounded.
+  return truncateUtf16Safe(raw, 100);
 }
 
+/** Builds the system-prefixed intro text posted when a thread binding becomes active. */
 export function resolveThreadBindingIntroText(params: {
   agentId?: string;
   label?: string;
@@ -49,7 +58,7 @@ export function resolveThreadBindingIntroText(params: {
 }): string {
   const label = normalizeOptionalString(params.label);
   const base = label || normalizeOptionalString(params.agentId) || "agent";
-  const normalized = base.replace(/\s+/g, " ").trim().slice(0, 100) || "agent";
+  const normalized = truncateUtf16Safe(base.replace(/\s+/g, " ").trim(), 100) || "agent";
   const idleTimeoutMs = normalizeThreadBindingDurationMs(params.idleTimeoutMs);
   const maxAgeMs = normalizeThreadBindingDurationMs(params.maxAgeMs);
   const cwd = normalizeOptionalString(params.sessionCwd);
@@ -81,6 +90,7 @@ export function resolveThreadBindingIntroText(params: {
   return prefixSystemMessage(`${intro}\n${details.join("\n")}`);
 }
 
+/** Builds the system-prefixed farewell text posted when a thread binding ends. */
 export function resolveThreadBindingFarewellText(params: {
   reason?: string;
   farewellText?: string;

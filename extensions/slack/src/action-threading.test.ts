@@ -1,11 +1,14 @@
+// Slack tests cover action threading plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
 
 type SlackThreadingToolContext = {
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  sameChannelThreadRequired?: boolean;
 };
 
 function createToolContext(
@@ -56,6 +59,29 @@ describe("resolveSlackAutoThreadId", () => {
     expect(hasRepliedRef.value).toBe(false);
   });
 
+  it("uses the active thread for matching user targets", () => {
+    expect(
+      resolveSlackAutoThreadId({
+        to: "user:U123",
+        toolContext: createToolContext({
+          currentChannelId: "slack:U123",
+        }),
+      }),
+    ).toBe("thread-1");
+  });
+
+  it("matches either native or routable DM targets", () => {
+    const context = createToolContext({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+    });
+
+    expect(resolveSlackAutoThreadId({ to: "user:U123", toolContext: context })).toBe("thread-1");
+    expect(resolveSlackAutoThreadId({ to: "U123", toolContext: context })).toBe("thread-1");
+    expect(resolveSlackAutoThreadId({ to: "D123", toolContext: context })).toBe("thread-1");
+    expect(resolveSlackAutoThreadId({ to: "user:U999", toolContext: context })).toBeUndefined();
+  });
+
   it("skips auto-threading when reply mode or thread context blocks it", () => {
     expect(
       resolveSlackAutoThreadId({
@@ -78,5 +104,17 @@ describe("resolveSlackAutoThreadId", () => {
         toolContext: createToolContext({ currentThreadTs: undefined }),
       }),
     ).toBeUndefined();
+  });
+
+  it("fails closed for same-channel threaded replies when the thread timestamp is missing", () => {
+    expect(() =>
+      resolveSlackAutoThreadId({
+        to: "C123",
+        toolContext: createToolContext({
+          currentThreadTs: undefined,
+          sameChannelThreadRequired: true,
+        }),
+      }),
+    ).toThrow("Slack thread context is required");
   });
 });

@@ -1,6 +1,8 @@
+// Message send command registration, including media and presentation/delivery options.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register `message send` and route execution through shared message helpers. */
 export function registerMessageSendCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
@@ -9,7 +11,10 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           message
             .command("send")
             .description("Send a message")
-            .option("-m, --message <text>", "Message body (required unless --media is set)"),
+            .option(
+              "-m, --message <text>",
+              "Message body (required unless --media or --presentation is set)",
+            ),
         )
         .option(
           "--media <path-or-url>",
@@ -17,7 +22,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         )
         .option(
           "--presentation <json>",
-          "Shared presentation payload as JSON (text, context, dividers, buttons, selects)",
+          "Shared presentation payload as JSON (text, context, dividers, charts, tables, buttons, selects)",
         )
         .option("--delivery <json>", "Shared delivery preferences as JSON")
         .option("--pin", "Request that the delivered message be pinned when supported", false)
@@ -26,7 +31,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
           "--force-document",
-          "Send media as document to avoid Telegram compression (Telegram only). Applies to images and GIFs.",
+          "Send media as document to avoid channel compression (Telegram, WhatsApp). Applies to images, GIFs, and videos.",
           false,
         )
         .option(

@@ -205,7 +205,7 @@ export function resolvePollReferenceEventId(content: unknown): string | null {
   return eventId.length > 0 ? eventId : null;
 }
 
-export function parsePollResponseAnswerIds(content: unknown): string[] | null {
+function parsePollResponseAnswerIds(content: unknown): string[] | null {
   if (!content || typeof content !== "object") {
     return null;
   }

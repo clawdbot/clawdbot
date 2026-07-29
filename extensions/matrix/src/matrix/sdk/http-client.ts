@@ -1,3 +1,4 @@
+// Matrix plugin module implements http client behavior.
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { buildHttpError } from "./event-helpers.js";
@@ -47,11 +48,18 @@ export class MatrixAuthedHttpClient {
       throw buildHttpError(response.status, text);
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
+    const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType === "application/json") {
       if (!text.trim()) {
         return {};
       }
-      return JSON.parse(text);
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw Object.assign(new Error("Matrix homeserver returned malformed JSON"), {
+          statusCode: response.status,
+        });
+      }
     }
     return text;
   }

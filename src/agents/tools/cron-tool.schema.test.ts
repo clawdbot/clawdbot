@@ -1,5 +1,12 @@
+import {
+  findLlamacppGbnfSchemaViolations,
+  normalizeToolParameterSchema,
+} from "@openclaw/ai/internal/openai";
+// Cron tool schema tests cover the provider-facing parameter shape and runtime
+// validation compatibility for cron jobs.
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { CronToolSchema } from "./cron-tool.js";
+import { createCronTool } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -24,8 +31,19 @@ function propertyAt(
   return cursor;
 }
 
-describe("CronToolSchema", () => {
-  const schemaRecord = CronToolSchema as unknown as Record<string, unknown>;
+describe("createCronToolSchema", () => {
+  const schema = createCronTool().parameters;
+  const schemaRecord = schema as unknown as Record<string, unknown>;
+  const providerSchemaRecord = normalizeToolParameterSchema(schema, {
+    modelProvider: "gemini",
+  }) as unknown as Record<string, unknown>;
+  const jjccGeminiSchemaRecord = normalizeToolParameterSchema(schema, {
+    modelProvider: "jjcc",
+    modelId: "gemini-3.1-pro-preview",
+  }) as unknown as Record<string, unknown>;
+  const llamacppSchemaRecord = normalizeToolParameterSchema(schema, {
+    modelCompat: { toolSchemaProfile: "llamacpp" },
+  }) as unknown as Record<string, unknown>;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -34,19 +52,46 @@ describe("CronToolSchema", () => {
     expect(keysAt(schemaRecord, "job")).toEqual(
       [
         "agentId",
+        "declarationKey",
         "deleteAfterRun",
         "delivery",
         "description",
+        "displayName",
         "enabled",
         "failureAlert",
         "name",
+        "owner",
+        "pacing",
         "payload",
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
+  });
+
+  it("keeps declarationKey portable across model schema converters", () => {
+    const declarationKey = propertyAt(schemaRecord, "job.declarationKey");
+
+    expect(declarationKey).toMatchObject({ type: "string", minLength: 1, maxLength: 200 });
+    // Runtime and gateway validation own the nonblank invariant. An unanchored
+    // model-schema pattern prevents llama.cpp from compiling the entire tool.
+    expect(declarationKey).not.toHaveProperty("pattern");
+  });
+
+  it("projects the complete cron schema into llama.cpp's GBNF subset", () => {
+    expect(propertyAt(schemaRecord, "job.trigger.script")).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 65_536,
+    });
+    expect(propertyAt(llamacppSchemaRecord, "job.trigger.script")).toEqual({
+      type: "string",
+      minLength: 1,
+    });
+    expect(findLlamacppGbnfSchemaViolations(llamacppSchemaRecord, "cron.parameters")).toEqual([]);
   });
 
   it("patch exposes the expected top-level fields", () => {
@@ -56,42 +101,142 @@ describe("CronToolSchema", () => {
         "deleteAfterRun",
         "delivery",
         "description",
+        "displayName",
         "enabled",
         "failureAlert",
         "name",
+        "pacing",
         "payload",
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
   });
 
-  it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs", () => {
-    expect(keysAt(schemaRecord, "job.schedule")).toEqual(
-      ["anchorMs", "at", "everyMs", "expr", "kind", "staggerMs", "tz"].toSorted(),
+  it("exposes next_check with its relative duration parameter", () => {
+    expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
+    expect(propertyAt(schemaRecord, "in")?.description).toContain("next_check");
+    expect(keysAt(schemaRecord, "job.pacing")).toEqual(["max", "min"]);
+    const patchPacing = propertyAt(schemaRecord, "patch.pacing");
+    const pacingObject = (patchPacing?.anyOf as Array<Record<string, unknown>> | undefined)?.find(
+      (entry) => entry.type === "object",
     );
+    expect(
+      Object.keys((pacingObject?.properties as Record<string, unknown>) ?? {}).toSorted(),
+    ).toEqual(["max", "min"]);
+  });
+
+  it("exposes bounded cron list pagination", () => {
+    expect(propertyAt(schemaRecord, "limit")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+    expect(propertyAt(schemaRecord, "offset")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
+    expect(Value.Check(schema, { action: "list", limit: 200, offset: 200 })).toBe(true);
+
+    for (const invalid of [
+      { action: "list", limit: 0 },
+      { action: "list", limit: 201 },
+      { action: "list", limit: 1.5 },
+      { action: "list", offset: -1 },
+      { action: "list", offset: 1.5 },
+    ]) {
+      expect(Value.Check(schema, invalid)).toBe(false);
+    }
+  });
+
+  it("job.schedule exposes interval, cron, and stream source fields", () => {
+    expect(keysAt(schemaRecord, "job.schedule")).toEqual(
+      [
+        "anchorMs",
+        "at",
+        "batchMs",
+        "command",
+        "cwd",
+        "everyMs",
+        "expr",
+        "kind",
+        "match",
+        "maxBatchBytes",
+        "mode",
+        "staggerMs",
+        "tz",
+      ].toSorted(),
+    );
+    expect(propertyAt(schemaRecord, "job.schedule.kind")?.enum).toContain("stream");
+  });
+
+  it("documents wake, context, and session-target fields", () => {
+    expect(propertyAt(schemaRecord, "text")?.description).toBe(
+      'systemEvent text for action="wake"',
+    );
+    expect(propertyAt(schemaRecord, "mode")?.description).toBe(
+      'Wake mode for action="wake" (default next-heartbeat)',
+    );
+    for (const path of ["job.sessionTarget", "patch.sessionTarget"]) {
+      expect(propertyAt(schemaRecord, path)?.description).toBe(
+        "main | isolated | current (agentTurn default) | session:<id>",
+      );
+    }
+    for (const path of ["job.payload", "patch.payload"]) {
+      expect(propertyAt(schemaRecord, `${path}.lightContext`)?.description).toBe(
+        "Lightweight bootstrap context (skip full workspace context)",
+      );
+      expect(propertyAt(schemaRecord, `${path}.allowUnsafeExternalContent`)?.description).toBe(
+        "Allow untrusted external content in prompt",
+      );
+    }
   });
 
   it("marks staggerMs as cron-only in both job and patch schedule schemas", () => {
     const jobStagger = propertyAt(schemaRecord, "job.schedule.staggerMs");
     const patchStagger = propertyAt(schemaRecord, "patch.schedule.staggerMs");
 
-    expect(jobStagger?.description).toBe("Random jitter in ms (kind=cron)");
-    expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
+    expect(jobStagger?.description).toBe("Jitter ms (kind=cron)");
+    expect(patchStagger?.description).toBe("Jitter ms (kind=cron)");
+  });
+
+  it("advertises numeric cron params with runtime bounds", () => {
+    for (const path of ["job.schedule.everyMs", "patch.schedule.everyMs"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const path of [
+      "job.schedule.anchorMs",
+      "job.schedule.staggerMs",
+      "patch.schedule.anchorMs",
+      "patch.schedule.staggerMs",
+      "job.failureAlert.cooldownMs",
+      "patch.failureAlert.cooldownMs",
+    ]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 0 });
+    }
+    for (const path of ["job.failureAlert.after", "patch.failureAlert.after"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const path of ["job.payload.timeoutSeconds", "patch.payload.timeoutSeconds"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "number", minimum: 0 });
+    }
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    // Cron expressions are interpreted by the gateway scheduler; model-facing
+    // docs must not encourage UTC conversion by the agent.
     const jobExpr = propertyAt(schemaRecord, "job.schedule.expr");
     const patchExpr = propertyAt(schemaRecord, "patch.schedule.expr");
     const jobTz = propertyAt(schemaRecord, "job.schedule.tz");
     const patchTz = propertyAt(schemaRecord, "patch.schedule.tz");
 
     for (const prop of [jobExpr, patchExpr]) {
-      expect(prop?.description).toMatch(/wall-clock time/i);
-      expect(prop?.description).toMatch(/do not convert/i);
-      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toMatch(/wall-time/i);
+      expect(prop?.description).toMatch(/never UTC-convert/i);
+      expect(prop?.description).toContain("Gateway local");
       expect(prop?.description).toContain("0 18 * * *");
       expect(prop?.description).toContain("Asia/Shanghai");
     }
@@ -116,7 +261,7 @@ describe("CronToolSchema", () => {
     );
   });
 
-  it("job.payload exposes kind, text, message, model, thinking and extras", () => {
+  it("job.payload exposes conversational and script payload fields", () => {
     expect(keysAt(schemaRecord, "job.payload")).toEqual(
       [
         "allowUnsafeExternalContent",
@@ -125,8 +270,10 @@ describe("CronToolSchema", () => {
         "lightContext",
         "message",
         "model",
+        "script",
         "text",
         "thinking",
+        "toolBudget",
         "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
@@ -146,12 +293,41 @@ describe("CronToolSchema", () => {
         "lightContext",
         "message",
         "model",
+        "script",
         "text",
         "thinking",
+        "toolBudget",
         "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
     );
+  });
+
+  it("accepts script payloads in create and patch schemas", () => {
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: {
+          name: "script job",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "script",
+            script: "return { notify: 'done' }",
+            timeoutSeconds: 300,
+            toolBudget: 50,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        id: "job-1",
+        patch: { payload: { kind: "script", toolBudget: 75 } },
+      }),
+    ).toBe(true);
   });
 
   it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {
@@ -167,45 +343,101 @@ describe("CronToolSchema", () => {
     const jobProps = root?.job?.properties as
       | Record<string, { type?: unknown; description?: string }>
       | undefined;
-    const schema = jobProps?.failureAlert;
+    const failureAlertSchema = jobProps?.failureAlert;
     // Must be a plain "object" type — not a type array — so providers that
     // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot) accept it.
-    expect(schema?.type).toBe("object");
+    expect(failureAlertSchema?.type).toBe("object");
     // The description must mention "false" so LLMs know they can disable alerts.
-    expect(schema?.description).toMatch(/false/i);
+    expect(failureAlertSchema?.description).toMatch(/false/i);
   });
 
-  it("job.agentId and job.sessionKey use plain string type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
+  it("accepts nullable cron patch clears in the runtime schema", () => {
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          agentId: null,
+          displayName: null,
+          sessionKey: null,
+          payload: {
+            toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          payload: {
+            model: null,
+            fallbacks: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("job.agentId and job.sessionKey project to plain string type for OpenAPI 3.0 compat", () => {
+    const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
-    const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
+    const jobProps = root?.job?.properties as
+      | Record<string, { type?: unknown; description?: string }>
+      | undefined;
 
-    // Must be plain "string" — not ["string", "null"] — for provider compat.
-    // Null semantics are conveyed via the field description and handled at runtime.
+    // Provider projection must be plain "string" rather than a nullable union.
+    // The raw runtime schema remains nullable so local validation accepts clears.
     expect(jobProps?.agentId?.type).toBe("string");
+    expect(jobProps?.agentId?.description).toMatch(/null to keep it unset/i);
     expect(jobProps?.sessionKey?.type).toBe("string");
+    expect(jobProps?.sessionKey?.description).toMatch(/null to clear it/i);
   });
 
-  it("patch.payload.toolsAllow uses plain array type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
+  it("patch.payload.toolsAllow projects to plain array type for OpenAPI 3.0 compat", () => {
+    const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const patchProps = root?.patch?.properties as
-      | Record<string, { properties?: Record<string, { type?: unknown }> }>
+      | Record<string, { properties?: Record<string, { type?: unknown; description?: string }> }>
       | undefined;
 
-    // Must be plain "array" — not ["array", "null"] — for provider compat.
+    // Provider-facing schemas must be plain "array" rather than JSON Schema
+    // unions so OpenAPI 3.0 subset validators accept them.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
+    expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
+    expect(patchProps?.payload?.properties?.model?.type).toBe("string");
+    expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
+  });
+
+  it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {
+    expect(propertyAt(jjccGeminiSchemaRecord, "job.agentId")).toMatchObject({
+      type: "string",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "job.sessionKey")).toMatchObject({
+      type: "string",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.payload.toolsAllow")).toMatchObject({
+      type: "array",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.delivery.channel")).toMatchObject({
+      type: "string",
+    });
+    expect(JSON.stringify(jjccGeminiSchemaRecord)).not.toContain('"anyOf"');
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
-  // serialized cron tool schema.  This catches future regressions at the source.
-  it("serialized schema contains no type-array or not/const keywords", () => {
-    const json = JSON.stringify(CronToolSchema);
+  // serialized provider-facing cron tool schema.
+  it("serialized provider schema contains no type-array or not/const keywords", () => {
+    const json = JSON.stringify(providerSchemaRecord);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
-    // "not" composition keyword is not supported by OpenAPI 3.0
+    // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
   });
 });

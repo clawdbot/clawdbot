@@ -1,8 +1,10 @@
+// Test fixtures create isolated agent/session store directories for session tests.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
 
+/** Creates and cleans a temporary session store fixture around each test. */
 export function useTempSessionsFixture(prefix: string) {
   let tempDir = "";
   let storePath = "";

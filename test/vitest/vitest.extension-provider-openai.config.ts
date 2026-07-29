@@ -1,3 +1,4 @@
+// Vitest extension provider openai config wires the extension provider openai test shard.
 import path from "node:path";
 import { providerOpenAiExtensionTestRoots } from "./vitest.extension-provider-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";

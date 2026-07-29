@@ -1,5 +1,8 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+// Parses inline reply directives into typed execution and routing options.
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
+import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -20,11 +23,13 @@ import {
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
+/** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = {
   cleaned: string;
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
+  clearThinkLevel: boolean;
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
@@ -32,8 +37,9 @@ export type InlineDirectives = {
   traceLevel?: TraceLevel;
   rawTraceLevel?: string;
   hasFastDirective: boolean;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   rawFastMode?: string;
+  clearFastMode: boolean;
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
@@ -72,6 +78,7 @@ export type InlineDirectives = {
   hasQueueOptions: boolean;
 };
 
+/** Parses supported inline directives in the same order they are stripped from text. */
 export function parseInlineDirectives(
   body: string,
   options?: {
@@ -167,12 +174,24 @@ export function parseInlineDirectives(
     hasDirective: hasQueueDirective,
     hasOptions: hasQueueOptions,
   } = extractQueueDirective(modelCleaned);
-
+  const hasAnyDirective =
+    hasThinkDirective ||
+    hasVerboseDirective ||
+    hasTraceDirective ||
+    hasFastDirective ||
+    hasReasoningDirective ||
+    hasElevatedDirective ||
+    hasExecDirective ||
+    hasStatusDirective ||
+    hasModelDirective ||
+    hasQueueDirective;
+  // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: queueCleaned,
+    cleaned: hasAnyDirective ? queueCleaned : body.trim(),
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,
+    clearThinkLevel: hasThinkDirective && isSessionDefaultDirectiveValue(rawThinkLevel),
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
@@ -182,6 +201,7 @@ export function parseInlineDirectives(
     hasFastDirective,
     fastMode,
     rawFastMode,
+    clearFastMode: hasFastDirective && isSessionDefaultDirectiveValue(rawFastMode),
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,

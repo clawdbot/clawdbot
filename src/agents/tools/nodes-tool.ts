@@ -1,20 +1,31 @@
+/**
+ * nodes built-in tool.
+ *
+ * Manages node pairing, notifications, device state, media capture, and approved command invocation.
+ */
 import crypto from "node:crypto";
 import { Type } from "typebox";
+import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { readConnectPairingRequiredMessage } from "../../gateway/protocol/connect-error-details.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
-import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -28,6 +39,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_clip",
   "photos_latest",
   "screen_record",
+  "screen_snapshot",
   "location_get",
   "notifications_list",
   "notifications_action",
@@ -35,6 +47,7 @@ const NODES_TOOL_ACTIONS = [
   "device_info",
   "device_permissions",
   "device_health",
+  "which",
   "invoke",
 ] as const;
 
@@ -77,10 +90,13 @@ async function resolveNodePairApproveScopes(
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  node: Type.Optional(Type.String()),
+  ...gatewayCallOptionSchemaProperties(),
+  node: Type.Optional(
+    Type.String({
+      description:
+        "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    }),
+  ),
   requestId: Type.Optional(Type.String()),
   // notify
   title: Type.Optional(Type.String()),
@@ -88,34 +104,42 @@ const NodesToolSchema = Type.Object({
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip
+  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
+  maxWidth: optionalPositiveIntegerSchema(),
+  quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
+  delayMs: optionalNonNegativeIntegerSchema(),
   deviceId: Type.Optional(Type.String()),
-  limit: Type.Optional(Type.Number()),
+  limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number({ maximum: 300_000 })),
+  durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
-  fps: Type.Optional(Type.Number()),
-  screenIndex: Type.Optional(Type.Number()),
+  fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
   // location_get
-  maxAgeMs: Type.Optional(Type.Number()),
-  locationTimeoutMs: Type.Optional(Type.Number()),
+  maxAgeMs: optionalNonNegativeIntegerSchema(),
+  locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
   // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
+  // which
+  bins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: "which: executable names to resolve on the selected node.",
+    }),
+  ),
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
-  invokeTimeoutMs: Type.Optional(Type.Number()),
+  invokeTimeoutMs: optionalPositiveIntegerSchema(),
 });
 
 export function createNodesTool(options?: {
@@ -136,9 +160,8 @@ export function createNodesTool(options?: {
   return {
     label: "Nodes",
     name: "nodes",
-    ownerOnly: isOpenClawOwnerOnlyCoreToolName("nodes"),
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke). For file retrieval, use the dedicated file_fetch tool.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -150,7 +173,12 @@ export function createNodesTool(options?: {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { required: true });
+            const node = readStringParam(params, "node");
+            if (!node) {
+              throw new Error(
+                'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+              );
+            }
             const nodeId = await resolveNodeId(gatewayOpts, node);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
@@ -194,8 +222,8 @@ export function createNodesTool(options?: {
               nodeId,
               command: "system.notify",
               params: {
-                title: title.trim() || undefined,
-                body: body.trim() || undefined,
+                title: title.trim(),
+                body: body.trim(),
                 sound: typeof params.sound === "string" ? params.sound : undefined,
                 priority: typeof params.priority === "string" ? params.priority : undefined,
                 delivery: typeof params.delivery === "string" ? params.delivery : undefined,
@@ -232,6 +260,7 @@ export function createNodesTool(options?: {
               action: action as NodeCommandAction,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -241,6 +270,7 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -263,11 +293,31 @@ export function createNodesTool(options?: {
               imageSanitization,
             });
           }
+          case "screen_snapshot": {
+            return await executeNodeMediaAction({
+              action,
+              params,
+              gatewayOpts,
+              modelHasVision: options?.modelHasVision,
+              imageSanitization,
+            });
+          }
           case "location_get": {
             return await executeNodeCommandAction({
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
+              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
+            });
+          }
+          case "which": {
+            return await executeNodeCommandAction({
+              action,
+              input: params,
+              gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -277,6 +327,7 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -293,7 +344,10 @@ export function createNodesTool(options?: {
             : "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
-        const pairing = action === "invoke" ? readConnectPairingRequiredMessage(message) : null;
+        const pairing =
+          action === "invoke" || action === "which"
+            ? readConnectPairingRequiredMessage(message)
+            : null;
         if (pairing) {
           const requestId = pairing.requestId ?? null;
           const approveHint = requestId

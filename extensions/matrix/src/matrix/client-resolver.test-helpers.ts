@@ -1,3 +1,4 @@
+// Matrix helper module supports client resolver helpers behavior.
 import { expect, vi, type Mock } from "vitest";
 import type { MatrixClient } from "./sdk.js";
 

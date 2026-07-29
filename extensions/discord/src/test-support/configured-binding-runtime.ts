@@ -1,3 +1,4 @@
+// Discord helper module supports configured binding runtime behavior.
 type ConfiguredBindingConversationRuntimeModule = {
   ensureConfiguredBindingRouteReady: (...args: never[]) => unknown;
   resolveConfiguredBindingRoute: (...args: never[]) => unknown;

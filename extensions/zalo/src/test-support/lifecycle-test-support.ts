@@ -1,4 +1,9 @@
+// Zalo plugin module implements lifecycle test support behavior.
 import { request as httpRequest } from "node:http";
+import {
+  createPluginRuntimeMediaMock,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
@@ -100,6 +105,7 @@ export function createImageUpdate(params?: {
   displayName?: string;
   chatId?: string;
   photoUrl?: string;
+  caption?: string;
   date?: number;
 }) {
   return {
@@ -107,7 +113,7 @@ export function createImageUpdate(params?: {
     message: {
       date: params?.date ?? 1774086023728,
       chat: { chat_type: "PRIVATE" as const, id: params?.chatId ?? "chat-123" },
-      caption: "",
+      caption: params?.caption ?? "",
       message_id: params?.messageId ?? "msg-123",
       message_type: "CHAT_PHOTO",
       from: {
@@ -122,7 +128,7 @@ export function createImageUpdate(params?: {
 
 export function createImageLifecycleCore() {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const buildChannelTurnContextMock = vi.fn(
+  const buildChannelInboundEventContextMock = vi.fn(
     (params: {
       channel: string;
       accountId?: string;
@@ -138,7 +144,12 @@ export function createImageLifecycleCore() {
       };
       reply: { to: string; originatingTo: string };
       message: { body?: string; rawBody: string; bodyForAgent?: string; commandBody?: string };
-      media?: Array<{ path?: string; url?: string; contentType?: string }>;
+      media?: Array<{
+        path?: string;
+        url?: string;
+        contentType?: string;
+        kind?: "audio" | "document" | "image" | "unknown" | "video";
+      }>;
       extra?: Record<string, unknown>;
     }) =>
       finalizeInboundContextMock({
@@ -158,26 +169,35 @@ export function createImageLifecycleCore() {
         Surface: params.channel,
         MessageSid: params.messageId,
         Timestamp: params.timestamp,
-        MediaPath: params.media?.[0]?.path,
-        MediaType: params.media?.[0]?.contentType,
-        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+        media: params.media,
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
       }),
   );
   const recordInboundSessionMock = vi.fn(async () => undefined);
-  const fetchRemoteMediaMock = vi.fn(async () => ({
+  const readRemoteMediaBufferMock = vi.fn(async () => ({
     buffer: Buffer.from("image-bytes"),
     contentType: "image/jpeg",
   }));
+  // Keep the mock arity aligned with PluginRuntime.saveRemoteMedia so
+  // mockImplementation callbacks that inspect timeout options typecheck.
+  const saveRemoteMediaMock = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
+    async (_params) => ({
+      id: "zalo-photo.jpg",
+      path: "/tmp/zalo-photo.jpg",
+      size: Buffer.byteLength("image-bytes"),
+      contentType: "image/jpeg",
+    }),
+  );
   const saveMediaBufferMock = vi.fn(async () => ({
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
   }));
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
-  const core = {
+  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
+  const core = createPluginRuntimeMock({
     logging: {
       shouldLogVerbose: vi.fn(
         () => false,
@@ -189,13 +209,6 @@ export function createImageLifecycleCore() {
           readAllowFromStoreMock as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
         upsertPairingRequest:
           upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
-      },
-      routing: {
-        resolveAgentRoute: vi.fn(() => ({
-          agentId: "main",
-          accountId: "default",
-          sessionKey: "agent:main:zalo:direct:chat-123",
-        })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
       },
       session: {
         resolveStorePath: vi.fn(
@@ -212,84 +225,23 @@ export function createImageLifecycleCore() {
           () => "code",
         ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
       },
-      media: {
-        fetchRemoteMedia:
-          fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
+      media: createPluginRuntimeMediaMock({
+        readRemoteMediaBuffer:
+          readRemoteMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["readRemoteMediaBuffer"],
+        saveRemoteMedia:
+          saveRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["saveRemoteMedia"],
         saveMediaBuffer:
           saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-      },
+      }) as unknown as PluginRuntime["channel"]["media"],
       reply: {
         finalizeInboundContext:
           finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-        resolveEnvelopeFormatOptions: vi.fn(() => ({
-          template: "channel+name+time",
-        })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-        formatAgentEnvelope: vi.fn(
-          (opts: { body: string }) => opts.body,
-        ) as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-          async () => undefined,
-        ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        dispatchReplyWithBufferedBlockDispatcher:
+          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
-          const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return {
-              admission: { kind: "drop" as const, reason: "ingest-null" },
-              dispatched: false,
-            };
-          }
-          const resolved = await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          );
-          await resolved.recordInboundSession({
-            storePath: resolved.storePath,
-            sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
-            ctx: resolved.ctxPayload,
-            groupResolution: resolved.record?.groupResolution,
-            createIfMissing: resolved.record?.createIfMissing,
-            updateLastRoute: resolved.record?.updateLastRoute,
-            onRecordError: resolved.record?.onRecordError ?? (() => undefined),
-          });
-          if ("runDispatch" in resolved) {
-            const dispatchResult = await resolved.runDispatch();
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: resolved.ctxPayload,
-              routeSessionKey: resolved.routeSessionKey,
-              dispatchResult,
-            };
-          }
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: resolved.ctxPayload,
-            cfg: resolved.cfg,
-            dispatcherOptions: {
-              ...resolved.dispatcherOptions,
-              deliver: async (...args: Parameters<typeof resolved.delivery.deliver>) => {
-                await resolved.delivery.deliver(...args);
-              },
-              onError: resolved.delivery.onError,
-            },
-            replyOptions: resolved.replyOptions,
-            replyResolver: resolved.replyResolver,
-          });
-          return {
-            admission: { kind: "dispatch" as const },
-            dispatched: true,
-            ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
-            dispatchResult,
-          };
-        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
+      inbound: {
         buildContext:
-          buildChannelTurnContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
@@ -303,12 +255,13 @@ export function createImageLifecycleCore() {
         ) as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
       },
     },
-  } as PluginRuntime;
+  });
   return {
     core,
     finalizeInboundContextMock,
     recordInboundSessionMock,
-    fetchRemoteMediaMock,
+    readRemoteMediaBufferMock,
+    saveRemoteMediaMock,
     saveMediaBufferMock,
     readAllowFromStoreMock,
     upsertPairingRequestMock,
@@ -316,7 +269,8 @@ export function createImageLifecycleCore() {
 }
 
 export function expectImageLifecycleDelivery(params: {
-  fetchRemoteMediaMock: ReturnType<typeof vi.fn>;
+  readRemoteMediaBufferMock: ReturnType<typeof vi.fn>;
+  saveRemoteMediaMock?: ReturnType<typeof vi.fn>;
   saveMediaBufferMock: ReturnType<typeof vi.fn>;
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   recordInboundSessionMock: ReturnType<typeof vi.fn>;
@@ -329,24 +283,25 @@ export function expectImageLifecycleDelivery(params: {
   const senderName = params.senderName ?? "Test User";
   const mediaPath = params.mediaPath ?? "/tmp/zalo-photo.jpg";
   const mediaType = params.mediaType ?? "image/jpeg";
-  expect(params.fetchRemoteMediaMock).toHaveBeenCalledWith({
+  const saveRemoteMediaMock = params.saveRemoteMediaMock ?? params.readRemoteMediaBufferMock;
+  expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
     maxBytes: 5 * 1024 * 1024,
+    responseHeaderTimeoutMs: 120_000,
+    readIdleTimeoutMs: 30_000,
   });
-  expect(params.saveMediaBufferMock).toHaveBeenCalledTimes(1);
+  expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
     expect.objectContaining({
       SenderName: senderName,
-      MediaPath: mediaPath,
-      MediaType: mediaType,
+      media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
     }),
   );
   expect(params.recordInboundSessionMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ctx: expect.objectContaining({
         SenderName: senderName,
-        MediaPath: mediaPath,
-        MediaType: mediaType,
+        media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
       }),
     }),
   );
@@ -355,7 +310,9 @@ export function expectImageLifecycleDelivery(params: {
 export async function settleAsyncWork(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 

@@ -1,12 +1,14 @@
+// Matrix tests cover idb persistence plugin behavior.
 import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  drainFileLockStateForTest,
-  resetFileLockStateForTest,
-} from "openclaw/plugin-sdk/file-lock";
+import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getMatrixRuntime } from "../../runtime.js";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { readMatrixIdbSnapshotJson, writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -19,7 +21,6 @@ const DATABASE_PREFIX = "openclaw-matrix-persistence-test";
 const OTHER_DATABASE_PREFIX = "openclaw-matrix-persistence-other-test";
 const cryptoDatabaseName = `${DATABASE_PREFIX}::matrix-sdk-crypto`;
 const otherCryptoDatabaseName = `${OTHER_DATABASE_PREFIX}::matrix-sdk-crypto`;
-const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 async function clearTestIndexedDbState(): Promise<void> {
   await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
@@ -31,6 +32,8 @@ describe("Matrix IndexedDB persistence", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-idb-persist-"));
     warnSpy = vi.spyOn(LogService, "warn").mockImplementation(() => {});
     await clearTestIndexedDbState();
@@ -40,6 +43,7 @@ describe("Matrix IndexedDB persistence", () => {
     warnSpy.mockRestore();
     await clearTestIndexedDbState();
     resetFileLockStateForTest();
+    resetPluginStateStoreForTests();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -60,12 +64,7 @@ describe("Matrix IndexedDB persistence", () => {
       snapshotPath,
       databasePrefix: DATABASE_PREFIX,
     });
-    expect(fs.existsSync(snapshotPath)).toBe(true);
-
-    const mode = fs.statSync(snapshotPath).mode & 0o777;
-    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
-      expect(mode).toBe(0o600);
-    }
+    expect(fs.existsSync(snapshotPath)).toBe(false);
 
     await clearTestIndexedDbState();
 
@@ -79,42 +78,73 @@ describe("Matrix IndexedDB persistence", () => {
     expect(restoredRecords).toEqual([{ key: "room-1", value: { session: "abc123" } }]);
 
     const dbs = await indexedDB.databases();
-    expect(dbs.some((entry) => entry.name === otherCryptoDatabaseName)).toBe(false);
+    expect(dbs.map((entry) => entry.name)).not.toContain(otherCryptoDatabaseName);
   });
 
-  it("returns false and logs a warning for malformed snapshots", async () => {
-    const snapshotPath = path.join(tmpDir, "bad-snapshot.json");
-    fs.writeFileSync(snapshotPath, JSON.stringify([{ nope: true }]), "utf8");
+  it("blocks runtime restore and persistence until doctor migrates the legacy snapshot", async () => {
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
+    const snapshot = JSON.stringify([{ name: cryptoDatabaseName, version: 1, stores: [] }]);
+    fs.writeFileSync(snapshotPath, snapshot);
 
-    const restored = await restoreIdbFromDisk(snapshotPath);
-    expect(restored).toBe(false);
+    await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject({
+      name: "MatrixIdbSnapshotMigrationRequiredError",
+      code: "matrix-idb-snapshot-requires-doctor",
+      remediation: "openclaw doctor --fix",
+    });
     expect(warnSpy).toHaveBeenCalledWith(
       "IdbPersistence",
-      expect.stringContaining(`Failed to restore IndexedDB snapshot from ${snapshotPath}:`),
-      expect.any(Error),
+      expect.objectContaining({
+        code: "matrix-idb-snapshot-requires-doctor",
+        remediation: "openclaw doctor --fix",
+      }),
     );
-  });
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(snapshotPath);
 
-  it("returns false for empty snapshot payloads without restoring databases", async () => {
-    const snapshotPath = path.join(tmpDir, "empty-snapshot.json");
-    fs.writeFileSync(snapshotPath, JSON.stringify([]), "utf8");
+    await seedDatabase({
+      name: cryptoDatabaseName,
+      storeName: "sessions",
+      records: [{ key: "new-room", value: { session: "new" } }],
+    });
+    await expect(
+      persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX }),
+    ).rejects.toMatchObject({
+      code: "matrix-idb-snapshot-requires-doctor",
+    });
+    expect(readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+    expect(fs.existsSync(snapshotPath)).toBe(true);
 
-    const restored = await restoreIdbFromDisk(snapshotPath);
-    expect(restored).toBe(false);
+    writeMatrixIdbSnapshotJson({
+      storageRootDir: tmpDir,
+      snapshotJson: JSON.stringify({ malformed: true }),
+      databaseCount: 1,
+    });
+    await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject({
+      code: "matrix-idb-snapshot-requires-doctor",
+    });
+    const storeSpy = vi
+      .spyOn(getMatrixRuntime().state, "openSyncKeyedStore")
+      .mockImplementation(() => {
+        throw new Error("sqlite unavailable");
+      });
 
-    const dbs = await indexedDB.databases();
-    expect(dbs).toEqual([]);
+    try {
+      await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject({
+        code: "matrix-idb-snapshot-requires-doctor",
+      });
+    } finally {
+      storeSpy.mockRestore();
+    }
   });
 
   it("returns false without warning when the snapshot does not exist yet", async () => {
-    const restored = await restoreIdbFromDisk(path.join(tmpDir, "missing-snapshot.json"));
+    const restored = await restoreIdbFromDisk(path.join(tmpDir, "crypto-idb-snapshot.json"));
 
     expect(restored).toBe(false);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("serializes concurrent persist operations via file lock", async () => {
-    const snapshotPath = path.join(tmpDir, "concurrent-persist.json");
+  it("handles concurrent persist operations in SQLite state", async () => {
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     await seedDatabase({
       name: cryptoDatabaseName,
       storeName: "sessions",
@@ -126,44 +156,14 @@ describe("Matrix IndexedDB persistence", () => {
       persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX }),
     ]);
 
-    expect(fs.existsSync(snapshotPath)).toBe(true);
-
-    const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
-    expect(Array.isArray(data)).toBe(true);
-    expect(data.length).toBe(1);
-  });
-
-  it("releases lock after persist completes", async () => {
-    const snapshotPath = path.join(tmpDir, "lock-release.json");
-    await seedDatabase({
-      name: cryptoDatabaseName,
-      storeName: "sessions",
-      records: [{ key: "room-1", value: { session: "abc123" } }],
-    });
-
-    await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
-
-    const lockPath = `${snapshotPath}.lock`;
-    expect(fs.existsSync(lockPath)).toBe(false);
-    await drainFileLockStateForTest();
-  });
-
-  it("releases lock after restore completes", async () => {
-    const snapshotPath = path.join(tmpDir, "lock-release-restore.json");
-    await seedDatabase({
-      name: cryptoDatabaseName,
-      storeName: "sessions",
-      records: [{ key: "room-1", value: { session: "abc123" } }],
-    });
-
-    await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
+    expect(fs.existsSync(snapshotPath)).toBe(false);
     await clearTestIndexedDbState();
-    await drainFileLockStateForTest();
-
-    await restoreIdbFromDisk(snapshotPath);
-
-    const lockPath = `${snapshotPath}.lock`;
-    expect(fs.existsSync(lockPath)).toBe(false);
-    await drainFileLockStateForTest();
+    await expect(restoreIdbFromDisk(snapshotPath)).resolves.toBe(true);
+    await expect(
+      readDatabaseRecords({
+        name: cryptoDatabaseName,
+        storeName: "sessions",
+      }),
+    ).resolves.toEqual([{ key: "room-1", value: { session: "abc123" } }]);
   });
 });

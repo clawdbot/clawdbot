@@ -1,3 +1,8 @@
+// Resolves ACP reset targets from sessions and command directives.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
@@ -8,10 +13,6 @@ import { listAcpBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 
 const acpResetTargetDeps = {
   getSessionBindingService,
@@ -19,7 +20,7 @@ const acpResetTargetDeps = {
   resolveConfiguredBindingRecord,
 };
 
-export const __testing = {
+const acpResetTargetTestApi = {
   setDepsForTest(
     overrides?: Partial<{
       getSessionBindingService: typeof getSessionBindingService;
@@ -34,6 +35,11 @@ export const __testing = {
       overrides?.resolveConfiguredBindingRecord ?? resolveConfiguredBindingRecord;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.acpResetTargetTestApi")] =
+    acpResetTargetTestApi;
+}
 
 function resolveResetTargetAccountId(params: {
   cfg: OpenClawConfig;

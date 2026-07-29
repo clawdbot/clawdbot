@@ -1,3 +1,6 @@
+/**
+ * Android node capability policy-config regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 

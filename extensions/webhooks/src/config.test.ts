@@ -1,3 +1,4 @@
+// Webhooks tests cover config plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveWebhooksPluginConfig } from "./config.js";
 

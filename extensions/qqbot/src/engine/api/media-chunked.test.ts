@@ -1,8 +1,10 @@
+// Qqbot tests cover media chunked plugin behavior.
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSource } from "../messaging/media-source.js";
 import {
   ApiError,
   MediaFileType,
@@ -10,22 +12,24 @@ import {
   type UploadPrepareResponse,
 } from "../types.js";
 import type { ApiClient } from "./api-client.js";
-import {
-  ChunkedMediaApi,
-  UploadDailyLimitExceededError,
-  isChunkedUploadImplemented,
-} from "./media-chunked.js";
+import { ChunkedMediaApi, UploadDailyLimitExceededError } from "./media-chunked.js";
 import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
 import type { TokenManager } from "./token.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 // ============ Test doubles ============
 
 /** Build a minimal ApiClient stub whose `request` is fully mockable. */
-function mockApiClient(): ApiClient & { request: ReturnType<typeof vi.fn> } {
+function mockApiClient(): ApiClient & { request: ReturnType<typeof vi.fn<ApiClient["request"]>> } {
   return {
-    request: vi.fn(),
-  } as unknown as ApiClient & { request: ReturnType<typeof vi.fn> };
+    request: vi.fn<ApiClient["request"]>(),
+  } as unknown as ApiClient & { request: ReturnType<typeof vi.fn<ApiClient["request"]>> };
 }
 
 /** Minimal TokenManager stub returning a static token. */
@@ -81,18 +85,39 @@ const FIXTURE_BUFFER = Buffer.from("0123456789abcdefghij"); // 20 bytes
 let originalFetch: typeof globalThis.fetch;
 
 function stubFetchOk(): ReturnType<typeof vi.fn> {
-  const spy = vi.fn(
-    async () =>
-      new Response("", {
-        status: 200,
-        headers: {
-          ETag: '"etag-value"',
-          "x-cos-request-id": "req-id",
-        },
-      }),
-  );
-  globalThis.fetch = spy as unknown as typeof globalThis.fetch;
-  return spy;
+  fetchWithSsrFGuardMock.mockImplementation(async () => ({
+    response: new Response("", {
+      status: 200,
+      headers: {
+        ETag: '"etag-value"',
+        "x-cos-request-id": "req-id",
+      },
+    }),
+    release: vi.fn(),
+  }));
+  return fetchWithSsrFGuardMock;
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 // ============ Tests ============
@@ -108,19 +133,15 @@ describe("media-chunked: UploadDailyLimitExceededError", () => {
   });
 });
 
-describe("media-chunked: isChunkedUploadImplemented", () => {
-  it("returns true for the filled-in module", () => {
-    expect(isChunkedUploadImplemented()).toBe(true);
-  });
-});
-
 describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
   beforeEach(() => {
     originalFetch = globalThis.fetch;
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     globalThis.fetch = originalFetch;
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -193,25 +214,26 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     // plus one complete. Because concurrency=2 the order of part_finish is
     // not strictly deterministic, so match on path + payload key.
     client.request.mockImplementation(
-      async (_token: string, _method: string, path: string, body: Record<string, unknown>) => {
-        if (path.endsWith("/upload_prepare")) {
-          expect(body.file_type).toBe(MediaFileType.FILE);
-          expect(typeof body.md5).toBe("string");
-          expect(typeof body.sha1).toBe("string");
-          expect(typeof body.md5_10m).toBe("string");
-          expect(body.file_size).toBe(FIXTURE_BUFFER.length);
+      async (_token: string, _method: string, pathLocal: string, body: unknown) => {
+        const uploadBody = body as Record<string, unknown>;
+        if (pathLocal.endsWith("/upload_prepare")) {
+          expect(uploadBody.file_type).toBe(MediaFileType.FILE);
+          expect(typeof uploadBody.md5).toBe("string");
+          expect(typeof uploadBody.sha1).toBe("string");
+          expect(typeof uploadBody.md5_10m).toBe("string");
+          expect(uploadBody.file_size).toBe(FIXTURE_BUFFER.length);
           return prepareResp;
         }
-        if (path.endsWith("/upload_part_finish")) {
-          expect(body.upload_id).toBe("uid-1");
-          expect(typeof body.part_index).toBe("number");
+        if (pathLocal.endsWith("/upload_part_finish")) {
+          expect(uploadBody.upload_id).toBe("uid-1");
+          expect(typeof uploadBody.part_index).toBe("number");
           return {};
         }
-        if (path.endsWith("/files")) {
-          expect(body.upload_id).toBe("uid-1");
+        if (pathLocal.endsWith("/files")) {
+          expect(uploadBody.upload_id).toBe("uid-1");
           return completeResp;
         }
-        throw new Error(`unexpected path ${path}`);
+        throw new Error(`unexpected path ${pathLocal}`);
       },
     );
 
@@ -234,34 +256,98 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
 
     // 3 COS PUTs, one per part, each to the presigned URL.
     expect(fetchSpy).toHaveBeenCalledTimes(3);
-    const putUrls = fetchSpy.mock.calls.map((c) => c[0]);
-    expect(putUrls).toEqual(
-      expect.arrayContaining([
+    const putUrls = fetchSpy.mock.calls.map((c) => (c[0] as { url: string }).url);
+    expect(new Set(putUrls)).toEqual(
+      new Set([
         "https://cos.example.com/part-1",
         "https://cos.example.com/part-2",
         "https://cos.example.com/part-3",
       ]),
     );
 
-    // Cache populated with the complete result.
-    const expectedMd5 = crypto.createHash("md5").update(FIXTURE_BUFFER).digest("hex");
-    expect(cache.setSpy).toHaveBeenCalledWith(
-      expectedMd5,
-      "group",
-      "g1",
-      MediaFileType.FILE,
-      "final-file-info",
-      "uuid-final",
-      3600,
-    );
+    // FILE uploads carry filename metadata in upload_prepare, so the content-only
+    // cache is bypassed to avoid reusing file_info with a stale name.
+    expect(cache.getSpy).not.toHaveBeenCalled();
+    expect(cache.setSpy).not.toHaveBeenCalled();
 
     // Progress callback hit 3 times with monotonically-increasing counts.
     expect(onProgress).toHaveBeenCalledTimes(3);
-    const last = onProgress.mock.calls[2][0];
+    const last = onProgress.mock.calls.at(2)?.[0];
     expect(last.completedParts).toBe(3);
     expect(last.totalParts).toBe(3);
     expect(last.uploadedBytes).toBe(FIXTURE_BUFFER.length);
     expect(last.totalBytes).toBe(FIXTURE_BUFFER.length);
+  });
+
+  it("bounds COS PUT error bodies on UTF-16 boundaries without using response.text()", async () => {
+    vi.useFakeTimers();
+    const client = mockApiClient();
+    const tm = mockTokenManager();
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+    client.request.mockImplementation(async (_token, _method, pathLocal) => {
+      if (pathLocal.endsWith("/upload_prepare")) {
+        return makePrepareResponse("uid-bounded", 1);
+      }
+      throw new Error(`unexpected path ${pathLocal}`);
+    });
+
+    const releases = [vi.fn(async () => {}), vi.fn(async () => {}), vi.fn(async () => {})];
+    const safeErrorPrefix = "x".repeat(119);
+    const safeLogPrefix = `${safeErrorPrefix}🎉${"y".repeat(38)}`;
+    const trackedResponses = releases.map((release) => {
+      const tracked = cancelTrackedResponse(`${safeLogPrefix}🎉${"tail".repeat(4096)}`, {
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: {
+          "content-type": "text/plain",
+          "x-cos-request-id": "req-bounded",
+        },
+      });
+      const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+      return {
+        response: tracked.response,
+        wasCanceled: tracked.wasCanceled,
+        release,
+        textSpy,
+      };
+    });
+    const pendingResponses = [...trackedResponses];
+
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      const next = pendingResponses.shift();
+      if (!next) {
+        throw new Error("unexpected extra COS PUT attempt");
+      }
+      return {
+        response: next.response,
+        release: next.release,
+      };
+    });
+
+    const api = new ChunkedMediaApi(client, tm, { logger });
+    const upload = api
+      .uploadChunked({
+        scope: "group",
+        targetId: "g1",
+        fileType: MediaFileType.FILE,
+        source: { kind: "buffer", buffer: Buffer.from("01234567"), fileName: "blob.bin" },
+        creds: { appId: "a", clientSecret: "s" },
+      })
+      .catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+    const error = await upload;
+
+    expect((error as Error).message).toBe(
+      `COS PUT failed: 503 Service Unavailable - ${safeErrorPrefix}`,
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
+    for (const tracked of trackedResponses) {
+      expect(tracked.wasCanceled()).toBe(true);
+      expect(tracked.textSpy).not.toHaveBeenCalled();
+      expect(tracked.release).toHaveBeenCalledTimes(1);
+    }
+    expect(String(logger.error.mock.calls[0]?.[0]).split("body=")[1]).toBe(safeLogPrefix);
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain("tail");
   });
 
   it("maps UPLOAD_PREPARE_FALLBACK_CODE to UploadDailyLimitExceededError", async () => {
@@ -323,13 +409,56 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
       expect(result.file_info).toBe("fi");
 
       // Verify prepare received the md5 of the on-disk bytes.
-      const prepareCall = client.request.mock.calls.find((c) =>
-        String(c[2]).endsWith("/upload_prepare"),
-      )!;
+      const prepareCall = client.request.mock.calls.find((c) => c[2].endsWith("/upload_prepare"))!;
       const prepareBody = prepareCall[3] as { md5: string; file_name: string };
       expect(prepareBody.md5).toBe(crypto.createHash("md5").update(FIXTURE_BUFFER).digest("hex"));
       expect(prepareBody.file_name).toBe("fixture.bin");
     } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the verified localPath handle if the path is replaced before chunked upload", async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "chunked-verified-"));
+    const filePath = path.join(tmp, "fixture.bin");
+    await fs.promises.writeFile(filePath, FIXTURE_BUFFER);
+    const source = await normalizeSource({ localPath: filePath }, { maxSize: 1_000_000 });
+    await fs.promises.rm(filePath);
+    await fs.promises.writeFile(filePath, Buffer.from("replacement bytes"));
+    try {
+      const client = mockApiClient();
+      const tm = mockTokenManager();
+      stubFetchOk();
+
+      client.request.mockImplementation(async (_t, _m, p) => {
+        if (p.endsWith("/upload_prepare")) {
+          return makePrepareResponse("uid-verified", 3);
+        }
+        if (p.endsWith("/upload_part_finish")) {
+          return {};
+        }
+        if (p.endsWith("/files")) {
+          return { file_uuid: "u", file_info: "fi", ttl: 10 } satisfies UploadMediaResponse;
+        }
+        throw new Error(`unexpected ${p}`);
+      });
+
+      const api = new ChunkedMediaApi(client, tm);
+      await api.uploadChunked({
+        scope: "c2c",
+        targetId: "u1",
+        fileType: MediaFileType.VIDEO,
+        source,
+        creds: { appId: "a", clientSecret: "s" },
+      });
+
+      const prepareCall = client.request.mock.calls.find((c) => c[2].endsWith("/upload_prepare"))!;
+      const prepareBody = prepareCall[3] as { md5: string };
+      expect(prepareBody.md5).toBe(crypto.createHash("md5").update(FIXTURE_BUFFER).digest("hex"));
+    } finally {
+      if (source.kind === "localPath") {
+        await source.opened?.close().catch(() => undefined);
+      }
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
   });

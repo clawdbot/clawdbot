@@ -1,4 +1,37 @@
-import { type MemorySourceFileStateRow } from "./manager-source-state.js";
+// Memory Core plugin module implements manager session sync state behavior.
+import type { MemorySourceFileStateRow } from "./manager-source-state.js";
+
+export type MemorySessionStartupFileState = {
+  absPath: string;
+  path: string;
+  mtimeMs: number;
+  size: number;
+};
+
+export function resolveMemorySessionStartupDirtyFiles(params: {
+  files: MemorySessionStartupFileState[];
+  existingRows?: MemorySourceFileStateRow[] | null;
+}): string[] {
+  const indexedRows = new Map((params.existingRows ?? []).map((row) => [row.path, row]));
+  const dirtyFiles: string[] = [];
+  for (const file of params.files) {
+    const existing = indexedRows.get(file.path);
+    if (!existing || existing.hash === "") {
+      dirtyFiles.push(file.absPath);
+      continue;
+    }
+    const indexedMtimeMs = Number(existing.mtime);
+    const indexedSize = Number(existing.size);
+    if (!Number.isFinite(indexedMtimeMs) || !Number.isFinite(indexedSize)) {
+      dirtyFiles.push(file.absPath);
+      continue;
+    }
+    if (file.size !== indexedSize || file.mtimeMs > indexedMtimeMs) {
+      dirtyFiles.push(file.absPath);
+    }
+  }
+  return dirtyFiles;
+}
 
 export function resolveMemorySessionSyncPlan(params: {
   needsFullReindex: boolean;

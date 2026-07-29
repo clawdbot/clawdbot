@@ -1,7 +1,8 @@
+/** Scans bundled plugin source/build roots and derives public/runtime artifacts from manifests. */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 const RUNTIME_SIDECAR_ARTIFACTS = new Set([
@@ -14,10 +15,12 @@ const RUNTIME_SIDECAR_ARTIFACTS = new Set([
 
 export { normalizeOptionalString as trimBundledPluginString };
 
+/** Normalizes string-list manifest fields found while scanning bundled plugin files. */
 export function normalizeBundledPluginStringList(value: unknown): string[] {
   return normalizeTrimmedStringList(value);
 }
 
+/** Converts a source entry path to its built JavaScript artifact path. */
 export function rewriteBundledPluginEntryToBuiltPath(
   entry: string | undefined,
 ): string | undefined {
@@ -48,6 +51,7 @@ function isTopLevelPublicSurfaceSource(name: string): boolean {
   return !/(\.test|\.spec)(\.[cm]?[jt]s)$/u.test(name);
 }
 
+/** Derives a stable id hint for bundled plugins with one or more extension entrypoints. */
 export function deriveBundledPluginIdHint(params: {
   entryPath: string;
   manifestId: string;
@@ -68,6 +72,7 @@ export function deriveBundledPluginIdHint(params: {
   return `${unscoped}/${base}`;
 }
 
+/** Lists top-level public surface artifacts that should be copied with bundled plugin runtime. */
 export function collectBundledPluginPublicSurfaceArtifacts(params: {
   pluginDir: string;
   sourceEntry: string;
@@ -90,6 +95,7 @@ export function collectBundledPluginPublicSurfaceArtifacts(params: {
   return artifacts.length > 0 ? artifacts : undefined;
 }
 
+/** Filters public artifacts down to runtime sidecars needed by bundled plugin execution. */
 export function collectBundledPluginRuntimeSidecarArtifacts(
   publicSurfaceArtifacts: readonly string[] | undefined,
 ): readonly string[] | undefined {
@@ -102,6 +108,7 @@ export function collectBundledPluginRuntimeSidecarArtifacts(
   return artifacts.length > 0 ? artifacts : undefined;
 }
 
+/** Chooses the source or built extension directory appropriate for the current package layout. */
 export function resolveBundledPluginScanDir(params: {
   packageRoot: string;
   runningFromBuiltArtifact: boolean;

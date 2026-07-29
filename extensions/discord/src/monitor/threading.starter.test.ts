@@ -1,13 +1,14 @@
+// Discord tests cover threading.starter plugin behavior.
 import { StickerFormatType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client } from "../internal/discord.js";
-import {
-  __resetDiscordThreadStarterCacheForTest,
-  resolveDiscordThreadStarter,
-} from "./threading.js";
+import { resetDiscordThreadStarterCacheForTest, resolveDiscordThreadStarter } from "./threading.js";
+
+type ResolvedThreadStarter = NonNullable<Awaited<ReturnType<typeof resolveDiscordThreadStarter>>>;
 
 type ThreadStarterRestMessage = {
   content?: string | null;
+  attachments?: unknown[];
   embeds?: Array<{ title?: string | null; description?: string | null }>;
   message_snapshots?: Array<{
     message?: {
@@ -17,6 +18,7 @@ type ThreadStarterRestMessage = {
       sticker_items?: unknown[];
     };
   }>;
+  sticker_items?: unknown[];
   author?: {
     id?: string | null;
     username?: string | null;
@@ -65,6 +67,23 @@ function createStarterMessage(overrides: ThreadStarterRestMessage = {}): ThreadS
   };
 }
 
+function requireThreadStarter(
+  result: Awaited<ReturnType<typeof resolveDiscordThreadStarter>>,
+): ResolvedThreadStarter {
+  if (!result) {
+    throw new Error("expected resolved Discord thread starter");
+  }
+  return result;
+}
+
+function firstRestGetPath(get: ReturnType<typeof vi.fn>): unknown {
+  const [call] = get.mock.calls;
+  if (!call) {
+    throw new Error("expected Discord REST GET call");
+  }
+  return call[0];
+}
+
 async function resolveStarter(params: {
   message: ThreadStarterRestMessage;
   parentId?: string;
@@ -87,7 +106,7 @@ async function resolveStarter(params: {
 
 describe("resolveDiscordThreadStarter", () => {
   beforeEach(() => {
-    __resetDiscordThreadStarterCacheForTest();
+    resetDiscordThreadStarterCacheForTest();
   });
 
   it("falls back to joined embed title and description when content is empty", async () => {
@@ -100,10 +119,13 @@ describe("resolveDiscordThreadStarter", () => {
       resolveTimestampMs: () => 123,
     });
 
-    expect(result).toMatchObject({
+    expect(requireThreadStarter(result)).toEqual({
       text: "Alert\nDetails",
       author: "Alice",
       authorId: "u1",
+      authorName: "Alice",
+      authorTag: "Alice",
+      memberRoleIds: undefined,
       timestamp: 123,
     });
   });
@@ -133,12 +155,14 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toMatchObject({
+    expect(requireThreadStarter(result)).toEqual({
+      text: "starter content",
       author: "Alice#1234",
       authorId: "u1",
       authorName: "Alice",
       authorTag: "Alice#1234",
       memberRoleIds: ["role-1", "role-2"],
+      timestamp: undefined,
     });
   });
 
@@ -152,10 +176,10 @@ describe("resolveDiscordThreadStarter", () => {
       resolveTimestampMs: () => 456,
     });
 
-    expect(result).toBeTruthy();
-    expect(result!.text).toContain("forwarded task content");
-    expect(result!.author).toBe("Bob");
-    expect(result!.timestamp).toBe(456);
+    const starter = requireThreadStarter(result);
+    expect(starter.text).toContain("forwarded task content");
+    expect(starter.author).toBe("Bob");
+    expect(starter.timestamp).toBe(456);
   });
 
   it("prefers content over forwarded message snapshots", async () => {
@@ -167,8 +191,7 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toBeTruthy();
-    expect(result!.text).toBe("direct content");
+    expect(requireThreadStarter(result).text).toBe("direct content");
   });
 
   it("joins multiple forwarded message snapshots", async () => {
@@ -182,9 +205,9 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toBeTruthy();
-    expect(result!.text).toContain("first forwarded message");
-    expect(result!.text).toContain("second forwarded message");
+    const starter = requireThreadStarter(result);
+    expect(starter.text).toContain("first forwarded message");
+    expect(starter.text).toContain("second forwarded message");
   });
 
   it("preserves forwarded attachment placeholders in thread starter context", async () => {
@@ -206,9 +229,10 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toBeTruthy();
-    expect(result!.text).toContain("[Forwarded message]");
-    expect(result!.text).toContain("<media:image> (1 image)");
+    const starter = requireThreadStarter(result);
+    expect(starter.text).toContain("[Forwarded message]");
+    expect(starter.text).toContain("<media:image>");
+    expect(starter.text).not.toContain("(1 image)");
   });
 
   it("preserves forwarded sticker placeholders in thread starter context", async () => {
@@ -229,9 +253,27 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toBeTruthy();
-    expect(result!.text).toContain("[Forwarded message]");
-    expect(result!.text).toContain("<media:sticker> (1 sticker)");
+    const starter = requireThreadStarter(result);
+    expect(starter.text).toContain("[Forwarded message]");
+    expect(starter.text).toContain("<media:sticker>");
+    expect(starter.text).not.toContain("(1 sticker)");
+  });
+
+  it("renders native media for attachment-only thread starters", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        attachments: [
+          {
+            id: "a1",
+            filename: "starter.png",
+            content_type: "image/png",
+            url: "https://cdn.discordapp.com/starter.png",
+          },
+        ],
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("<media:image>");
   });
 
   it("uses the thread id as the message channel id for forum parents", async () => {
@@ -241,10 +283,9 @@ describe("resolveDiscordThreadStarter", () => {
       parentType: ChannelType.GuildForum,
     });
 
-    expect(result?.text).toBe("starter content");
-    expect(get).toHaveBeenCalledWith(
-      expect.stringContaining("/channels/thread-1/messages/thread-1"),
-    );
+    expect(requireThreadStarter(result).text).toBe("starter content");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(firstRestGetPath(get)).toBe("/channels/thread-1/messages/thread-1");
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {

@@ -1,17 +1,17 @@
-/**
- * Cron session reaper — prunes completed isolated cron run sessions
- * from the session store after a configurable retention period.
- *
- * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` are ephemeral
- * run records. The base session (`...:cron:<jobId>`) is kept as-is.
- */
-
+/** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
+import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+  type SessionEntryLifecycleRemoval,
+} from "../config/sessions/session-accessor.js";
+import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -19,9 +19,14 @@ const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
-const lastSweepAtMsByStore = new Map<string, number>();
+const lastSweepAtMsByTarget = new Map<string, number>();
 
-export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
+function reaperTargetKey(agentId: string, storePath: string): string {
+  return `${normalizeAgentId(agentId)}\0${path.resolve(storePath)}`;
+}
+
+/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
+function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
   }
@@ -42,17 +47,15 @@ type ReaperResult = {
 };
 
 /**
- * Sweep the session store and prune expired cron run sessions.
- * Designed to be called from the cron timer tick — self-throttles via
- * MIN_SWEEP_INTERVAL_MS to avoid excessive I/O.
+ * Sweeps completed isolated cron run sessions while preserving base cron sessions.
  *
- * Lock ordering: this function acquires the session-store file lock via
- * `updateSessionStore`. It must be called OUTSIDE of the cron service's
- * own `locked()` section to avoid lock-order inversions. The cron timer
- * calls this after all `locked()` sections have been released.
+ * Must run outside the cron service `locked()` section because this acquires
+ * the session-store file lock; reversing that order can deadlock timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
+  agentId: string;
+  defaultAgentId: string;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
   nowMs?: number;
@@ -60,77 +63,101 @@ export async function sweepCronRunSessions(params: {
   /** Override for testing — skips the min-interval throttle. */
   force?: boolean;
 }): Promise<ReaperResult> {
-  const now = params.nowMs ?? Date.now();
-  const storePath = params.sessionStorePath;
-  const lastSweepAtMs = lastSweepAtMsByStore.get(storePath) ?? 0;
-
-  // Throttle: don't sweep more often than every 5 minutes.
-  if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
-    return { swept: false, pruned: 0 };
-  }
-
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
-    lastSweepAtMsByStore.set(storePath, now);
     return { swept: false, pruned: 0 };
   }
 
+  const now = params.nowMs ?? Date.now();
+  const storePath = params.sessionStorePath;
+  // Shared physical stores still hold agent-scoped rows. The throttle also
+  // suppresses in-flight attempts, so its identity must retain both scopes.
+  const targetKey = reaperTargetKey(params.agentId, storePath);
+  const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
+
+  // Timer ticks can be frequent; throttle per agent/store target to avoid
+  // repeated session-store I/O while preserving a force path for tests.
+  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+    return { swept: false, pruned: 0 };
+  }
+
+  // Throttle attempts, not only successful sweeps. A broken session store must
+  // not turn frequent timer ticks into an unbounded persistence-error loop.
+  lastSweepAtMsByTarget.set(targetKey, now);
+
   let pruned = 0;
-  const prunedSessions = new Map<string, string | undefined>();
+  let transcriptCleanupError: unknown;
   try {
-    await updateSessionStore(storePath, (store) => {
-      const cutoff = now - retentionMs;
-      for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
+    const cutoff = now - retentionMs;
+    const requestedOwner = normalizeAgentId(params.agentId);
+    let pendingMediaSessionKeys: Set<string> | undefined;
+    const removals: SessionEntryLifecycleRemoval[] = [];
+    // The accessor keeps agentId logical for admission checks and resolves a shared
+    // store's physical database owner internally through its SQLite scope.
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId: params.agentId,
+      storePath,
+    })) {
+      if (!isCronRunSessionKey(sessionKey)) {
+        continue;
+      }
+      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+      if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
+        continue;
+      }
+      const updatedAt = entry.updatedAt ?? 0;
+      if (updatedAt >= cutoff) {
+        continue;
+      }
+      if (entry.cronRunContinuation) {
+        // Build one unordered snapshot only when an expired continuation needs it.
+        // Fresh rows and stores without continuations never touch the task registry.
+        pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
+        if (pendingMediaSessionKeys.has(sessionKey)) {
           continue;
-        }
-        const entry = store[key];
-        if (!entry) {
-          continue;
-        }
-        const updatedAt = entry.updatedAt ?? 0;
-        if (updatedAt < cutoff) {
-          if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
-            prunedSessions.set(entry.sessionId, entry.sessionFile);
-          }
-          delete store[key];
-          pruned++;
         }
       }
-    });
+      removals.push({
+        sessionKey,
+        expectedEntry: entry,
+        ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
+        expectedUpdatedAt: entry.updatedAt,
+        archiveRemovedTranscript: true,
+      });
+    }
+    if (removals.length > 0) {
+      // Archive-age cleanup follows the session maintenance retention knob:
+      // the reaper's cron retention decides which rows die, but archived
+      // transcript files are conversation history owned by the archive
+      // retention policy (null = keep until the disk budget evicts).
+      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
+      const result = await applySessionEntryLifecycleMutation({
+        agentId: params.agentId,
+        storePath,
+        removals,
+        ...(archiveRetentionMs == null
+          ? {}
+          : {
+              cleanupArchivedTranscripts: {
+                rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
+                nowMs: now,
+              },
+            }),
+        captureArtifactCleanupError: true,
+      });
+      pruned = result.removedEntries;
+      transcriptCleanupError = result.artifactCleanupError;
+    }
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
     return { swept: false, pruned: 0 };
   }
 
-  lastSweepAtMsByStore.set(storePath, now);
-
-  if (prunedSessions.size > 0) {
-    try {
-      const store = loadSessionStore(storePath, { skipCache: true });
-      const referencedSessionIds = new Set(
-        Object.values(store)
-          .map((entry) => entry?.sessionId)
-          .filter((id): id is string => Boolean(id)),
-      );
-      const archivedDirs = await archiveRemovedSessionTranscripts({
-        removedSessionFiles: prunedSessions,
-        referencedSessionIds,
-        storePath,
-        reason: "deleted",
-        restrictToStoreDir: true,
-      });
-      if (archivedDirs.size > 0) {
-        await cleanupArchivedSessionTranscripts({
-          directories: [...archivedDirs],
-          olderThanMs: retentionMs,
-          reason: "deleted",
-          nowMs: now,
-        });
-      }
-    } catch (err) {
-      params.log.warn({ err: String(err) }, "cron-reaper: transcript cleanup failed");
-    }
+  if (transcriptCleanupError) {
+    params.log.warn(
+      { err: formatErrorMessage(transcriptCleanupError) },
+      "cron-reaper: transcript cleanup failed",
+    );
   }
 
   if (pruned > 0) {
@@ -143,7 +170,13 @@ export async function sweepCronRunSessions(params: {
   return { swept: true, pruned };
 }
 
-/** Reset the throttle timer (for tests). */
-export function resetReaperThrottle(): void {
-  lastSweepAtMsByStore.clear();
+/** Resets per-target reaper throttles between tests. */
+function resetReaperThrottle(): void {
+  lastSweepAtMsByTarget.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronSessionReaperTestApi")] = {
+    resetReaperThrottle,
+  };
 }

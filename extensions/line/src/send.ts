@@ -1,12 +1,17 @@
+// Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
+import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
-import type { LineSendResult } from "./types.js";
+import { createLineSendReceipt } from "./send-receipt.js";
+import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
@@ -25,6 +30,25 @@ const userProfileCache = new Map<
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PROFILE_CACHE_MAX_ENTRIES = 1000;
+
+function cacheUserProfile(
+  userId: string,
+  profile: { displayName: string; pictureUrl?: string; fetchedAt: number },
+): void {
+  // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+  userProfileCache.delete(userId);
+  userProfileCache.set(userId, profile);
+  if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  for (const [key, cached] of userProfileCache) {
+    if (profile.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      userProfileCache.delete(key);
+    }
+  }
+  pruneMapToMaxSize(userProfileCache, PROFILE_CACHE_MAX_ENTRIES);
+}
 
 interface LineSendOpts {
   cfg: OpenClawConfig;
@@ -32,7 +56,7 @@ interface LineSendOpts {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
-  mediaKind?: "image" | "video" | "audio";
+  mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
   trackingId?: string;
@@ -65,6 +89,18 @@ function normalizeTarget(to: string): string {
 
   if (!normalized) {
     throw new Error("Recipient is required for LINE sends");
+  }
+
+  // Real LINE chat ids are a capital C/U/R followed by 32 lowercase hex chars
+  // (33 chars total) and are case-sensitive — push returns HTTP 400 otherwise.
+  // Reject values that match the LINE id shape but lost their leading capital
+  // so the failure is surfaced as a permanent error (recovery moves the entry
+  // to failed/ immediately instead of silently retrying 5 times). Short test
+  // fixtures (e.g. "U123") are left alone. openclaw/openclaw#81628
+  if (normalized.length >= 33 && !/^[CUR]/.test(normalized)) {
+    throw new Error(
+      `Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): ${truncateUtf16Safe(normalized, 4)}…`,
+    );
   }
 
   return normalized;
@@ -147,8 +183,8 @@ export function createLocationMessage(location: {
 }): LocationMessage {
   return {
     type: "location",
-    title: location.title.slice(0, 100),
-    address: location.address.slice(0, 100),
+    title: truncateUtf16Safe(location.title, 100),
+    address: truncateUtf16Safe(location.address, 100),
     latitude: location.latitude,
     longitude: location.longitude,
   };
@@ -177,6 +213,23 @@ function recordLineOutboundActivity(accountId: string): void {
   });
 }
 
+function resolveLineReceiptKind(messages: readonly Message[]) {
+  const types = new Set(messages.map((message) => message.type));
+  if (types.has("audio")) {
+    return "voice";
+  }
+  if (types.has("image") || types.has("video")) {
+    return "media";
+  }
+  if (types.has("flex") || types.has("template") || types.has("location")) {
+    return "card";
+  }
+  if (types.has("text")) {
+    return "text";
+  }
+  return "unknown";
+}
+
 async function pushLineMessages(
   to: string,
   messages: Message[],
@@ -188,13 +241,14 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
+  const normalizedMessages = messages.map(normalizeLineMessageActions);
   const pushRequest = client.pushMessage({
     to: chatId,
-    messages,
+    messages: normalizedMessages,
   });
 
   if (behavior.errorContext) {
-    await pushRequest.catch((err) => {
+    await pushRequest.catch((err: unknown) => {
       logLineHttpError(err, behavior.errorContext!);
       throw err;
     });
@@ -214,6 +268,12 @@ async function pushLineMessages(
   return {
     messageId: "push",
     chatId,
+    receipt: createLineSendReceipt({
+      messageId: "push",
+      chatId,
+      kind: resolveLineReceiptKind(messages),
+      messageCount: messages.length,
+    }),
   };
 }
 
@@ -224,10 +284,11 @@ async function replyLineMessages(
   behavior: LineReplyBehavior = {},
 ): Promise<void> {
   const { account, client } = createLineMessagingClient(opts);
+  const normalizedMessages = messages.map(normalizeLineMessageActions);
 
   await client.replyMessage({
     replyToken,
-    messages,
+    messages: normalizedMessages,
   });
 
   recordLineOutboundActivity(account.accountId);
@@ -265,7 +326,6 @@ export async function sendMessageLine(
       case "audio":
         messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
         break;
-      case "image":
       default:
         // Backward compatibility: keep image as default when media kind is unspecified.
         {
@@ -293,6 +353,12 @@ export async function sendMessageLine(
     return {
       messageId: "reply",
       chatId,
+      receipt: createLineSendReceipt({
+        messageId: "reply",
+        chatId,
+        kind: resolveLineReceiptKind(messages),
+        messageCount: messages.length,
+      }),
     };
   }
 
@@ -376,7 +442,7 @@ export async function pushFlexMessage(
 ): Promise<LineSendResult> {
   const flexMessage: FlexMessage = {
     type: "flex",
-    altText: altText.slice(0, 400),
+    altText: truncateUtf16Safe(altText, 400),
     contents,
   };
 
@@ -412,11 +478,7 @@ export async function pushTextMessageWithQuickReplies(
 export function createQuickReplyItems(labels: string[]): QuickReply {
   const items: QuickReplyItem[] = labels.slice(0, 13).map((label) => ({
     type: "action",
-    action: {
-      type: "message",
-      label: label.slice(0, 20),
-      text: label,
-    },
+    action: messageAction(label, label),
   }));
   return { items };
 }
@@ -471,7 +533,7 @@ export async function getUserProfile(
       pictureUrl: profile.pictureUrl,
     };
 
-    userProfileCache.set(userId, {
+    cacheUserProfile(userId, {
       ...result,
       fetchedAt: Date.now(),
     });

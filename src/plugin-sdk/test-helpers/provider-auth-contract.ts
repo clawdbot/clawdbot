@@ -1,3 +1,4 @@
+// Provider auth contract helpers define reusable tests for provider auth implementations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "../agent-runtime.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -9,23 +10,28 @@ import type {
 } from "../setup.js";
 import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
-type LoginOpenAICodexOAuth =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
-type GithubCopilotLoginCommand =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
+type LoginOpenAICodexOAuth = (params: unknown) => Promise<{
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+} | null>;
 type EnsureAuthProfileStore =
   typeof import("openclaw/plugin-sdk/provider-auth").ensureAuthProfileStore;
 type ListProfilesForProvider =
   typeof import("openclaw/plugin-sdk/provider-auth").listProfilesForProvider;
 
-const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
-const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn<EnsureAuthProfileStore>());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn<ListProfilesForProvider>());
 
 export type ProviderAuthContractPluginLoader = () => Promise<{
   default: Parameters<typeof registerProviders>[0];
 }>;
+
+type OpenAICodexProviderAuthContractOptions = {
+  expectedCodexDefaultModel: string;
+  loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
+};
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -75,6 +81,7 @@ function buildOpenAICodexOAuthResult(params: {
   refresh: string;
   expires: number;
   email?: string;
+  defaultModel: string;
 }) {
   return {
     profiles: [
@@ -82,7 +89,7 @@ function buildOpenAICodexOAuthResult(params: {
         profileId: params.profileId,
         credential: {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: params.access,
           refresh: params.refresh,
           expires: params.expires,
@@ -94,28 +101,18 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.5": {},
+            [params.defaultModel]: {},
           },
         },
       },
     },
-    defaultModel: "openai-codex/gpt-5.5",
+    defaultModel: params.defaultModel,
     notes: undefined,
   };
 }
 
 function installSharedAuthProfileStoreHooks(state: { authStore: AuthProfileStore }) {
   beforeEach(() => {
-    vi.doMock("openclaw/plugin-sdk/provider-auth-login", async () => {
-      const actual = await vi.importActual<
-        typeof import("openclaw/plugin-sdk/provider-auth-login")
-      >("openclaw/plugin-sdk/provider-auth-login");
-      return {
-        ...actual,
-        loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
-        githubCopilotLoginCommand: githubCopilotLoginCommandMock,
-      };
-    });
     vi.doMock("openclaw/plugin-sdk/provider-auth", async () => {
       const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
         "openclaw/plugin-sdk/provider-auth",
@@ -138,25 +135,27 @@ function installSharedAuthProfileStoreHooks(state: { authStore: AuthProfileStore
   });
 
   afterEach(() => {
-    loginOpenAICodexOAuthMock.mockReset();
-    githubCopilotLoginCommandMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
   });
 }
 
-export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContractPluginLoader) {
+export function describeOpenAICodexProviderAuthContract(
+  load: ProviderAuthContractPluginLoader,
+  options: OpenAICodexProviderAuthContractOptions,
+) {
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
+  const { expectedCodexDefaultModel, loginOpenAICodexOAuthMock } = options;
 
-  describe("openai-codex provider auth contract", () => {
+  describe("openai provider ChatGPT auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
 
     async function expectStableFallbackProfile(params: { access: string; profileId: string }) {
       const { default: openAIPlugin } = await load();
-      const provider = requireProvider(await registerProviders(openAIPlugin), "openai-codex");
+      const provider = requireProvider(await registerProviders(openAIPlugin), "openai");
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
         access: params.access,
@@ -169,13 +168,14 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
           access: params.access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     }
 
     async function getProvider() {
       const { default: openAIPlugin } = await load();
-      return requireProvider(await registerProviders(openAIPlugin), "openai-codex");
+      return requireProvider(await registerProviders(openAIPlugin), "openai");
     }
 
     it("keeps OAuth auth results provider-owned", async () => {
@@ -191,11 +191,12 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
 
       expect(result).toEqual(
         buildOpenAICodexOAuthResult({
-          profileId: "openai-codex:user@example.com",
+          profileId: "openai:user@example.com",
           access: "access-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
           email: "user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -217,11 +218,12 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
 
       expect(result).toEqual(
         buildOpenAICodexOAuthResult({
-          profileId: "openai-codex:jwt-user@example.com",
+          profileId: "openai:jwt-user@example.com",
           access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
           email: "jwt-user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -235,7 +237,7 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
       const expectedStableId = Buffer.from("user-123__acct-456", "utf8").toString("base64url");
       await expectStableFallbackProfile({
         access,
-        profileId: `openai-codex:id-${expectedStableId}`,
+        profileId: `openai:id-${expectedStableId}`,
       });
     });
 
@@ -249,7 +251,7 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
       );
       await expectStableFallbackProfile({
         access,
-        profileId: `openai-codex:id-${expectedStableId}`,
+        profileId: `openai:id-${expectedStableId}`,
       });
     });
 
@@ -260,7 +262,7 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
       const expectedStableId = Buffer.from("user-abc").toString("base64url");
       await expectStableFallbackProfile({
         access,
-        profileId: `openai-codex:id-${expectedStableId}`,
+        profileId: `openai:id-${expectedStableId}`,
       });
     });
 
@@ -276,26 +278,30 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
 
       expect(result).toEqual(
         buildOpenAICodexOAuthResult({
-          profileId: "openai-codex:default",
+          profileId: "openai:default",
           access: "not-a-jwt-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
 
-    it("keeps OAuth failures non-fatal at the provider layer", async () => {
+    it("surfaces OAuth failures instead of silently succeeding with no profiles", async () => {
       const provider = await getProvider();
       loginOpenAICodexOAuthMock.mockRejectedValueOnce(new Error("oauth failed"));
 
-      await expect(provider.auth[0]?.run(buildAuthContext() as never)).resolves.toEqual({
-        profiles: [],
-      });
+      await expect(provider.auth[0]?.run(buildAuthContext() as never)).rejects.toThrow(
+        "oauth failed",
+      );
     });
   });
 }
 
-export function describeGithubCopilotProviderAuthContract(load: ProviderAuthContractPluginLoader) {
+export function describeGithubCopilotProviderAuthContract(
+  load: ProviderAuthContractPluginLoader,
+  defaultModel: string,
+) {
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
@@ -317,7 +323,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       };
 
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-      const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+      const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
       Object.defineProperty(stdin, "isTTY", {
         configurable: true,
@@ -327,7 +333,6 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
 
       try {
         const result = await provider.auth[0]?.run(buildAuthContext() as never);
-        expect(githubCopilotLoginCommandMock).not.toHaveBeenCalled();
         expect(result).toEqual({
           profiles: [
             {
@@ -339,7 +344,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.7",
+          defaultModel,
         });
       } finally {
         if (previousIsTTYDescriptor) {
@@ -422,13 +427,12 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
             },
           },
         ],
-        defaultModel: "github-copilot/claude-opus-4.7",
+        defaultModel,
       });
       // Credential is sourced from the device flow response, not from the existing
       // on-disk auth store. ensureAuthProfileStore is still called by the
       // resolveExistingCopilotAuthResult existence check, which legitimately probes
       // the store before launching the device flow when no profile exists yet.
-      expect(githubCopilotLoginCommandMock).not.toHaveBeenCalled();
     });
 
     it("uses the wizard prompter and openUrl hooks for the device code (no stdin/stdout)", async () => {
@@ -450,7 +454,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
     it("supports non-interactive (GUI/RPC) auth contexts without a TTY", async () => {
       const provider = await getProvider();
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-      const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+      const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
       Object.defineProperty(stdin, "isTTY", {
         configurable: true,

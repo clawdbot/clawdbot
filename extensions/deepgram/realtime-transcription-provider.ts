@@ -1,3 +1,4 @@
+// Deepgram provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -6,7 +7,12 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+  parseBooleanValue as readBoolean,
+  parseFiniteNumber as readFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_DEEPGRAM_AUDIO_BASE_URL, DEFAULT_DEEPGRAM_AUDIO_MODEL } from "./audio.js";
 
 type DeepgramRealtimeTranscriptionEncoding = "linear16" | "mulaw" | "alaw";
@@ -55,43 +61,10 @@ const DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const DEEPGRAM_REALTIME_RECONNECT_DELAY_MS = 1000;
 const DEEPGRAM_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readNestedDeepgramConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
   const providers = readRecord(raw?.providers);
   return readRecord(providers?.deepgram ?? raw?.deepgram ?? raw) ?? {};
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  const next =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number.parseFloat(value)
-        : undefined;
-  return Number.isFinite(next) ? next : undefined;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
 }
 
 function normalizeDeepgramEncoding(
@@ -117,15 +90,36 @@ function normalizeDeepgramEncoding(
 }
 
 function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
-  return (
-    normalizeOptionalString(value ?? process.env.DEEPGRAM_BASE_URL) ??
-    DEFAULT_DEEPGRAM_AUDIO_BASE_URL
-  );
+  const resolved = normalizeOptionalString(value ?? process.env.DEEPGRAM_BASE_URL);
+  if (!resolved) {
+    return DEFAULT_DEEPGRAM_AUDIO_BASE_URL;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(resolved);
+  } catch {
+    throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
+  }
+  const { protocol } = parsed;
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "ws:" && protocol !== "wss:") {
+    // Endpoint URLs can contain userinfo or sensitive query values. Keep the
+    // error actionable without echoing the configured value.
+    throw new Error(
+      `Invalid Deepgram baseUrl: unsupported scheme "${protocol}" (expected http, https, ws, or wss)`,
+    );
+  }
+  return resolved;
 }
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
   const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  // Self-hosted Deepgram may explicitly use ws:// without TLS. Translate only
+  // matching HTTP schemes so direct WebSocket endpoints keep their contract.
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  }
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/listen`;
   url.searchParams.set("model", config.model);
   url.searchParams.set("encoding", config.encoding);
@@ -214,9 +208,8 @@ function createDeepgramRealtimeTranscriptionSession(
       case "Error":
       case "error":
         config.onError?.(new Error(readErrorDetail(event.error ?? event.message)));
-        return;
+
       default:
-        return;
     }
   };
 
@@ -275,8 +268,3 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
     },
   };
 }
-
-export const __testing = {
-  normalizeProviderConfig,
-  toDeepgramRealtimeWsUrl,
-};

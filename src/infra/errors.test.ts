@@ -1,7 +1,7 @@
+// Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
 import {
   collectErrorGraphCandidates,
-  detectErrorKind,
   extractErrorCode,
   formatErrorMessage,
   formatUncaughtError,
@@ -50,7 +50,7 @@ describe("error helpers", () => {
         ...((current as { errors?: unknown[] }).errors ?? []),
       ]),
     ).toEqual([root, child, leaf]);
-    expect(collectErrorGraphCandidates(null)).toEqual([]);
+    expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
   });
 
   it("matches errno-shaped errors by code", () => {
@@ -88,6 +88,13 @@ describe("error helpers", () => {
     expect(formatted).toBe("error A | error B");
   });
 
+  it("dedupes repeated cause messages while preserving deeper distinct causes", () => {
+    const rootCause = new Error("provider auth lookup failed");
+    const inner = new Error('No API key found for provider "openai".', { cause: rootCause });
+    const wrapper = new Error(inner.message, { cause: inner });
+    expect(formatErrorMessage(wrapper)).toBe(`${inner.message} | ${rootCause.message}`);
+  });
+
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
@@ -95,33 +102,23 @@ describe("error helpers", () => {
     expect(formatted).not.toContain(token);
   });
 
-  it.each([
-    {
-      value: new Error("Unhandled stop reason: refusal_policy"),
-      expected: "refusal",
-    },
-    {
-      value: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
-      expected: "timeout",
-    },
-    {
-      value: Object.assign(new Error("Too many requests"), { code: 429 }),
-      expected: "rate_limit",
-    },
-    {
-      value: new Error("context_window exceeded with too many tokens"),
-      expected: "context_length",
-    },
-    {
-      value: new Error("plain provider failure"),
-      expected: undefined,
-    },
-    {
-      value: undefined,
-      expected: undefined,
-    },
-  ] as const)("detects error kind for case %#", ({ value, expected }) => {
-    expect(detectErrorKind(value)).toBe(expected);
+  it("redacts HTTP client config secrets from formatted error chains", () => {
+    const appSecret = "feishu_app_secret_1234567890";
+    const tenantToken = "feishu_tenant_access_abcdef123456";
+    const rootCause = new Error(
+      `request config: { appSecret: '${appSecret}', headers: { authorization: 'Bearer ${tenantToken}' } }`,
+    );
+    const httpError = Object.assign(new Error(`POST /auth/v3/tenant_access_token failed`), {
+      cause: rootCause,
+    });
+
+    const formatted = formatErrorMessage(httpError);
+
+    expect(formatted).toContain("POST /auth/v3/tenant_access_token failed");
+    expect(formatted).toContain("appSecret:");
+    expect(formatted).toContain("authorization:");
+    expect(formatted).not.toContain(appSecret);
+    expect(formatted).not.toContain(tenantToken);
   });
 
   it("uses message-only formatting for INVALID_CONFIG and stack formatting otherwise", () => {

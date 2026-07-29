@@ -1,3 +1,4 @@
+// Tests prepared reply queue state resolution before get-reply starts a run.
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 

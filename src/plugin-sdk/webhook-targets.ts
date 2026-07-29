@@ -1,19 +1,25 @@
+// Webhook target helpers resolve and validate plugin webhook destinations.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-import { normalizeWebhookPath } from "./webhook-path.js";
 import {
   beginWebhookRequestPipelineOrReject,
   type WebhookInFlightLimiter,
 } from "./webhook-request-guards.js";
 
+/** Registration handle returned for one live webhook target. */
 export type RegisteredWebhookTarget<T> = {
+  /** Normalized target stored in the caller-owned path registry. */
   target: T;
+  /** Idempotently remove this target and run path teardown when it was the last target. */
   unregister: () => void;
 };
 
+/** Lifecycle hooks for path-level webhook target registration. */
 export type RegisterWebhookTargetOptions<T extends { path: string }> = {
+  /** Called before the first target for a normalized path is stored; may return path teardown. */
   onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
+  /** Called after the last target for a normalized path has been removed. */
   onLastPathTargetRemoved?: (params: { path: string }) => void;
 };
 
@@ -21,6 +27,37 @@ type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[
 
 export { registerPluginHttpRoute };
 
+/** Normalize a webhook path to a leading slash without a trailing slash. */
+export function normalizeWebhookPath(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
+}
+
+/** Resolve a webhook path from explicit config, URL pathname, or a caller default. */
+export function resolveWebhookPath(params: {
+  webhookPath?: string;
+  webhookUrl?: string;
+  defaultPath?: string | null;
+}): string | null {
+  const trimmedPath = params.webhookPath?.trim();
+  if (trimmedPath) {
+    return normalizeWebhookPath(trimmedPath);
+  }
+  if (params.webhookUrl?.trim()) {
+    try {
+      return normalizeWebhookPath(new URL(params.webhookUrl).pathname || "/");
+    } catch {
+      return null;
+    }
+  }
+  return params.defaultPath ?? null;
+}
+
+/** Plugin HTTP route options supplied when webhook paths are registered lazily. */
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
   "path" | "fallbackPath"
@@ -28,9 +65,13 @@ export type RegisterWebhookPluginRouteOptions = Omit<
 
 /** Register a webhook target and lazily install the matching plugin HTTP route on first use. */
 export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
+  /** Caller-owned normalized path registry shared by all targets for this plugin/runtime. */
   targetsByPath: Map<string, T[]>;
+  /** Target to normalize, store, and later return from the registration handle. */
   target: T;
+  /** Plugin HTTP route configuration used when the first target for a path is registered. */
   route: RegisterWebhookPluginRouteOptions;
+  /** Optional last-target hook forwarded to `registerWebhookTarget`. */
   onLastPathTargetRemoved?: RegisterWebhookTargetOptions<T>["onLastPathTargetRemoved"];
 }): RegisteredWebhookTarget<T> {
   return registerWebhookTarget(params.targetsByPath, params.target, {
@@ -38,6 +79,8 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
       registerPluginHttpRoute({
         ...params.route,
         path,
+        // Webhook targets own this path while registered; default replacement lets
+        // plugin reload/setup refresh the handler without accumulating stale routes.
         replaceExisting: params.route.replaceExisting ?? true,
       }),
     onLastPathTargetRemoved: params.onLastPathTargetRemoved,
@@ -53,6 +96,8 @@ function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () 
     return existing;
   }
   const created = new Map<string, () => void>();
+  // Teardown is scoped to the caller-owned registry map so independent plugins using the same
+  // path do not unregister each other's HTTP routes.
   pathTeardownByTargetMap.set(mapKey, created);
   return created;
 }
@@ -119,18 +164,31 @@ export function resolveWebhookTargets<T>(
 
 /** Run common webhook guards, then dispatch only when the request path resolves to live targets. */
 export async function withResolvedWebhookRequestPipeline<T>(params: {
+  /** Incoming HTTP request whose pathname selects the target bucket. */
   req: IncomingMessage;
+  /** HTTP response used by guard failures before handler dispatch. */
   res: ServerResponse;
+  /** Caller-owned target registry keyed by normalized webhook path. */
   targetsByPath: Map<string, T[]>;
+  /** Allowed methods for the common request guard. */
   allowMethods?: readonly string[];
+  /** Optional per-key fixed-window limiter shared across requests. */
   rateLimiter?: FixedWindowRateLimiter;
+  /** Explicit rate-limit key; defaults are owned by the request guard. */
   rateLimitKey?: string;
+  /** Clock override for deterministic limiter tests. */
   nowMs?: number;
+  /** Require JSON content type before dispatching to the webhook handler. */
   requireJsonContentType?: boolean;
+  /** Optional in-flight limiter to cap concurrent handling for a key. */
   inFlightLimiter?: WebhookInFlightLimiter;
+  /** Explicit or derived key for concurrent request limiting. */
   inFlightKey?: string | ((args: { req: IncomingMessage; path: string; targets: T[] }) => string);
+  /** Status code returned when the in-flight guard rejects. */
   inFlightLimitStatusCode?: number;
+  /** Response body returned when the in-flight guard rejects. */
   inFlightLimitMessage?: string;
+  /** Handler invoked only after target resolution and common guards succeed. */
   handle: (args: { path: string; targets: T[] }) => Promise<boolean | void> | boolean | void;
 }): Promise<boolean> {
   const resolved = resolveWebhookTargets(params.req, params.targetsByPath);
@@ -163,10 +221,13 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
     await params.handle(resolved);
     return true;
   } finally {
+    // Release even when the handler throws; otherwise one failed webhook can pin the in-flight
+    // slot and permanently reject later deliveries for the same key.
     requestLifecycle.release();
   }
 }
 
+/** Result of matching a request against zero, one, or multiple webhook targets. */
 export type WebhookTargetMatchResult<T> =
   | { kind: "none" }
   | { kind: "single"; target: T }
@@ -199,6 +260,8 @@ export function resolveSingleWebhookTarget<T>(
     if (!isMatch(target)) {
       continue;
     }
+    // Stop at the second match so auth callers can reject ambiguous secrets without inspecting
+    // or accidentally selecting a later target.
     const updated = updateMatchedWebhookTarget(matched, target);
     if (!updated.ok) {
       return updated.result;
@@ -229,12 +292,19 @@ export async function resolveSingleWebhookTargetAsync<T>(
 
 /** Resolve an authorized target and send the standard unauthorized or ambiguous response on failure. */
 export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
+  /** Candidate targets for the already-resolved webhook path. */
   targets: readonly T[];
+  /** HTTP response used to send unauthorized or ambiguous failures. */
   res: ServerResponse;
+  /** Auth or routing predicate; exactly one target must match. */
   isMatch: (target: T) => boolean | Promise<boolean>;
+  /** Status code for no matching target. Defaults to 401. */
   unauthorizedStatusCode?: number;
+  /** Response body for no matching target. */
   unauthorizedMessage?: string;
+  /** Status code for multiple matching targets. Defaults to 401. */
   ambiguousStatusCode?: number;
+  /** Response body for multiple matching targets. */
   ambiguousMessage?: string;
 }): Promise<T | null> {
   const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
@@ -245,12 +315,19 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
 
 /** Synchronous variant of webhook auth resolution for cheap in-memory match checks. */
 export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
+  /** Candidate targets for the already-resolved webhook path. */
   targets: readonly T[];
+  /** HTTP response used to send unauthorized or ambiguous failures. */
   res: ServerResponse;
+  /** Synchronous auth or routing predicate; exactly one target must match. */
   isMatch: (target: T) => boolean;
+  /** Status code for no matching target. Defaults to 401. */
   unauthorizedStatusCode?: number;
+  /** Response body for no matching target. */
   unauthorizedMessage?: string;
+  /** Status code for multiple matching targets. Defaults to 401. */
   ambiguousStatusCode?: number;
+  /** Response body for multiple matching targets. */
   ambiguousMessage?: string;
 }): T | null {
   const match = resolveSingleWebhookTarget(params.targets, params.isMatch);

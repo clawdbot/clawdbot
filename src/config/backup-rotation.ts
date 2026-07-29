@@ -1,4 +1,6 @@
+// Rotates config backup files while preserving recent recovery points.
 import path from "node:path";
+import { logVerbose } from "../globals.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
@@ -13,10 +15,13 @@ interface BackupMaintenanceFs extends BackupRotationFs {
   copyFile: (from: string, to: string) => Promise<void>;
 }
 
-export async function rotateConfigBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+/**
+ * Advances the config `.bak` ring before a new primary backup is copied in.
+ *
+ * Missing slots are ignored so interrupted writes or first-run configs do not
+ * block the next config write.
+ */
+async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (CONFIG_BACKUP_COUNT <= 1) {
     return;
   }
@@ -36,24 +41,19 @@ export async function rotateConfigBackups(
 }
 
 /**
- * Harden file permissions on all .bak files in the rotation ring.
- * copyFile does not guarantee permission preservation on all platforms
- * (e.g. Windows, some NFS mounts), so we explicitly chmod each backup
- * to owner-only (0o600) to match the main config file.
+ * Sets owner-only permissions on every backup slot when chmod exists.
+ *
+ * Backups are copied on mixed filesystems, so copy mode preservation is not a
+ * portable security guarantee.
  */
-export async function hardenBackupPermissions(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
   const backupBase = `${configPath}.bak`;
-  // Harden the primary .bak
   await ioFs.chmod(backupBase, 0o600).catch(() => {
     // best-effort
   });
-  // Harden numbered backups
   for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
     await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
       // best-effort
@@ -61,18 +61,8 @@ export async function hardenBackupPermissions(
   }
 }
 
-/**
- * Remove orphan .bak files that fall outside the managed rotation ring.
- * These can accumulate from interrupted writes, manual copies, or PID-stamped
- * backups (e.g. openclaw.json.bak.1772352289, openclaw.json.bak.before-marketing).
- *
- * Only files matching `<configBasename>.bak.*` are considered; the primary
- * `.bak` and numbered `.bak.1` through `.bak.{N-1}` are preserved.
- */
-export async function cleanOrphanBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+/** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
+async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.readdir) {
     return;
   }
@@ -80,7 +70,6 @@ export async function cleanOrphanBackups(
   const base = path.basename(configPath);
   const bakPrefix = `${base}.bak.`;
 
-  // Build the set of valid numbered suffixes: "1", "2", ..., "{N-1}"
   const validSuffixes = new Set<string>();
   for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
     validSuffixes.add(String(i));
@@ -89,8 +78,11 @@ export async function cleanOrphanBackups(
   let entries: string[];
   try {
     entries = await ioFs.readdir(dir);
-  } catch {
-    return; // best-effort
+  } catch (error) {
+    // best-effort: surface the reason so operators can see why orphan cleanup
+    // did not run instead of silently accumulating backups (#105199).
+    logVerbose(`config orphan backup cleanup skipped: cannot read ${dir}: ${String(error)}`);
+    return;
   }
 
   for (const entry of entries) {
@@ -101,17 +93,61 @@ export async function cleanOrphanBackups(
     if (validSuffixes.has(suffix)) {
       continue;
     }
-    // This is an orphan — remove it
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
-      // best-effort
+    const orphanPath = path.join(dir, entry);
+    await ioFs.unlink(orphanPath).catch((error: unknown) => {
+      // best-effort: log so a locked/undeletable orphan does not accumulate
+      // silently and slowly exhaust disk without any operator signal (#105199).
+      logVerbose(`config orphan backup cleanup failed to remove ${orphanPath}: ${String(error)}`);
     });
   }
 }
 
+interface PreUpdateSnapshotFs {
+  writeFile: (
+    path: string,
+    content: string,
+    options: { encoding: "utf-8"; mode: number; flag: "w" },
+  ) => Promise<void>;
+  readFile: (path: string, encoding: "utf-8") => Promise<string>;
+  existsSync: (path: string) => boolean;
+}
+
+const preUpdateConfigSnapshotsWritten = new Set<string>();
+
 /**
- * Run the full backup maintenance cycle around config writes.
- * Order matters: rotate ring -> create new .bak -> harden modes -> prune orphan .bak.* files.
+ * Captures the first on-disk config state for an update attempt.
+ *
+ * The snapshot is outside the rotating `.bak` ring so repeated writes during
+ * one process keep an operator-visible rollback point for the original file.
  */
+export async function createPreUpdateConfigSnapshot(params: {
+  configPath: string;
+  fs: PreUpdateSnapshotFs;
+}): Promise<void> {
+  if (!params.fs.existsSync(params.configPath)) {
+    return;
+  }
+  const snapshotKey = path.resolve(params.configPath);
+  if (preUpdateConfigSnapshotsWritten.has(snapshotKey)) {
+    return;
+  }
+  // Mark before I/O so concurrent callers coalesce onto the in-flight snapshot attempt.
+  preUpdateConfigSnapshotsWritten.add(snapshotKey);
+  const snapshotPath = `${params.configPath}.pre-update`;
+  try {
+    const content = await params.fs.readFile(params.configPath, "utf-8");
+    await params.fs.writeFile(snapshotPath, content, {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "w",
+    });
+  } catch {
+    // Best-effort: let the update continue, but allow its later snapshot pass to retry.
+    preUpdateConfigSnapshotsWritten.delete(snapshotKey);
+  }
+}
+
+/** Runs rotation, primary copy, permission hardening, then orphan pruning. */
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,

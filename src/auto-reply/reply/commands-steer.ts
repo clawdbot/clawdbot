@@ -1,17 +1,25 @@
+// Implements steer commands that persist per-session agent guidance.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
-  isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
+  formatEmbeddedAgentQueueFailureSummary,
+  isEmbeddedAgentRunActive,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "./commands-steer.runtime.js";
-import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -26,10 +34,9 @@ function parseSteerMessage(raw: string): string | null {
 function resolveSteerTargetSessionKey(params: HandleCommandsParams): string | undefined {
   const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
   const commandSession = normalizeOptionalString(params.sessionKey);
-  const raw =
-    params.ctx.CommandSource === "native"
-      ? commandTarget || commandSession
-      : commandSession || commandTarget;
+  const raw = isNativeCommandTurn(resolveCommandTurnContext(params.ctx))
+    ? commandTarget || commandSession
+    : commandSession || commandTarget;
   if (!raw) {
     return undefined;
   }
@@ -51,21 +58,52 @@ function resolveStoredSessionEntry(
   return undefined;
 }
 
+function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
+  const candidates = [targetSessionKey];
+  if (targetSessionKey.includes(":slash:")) {
+    candidates.push(
+      targetSessionKey.replace(":slash:", ":direct:"),
+      targetSessionKey.replace(":slash:", ":dm:"),
+    );
+  }
+  return [...new Set(candidates)];
+}
+
 function resolveSteerSessionId(params: {
   commandParams: HandleCommandsParams;
   targetSessionKey: string;
 }): string | undefined {
-  const activeSessionId = resolveActiveEmbeddedRunSessionId(params.targetSessionKey);
-  if (activeSessionId) {
-    return activeSessionId;
+  const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
+  for (const candidateKey of candidateKeys) {
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
   }
 
-  const entry = resolveStoredSessionEntry(params.commandParams, params.targetSessionKey);
-  const sessionId = normalizeOptionalString(entry?.sessionId);
-  if (!sessionId || !isEmbeddedPiRunActive(sessionId)) {
-    return undefined;
+  for (const candidateKey of candidateKeys) {
+    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
+    const sessionId = normalizeOptionalString(entry?.sessionId);
+    if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
+      return sessionId;
+    }
   }
-  return sessionId;
+
+  return undefined;
+}
+
+function formatSteerError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function continueWithSteerFallback(
+  params: HandleCommandsParams,
+  message: string,
+  logMessage: string,
+): CommandHandlerResult {
+  logVerbose(logMessage);
+  applyCommandTextToParams(params, message);
+  return { shouldContinue: true };
 }
 
 export const handleSteerCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -89,24 +127,47 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
 
   const targetSessionKey = resolveSteerTargetSessionKey(params);
   if (!targetSessionKey) {
-    return { shouldContinue: false, reply: { text: "⚠️ No current session to steer." } };
+    return continueWithSteerFallback(
+      params,
+      message,
+      "steer: no current session; continuing with /steer payload as a normal prompt",
+    );
   }
 
   const sessionId = resolveSteerSessionId({ commandParams: params, targetSessionKey });
   if (!sessionId) {
-    return { shouldContinue: false, reply: { text: "⚠️ No active run to steer in this session." } };
+    return continueWithSteerFallback(
+      params,
+      message,
+      `steer: no active run for ${targetSessionKey}; continuing with /steer payload as a normal prompt`,
+    );
   }
 
-  const steered = queueEmbeddedPiMessage(sessionId, message, {
+  const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
+    isInboundUserMessage: true,
     debounceMs: 0,
+    ...(params.opts?.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
+      : {}),
+    taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
+  }).catch((err: unknown): CommandHandlerResult => {
+    return continueWithSteerFallback(
+      params,
+      message,
+      `steer: active session ${sessionId} threw while steering: ${formatSteerError(err)}; continuing with /steer payload as a normal prompt`,
+    );
   });
-  if (!steered) {
-    logVerbose(`steer: active session ${sessionId} rejected steering injection`);
-    return {
-      shouldContinue: false,
-      reply: { text: "⚠️ Current run is active but not accepting steering right now." },
-    };
+  if ("shouldContinue" in queueOutcome) {
+    return queueOutcome;
+  }
+  if (!queueOutcome.queued) {
+    const summary = formatEmbeddedAgentQueueFailureSummary(queueOutcome);
+    return continueWithSteerFallback(
+      params,
+      message,
+      `steer: active session ${sessionId} rejected steering injection: ${summary}; continuing with /steer payload as a normal prompt`,
+    );
   }
 
   return { shouldContinue: false, reply: { text: "steered current session." } };

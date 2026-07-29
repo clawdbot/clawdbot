@@ -1,9 +1,10 @@
+// Telegram plugin module implements bot message context.route test support behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { vi, type Mock } from "vitest";
-import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type BuildTelegramMessageContextForTest =
@@ -17,9 +18,6 @@ const hoisted = vi.hoisted((): { recordInboundSessionMock: AsyncUnknownMock } =>
 }));
 
 export const recordInboundSessionMock: AsyncUnknownMock = hoisted.recordInboundSessionMock;
-const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
-  NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>["finalizeInboundContext"]
->;
 const recordInboundSessionForTest: NonNullable<
   NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>["recordInboundSession"]
 > = async (params) => {
@@ -29,7 +27,7 @@ const recordInboundSessionForTest: NonNullable<
 export const telegramRouteTestSessionRuntime: NonNullable<
   BuildTelegramMessageContextParams["sessionRuntime"]
 > = {
-  finalizeInboundContext: finalizeInboundContextForTest,
+  buildChannelInboundEventContext,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: recordInboundSessionForTest,
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>

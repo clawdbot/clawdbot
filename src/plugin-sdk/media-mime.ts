@@ -4,6 +4,7 @@ export {
   detectMime,
   extensionForMime,
   getFileExtension,
+  mimeTypeFromFilePath,
   normalizeMimeType,
-} from "../media/mime.js";
-export { mediaKindFromMime, type MediaKind } from "../media/constants.js";
+} from "@openclaw/media-core/mime";
+export { mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";

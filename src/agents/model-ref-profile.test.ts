@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for model ref auth-profile suffix parsing.
+ * Ensures model version and local quantization `@` suffixes are preserved.
+ */
 import { describe, expect, it } from "vitest";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 

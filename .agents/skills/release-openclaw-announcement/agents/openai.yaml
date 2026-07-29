@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Release Announcement"
+  short_description: "Draft Discord beta/stable release announcements from evidence."
+  default_prompt: "Use this skill to draft an OpenClaw beta or stable Discord announcement from changelog, release notes, npm/GitHub release proof, and validation evidence."

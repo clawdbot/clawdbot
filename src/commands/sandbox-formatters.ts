@@ -13,11 +13,3 @@ export function formatSimpleStatus(running: boolean): string {
 export function formatImageMatch(matches: boolean): string {
   return matches ? "✓" : "⚠️  mismatch";
 }
-
-export function countRunning(items: readonly { running: boolean }[]): number {
-  return items.filter((item) => item.running).length;
-}
-
-export function countMismatches(items: readonly { imageMatch: boolean }[]): number {
-  return items.filter((item) => !item.imageMatch).length;
-}

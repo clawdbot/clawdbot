@@ -1,3 +1,4 @@
+// Command bootstrap tests cover CLI command bootstrap sequencing and side effects.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -40,6 +41,25 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
       routeLogsToStderr: true,
+    });
+  });
+
+  it("forwards prepared pristine migration facts to the config guard", async () => {
+    const runtime = {} as never;
+
+    await ensureCliCommandBootstrap({
+      runtime,
+      commandPath: ["gateway"],
+      loadPlugins: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["gateway"],
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
   });
 

@@ -1,8 +1,18 @@
+// Venice tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 describe("venice provider plugin", () => {
+  it("registers provider-owned usage hooks", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider).toMatchObject({
+      resolveUsageAuth: expect.any(Function),
+      fetchUsageSnapshot: expect.any(Function),
+    });
+  });
+
   it("applies the shared xAI compat patch to Grok-backed Venice models only", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -16,20 +26,28 @@ describe("venice provider plugin", () => {
           },
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
+      id: "grok-4",
       compat: {
         supportsUsageInStreaming: true,
         toolSchemaProfile: "xai",
-        nativeWebSearchTool: true,
+        unsupportedToolSchemaKeywords: [
+          "minLength",
+          "maxLength",
+          "minItems",
+          "maxItems",
+          "minContains",
+          "maxContains",
+        ],
         toolCallArgumentsEncoding: "html-entities",
       },
     });
 
     expect(
       provider.normalizeResolvedModel?.({
-        modelId: "venice/llama-3.3-70b",
+        modelId: "venice/qwen3-coder-480b-a35b-instruct-turbo",
         model: {
-          id: "llama-3.3-70b",
+          id: "qwen3-coder-480b-a35b-instruct-turbo",
           compat: {},
         },
       } as never),

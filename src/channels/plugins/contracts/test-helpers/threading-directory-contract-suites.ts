@@ -1,24 +1,30 @@
+/**
+ * Threading and directory channel contract assertions.
+ *
+ * Verifies optional directory/threading hooks return normalized public shapes.
+ */
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
   ChannelDirectoryEntry,
-  ChannelFocusedBindingContext,
-  ChannelReplyTransport,
+  ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
 
-let contractRuntime: RuntimeEnv | undefined;
+type ChannelReplyTransport = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
+>;
+type ChannelFocusedBindingContext = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
+>;
 
-async function getDirectoryContractRuntime(): Promise<RuntimeEnv> {
-  if (contractRuntime) {
-    return contractRuntime;
-  }
-  const { createNonExitingRuntime } = await import("../../../../runtime.js");
-  contractRuntime = createNonExitingRuntime();
-  return contractRuntime;
-}
+const contractRuntime = new Proxy(Object.create(null), {
+  get(_target, property) {
+    throw new Error(`Directory contract unexpectedly accessed runtime.${String(property)}`);
+  },
+}) as RuntimeEnv;
 
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
@@ -82,12 +88,14 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(binding.labelNoun.trim()).not.toBe("");
 }
 
+/** Asserts that a plugin declares the threading adapter under test. */
 export function expectChannelThreadingBaseContract(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
   expect(plugin.threading).toBeDefined();
 }
 
+/** Exercises optional threading hooks and checks normalized return shapes. */
 export function expectChannelThreadingReturnValuesNormalized(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
@@ -173,6 +181,7 @@ export function expectChannelThreadingReturnValuesNormalized(
   }
 }
 
+/** Exercises directory lookups and checks normalized entry shapes when possible. */
 export async function expectChannelDirectoryBaseContract(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
@@ -181,15 +190,24 @@ export async function expectChannelDirectoryBaseContract(params: {
 }) {
   const directory = params.plugin.directory;
   expect(directory).toBeDefined();
+  const cfg =
+    params.cfg ??
+    ({
+      channels: {
+        [params.plugin.id]: { enabled: false },
+      },
+    } as unknown as OpenClawConfig);
+  const accountId = params.accountId ?? "default";
 
   if (params.coverage === "presence") {
+    // Presence-only channels advertise a directory surface but cannot perform
+    // deterministic offline lookup calls in shared contract fixtures.
     return;
   }
-  const runtime = await getDirectoryContractRuntime();
   const self = await directory?.self?.({
-    cfg: params.cfg ?? ({} as OpenClawConfig),
-    accountId: params.accountId ?? "default",
-    runtime,
+    cfg,
+    accountId,
+    runtime: contractRuntime,
   });
   if (self) {
     expectDirectoryEntryShape(self);
@@ -197,11 +215,11 @@ export async function expectChannelDirectoryBaseContract(params: {
 
   const peers =
     (await directory?.listPeers?.({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      accountId: params.accountId ?? "default",
+      cfg,
+      accountId,
       query: "",
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     })) ?? [];
   expect(Array.isArray(peers)).toBe(true);
   for (const peer of peers) {
@@ -210,11 +228,11 @@ export async function expectChannelDirectoryBaseContract(params: {
 
   const groups =
     (await directory?.listGroups?.({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      accountId: params.accountId ?? "default",
+      cfg,
+      accountId,
       query: "",
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     })) ?? [];
   expect(Array.isArray(groups)).toBe(true);
   for (const group of groups) {
@@ -223,11 +241,11 @@ export async function expectChannelDirectoryBaseContract(params: {
 
   if (directory?.listGroupMembers && groups[0]?.id) {
     const members = await directory.listGroupMembers({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      accountId: params.accountId ?? "default",
+      cfg,
+      accountId,
       groupId: groups[0].id,
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     });
     expect(Array.isArray(members)).toBe(true);
     for (const member of members) {

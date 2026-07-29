@@ -1,7 +1,8 @@
+// Mistral tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
@@ -11,7 +12,7 @@ describe("mistralMediaUnderstandingProvider", () => {
   it("has expected provider metadata", () => {
     expect(mistralMediaUnderstandingProvider.id).toBe("mistral");
     expect(mistralMediaUnderstandingProvider.capabilities).toEqual(["audio"]);
-    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeDefined();
+    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
   });
 
   it("uses Mistral base URL by default", async () => {

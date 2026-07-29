@@ -1,5 +1,7 @@
+// Configured hook helpers combine config and install records into active hooks.
 import type { HookConfig, HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 
 function hasEnabledFlag(entry: HookConfig | undefined): boolean {
@@ -17,9 +19,18 @@ function hasConfiguredInstalls(installs: Record<string, HookInstallRecord> | und
   return installs ? Object.keys(installs).length > 0 : false;
 }
 
+function readConfiguredInstalls(): Record<string, HookInstallRecord> | undefined {
+  return readConfigMachineState<Record<string, HookInstallRecord>>("hooks.internal.installs");
+}
+
+/** Return whether config can load any internal hooks, including legacy handlers. */
 export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   const internal = config.hooks?.internal;
-  if (!internal || internal.enabled === false) {
+  const installs = readConfiguredInstalls();
+  if (!internal) {
+    return hasConfiguredInstalls(installs);
+  }
+  if (internal.enabled === false) {
     return false;
   }
   if (internal.enabled === true) {
@@ -31,15 +42,20 @@ export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   if ((internal.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {
     return true;
   }
-  if (hasConfiguredInstalls(internal.installs)) {
+  if (hasConfiguredInstalls(installs)) {
     return true;
   }
   return getLegacyInternalHookHandlers(config).length > 0;
 }
 
+/** Resolve explicitly configured internal hook names; null means all/discovered hooks may load. */
 export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<string> | null {
   const internal = config.hooks?.internal;
-  if (!internal || internal.enabled === false) {
+  const installs = readConfiguredInstalls();
+  if (!internal) {
+    return hasConfiguredInstalls(installs) ? null : new Set();
+  }
+  if (internal.enabled === false) {
     return new Set();
   }
   if (internal.enabled === true) {
@@ -53,9 +69,11 @@ export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<
       names.add(trimmed);
     }
   }
-  for (const [installId, install] of Object.entries(internal.installs ?? {})) {
+  for (const [installId, install] of Object.entries(installs ?? {})) {
     const hookNames = install.hooks ?? [];
     if (hookNames.length === 0 && installId.trim()) {
+      // An install without an explicit hook list can add hooks dynamically, so
+      // callers must treat the allowlist as open-ended.
       return null;
     }
     for (const hookName of hookNames) {

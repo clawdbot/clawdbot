@@ -1,3 +1,4 @@
+// Smoke-tests the built plugin loader singleton and bundled plugin runtime overlay.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -77,8 +78,7 @@ fs.writeFileSync(
 fs.writeFileSync(
   path.join(distPluginDir, "index.js"),
   [
-    "import sdk from 'openclaw/plugin-sdk';",
-    "const { emptyPluginConfigSchema } = sdk;",
+    "import { emptyPluginConfigSchema } from 'openclaw/plugin-sdk/plugin-entry';",
     "",
     "export default {",
     `  id: ${JSON.stringify(pluginId)},`,

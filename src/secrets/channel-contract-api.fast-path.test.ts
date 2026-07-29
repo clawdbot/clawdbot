@@ -1,29 +1,22 @@
+/** Tests fast-path secret collection for channel contract API credentials. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
-  loadPluginManifestRegistryMock: vi.fn(() => {
-    throw new Error("manifest registry should stay off the explicit bundled channel fast path");
-  }),
+const { loadPluginMetadataSnapshotMock } = vi.hoisted(() => ({
+  loadPluginMetadataSnapshotMock: vi.fn((_params: unknown) => ({ plugins: [] })),
 }));
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-      if (dirName === "bluebubbles" && artifactBasename === "secret-contract-api.js") {
+      if (dirName === "discord" && artifactBasename === "secret-contract-api.js") {
         return {
           collectRuntimeConfigAssignments: () => undefined,
           secretTargetRegistryEntries: [
             {
-              id: "channels.bluebubbles.accounts.*.password",
+              id: "channels.discord.accounts.*.token",
               type: "channel",
-              path: "channels.bluebubbles.accounts.*.password",
+              path: "channels.discord.accounts.*.token",
             },
           ],
-        };
-      }
-      if (dirName === "whatsapp" && artifactBasename === "security-contract-api.js") {
-        return {
-          unsupportedSecretRefSurfacePatterns: ["channels.whatsapp.creds.json"],
-          collectUnsupportedSecretRefConfigCandidates: () => [],
         };
       }
       throw new Error(
@@ -33,53 +26,49 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
 }));
 
-import {
-  loadBundledChannelSecretContractApi,
-  loadBundledChannelSecurityContractApi,
-} from "./channel-contract-api.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
 describe("channel contract api explicit fast path", () => {
   beforeEach(() => {
-    loadPluginManifestRegistryMock.mockClear();
+    loadPluginMetadataSnapshotMock.mockClear();
   });
 
   it("resolves bundled channel secret contracts by explicit channel id without manifest scans", () => {
-    const api = loadBundledChannelSecretContractApi("bluebubbles");
+    const api = loadChannelSecretContractApi({ channelId: "discord", config: {} });
 
     expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "bluebubbles",
+      dirName: "discord",
       artifactBasename: "secret-contract-api.js",
     });
-    expect(api?.secretTargetRegistryEntries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "channels.bluebubbles.accounts.*.password",
-        }),
-      ]),
+    const tokenEntry = api?.secretTargetRegistryEntries?.find(
+      (entry) => entry.id === "channels.discord.accounts.*.token",
     );
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expect(tokenEntry?.id).toBe("channels.discord.accounts.*.token");
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it("resolves bundled channel security contracts by explicit channel id without manifest scans", () => {
-    const api = loadBundledChannelSecurityContractApi("whatsapp");
+  it("does not fall back to the broad contract-api artifact when the secret artifact is missing", () => {
+    const api = loadChannelSecretContractApi({ channelId: "missing", config: {} });
 
-    expect(api?.unsupportedSecretRefSurfacePatterns).toEqual(
-      expect.arrayContaining(["channels.whatsapp.creds.json"]),
-    );
-    expect(api?.collectUnsupportedSecretRefConfigCandidates).toBeTypeOf("function");
+    expect(api).toBeUndefined();
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "whatsapp",
-      artifactBasename: "security-contract-api.js",
+      dirName: "missing",
+      artifactBasename: "secret-contract-api.js",
     });
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "contract-api.js",
+    });
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(loadPluginMetadataSnapshotMock.mock.calls[0]?.[0]).not.toHaveProperty("workspaceDir");
   });
 });

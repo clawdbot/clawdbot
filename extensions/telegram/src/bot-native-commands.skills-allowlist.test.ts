@@ -1,7 +1,8 @@
+// Telegram tests cover bot native commands.skills allowlist plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -60,8 +61,8 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
       ],
     };
     listSkillCommandsForAgents.mockImplementation(
-      ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
-        listActualSkillCommandsForAgents({ cfg, agentIds }),
+      ({ cfg: cfgLocal, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
+        listActualSkillCommandsForAgents({ cfg: cfgLocal, agentIds }),
     );
 
     registerTelegramNativeCommands({
@@ -82,7 +83,7 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
-    expect(registeredCommands.some((entry) => entry.command === "alpha_skill")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "beta_skill")).toBe(false);
+    expect(registeredCommands.map((entry) => entry.command)).toContain("alpha_skill");
+    expect(registeredCommands.map((entry) => entry.command)).not.toContain("beta_skill");
   });
 });

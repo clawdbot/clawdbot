@@ -1,6 +1,9 @@
 // Shared param-validation helpers used by all four agent tools.
 // Goal: identical validation behavior + identical error shapes everywhere.
 
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+
 type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -15,9 +18,7 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
   if (typeof params.gatewayToken === "string" && params.gatewayToken.trim()) {
     opts.gatewayToken = params.gatewayToken.trim();
   }
-  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
-    opts.timeoutMs = params.timeoutMs;
-  }
+  opts.timeoutMs = readPositiveIntegerParam(params, "timeoutMs");
   return opts;
 }
 
@@ -45,18 +46,15 @@ export function readClampedInt(params: {
   hardMin: number;
   hardMax: number;
 }): number {
-  const value = params.input[params.key];
-  const requested =
-    typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : params.defaultValue;
+  const requested = readPositiveIntegerParam(params.input, params.key) ?? params.defaultValue;
   return Math.max(params.hardMin, Math.min(requested, params.hardMax));
 }
 
 export function humanSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: " ",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "kilo" ? 1 : 2),
+  });
 }

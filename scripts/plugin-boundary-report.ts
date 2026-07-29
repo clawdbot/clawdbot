@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -8,7 +9,7 @@ import {
   reservedBundledPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../src/plugin-sdk/entrypoints.ts";
-import { PLUGIN_COMPAT_RECORDS } from "../src/plugins/compat/registry.ts";
+import { listPluginCompatRecords } from "../src/plugins/compat/registry.ts";
 import type { PluginCompatRecord } from "../src/plugins/compat/types.ts";
 
 const REPO_ROOT = process.cwd();
@@ -49,6 +50,21 @@ type CompatDebtRecord = {
   eligibleForRemoval: boolean;
 };
 
+type RemovalPendingDebtRecord = {
+  code: string;
+  owner: string;
+  status: "removal-pending";
+  removeAfter?: string;
+  blocker: string;
+  readerFiles: string[];
+  dueForReview: boolean;
+};
+
+type RemovalPendingDebtSummary = Omit<RemovalPendingDebtRecord, "readerFiles"> & {
+  readerCount: number;
+  readerSample: string[];
+};
+
 type WorkspaceTextFile = {
   file: string;
   relativeFile: string;
@@ -70,6 +86,9 @@ type BoundaryReport = {
     deprecatedCount: number;
     eligibleForRemovalCount: number;
     records: CompatDebtRecord[];
+    removalPendingCount: number;
+    removalPendingDueCount: number;
+    removalPending: RemovalPendingDebtRecord[];
   };
   pluginSdk: {
     entrypointCount: number;
@@ -96,6 +115,9 @@ type BoundaryReportSummary = {
     eligibleForRemovalCount: number;
     deprecatedByOwner: Record<string, number>;
     eligibleForRemoval: Array<Pick<CompatDebtRecord, "code" | "owner" | "removeAfter">>;
+    removalPendingCount: number;
+    removalPendingDueCount: number;
+    removalPending: RemovalPendingDebtSummary[];
   };
   pluginSdk: {
     entrypointCount: number;
@@ -148,10 +170,68 @@ function collectTextFiles(dir: string): string[] {
   return files;
 }
 
+function isExistingTextFile(file: string): boolean {
+  try {
+    return lstatSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function collectWorkspaceTextFiles(): string[] {
-  return SOURCE_ROOTS.flatMap((root) => collectTextFiles(resolve(REPO_ROOT, root))).toSorted(
-    (left, right) => relative(REPO_ROOT, left).localeCompare(relative(REPO_ROOT, right)),
+  const gitFiles = collectWorkspaceTextFilesFromGit();
+  return (
+    gitFiles ?? SOURCE_ROOTS.flatMap((root) => collectTextFiles(resolve(REPO_ROOT, root)))
+  ).toSorted((left, right) => relative(REPO_ROOT, left).localeCompare(relative(REPO_ROOT, right)));
+}
+
+function collectWorkspaceTextFilesFromGit(): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "--", ...SOURCE_ROOTS],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
   );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && TEXT_FILE_PATTERN.test(line))
+    .filter((line) => !line.split("/").some((part) => SKIPPED_DIRS.has(part)))
+    .map((line) => resolve(REPO_ROOT, line))
+    .filter(isExistingTextFile);
+}
+
+function collectWorkspaceTextFilesMatchingGit(pattern: string): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["grep", "--untracked", "-l", "-E", pattern, "--", ...SOURCE_ROOTS],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && TEXT_FILE_PATTERN.test(line))
+    .filter((line) => !line.split("/").some((part) => SKIPPED_DIRS.has(part)))
+    .map((line) => resolve(REPO_ROOT, line))
+    .filter(isExistingTextFile);
 }
 
 function repoRelative(file: string): string {
@@ -164,6 +244,26 @@ function collectWorkspaceTextFileSources(): WorkspaceTextFile[] {
     relativeFile: repoRelative(file),
     source: readFileSync(file, "utf8"),
   }));
+}
+
+function collectSummaryWorkspaceTextFileSources(): WorkspaceTextFile[] {
+  const pluginSdkFiles = collectWorkspaceTextFilesMatchingGit(
+    String.raw`openclaw/plugin-sdk/[a-z0-9][a-z0-9-]*`,
+  );
+  if (!pluginSdkFiles) {
+    return collectWorkspaceTextFileSources();
+  }
+  const files = new Set(pluginSdkFiles);
+  for (const file of collectTextFiles(resolve(REPO_ROOT, "packages/memory-host-sdk/src"))) {
+    files.add(file);
+  }
+  return [...files]
+    .toSorted((left, right) => repoRelative(left).localeCompare(repoRelative(right)))
+    .map((file) => ({
+      file,
+      relativeFile: repoRelative(file),
+      source: readFileSync(file, "utf8"),
+    }));
 }
 
 function isDocsFile(file: string): boolean {
@@ -238,10 +338,12 @@ function resolveConsumerOwner(file: string): string | undefined {
   return /^extensions\/([^/]+)\//u.exec(file)?.[1];
 }
 
-function extractCompatTokens(record: PluginCompatRecord): string[] {
+function extractCompatTokensFromValues(values: readonly (string | undefined)[]): string[] {
   const tokens = new Set<string>();
-  const values = [record.code, record.replacement, ...record.surfaces, ...record.diagnostics];
   for (const value of values) {
+    if (value === undefined) {
+      continue;
+    }
     for (const match of value.matchAll(/`([^`]+)`/g)) {
       const token = match[1]?.trim();
       if (token && !token.includes(" ")) {
@@ -262,6 +364,19 @@ function extractCompatTokens(record: PluginCompatRecord): string[] {
     }
   }
   return [...tokens].toSorted();
+}
+
+function extractCompatTokens(record: PluginCompatRecord): string[] {
+  return extractCompatTokensFromValues([
+    record.code,
+    record.replacement,
+    ...record.surfaces,
+    ...record.diagnostics,
+  ]);
+}
+
+function extractCompatSurfaceTokens(record: PluginCompatRecord): string[] {
+  return extractCompatTokensFromValues(record.surfaces);
 }
 
 function collectReferenceFiles(files: readonly WorkspaceTextFile[], tokens: readonly string[]) {
@@ -291,7 +406,8 @@ function collectCompatDebt(
   today = new Date(),
   options: { includeReferenceFiles?: boolean } = {},
 ): CompatDebtRecord[] {
-  return PLUGIN_COMPAT_RECORDS.filter((record) => record.status === "deprecated")
+  return listPluginCompatRecords()
+    .filter((record) => record.status === "deprecated")
     .map((record) => {
       const tokens = extractCompatTokens(record);
       const references =
@@ -306,13 +422,41 @@ function collectCompatDebt(
         owner: record.owner,
         status: record.status,
         removeAfter: record.removeAfter,
-        replacement: record.replacement,
+        replacement: record.replacement as string,
         docsPath: record.docsPath,
         surfaces: record.surfaces,
         tokens,
         codeReferenceFiles: references.codeReferenceFiles,
         docReferenceFiles: references.docReferenceFiles,
         eligibleForRemoval,
+      };
+    })
+    .toSorted(
+      (left, right) =>
+        (left.removeAfter ?? "").localeCompare(right.removeAfter ?? "") ||
+        left.owner.localeCompare(right.owner) ||
+        left.code.localeCompare(right.code),
+    );
+}
+
+function collectRemovalPendingDebt(
+  files: readonly WorkspaceTextFile[],
+  today = new Date(),
+): RemovalPendingDebtRecord[] {
+  return listPluginCompatRecords()
+    .filter((record) => record.status === "removal-pending")
+    .map((record) => {
+      const references = collectReferenceFiles(files, extractCompatSurfaceTokens(record));
+      return {
+        code: record.code,
+        owner: record.owner,
+        status: "removal-pending" as const,
+        removeAfter: record.removeAfter,
+        blocker: record.replacement ?? "no removal blocker documented",
+        readerFiles: references.codeReferenceFiles,
+        dueForReview: record.removeAfter
+          ? new Date(`${record.removeAfter}T00:00:00Z`) <= today
+          : false,
       };
     })
     .toSorted(
@@ -421,6 +565,13 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
       eligibleForRemovalCount: report.compat.eligibleForRemovalCount,
       deprecatedByOwner: countByOwner(report.compat.records),
       eligibleForRemoval,
+      removalPendingCount: report.compat.removalPendingCount,
+      removalPendingDueCount: report.compat.removalPendingDueCount,
+      removalPending: report.compat.removalPending.map(({ readerFiles, ...record }) => ({
+        ...record,
+        readerCount: readerFiles.length,
+        readerSample: readerFiles.slice(0, 5),
+      })),
     },
     pluginSdk: {
       entrypointCount: report.pluginSdk.entrypointCount,
@@ -443,18 +594,23 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
   };
 }
 
-function buildReport(options: Pick<CliOptions, "owner" | "summary"> = {}): BoundaryReport {
-  const files = collectWorkspaceTextFileSources();
+function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {}): BoundaryReport {
+  const files = options.summary
+    ? collectSummaryWorkspaceTextFileSources()
+    : collectWorkspaceTextFileSources();
   const pluginIds = collectBundledPluginIds();
   const compatRecords = collectCompatDebt(files, new Date(), {
     includeReferenceFiles: !options.summary,
   }).filter((record) => matchesOwner(options.owner, record.owner));
+  const removalPending = collectRemovalPendingDebt(files).filter((record) =>
+    matchesOwner(options.owner, record.owner),
+  );
   const reservedImports = collectReservedSdkImports(files).filter(
     (entry) =>
       matchesOwner(options.owner, entry.owner) || matchesOwner(options.owner, entry.consumerOwner),
   );
   const usedReserved = new Set(reservedImports.map((entry) => entry.subpath));
-  const unusedReservedSubpaths = reservedBundledPluginSdkEntrypoints
+  const unusedReservedSubpaths = (reservedBundledPluginSdkEntrypoints as readonly string[])
     .filter(
       (subpath) =>
         !usedReserved.has(subpath) &&
@@ -467,6 +623,9 @@ function buildReport(options: Pick<CliOptions, "owner" | "summary"> = {}): Bound
       deprecatedCount: compatRecords.length,
       eligibleForRemovalCount: compatRecords.filter((record) => record.eligibleForRemoval).length,
       records: compatRecords,
+      removalPendingCount: removalPending.length,
+      removalPendingDueCount: removalPending.filter((record) => record.dueForReview).length,
+      removalPending,
     },
     pluginSdk: {
       entrypointCount: pluginSdkEntrypoints.length,
@@ -488,8 +647,13 @@ function renderSummaryText(summary: BoundaryReportSummary): string {
   lines.push(`Plugin Boundary Report${summary.owner ? ` (${summary.owner})` : ""}`);
   lines.push("");
   lines.push(
-    `compat deprecated=${summary.compat.deprecatedCount} eligibleForRemoval=${summary.compat.eligibleForRemovalCount}`,
+    `compat deprecated=${summary.compat.deprecatedCount} eligibleForRemoval=${summary.compat.eligibleForRemovalCount} removalPending=${summary.compat.removalPendingCount} removalPendingDue=${summary.compat.removalPendingDueCount}`,
   );
+  for (const record of summary.compat.removalPending) {
+    lines.push(
+      `  removal-pending ${record.removeAfter ?? "no-date"} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerCount} readers=${record.readerSample.join(",") || "none"}`,
+    );
+  }
   lines.push(
     `plugin-sdk entrypoints=${summary.pluginSdk.entrypointCount} reserved=${summary.pluginSdk.reservedCount}`,
   );
@@ -513,12 +677,20 @@ function renderText(report: BoundaryReport, owner?: string): string {
   lines.push(`Plugin Boundary Report${owner ? ` (${owner})` : ""}`);
   lines.push("");
   lines.push(
-    `compat deprecated=${report.compat.deprecatedCount} eligibleForRemoval=${report.compat.eligibleForRemovalCount}`,
+    `compat deprecated=${report.compat.deprecatedCount} eligibleForRemoval=${report.compat.eligibleForRemovalCount} removalPending=${report.compat.removalPendingCount} removalPendingDue=${report.compat.removalPendingDueCount}`,
   );
   for (const record of report.compat.records) {
     lines.push(
       `  ${record.removeAfter ?? "no-date"} ${record.code} owner=${record.owner} codeRefs=${record.codeReferenceFiles.length} docRefs=${record.docReferenceFiles.length}`,
     );
+  }
+  for (const record of report.compat.removalPending) {
+    lines.push(
+      `  removal-pending ${record.removeAfter ?? "no-date"} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerFiles.length}`,
+    );
+    for (const reader of record.readerFiles) {
+      lines.push(`    reader ${reader}`);
+    }
   }
   lines.push("");
   lines.push(

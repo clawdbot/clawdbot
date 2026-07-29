@@ -1,0 +1,294 @@
+// Canvas tests cover cli plugin behavior.
+import { Command } from "commander";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDefaultCanvasCliDependencies,
+  registerNodesCanvasCommands,
+  type CanvasCliDependencies,
+} from "./cli.js";
+
+function createCanvasCliDeps() {
+  const writtenFiles: Array<{ filePath: string; base64: string }> = [];
+  const runtime = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }),
+    writeJson: vi.fn(),
+  };
+  const deps: CanvasCliDependencies = {
+    defaultRuntime: runtime,
+    nodesCallOpts: (cmd) =>
+      cmd
+        .option("--url <url>", "Gateway WebSocket URL")
+        .option("--token <token>", "Gateway token")
+        .option("--timeout <ms>", "Timeout in ms", "10000")
+        .option("--json", "Output JSON", false),
+    runNodesCommand: async (_label, action) => {
+      await action();
+    },
+    getNodesTheme: () => ({ ok: (value) => value }),
+    parseTimeoutMs: (raw) => (typeof raw === "string" ? Number.parseInt(raw, 10) : undefined),
+    resolveNodeId: async (opts) => opts.node ?? "ios-node",
+    buildNodeInvokeParams: ({ nodeId, command, params, timeoutMs }) => ({
+      nodeId,
+      command,
+      params,
+      ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    }),
+    callGatewayCli: vi.fn(async () => ({
+      payload: {
+        format: "png",
+        base64: "aGk=",
+      },
+    })),
+    writeBase64ToFile: async (filePath, base64) => {
+      writtenFiles.push({ filePath, base64 });
+    },
+    shortenHomePath: (filePath) => filePath,
+  };
+  return { deps, runtime, writtenFiles };
+}
+
+function createCanvasCliDepsWithDefaultParsers() {
+  const baseDeps = createDefaultCanvasCliDependencies();
+  const harness = createCanvasCliDeps();
+  return {
+    ...harness,
+    deps: {
+      ...baseDeps,
+      defaultRuntime: harness.runtime,
+      nodesCallOpts: harness.deps.nodesCallOpts,
+      runNodesCommand: harness.deps.runNodesCommand,
+      getNodesTheme: harness.deps.getNodesTheme,
+      resolveNodeId: harness.deps.resolveNodeId,
+      buildNodeInvokeParams: harness.deps.buildNodeInvokeParams,
+      callGatewayCli: harness.deps.callGatewayCli,
+      writeBase64ToFile: harness.deps.writeBase64ToFile,
+      shortenHomePath: harness.deps.shortenHomePath,
+    },
+  };
+}
+
+describe("canvas CLI", () => {
+  it("registers under nodes and captures a snapshot media path", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime, writtenFiles } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+    await program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(deps.callGatewayCli).toHaveBeenCalledTimes(1);
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      {
+        node: "ios-node",
+        format: "jpg",
+        timeout: "10000",
+        json: false,
+        invokeTimeout: "20000",
+      },
+      {
+        nodeId: "ios-node",
+        command: "canvas.snapshot",
+        params: {
+          format: "jpeg",
+          maxWidth: undefined,
+          quality: undefined,
+        },
+        timeoutMs: 20000,
+      },
+    );
+    expect(writtenFiles).toHaveLength(1);
+    const [writtenFile] = writtenFiles;
+    if (!writtenFile) {
+      throw new Error("Expected canvas snapshot file");
+    }
+    expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
+    expect(writtenFile.base64).toBe("aGk=");
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const savedPath = runtime.log.mock.calls[0]?.[0];
+    expect(savedPath?.startsWith("MEDIA:")).toBe(false);
+    expect(savedPath?.endsWith(".png")).toBe(true);
+  });
+
+  it("rejects node-controlled snapshot formats before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "/../../target.sh",
+        base64: "aGk=",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
+  });
+
+  it("rejects malformed node-controlled snapshot base64 before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "png",
+        base64: "Zh==",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
+  });
+
+  it("rejects unsupported snapshot formats before invoking the node", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "gif"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid format: gif/i);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    expect(writtenFiles).toHaveLength(0);
+  });
+
+  it("prints an empty canvas eval result instead of a success placeholder", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({ payload: { result: "" } });
+
+    registerNodesCanvasCommands(nodes, deps);
+    await program.parseAsync(["nodes", "canvas", "eval", `""`, "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("");
+    expect(runtime.log).not.toHaveBeenCalledWith("canvas eval ok");
+  });
+
+  it.each([
+    ["--max-width", "640px", "--max-width must be a positive integer."],
+    ["--quality", "0.8x", "--quality must be a number."],
+    ["--quality", "-0.1", "--quality must be between 0 and 1."],
+    ["--quality", "5", "--quality must be between 0 and 1."],
+  ])("rejects partial numeric snapshot %s values", async (flag, value, message) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", flag, value], {
+        from: "user",
+      }),
+    ).rejects.toThrow(message);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "1"])("accepts snapshot --quality boundary value %s", async (quality) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await program.parseAsync(
+      ["nodes", "canvas", "snapshot", "--node", "ios-node", "--quality", quality],
+      {
+        from: "user",
+      },
+    );
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({
+        params: expect.objectContaining({
+          quality: Number(quality),
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["snapshot"],
+    ["present"],
+    ["hide"],
+    ["navigate", "https://example.com"],
+    ["eval", "1 + 1"],
+    ["a2ui", "push", "--text", "hello"],
+    ["a2ui", "reset"],
+  ])("rejects invalid %s invoke timeouts before invoking the node", async (...args) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDepsWithDefaultParsers();
+    deps.resolveNodeId = vi.fn(async () => {
+      throw new Error("resolveNodeId should not be called");
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(
+        ["nodes", "canvas", ...args, "--node", "ios-node", "--invoke-timeout", "20ms"],
+        {
+          from: "user",
+        },
+      ),
+    ).rejects.toThrow("--invoke-timeout must be a positive integer.");
+    expect(deps.resolveNodeId).not.toHaveBeenCalled();
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--x", "1x"],
+    ["--y", "2px"],
+    ["--width", "800wide"],
+    ["--height", "600tall"],
+  ])("rejects partial numeric present %s values", async (flag, value) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "present", "--node", "ios-node", flag, value], {
+        from: "user",
+      }),
+    ).rejects.toThrow(`${flag} must be a number.`);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+});

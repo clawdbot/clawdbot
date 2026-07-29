@@ -1,3 +1,4 @@
+// Matrix tests cover targets plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { EventType } from "./types.js";
@@ -53,8 +54,8 @@ describe("resolveMatrixRoomId", () => {
     const roomId = await resolveMatrixRoomId(client, userId);
 
     expect(roomId).toBe("!room:example.org");
-    expect(client.getJoinedRooms).not.toHaveBeenCalled();
-    expect(client.setAccountData).not.toHaveBeenCalled();
+    expect(client["getJoinedRooms"]).toHaveBeenCalledTimes(1);
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
   it("falls back to joined rooms and persists m.direct", async () => {
@@ -65,10 +66,7 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe(roomId);
-    expect(client.setAccountData).toHaveBeenCalledWith(
-      EventType.Direct,
-      expect.objectContaining({ [userId]: [roomId] }),
-    );
+    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
   });
 
   it("prefers joined rooms marked direct in local member state over plain strict rooms", async () => {
@@ -90,10 +88,9 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!explicit:example.org");
-    expect(client.setAccountData).toHaveBeenCalledWith(
-      EventType.Direct,
-      expect.objectContaining({ [userId]: ["!explicit:example.org"] }),
-    );
+    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, {
+      [userId]: ["!explicit:example.org"],
+    });
   });
 
   it("ignores remote member-state direct flags when resolving a direct room", async () => {
@@ -115,10 +112,9 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!fallback:example.org");
-    expect(client.setAccountData).toHaveBeenCalledWith(
-      EventType.Direct,
-      expect.objectContaining({ [userId]: ["!fallback:example.org"] }),
-    );
+    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, {
+      [userId]: ["!fallback:example.org"],
+    });
   });
 
   it("continues when a room member lookup fails", async () => {
@@ -155,7 +151,7 @@ describe("resolveMatrixRoomId", () => {
     await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
       `No direct room found for ${userId} (m.direct missing)`,
     );
-    expect(client.setAccountData).not.toHaveBeenCalled();
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
   it("accepts nested Matrix user target prefixes", async () => {
@@ -172,7 +168,7 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, `matrix:user:${userId}`);
 
     expect(resolved).toBe(roomId);
-    expect(client.resolveRoom).not.toHaveBeenCalled();
+    expect(client["resolveRoom"]).not.toHaveBeenCalled();
   });
 
   it("scopes direct-room cache per Matrix client", async () => {
@@ -201,8 +197,8 @@ describe("resolveMatrixRoomId", () => {
     await expect(resolveMatrixRoomId(clientA, userId)).resolves.toBe("!room-a:example.org");
     await expect(resolveMatrixRoomId(clientB, userId)).resolves.toBe("!room-b:example.org");
 
-    expect(clientA.getAccountData).toHaveBeenCalledTimes(1);
-    expect(clientB.getAccountData).toHaveBeenCalledTimes(1);
+    expect(clientA["getAccountData"]).toHaveBeenCalledTimes(1);
+    expect(clientB["getAccountData"]).toHaveBeenCalledTimes(1);
   });
 
   it("ignores m.direct entries that point at shared rooms", async () => {

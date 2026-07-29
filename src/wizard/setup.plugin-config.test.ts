@@ -1,3 +1,4 @@
+// Setup plugin config tests cover plugin choices and generated config.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
@@ -43,6 +44,14 @@ function makeManifestPlugin(
   };
 }
 
+function requireFirst<T>(values: T[], label: string): T {
+  const value = values[0];
+  if (value === undefined) {
+    throw new Error(`expected first ${label}`);
+  }
+  return value;
+}
+
 describe("discoverConfigurablePlugins", () => {
   it("returns plugins with non-advanced uiHints", () => {
     const plugins = [
@@ -54,11 +63,11 @@ describe("discoverConfigurablePlugins", () => {
     ];
     const result = discoverConfigurablePlugins({ manifestPlugins: plugins });
     expect(result).toHaveLength(1);
-    expect(result[0]).toBeDefined();
-    expect(result[0].id).toBe("openshell");
-    expect(Object.keys(result[0].uiHints)).toEqual(["mode", "gateway"]);
+    const plugin = requireFirst(result, "configurable plugin");
+    expect(plugin.id).toBe("openshell");
+    expect(Object.keys(plugin.uiHints)).toEqual(["mode", "gateway"]);
     // Advanced field excluded
-    expect(result[0].uiHints.gpu).toBeUndefined();
+    expect(plugin.uiHints.gpu).toBeUndefined();
   });
 
   it("excludes plugins with no uiHints", () => {
@@ -78,8 +87,10 @@ describe("discoverConfigurablePlugins", () => {
     expect(result).toHaveLength(1);
     // sensitive fields are still included in uiHints for discovery —
     // they are skipped at prompt time, not at discovery time
-    expect(result[0].uiHints.endpoint).toBeDefined();
-    expect(result[0].uiHints.apiKey).toBeDefined();
+    const plugin = requireFirst(result, "configurable plugin");
+    expect(plugin.uiHints.endpoint?.label).toBe("Endpoint");
+    expect(plugin.uiHints.apiKey?.label).toBe("API Key");
+    expect(plugin.uiHints.apiKey?.sensitive).toBe(true);
   });
 
   it("excludes plugins where all fields are advanced", () => {
@@ -126,8 +137,7 @@ describe("discoverUnconfiguredPlugins", () => {
     });
     // gateway is unconfigured
     expect(result).toHaveLength(1);
-    expect(result[0]).toBeDefined();
-    expect(result[0].id).toBe("openshell");
+    expect(requireFirst(result, "unconfigured plugin").id).toBe("openshell");
   });
 
   it("excludes plugins where all fields are configured", () => {
@@ -347,19 +357,72 @@ describe("setupPluginConfig", () => {
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
   });
 
-  it("coerces integer schema fields from text input", async () => {
+  it("rejects prototype-polluting dotted uiHint paths without mutating config", async () => {
+    const pollutionProbe = "openclawPluginPollutionProbe";
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("unsafe-plugin", {
+            [`safe.__proto__.${pollutionProbe}`]: { label: "Unsafe field" },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+    const config: OpenClawConfig = {
+      plugins: { entries: { "unsafe-plugin": { enabled: true } } },
+    };
+
+    await expect(
+      setupPluginConfig({
+        config,
+        prompter: {
+          intro: vi.fn(async () => {}),
+          outro: vi.fn(async () => {}),
+          note: vi.fn(async () => {}),
+          select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+          multiselect: vi.fn(async () => [
+            "unsafe-plugin",
+          ]) as unknown as WizardPrompter["multiselect"],
+          text: vi.fn(async () => "owned") as unknown as WizardPrompter["text"],
+          confirm: vi.fn(async () => true),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        },
+      }),
+    ).rejects.toThrow(/prototype-polluting/);
+    expect(config.plugins?.entries?.["unsafe-plugin"]?.config).toBeUndefined();
+    expect(({} as Record<string, unknown>)[pollutionProbe]).toBeUndefined();
+  });
+
+  it("coerces only JSON-compatible numeric inputs", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         makeManifestPlugin(
-          "retry-plugin",
+          "numeric-plugin",
           {
+            decimal: { label: "Decimal" },
+            scientific: { label: "Scientific" },
             retries: { label: "Retries" },
+            hexadecimal: { label: "Hexadecimal" },
+            fractionalRetries: { label: "Fractional retries" },
           },
           {
             type: "object",
             additionalProperties: false,
             properties: {
+              decimal: {
+                type: "number",
+              },
+              scientific: {
+                type: "number",
+              },
               retries: {
+                type: "integer",
+              },
+              hexadecimal: {
+                type: "number",
+              },
+              fractionalRetries: {
                 type: "integer",
               },
             },
@@ -368,11 +431,13 @@ describe("setupPluginConfig", () => {
       ],
     });
 
+    const answers = ["1.5", "1e2", "3", "0x10", "1.5"];
+
     const result = await setupPluginConfig({
       config: {
         plugins: {
           entries: {
-            "retry-plugin": {
+            "numeric-plugin": {
               enabled: true,
             },
           },
@@ -384,15 +449,17 @@ describe("setupPluginConfig", () => {
         note: vi.fn(async () => {}),
         select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => [
-          "retry-plugin",
+          "numeric-plugin",
         ]) as unknown as WizardPrompter["multiselect"],
-        text: vi.fn(async () => "3") as unknown as WizardPrompter["text"],
+        text: vi.fn(async () => answers.shift() ?? "") as unknown as WizardPrompter["text"],
         confirm: vi.fn(async () => true),
         progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
       },
     });
 
-    expect(result.plugins?.entries?.["retry-plugin"]?.config).toEqual({
+    expect(result.plugins?.entries?.["numeric-plugin"]?.config).toEqual({
+      decimal: 1.5,
+      scientific: 100,
       retries: 3,
     });
   });

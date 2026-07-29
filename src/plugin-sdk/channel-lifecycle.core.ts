@@ -1,3 +1,4 @@
+// Channel lifecycle core contracts define account lifecycle snapshots and sync hooks.
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -13,18 +14,27 @@ type PassiveAccountLifecycleParams<Handle> = {
   onStop?: () => void | Promise<void>;
 };
 
+/** Runtime context passed to queued channel work. */
 export type ChannelRunQueueTaskContext = {
+  /** Signal tied to the channel/account lifecycle that owns the queued work. */
   lifecycleSignal?: AbortSignal;
 };
 
+/** Per-key async queue used by channel plugins to serialize account or thread work. */
 export type ChannelRunQueue = {
+  /** Enqueue work under a serialization key such as account id, thread id, or chat id. */
   enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  /** Stop accepting meaningful work and mark the lifecycle as inactive. */
   deactivate: () => void;
 };
 
+/** Hooks used to wire channel queue state into runtime status and error reporting. */
 export type ChannelRunQueueParams = {
+  /** Receives busy/idle lifecycle snapshots from the shared run-state machine. */
   setStatus?: RunStateStatusSink;
+  /** Lifecycle signal propagated to queued tasks. */
   abortSignal?: AbortSignal;
+  /** Best-effort sink for task failures after enqueueing. */
   onError?: (error: unknown) => void;
 };
 
@@ -38,6 +48,35 @@ export function createAccountStatusSink(params: {
   };
 }
 
+function createTrackedRunState(params: ChannelRunQueueParams) {
+  const runStarts = new Map<symbol, number>();
+  const oldestRunStart = () => Math.min(...runStarts.values());
+  const runState = createRunStateMachine({
+    setStatus: (patch) => {
+      params.setStatus?.({
+        ...patch,
+        activeRunStartedAt: runStarts.size > 0 ? oldestRunStart() : null,
+      });
+    },
+    abortSignal: params.abortSignal,
+  });
+
+  return {
+    isActive: () => runState.isActive(),
+    deactivate: runState.deactivate,
+    onRunStart() {
+      const handle = Symbol();
+      runStarts.set(handle, Date.now());
+      runState.onRunStart();
+      return handle;
+    },
+    onRunEnd(handle: symbol) {
+      runStarts.delete(handle);
+      runState.onRunEnd();
+    },
+  };
+}
+
 /**
  * Serialize channel work per key while keeping lifecycle/busy accounting out of
  * channel-specific message handlers. The queue does not impose run timeouts;
@@ -45,10 +84,7 @@ export function createAccountStatusSink(params: {
  */
 export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
   const queue = new KeyedAsyncQueue();
-  const runState = createRunStateMachine({
-    setStatus: params.setStatus,
-    abortSignal: params.abortSignal,
-  });
+  const runState = createTrackedRunState(params);
   const reportError = (error: unknown) => {
     try {
       params.onError?.(error);
@@ -65,14 +101,15 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           if (!runState.isActive()) {
             return;
           }
-          runState.onRunStart();
+          const runHandle = runState.onRunStart();
           try {
+            // Deactivation can happen while this key waited behind older work.
             if (!runState.isActive()) {
               return;
             }
             await task({ lifecycleSignal: params.abortSignal });
           } finally {
-            runState.onRunEnd();
+            runState.onRunEnd(runHandle);
           }
         })
         .catch(reportError);

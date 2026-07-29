@@ -1,3 +1,6 @@
+// Feishu plugin module implements sequential queue behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+
 /**
  * Per-key serial task queue for Feishu inbound message handling.
  *
@@ -18,7 +21,7 @@
 
 const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
-export interface SequentialQueueOptions {
+interface SequentialQueueOptions {
   /**
    * Maximum time (ms) to block subsequent same-key tasks behind a single
    * in-flight task. Pass 0 (or a non-finite value) to disable the cap and
@@ -65,16 +68,17 @@ async function boundedRun(
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return task();
   }
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TASK_TIMEOUT_MS);
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<void>((resolve) => {
     timeoutHandle = setTimeout(() => {
       try {
-        onTaskTimeout?.(key, timeoutMs);
+        onTaskTimeout?.(key, resolvedTimeoutMs);
       } catch {
         // Swallow logging errors so they cannot poison the queue chain.
       }
       resolve();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
   });
   try {
     await Promise.race([task(), timeoutPromise]);

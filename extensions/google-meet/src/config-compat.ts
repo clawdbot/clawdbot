@@ -1,4 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Google Meet helper module supports config compat behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asNullableRecord as asRecord,
+  normalizeOptionalLowercaseString as normalizeProviderId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacyConfigRule = {
   path: Array<string | number>;
@@ -6,18 +11,8 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeProviderId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {
@@ -37,7 +32,7 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-export function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
+function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } | null {

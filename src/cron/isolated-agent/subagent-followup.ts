@@ -1,10 +1,12 @@
+/** Reads or waits for descendant subagent summaries after isolated cron orchestration. */
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function resolveCronSubagentTimings() {
-  const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
+  const fastTestMode = isFastTestRuntimeEnv();
   return {
     waitMinMs: fastTestMode ? 10 : 30_000,
     finalReplyGraceMs: fastTestMode ? 50 : 5_000,
@@ -12,6 +14,7 @@ function resolveCronSubagentTimings() {
   };
 }
 
+/** Reads completed descendant subagent replies when the orchestrator only emitted interim text. */
 export async function readDescendantSubagentFallbackReply(params: {
   sessionKey: string;
   runStartedAt: number;
@@ -41,15 +44,27 @@ export async function readDescendantSubagentFallbackReply(params: {
   }
 
   const replies: string[] = [];
+  // Limit fallback synthesis to the latest few children so a noisy run does not
+  // flood the cron announce with stale descendant output.
   const latestRuns = [...latestByChild.values()]
     .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
     .slice(-4);
   for (const entry of latestRuns) {
-    let reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    const frozenResultText = entry.completion?.resultText;
+    const frozenReply =
+      typeof frozenResultText === "string" && frozenResultText.trim()
+        ? frozenResultText.trim()
+        : undefined;
+    const usesInternalTranscript = entry.execution?.transcriptTarget !== undefined;
+    let reply = usesInternalTranscript ? frozenReply : undefined;
+    if (!reply && !usesInternalTranscript) {
+      reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    }
     // Fall back to the registry's frozen result text when the session transcript
-    // is unavailable (e.g. child session already deleted by announce cleanup).
-    if (!reply && typeof entry.frozenResultText === "string" && entry.frozenResultText.trim()) {
-      reply = entry.frozenResultText.trim();
+    // is unavailable (e.g. child session already deleted by announce cleanup) or
+    // intentionally bypassed by an internal interrupted-resume run.
+    if (!reply && frozenReply) {
+      reply = frozenReply;
     }
     if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       continue;
@@ -117,6 +132,8 @@ export async function waitForDescendantSubagentSummary(params: {
       latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
       (latest !== initialReply || !isLikelyInterimCronMessage(latest))
     ) {
+      // Ignore the original interim acknowledgement; only a new synthesis or a
+      // non-interim reply should replace descendant fallback text.
       return latest;
     }
     return undefined;
@@ -127,7 +144,9 @@ export async function waitForDescendantSubagentSummary(params: {
     if (latest) {
       return latest;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, timings.gracePollMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, timings.gracePollMs);
+    });
   }
 
   // Final read after grace period expires.

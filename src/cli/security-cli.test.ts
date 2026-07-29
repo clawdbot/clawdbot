@@ -1,3 +1,4 @@
+// Security CLI tests cover security command registration and diagnostics output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecurityCli } from "./security-cli.js";
@@ -75,6 +76,16 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
   return sourceConfig;
 }
 
+function lastSecretResolverOptions(): Record<string, unknown> | undefined {
+  const calls = resolveCommandSecretRefsViaGateway.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
+}
+
+function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
+  const calls = runSecurityAudit.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
+}
+
 describe("security CLI", () => {
   beforeEach(() => {
     runtimeLogs.length = 0;
@@ -138,23 +149,17 @@ describe("security CLI", () => {
 
     await createProgram().parseAsync(["security", "audit", "--json"], { from: "user" });
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: sourceConfig,
-        commandName: "security audit",
-        mode: "read_only_status",
-        targetIds: expect.any(Set),
-      }),
-    );
-    expect(runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: resolvedConfig,
-        sourceConfig,
-        deep: false,
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-    );
+    const resolverOptions = lastSecretResolverOptions();
+    expect(resolverOptions?.config).toBe(sourceConfig);
+    expect(resolverOptions?.commandName).toBe("security audit");
+    expect(resolverOptions?.mode).toBe("read_only_status");
+    expect(resolverOptions?.targetIds).toBeInstanceOf(Set);
+    const auditOptions = lastSecurityAuditOptions();
+    expect(auditOptions?.config).toBe(resolvedConfig);
+    expect(auditOptions?.sourceConfig).toBe(sourceConfig);
+    expect(auditOptions?.deep).toBe(false);
+    expect(auditOptions?.includeFilesystem).toBe(true);
+    expect(auditOptions?.includeChannelSecurity).toBe(true);
     const payload = JSON.parse(String(runtimeLogs.at(-1)));
     expect(payload.secretDiagnostics).toEqual([
       "security audit: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
@@ -166,11 +171,19 @@ describe("security CLI", () => {
       title: "forwards --token to deep probe auth without altering command-level resolver mode",
       argv: ["--token", "explicit-token"],
       deepProbeAuth: { token: "explicit-token" },
+      auditGatewayAuthOverride: undefined,
     },
     {
       title: "forwards --password to deep probe auth without altering command-level resolver mode",
       argv: ["--password", "explicit-password"],
       deepProbeAuth: { password: "explicit-password" },
+      auditGatewayAuthOverride: undefined,
+    },
+    {
+      title: "forwards --auth with explicit gateway password",
+      argv: ["--auth", "password", "--password", "explicit-password"],
+      deepProbeAuth: { password: "explicit-password" },
+      auditGatewayAuthOverride: { mode: "password", password: "explicit-password" },
     },
     {
       title: "forwards both --token and --password to deep probe auth",
@@ -179,24 +192,39 @@ describe("security CLI", () => {
         token: "explicit-token",
         password: "explicit-password",
       },
+      auditGatewayAuthOverride: undefined,
     },
-  ])("$title", async ({ argv, deepProbeAuth }) => {
+  ])("$title", async ({ argv, deepProbeAuth, auditGatewayAuthOverride }) => {
     primeDeepAuditConfig();
 
     await createProgram().parseAsync(["security", "audit", "--deep", ...argv, "--json"], {
       from: "user",
     });
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "read_only_status",
-      }),
-    );
-    expect(runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deep: true,
-        deepProbeAuth,
-      }),
-    );
+    expect(lastSecretResolverOptions()?.mode).toBe("read_only_status");
+    expect(lastSecurityAuditOptions()?.deep).toBe(true);
+    expect(lastSecurityAuditOptions()?.deepProbeAuth).toEqual(deepProbeAuth);
+    expect(lastSecurityAuditOptions()?.auditGatewayAuthOverride).toEqual(auditGatewayAuthOverride);
   });
+
+  it.each([
+    {
+      argv: ["--auth", "token"],
+      message: /pass --token <token>/i,
+    },
+    {
+      argv: ["--auth", "password"],
+      message: /pass --password <password>/i,
+    },
+  ])(
+    "rejects shared-secret auth override without the matching secret",
+    async ({ argv, message }) => {
+      primeDeepAuditConfig();
+
+      await expect(
+        createProgram().parseAsync(["security", "audit", ...argv, "--json"], { from: "user" }),
+      ).rejects.toThrow(message);
+      expect(runSecurityAudit).not.toHaveBeenCalled();
+    },
+  );
 });

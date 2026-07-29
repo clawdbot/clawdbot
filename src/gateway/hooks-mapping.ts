@@ -1,9 +1,14 @@
+// Gateway hook mapping resolver.
+// Normalizes hook presets, templates, transforms, and resolved hook actions.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -85,6 +90,12 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
 };
 
 const transformCache = new Map<string, HookTransformFn>();
+let transformCacheBustVersion = 0;
+
+export function commitHookTransformMappingReload(): void {
+  transformCache.clear();
+  transformCacheBustVersion += 1;
+}
 
 type HookTransformResult = Partial<{
   kind: HookAction["kind"];
@@ -109,6 +120,7 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
+/** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
 export function resolveHookMappings(
   hooks?: HooksConfig,
   opts?: { configDir?: string },
@@ -369,9 +381,16 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   if (cached) {
     return cached;
   }
-  const mod = await importFileModule({ modulePath: transform.modulePath });
+  const generation = transformCacheBustVersion;
+  const mod = await importFileModule({
+    modulePath: transform.modulePath,
+    cacheBust: true,
+    nowMs: generation,
+  });
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(cacheKey, fn);
+  if (generation === transformCacheBustVersion) {
+    transformCache.set(cacheKey, fn);
+  }
   return fn;
 }
 

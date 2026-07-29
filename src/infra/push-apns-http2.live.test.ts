@@ -1,3 +1,4 @@
+// Covers live APNs HTTP/2 reachability through proxy paths.
 import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";

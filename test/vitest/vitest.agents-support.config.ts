@@ -1,12 +1,14 @@
-import { agentsSupportExcludePatterns, agentsSupportTestPatterns } from "./vitest.agents-paths.mjs";
+// Vitest agents support config wires the agents support test shard.
+import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createAgentsSupportVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(agentsSupportTestPatterns, {
-    dir: "src/agents",
+  const owner = agentVitestProjectOwners.support;
+  return createScopedVitestConfig(owner.include, {
+    dir: owner.dir,
     env,
-    exclude: agentsSupportExcludePatterns,
-    name: "agents-support",
+    exclude: owner.exclude,
+    name: owner.name,
   });
 }
 

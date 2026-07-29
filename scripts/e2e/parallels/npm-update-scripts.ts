@@ -1,5 +1,11 @@
+// Npm Update Scripts script supports OpenClaw repository automation.
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
+import {
+  posixCodexPlatformPackageRepairFunction,
+  posixProviderOnlyPluginIsolationScript,
+  windowsCodexPlatformPackageRepairFunction,
+} from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -12,13 +18,25 @@ import {
 } from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
-export interface NpmUpdateScriptInput {
+interface NpmUpdateScriptInput {
   auth: ProviderAuth;
   expectedNeedle: string;
+  npmRegistry?: string;
   updateTarget: string;
 }
 
 const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`;
+const macosGuestPath =
+  "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+const macosOpenClawCommand = '"$OPENCLAW_BIN"';
+
+function posixNpmRegistryEnv(registry: string | undefined): string {
+  if (!registry) {
+    return "";
+  }
+  const quoted = shellQuote(registry);
+  return `NPM_CONFIG_REGISTRY=${quoted} npm_config_registry=${quoted} `;
+}
 
 function posixModelProviderConfigCommands(
   command: string,
@@ -41,19 +59,55 @@ rm -f "$provider_config_batch"
 if [ "$provider_config_exit" -ne 0 ]; then exit "$provider_config_exit"; fi`;
 }
 
-function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
-  return `agent_ok=false
+function posixPrintLogTailFunction(): string {
+  return `print_log_tail() {
+  log_file="$1"
+  max_bytes="\${OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES:-262144}"
+  case "$max_bytes" in
+    ''|*[!0-9]*) max_bytes=262144 ;;
+    *) [ "$max_bytes" -gt 0 ] || max_bytes=262144 ;;
+  esac
+  [ -f "$log_file" ] || return 0
+  log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+  log_bytes="\${log_bytes//[[:space:]]/}"
+  case "$log_bytes" in
+    ''|*[!0-9]*) log_bytes=0 ;;
+  esac
+  if [ "$log_bytes" -gt "$max_bytes" ]; then
+    echo "--- $log_file truncated: showing last $max_bytes of $log_bytes bytes ---"
+  fi
+  tail -c "$max_bytes" "$log_file" 2>/dev/null || true
+}`;
+}
+
+function posixAssertAgentOkScript(
+  command: string,
+  input: NpmUpdateScriptInput,
+  platform: Extract<Platform, "linux" | "macos">,
+  sessionId: string,
+) {
+  return `${posixProviderOnlyPluginIsolationScript({
+    fallbackPluginId: input.auth.modelId.split("/", 1)[0] || "openai",
+    modelId: input.auth.modelId,
+  })}
+${posixCodexPlatformPackageRepairFunction()}
+agent_ok=false
 for attempt in 1 2; do
   session_id=${shellQuote(sessionId)}
   if [ "$attempt" -gt 1 ]; then session_id=${shellQuote(`${sessionId}-retry`)}"-$attempt"; fi
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking minimal --json >"$output_file" 2>&1
+  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
   rc=$?
   set -e
-  cat "$output_file"
+  print_log_tail "$output_file"
   if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
     rm -f "$output_file"
     exit "$rc"
   fi
@@ -75,8 +129,11 @@ fi`;
 }
 
 function windowsUpdateWithBundledPluginsDisabled(input: NpmUpdateScriptInput): string {
+  const registryEntry = input.npmRegistry
+    ? `; NPM_CONFIG_REGISTRY = ${psSingleQuote(input.npmRegistry)}`
+    : "";
   return `$script:OpenClawUpdateExit = 0
-$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'; OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1' } {
+$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'; OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'${registryEntry} } {
   Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
@@ -108,6 +165,7 @@ Wait-OpenClawGateway`;
 
 function windowsAssertAgentOkScript(input: NpmUpdateScriptInput): string {
   return `${windowsAgentTurnConfigPatchScript(input.auth.modelId)}
+${windowsCodexPlatformPackageRepairFunction()}
 $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -118,24 +176,37 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
   $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
   Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
+  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
+  $agentExitCode = $LASTEXITCODE
   if ($null -ne $output) { $output | ForEach-Object { $_ } }
-  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
-  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+  if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
     $agentOk = $true
     break
+  }
+  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
+    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+    continue
   }
   if ($attempt -lt 2) {
     Write-Host "agent turn attempt $attempt finished without OK response; retrying"
     Start-Sleep -Seconds 3
   }
+  if ($agentExitCode -ne 0) { throw "agent failed with exit code $agentExitCode" }
 }
 if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 }
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
-export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH=${macosGuestPath}
+${posixPrintLogTailFunction()}
+resolve_required_command() {
+  command -v "$1" || {
+    echo "required command not found on PATH: $1" >&2
+    exit 127
+  }
+}
+OPENCLAW_BIN="$(resolve_required_command openclaw)"
 scrub_future_plugin_entries() {
   python3 - <<'PY'
 import json
@@ -162,43 +233,55 @@ path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 }
 stop_openclaw_gateway_processes() {
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -n "$pids" ]; then
+      kill $pids >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 $pids >/dev/null 2>&1 || true
+    fi
+  fi
 }
 start_openclaw_gateway() {
-  if /opt/homebrew/bin/openclaw gateway restart; then
-    return
-  fi
-  pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
+  stop_openclaw_gateway_processes
   rm -f /tmp/openclaw-parallels-macos-gateway.log
-  nohup env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
+  trap '' HUP
+  /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
     input.auth.apiKeyValue,
-  )} /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+  )} "$OPENCLAW_BIN" gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+  sleep 1
 }
 wait_for_gateway() {
   deadline=$((SECONDS + 240))
+  attempt=0
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc --timeout 15000; then
+    if "$OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
       return
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 4 ]; then
+      start_openclaw_gateway
     fi
     sleep 2
   done
-  cat /tmp/openclaw-parallels-macos-gateway.log >&2 || true
+  print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2
   echo "gateway did not become ready after update" >&2
   exit 1
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
-${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
+${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixVersionCheck(macosOpenClawCommand, input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
-/opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderConfigCommands("/opt/homebrew/bin/openclaw", input.auth.modelId, "macos")}
-/opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
-/opt/homebrew/bin/openclaw config set tools.profile minimal
+"$OPENCLAW_BIN" models set ${shellQuote(input.auth.modelId)}
+${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "macos")}
+"$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
+"$OPENCLAW_BIN" config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("/opt/homebrew/bin/openclaw", input, "parallels-npm-update-macos")}`;
+${posixAssertAgentOkScript(macosOpenClawCommand, input, "macos", "parallels-npm-update-macos")}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -209,20 +292,48 @@ ${windowsScopedEnvFunction}
 function Remove-FuturePluginEntries {
   $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
   if (-not (Test-Path $configPath)) { return }
-  try { $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable } catch { return }
-  $plugins = $config['plugins']
-  if (-not ($plugins -is [hashtable])) { return }
-  $entries = $plugins['entries']
-  if ($entries -is [hashtable]) {
-    foreach ($pluginId in @('feishu', 'whatsapp', 'openai')) {
-      if ($entries.ContainsKey($pluginId)) { $entries.Remove($pluginId) }
+  $nodeScript = @'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\\uFEFF/u, ""));
+} catch {
+  process.exit(0);
+}
+const plugins = config.plugins;
+if (!plugins || typeof plugins !== "object") {
+  process.exit(0);
+}
+const futurePluginIds = new Set(["feishu", "whatsapp", "openai"]);
+let changed = false;
+if (plugins.entries && typeof plugins.entries === "object") {
+  for (const pluginId of futurePluginIds) {
+    if (Object.hasOwn(plugins.entries, pluginId)) {
+      delete plugins.entries[pluginId];
+      changed = true;
     }
   }
-  $allow = $plugins['allow']
-  if ($allow -is [array]) {
-    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
+}
+if (Array.isArray(plugins.allow)) {
+  const allow = plugins.allow.filter((pluginId) => !futurePluginIds.has(pluginId));
+  if (allow.length !== plugins.allow.length) {
+    plugins.allow = allow;
+    changed = true;
   }
-  $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
+}
+if (changed) {
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+}
+'@
+  $nodeScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ('openclaw-future-plugin-scrub-' + [guid]::NewGuid().ToString('N') + '.cjs')
+  try {
+    $nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8
+    & node.exe $nodeScriptPath $configPath
+    if ($LASTEXITCODE -ne 0) { throw "failed to scrub future plugin entries" }
+  } finally {
+    Remove-Item $nodeScriptPath -Force -ErrorAction SilentlyContinue
+  }
 }
 function Stop-OpenClawGatewayProcesses {
   Invoke-OpenClaw gateway stop *>&1 | Out-Host
@@ -251,6 +362,8 @@ ${windowsAssertAgentOkScript(input)}`;
 export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
+export OPENCLAW_ALLOW_ROOT=1
+${posixPrintLogTailFunction()}
 scrub_future_plugin_entries() {
   node - <<'JS'
 const fs = require("node:fs");
@@ -273,33 +386,38 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 JS
 }
 stop_openclaw_gateway_processes() {
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
 }
 start_openclaw_gateway() {
   pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
   rm -f /tmp/openclaw-parallels-linux-gateway.log
   setsid sh -lc ${shellQuote(
-    `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 ${input.auth.apiKeyEnv}=${shellQuote(
+    `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_ALLOW_ROOT=1 ${input.auth.apiKeyEnv}=${shellQuote(
       input.auth.apiKeyValue,
     )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
   )} >/dev/null 2>&1 < /dev/null &
 }
 wait_for_gateway() {
   deadline=$((SECONDS + 240))
+  attempt=0
   while [ "$SECONDS" -lt "$deadline" ]; do
     if openclaw gateway status --deep --require-rpc --timeout 15000; then
       return
     fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 4 ]; then
+      start_openclaw_gateway
+    fi
     sleep 2
   done
-  cat /tmp/openclaw-parallels-linux-gateway.log >&2 || true
+  print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2
   echo "gateway did not become ready after update" >&2
   exit 1
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
@@ -308,7 +426,7 @@ ${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("openclaw", input, "parallels-npm-update-linux")}`;
+${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-linux")}`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {

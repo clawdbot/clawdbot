@@ -1,3 +1,4 @@
+// Mattermost tests cover reconnect plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithReconnect } from "./reconnect.js";
 
@@ -58,7 +59,10 @@ describe("runWithReconnect", () => {
 
     expect(connectFn).toHaveBeenCalledTimes(3);
     expect(onError).toHaveBeenCalledTimes(2);
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "fetch failed" }));
+    expect(onError.mock.calls.map(([error]) => error)).toStrictEqual([
+      new Error("fetch failed"),
+      new Error("fetch failed"),
+    ]);
   });
 
   it("uses exponential backoff on consecutive errors, capped at maxDelayMs", async () => {

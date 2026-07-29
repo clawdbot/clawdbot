@@ -1,3 +1,4 @@
+// Covers install archive extraction and existing install path resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,10 @@ async function runExtractedArchiveFailureCase(configureArchive: () => void) {
     timeoutMs: 1000,
     onExtracted: async () => ({ ok: true as const }),
   });
+}
+
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
 }
 
 describe("resolveExistingInstallPath", () => {
@@ -75,12 +80,12 @@ describe("withExtractedArchiveRoot", () => {
       onExtracted,
     });
 
-    expect(withTempDirSpy).toHaveBeenCalledWith("openclaw-plugin-", expect.any(Function));
-    expect(extractSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        archivePath,
-      }),
-    );
+    expect(withTempDirSpy).toHaveBeenCalledTimes(1);
+    const withTempDirCall = firstMockCall(withTempDirSpy);
+    expect(withTempDirCall?.[0]).toBe("openclaw-plugin-");
+    expect(typeof withTempDirCall?.[1]).toBe("function");
+    expect(extractSpy).toHaveBeenCalledOnce();
+    expect(firstMockCall(extractSpy)?.[0]?.archivePath).toBe(archivePath);
     expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
       rootMarkers: ["package.json"],
     });

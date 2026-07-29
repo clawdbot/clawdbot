@@ -1,3 +1,4 @@
+// Qa Channel API module exposes the plugin public contract.
 export {
   DEFAULT_ACCOUNT_ID,
   listEnabledQaChannelAccounts,
@@ -36,6 +37,7 @@ export {
   type QaBusSearchMessagesInput,
   type QaBusStateSnapshot,
   type QaBusThread,
+  type QaBusToolCall,
   type QaBusWaitForInput,
   reactToQaBusMessage,
   readQaBusMessage,

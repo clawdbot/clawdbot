@@ -1,11 +1,44 @@
+// Shared media tool tests cover root separation, provider availability, and
+// model-registry normalization for generation/understanding tools.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import { withEnv } from "../../test-utils/env.js";
 import {
   hasGenerationToolAvailability,
+  isCapabilityProviderConfigured,
+  readBooleanToolParam,
+  resolveMediaToolInboundRoots,
+  resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
+
+// Keep media-tool-shared tests focused on root separation; channel-inbound
+// tests cover the real bundled contract loader.
+vi.mock("../../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRootsForChannel: (params: {
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channelId = params.channelId?.trim();
+    if (!channelId) {
+      return undefined;
+    }
+
+    const channelConfig = params.cfg?.channels?.[channelId];
+    const accountConfig = params.accountId
+      ? channelConfig?.accounts?.[params.accountId]
+      : undefined;
+    const roots = [
+      ...(accountConfig?.attachmentRoots ?? []),
+      ...(channelConfig?.attachmentRoots ?? []),
+    ];
+    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
+  },
+}));
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
@@ -27,11 +60,15 @@ function createModelRegistryStub(resolve: (provider: string, modelId: string) =>
   };
 }
 
-describe("resolveMediaToolLocalRoots", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+describe("readBooleanToolParam", () => {
+  it("parses booleans and true/false string tokens", () => {
+    expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
+    expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
+    expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
   });
+});
 
+describe("resolveMediaToolLocalRoots", () => {
   it("does not widen default local roots from media sources", () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
@@ -39,13 +76,13 @@ describe("resolveMediaToolLocalRoots", () => {
     const moviesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const roots = resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
-      path.join(picturesDir, "photo.png"),
-      pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
-      "/top-level-file.png",
-    ]);
+    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
+        path.join(picturesDir, "photo.png"),
+        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
+        "/top-level-file.png",
+      ]),
+    );
 
     const normalizedRoots = roots.map(normalizeHostPath);
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));
@@ -53,6 +90,45 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
+  });
+
+  it("keeps channel inbound attachment roots separate from local roots", () => {
+    // Inbound channel roots may include broad chat attachment folders; keep them
+    // out of local filesystem allowlists unless the channel context asks.
+    const accountRoot = path.join("/tmp", "openclaw-imessage-work");
+    const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
+    const cfg = {
+      channels: {
+        imessage: {
+          attachmentRoots: [sharedRoot],
+          accounts: {
+            work: {
+              attachmentRoots: [accountRoot],
+            },
+          },
+        },
+      },
+    };
+
+    const withoutChannel = resolveMediaToolLocalRoots(undefined, { cfg });
+    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+
+    const withImessage = resolveMediaToolLocalRoots(undefined, {
+      cfg,
+      channelId: "imessage",
+      accountId: "work",
+    });
+    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(
+      resolveMediaToolInboundRoots({
+        cfg,
+        channelId: "imessage",
+        accountId: "work",
+      }),
+    ).toEqual([accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"]);
   });
 });
 
@@ -84,6 +160,8 @@ describe("resolveModelFromRegistry", () => {
   });
 
   it("falls back to provider-prefixed custom model IDs", () => {
+    // Custom providers can store ids with provider prefixes; try both forms so
+    // callers can pass the short local model id.
     const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
     const { calls, registry } = createModelRegistryStub((_, modelId) =>
       modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
@@ -104,6 +182,61 @@ describe("resolveModelFromRegistry", () => {
 });
 
 describe("hasGenerationToolAvailability", () => {
+  it("accepts config-backed custom provider auth for generation providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        cfg,
+        providers: [{ id: "custom-image", defaultModel: "workflow" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves a provider-specific not-configured result over generic config auth", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "workflow-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    const provider = {
+      id: "workflow-image",
+      defaultModel: "workflow",
+      isConfigured: () => false,
+    };
+
+    expect(
+      isCapabilityProviderConfigured({
+        providers: [provider],
+        provider,
+        cfg,
+      }),
+    ).toBe(false);
+    expect(
+      resolveCapabilityModelConfigForTool({
+        cfg,
+        providers: [provider],
+      }),
+    ).toBeNull();
+  });
+
   it("allows generation tools for runtime providers configured without auth", () => {
     expect(
       hasGenerationToolAvailability({

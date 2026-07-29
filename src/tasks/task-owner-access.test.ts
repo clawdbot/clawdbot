@@ -1,4 +1,6 @@
+// Verifies requester and owner access checks for task records.
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   findLatestTaskForRelatedSessionKeyForOwner,
@@ -6,17 +8,23 @@ import {
   getTaskByIdForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "./task-owner-access.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "./task-registry.js";
+import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
+  const task = createTaskRecordOrNull(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
 
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
-  if (ORIGINAL_STATE_DIR == null) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
+  ORIGINAL_ENV.restore();
 });
 
 async function withTaskRegistryTempDir<T>(run: () => Promise<T> | T): Promise<T> {

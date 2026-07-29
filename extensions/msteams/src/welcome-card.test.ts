@@ -1,3 +1,4 @@
+// Msteams tests cover welcome card plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
@@ -23,6 +24,51 @@ describe("buildMSTeamsPresentationCard", () => {
       actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
     });
   });
+
+  it("submits command actions as command text", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Plugins",
+                  action: { type: "command", command: "/codex plugins menu" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      actions: [{ type: "Action.Submit", title: "Plugins", data: "/codex plugins menu" }],
+    });
+  });
+
+  it("renders web app button links as open-url actions", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open app", webApp: { url: "https://example.com/app" } },
+                { label: "Legacy app", web_app: { url: "https://example.com/legacy" } },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      actions: [
+        { type: "Action.OpenUrl", title: "Open app", url: "https://example.com/app" },
+        { type: "Action.OpenUrl", title: "Legacy app", url: "https://example.com/legacy" },
+      ],
+    });
+  });
 });
 
 describe("buildWelcomeCard", () => {
@@ -37,6 +83,15 @@ describe("buildWelcomeCard", () => {
     const actions = card.actions as Array<{ title: string; data: unknown }>;
     expect(actions.length).toBe(3);
     expect(actions[0]?.title).toBe("What can you do?");
+  });
+
+  it("styles the heading with valid PascalCase Adaptive Card enum values", () => {
+    // Lowercase weight/size fall back to Default in the Teams renderer, so the heading must use the
+    // schema's PascalCase enums to render bold/medium.
+    const card = buildWelcomeCard();
+    const heading = (card.body as Array<{ weight?: string; size?: string }>)[0];
+    expect(heading?.weight).toBe("Bolder");
+    expect(heading?.size).toBe("Medium");
   });
 
   it("uses custom bot name", () => {

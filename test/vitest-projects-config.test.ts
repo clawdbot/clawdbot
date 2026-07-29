@@ -1,8 +1,17 @@
+// Vitest project config tests validate aggregate Vitest project wiring.
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
-import { createAgentsPiEmbeddedVitestConfig } from "./vitest/vitest.agents-pi-embedded.config.ts";
+import { createAgentsEmbeddedIncompleteTurnVitestConfig } from "./vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
+import { createAgentsEmbeddedOverflowCompactionVitestConfig } from "./vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
+import { createAgentsEmbeddedRunVitestConfig } from "./vitest/vitest.agents-embedded-agent-run.config.ts";
+import { createAgentsEmbeddedVitestConfig } from "./vitest/vitest.agents-embedded-agent.config.ts";
+import {
+  agentVitestProjectConfigs,
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "./vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "./vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
@@ -25,12 +34,30 @@ import {
   resolveSharedVitestWorkerConfig,
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
-import { createUiVitestConfig, unitUiIncludePatterns } from "./vitest/vitest.ui.config.ts";
+import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
+import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
-import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
+
+function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
+  if (!config.test) {
+    throw new Error("expected vitest test config");
+  }
+  return config.test as NonNullable<T["test"]>;
+}
+
+function requireWebOptimizer(testConfig: unknown) {
+  const webOptimizer = (testConfig as { deps?: { optimizer?: { web?: { enabled?: boolean } } } })
+    .deps?.optimizer?.web;
+  if (!webOptimizer) {
+    throw new Error("expected vitest web optimizer config");
+  }
+  return webOptimizer;
+}
 
 afterEach(() => {
   patternFiles.cleanup();
@@ -38,26 +65,103 @@ afterEach(() => {
 
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
-    expect(baseConfig.test?.projects).toEqual([...rootVitestProjects]);
+    expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
+  });
+
+  it("keeps root and full-suite agent projects aligned with canonical owners", () => {
+    const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
+    const agentConfigs = new Set(agentVitestProjectConfigs);
+
+    expect(rootVitestProjects.filter((config) => agentConfigs.has(config))).toEqual(
+      agentVitestProjectConfigs,
+    );
+    expect(agenticShard?.projects.filter((config) => agentConfigs.has(config))).toEqual(
+      agentVitestProjectConfigs,
+    );
+    expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
+  });
+
+  it("keeps all embedded harnesses under their canonical embedded owner", () => {
+    expect(embeddedAgentVitestProjectOwners).toEqual([
+      agentVitestProjectOwners.embedded,
+      agentVitestProjectOwners.embeddedIncompleteTurn,
+      agentVitestProjectOwners.embeddedOverflowCompaction,
+      agentVitestProjectOwners.embeddedRun,
+    ]);
+  });
+
+  it("keeps root watch projects aligned with dedicated extension shard lanes", () => {
+    const extensionShard = fullSuiteVitestShards.find(
+      (shard) => shard.config === "test/vitest/vitest.full-extensions.config.ts",
+    );
+
+    expect(extensionShard?.projects).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
+      ]),
+    );
+    expect(rootVitestProjects).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
+      ]),
+    );
+  });
+
+  it("keeps root watch projects aligned with dedicated tooling shard lanes", () => {
+    const toolingShard = fullSuiteVitestShards.find(
+      (shard) => shard.config === "test/vitest/vitest.full-core-tooling.config.ts",
+    );
+
+    expect(toolingShard?.projects).toEqual(
+      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    );
+    expect(rootVitestProjects).toEqual(
+      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    );
   });
 
   it("disables vite env-file loading for vitest lanes", () => {
-    expect(baseConfig.envFile).toBe(false);
-    expect(sharedVitestConfig.envFile).toBe(false);
+    expect(baseConfig.envDir).toBe(false);
+    expect(sharedVitestConfig.envDir).toBe(false);
+  });
+
+  it("uses absolute force-rerun triggers for discovered vitest lane files", () => {
+    expect(sharedVitestConfig.test.forceRerunTriggers.map(normalizeConfigPath)).toContain(
+      normalizeConfigPath(`${process.cwd()}/test/vitest/vitest.config.ts`),
+    );
   });
 
   it("keeps root projects on their expected pool defaults", () => {
-    expect(createGatewayVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsCoreVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsPiEmbeddedVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsSupportVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsToolsVitestConfig().test.pool).toBe("threads");
-    expect(createCommandsLightVitestConfig().test.pool).toBe("threads");
-    expect(createCommandsVitestConfig().test.pool).toBe("forks");
-    expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
-    expect(createUnitFastVitestConfig().test.pool).toBe("threads");
-    expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("forks");
+    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedIncompleteTurnVitestConfig()).pool).toBe(
+      "threads",
+    );
+    expect(requireTestConfig(createAgentsEmbeddedOverflowCompactionVitestConfig()).pool).toBe(
+      "threads",
+    );
+    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe("forks");
+    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
+      "threads",
+    );
+  });
+
+  it("keeps the embedded-agent cold-hook budget explicit", () => {
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).hookTimeout).toBe(600_000);
   });
 
   it("honors explicit worker caps in CI vitest lanes", () => {
@@ -93,20 +197,21 @@ describe("projects vitest config", () => {
     });
   });
 
-  it("keeps contract shards on the non-isolated fork runner by default", () => {
+  it("keeps contract shards on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig(pluginContractPatterns);
-    expect(config.test.pool).toBe("forks");
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("gives contract project configs unique names", () => {
     expect([
-      contractChannelSurfaceConfig.test?.name,
-      contractChannelConfigConfig.test?.name,
-      contractChannelRegistryConfig.test?.name,
-      contractChannelSessionConfig.test?.name,
-      contractPluginConfig.test?.name,
+      requireTestConfig(contractChannelSurfaceConfig).name,
+      requireTestConfig(contractChannelConfigConfig).name,
+      requireTestConfig(contractChannelRegistryConfig).name,
+      requireTestConfig(contractChannelSessionConfig).name,
+      requireTestConfig(contractPluginConfig).name,
     ]).toEqual([
       "contracts-channel-surface",
       "contracts-channel-config",
@@ -124,7 +229,7 @@ describe("projects vitest config", () => {
       "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
     ]);
 
-    expect(config.test.include).toEqual([
+    expect(requireTestConfig(config).include).toEqual([
       "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
     ]);
   });
@@ -143,47 +248,58 @@ describe("projects vitest config", () => {
       },
     );
 
-    expect(config.test.include).toEqual([
+    expect(requireTestConfig(config).include).toEqual([
       "src/channels/plugins/contracts/directory.registry-backed-shard-a.contract.test.ts",
     ]);
   });
 
-  it("keeps the root ui lane aligned with the shared jsdom setup", () => {
+  it("keeps the root ui lane on the shared non-isolated runner", () => {
     const config = createUiVitestConfig();
-    expect(config.test.environment).toBe("jsdom");
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
-    const setupFiles = normalizeConfigPaths(config.test.setupFiles);
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.environment).toBe("jsdom");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
-    expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
-  });
-
-  it("keeps the unit-ui shard aligned with the shared jsdom setup", () => {
-    expect(unitUiConfig.test?.environment).toBe("jsdom");
-    expect(unitUiConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(unitUiConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
-    expect(unitUiIncludePatterns).toContain("ui/src/ui/views/dreaming.test.ts");
-    const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
-    expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
-    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
+    expect(requireWebOptimizer(testConfig).enabled).toBe(true);
   });
 
   it("keeps the unit lane on the non-isolated runner by default", () => {
     const config = createUnitVitestConfig();
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps the unit-fast lane on shared workers without the reset-heavy runner", () => {
     const config = createUnitFastVitestConfig();
-    expect(config.test.isolate).toBe(false);
-    expect(config.test.runner).toBeUndefined();
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(false);
+    expect(testConfig.runner).toBeUndefined();
+  });
+
+  it("isolates forced unit-fast files from shared module caches", () => {
+    const config = createUnitFastIsolatedVitestConfig();
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.runner).toBeUndefined();
+  });
+
+  it("keeps fake-timer unit-fast files serial with the non-isolated runner", () => {
+    const config = createUnitFastFakeTimersVitestConfig();
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    expect(testConfig.fileParallelism).toBe(false);
+    expect(testConfig.maxWorkers).toBe(1);
+    expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {
-    expect(bundledConfig.test?.pool).toBe("threads");
-    expect(bundledConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(bundledConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(bundledConfig);
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 });

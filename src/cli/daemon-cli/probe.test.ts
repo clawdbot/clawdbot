@@ -1,3 +1,4 @@
+// Daemon probe tests cover gateway probe command behavior and output.
 import { describe, expect, it, vi } from "vitest";
 import { probeGatewayStatus } from "./probe.js";
 
@@ -84,6 +85,35 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("preserves gateway server version from the connect probe", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
+      server: { version: "2026.5.6", connId: "conn-1" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !("server" in result)) {
+      throw new Error("expected successful probe with server details");
+    }
+    expect(result.server?.version).toBe("2026.5.6");
+    expect(result.server?.connId).toBe("conn-1");
+    expect(result.version).toBe("2026.5.6");
+  });
+
   it("uses a real status RPC when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
@@ -138,7 +168,7 @@ describe("probeGatewayStatus", () => {
     });
   });
 
-  it("forwards configured handshake timeout to the connect probe and status RPC", async () => {
+  it("forwards the resolved handshake timeout to the connect probe and status RPC", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
     callGatewayMock.mockResolvedValueOnce({ status: "ok" });
@@ -150,7 +180,7 @@ describe("probeGatewayStatus", () => {
         capability: "admin_capable",
       },
     });
-    const config = { gateway: { handshakeTimeoutMs: 30_000 } };
+    const config = {};
 
     await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
@@ -161,18 +191,105 @@ describe("probeGatewayStatus", () => {
       requireRpc: true,
     });
 
-    expect(probeGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 30_000,
-      }),
-    );
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        timeoutMs: 30_000,
-      }),
-    );
+    expect(probeGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      auth: {
+        token: "temp-token",
+        password: undefined,
+      },
+      tlsFingerprint: undefined,
+      preauthHandshakeTimeoutMs: 30_000,
+      timeoutMs: 30_000,
+      includeDetails: false,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: undefined,
+      config,
+      method: "status",
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("omits config-backed credentials from the status RPC when disabled", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        capability: "admin_capable",
+      },
+    });
+    const config = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    } as const;
+
+    await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      config,
+      timeoutMs: 5_000,
+      requireRpc: true,
+      allowRpcConfigCredentials: false,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: undefined,
+      method: "status",
+      timeoutMs: 5_000,
+    });
+  });
+
+  it("fails before the status RPC when config credentials are disabled without explicit auth", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "exec", provider: "vault", id: "gateway/token" },
+          },
+        },
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: "/bin/false" },
+          },
+        },
+      },
+      timeoutMs: 5_000,
+      requireRpc: true,
+      allowRpcConfigCredentials: false,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "read",
+      error:
+        "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(probeGatewayMock).not.toHaveBeenCalled();
   });
 
   it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {
@@ -204,6 +321,69 @@ describe("probeGatewayStatus", () => {
         scopes: [],
         capability: "unknown",
       },
+    });
+  });
+
+  it("uses status.runtimeVersion when read-probe handshake metadata is unavailable", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.24", status: "ok" });
+    probeGatewayMock.mockRejectedValueOnce(new Error("probe timed out after status"));
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: undefined,
+      version: "2026.4.24",
+    });
+  });
+
+  it("prefers read-probe server metadata over status.runtimeVersion", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.23", status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      server: {
+        version: "2026.4.24",
+        connId: "conn-1",
+      },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      server: {
+        version: "2026.4.24",
+        connId: "conn-1",
+      },
+      version: "2026.4.24",
     });
   });
 
@@ -247,11 +427,9 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "connect",
-      error: "scope upgrade pending approval (requestId: req-123)",
-    });
+    expect(result.ok).toBe(false);
+    expect(result.kind).toBe("connect");
+    expect(result.error).toBe("scope upgrade pending approval (requestId: req-123)");
   });
 
   it("surfaces status RPC errors when requireRpc is enabled", async () => {

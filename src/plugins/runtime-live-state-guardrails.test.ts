@@ -1,3 +1,4 @@
+// Verifies runtime live-state guardrails stay documented and enforced.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,9 +14,9 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
     forbidden: readonly string[];
   }
 > = {
-  [bundledPluginFile("whatsapp", "src/connection-controller-registry.ts")]: {
-    required: ["globalThis", 'Symbol.for("openclaw.whatsapp.connectionControllerRegistry")'],
-    forbidden: ["resolveGlobalSingleton"],
+  [bundledPluginFile("whatsapp", "src/connection-controller-runtime-context.ts")]: {
+    required: ["getChannelRuntimeContext", "WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY"],
+    forbidden: ["globalThis", "resolveGlobalSingleton"],
   },
 };
 

@@ -1,3 +1,4 @@
+// Tests heartbeat runner response prefix template handling.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -29,9 +30,9 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
           token: "test-token",
           allowFrom: ["*"],
           heartbeat: { showOk: false },
+          responsePrefix: params.responsePrefix,
         },
       } as never,
-      messages: { responsePrefix: params.responsePrefix },
       session: { store: params.storePath },
     };
   }
@@ -51,6 +52,14 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
   }
 
+  function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+    const call = mock.mock.calls[0];
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  }
+
   async function runTemplatedHeartbeat(params: { responsePrefix: string; replyText: string }) {
     return withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createTelegramHeartbeatConfig({
@@ -66,7 +75,7 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
 
       replySpy.mockImplementation(async (_ctx, opts) => {
         opts?.onModelSelected?.({
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4-20260401",
           thinkLevel: "high",
         });
@@ -93,11 +102,10 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    expect(sendTelegram).toHaveBeenCalledWith(
-      TELEGRAM_GROUP,
-      "[openai-codex/gpt-5.4|think:high] Heartbeat alert",
-      expect.any(Object),
-    );
+    const [target, message, options] = requireFirstMockCall(sendTelegram, "telegram send");
+    expect(target).toBe(TELEGRAM_GROUP);
+    expect(message).toBe("[openai/gpt-5.4|think:high] Heartbeat alert");
+    expect(typeof options).toBe("object");
   });
 
   it("uses the resolved responsePrefix when suppressing prefixed HEARTBEAT_OK replies", async () => {

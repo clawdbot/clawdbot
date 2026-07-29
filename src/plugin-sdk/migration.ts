@@ -1,5 +1,7 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
   MigrationDetection,
   MigrationItem,
@@ -7,7 +9,7 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
   MigrationSummary,
-} from "../plugins/types.js";
+} from "./plugin-entry.js";
 
 export type {
   MigrationDetection,
@@ -18,9 +20,12 @@ export type {
   MigrationSummary,
 };
 
+/** Shared migration failure reason when an item lacks required paths. */
 export const MIGRATION_REASON_MISSING_SOURCE_OR_TARGET = "missing source or target";
+/** Shared migration conflict reason when a target already exists. */
 export const MIGRATION_REASON_TARGET_EXISTS = "target exists";
 
+/** Creates a migration item, defaulting new provider output to the planned state. */
 export function createMigrationItem(
   params: Omit<MigrationItem, "status"> & { status?: MigrationItem["status"] },
 ): MigrationItem {
@@ -30,18 +35,22 @@ export function createMigrationItem(
   };
 }
 
+/** Marks a planned item as blocked by an existing target value. */
 export function markMigrationItemConflict(item: MigrationItem, reason: string): MigrationItem {
   return { ...item, status: "conflict", reason };
 }
 
+/** Marks an item as failed during detection or apply. */
 export function markMigrationItemError(item: MigrationItem, reason: string): MigrationItem {
   return { ...item, status: "error", reason };
 }
 
+/** Marks an item as intentionally skipped, usually for manual follow-up. */
 export function markMigrationItemSkipped(item: MigrationItem, reason: string): MigrationItem {
   return { ...item, status: "skipped", reason };
 }
 
+/** Counts migration item statuses for provider plans, apply results, and CLI reports. */
 export function summarizeMigrationItems(items: readonly MigrationItem[]): MigrationSummary {
   return {
     total: items.length,
@@ -92,12 +101,11 @@ function isSecretKey(key: string): boolean {
   return SECRET_KEY_MARKERS.some((marker) => normalized.includes(marker));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
+/** Structured config patch details stored on migration items. */
 export type MigrationConfigPatchDetails = {
+  /** Config object path where the patch should be merged. */
   path: string[];
+  /** Patch value stored on the migration item. */
   value: unknown;
 };
 
@@ -108,10 +116,40 @@ class MigrationConfigPatchConflictError extends Error {
   }
 }
 
+const MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH = "unsafe config patch path";
+
+function isSafeMigrationConfigPath(path: readonly string[]): boolean {
+  return (
+    path.length > 0 && path.every((segment) => segment.length > 0 && !isBlockedObjectKey(segment))
+  );
+}
+
+function cloneMigrationConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneMigrationConfigValue(entry));
+  }
+  if (!isRecord(value)) {
+    return structuredClone(value);
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    // Migration patches come from external tools. Drop prototype-bearing keys
+    // recursively before any value reaches a live config object.
+    if (!isBlockedObjectKey(key)) {
+      next[key] = cloneMigrationConfigValue(entry);
+    }
+  }
+  return next;
+}
+
+/** Reads a nested config value, returning undefined when a parent is not an object. */
 export function readMigrationConfigPath(
   root: Record<string, unknown>,
   path: readonly string[],
 ): unknown {
+  if (!isSafeMigrationConfigPath(path)) {
+    return undefined;
+  }
   let current: unknown = root;
   for (const segment of path) {
     if (!isRecord(current)) {
@@ -122,22 +160,30 @@ export function readMigrationConfigPath(
   return current;
 }
 
+/** Deep-merges object patches and replaces scalar/array values with a cloned target value. */
 export function mergeMigrationConfigValue(left: unknown, right: unknown): unknown {
   if (!isRecord(left) || !isRecord(right)) {
-    return structuredClone(right);
+    return cloneMigrationConfigValue(right);
   }
   const next: Record<string, unknown> = { ...left };
   for (const [key, value] of Object.entries(right)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     next[key] = mergeMigrationConfigValue(next[key], value);
   }
   return next;
 }
 
+/** Writes a config patch path in-place, creating missing object parents as needed. */
 export function writeMigrationConfigPath(
   root: Record<string, unknown>,
   path: readonly string[],
   value: unknown,
 ): void {
+  if (!isSafeMigrationConfigPath(path)) {
+    throw new Error(MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
+  }
   let current = root;
   for (const segment of path.slice(0, -1)) {
     const existing = current[segment];
@@ -148,26 +194,32 @@ export function writeMigrationConfigPath(
   }
   const leaf = path.at(-1);
   if (!leaf) {
-    return;
+    throw new Error(MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
   }
   current[leaf] = mergeMigrationConfigValue(current[leaf], value);
 }
 
+/** Checks whether a config patch would overwrite existing leaf keys without `--overwrite`. */
 export function hasMigrationConfigPatchConflict(
   config: MigrationProviderContext["config"],
   path: readonly string[],
   value: unknown,
 ): boolean {
   if (!isRecord(value)) {
+    // Scalar patches conflict with any existing value at the target path.
     return readMigrationConfigPath(config as Record<string, unknown>, path) !== undefined;
   }
   const existing = readMigrationConfigPath(config as Record<string, unknown>, path);
   if (!isRecord(existing)) {
     return false;
   }
-  return Object.keys(value).some((key) => existing[key] !== undefined);
+  return Object.keys(value).some(
+    (key) =>
+      !isBlockedObjectKey(key) && Object.hasOwn(existing, key) && existing[key] !== undefined,
+  );
 }
 
+/** Builds a planned or conflicting config-merge migration item. */
 export function createMigrationConfigPatchItem(params: {
   id: string;
   target: string;
@@ -177,6 +229,7 @@ export function createMigrationConfigPatchItem(params: {
   conflict?: boolean;
   reason?: string;
   source?: string;
+  sensitive?: boolean;
   details?: Record<string, unknown>;
 }): MigrationItem {
   return createMigrationItem({
@@ -188,10 +241,12 @@ export function createMigrationConfigPatchItem(params: {
     status: params.conflict ? "conflict" : "planned",
     reason: params.conflict ? (params.reason ?? MIGRATION_REASON_TARGET_EXISTS) : undefined,
     message: params.message,
+    sensitive: params.sensitive,
     details: { ...params.details, path: params.path, value: params.value },
   });
 }
 
+/** Builds a skipped item that records user-facing manual migration guidance. */
 export function createMigrationManualItem(params: {
   id: string;
   source: string;
@@ -209,6 +264,7 @@ export function createMigrationManualItem(params: {
   });
 }
 
+/** Reads config patch metadata from an item produced by `createMigrationConfigPatchItem`. */
 export function readMigrationConfigPatchDetails(
   item: MigrationItem,
 ): MigrationConfigPatchDetails | undefined {
@@ -222,6 +278,12 @@ export function readMigrationConfigPatchDetails(
   return { path, value: item.details?.value };
 }
 
+/** Resolves the host-owned config mutation target for migration apply. */
+export function resolveMigrationConfigRuntime(ctx: MigrationProviderContext) {
+  return ctx.configRuntime ?? ctx.runtime?.config;
+}
+
+/** Applies one planned config patch through the runtime config writer and returns its final status. */
 export async function applyMigrationConfigPatchItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
@@ -233,7 +295,10 @@ export async function applyMigrationConfigPatchItem(
   if (!details) {
     return markMigrationItemError(item, "missing config patch");
   }
-  const configApi = ctx.runtime?.config;
+  if (!isSafeMigrationConfigPath(details.path)) {
+    return markMigrationItemError(item, MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
+  }
+  const configApi = resolveMigrationConfigRuntime(ctx);
   if (!configApi?.current || !configApi.mutateConfigFile) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
@@ -264,6 +329,7 @@ export async function applyMigrationConfigPatchItem(
   }
 }
 
+/** Manual items never mutate state; applying one preserves the skipped/manual status. */
 export function applyMigrationManualItem(item: MigrationItem): MigrationItem {
   return markMigrationItemSkipped(item, item.reason ?? "manual follow-up required");
 }
@@ -301,8 +367,18 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
     return REDACTED_MIGRATION_VALUE;
   }
   seen.add(value);
+  const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
+  const redactSensitiveDetailsValue =
+    record.sensitive === true && isRecord(record.details) && Object.hasOwn(record.details, "value");
+  for (const [key, entry] of Object.entries(record)) {
+    if (key === "details" && redactSensitiveDetailsValue && isRecord(entry)) {
+      const details = redactMigrationValueInternal(entry, seen);
+      next[key] = isRecord(details)
+        ? { ...details, value: REDACTED_MIGRATION_VALUE }
+        : REDACTED_MIGRATION_VALUE;
+      continue;
+    }
     if (isSecretKey(key) && !isSecretReferenceLike(entry)) {
       next[key] = REDACTED_MIGRATION_VALUE;
       continue;
@@ -312,14 +388,17 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
   return next;
 }
 
+/** Redacts likely secret values while preserving SecretRef-like objects for operator context. */
 export function redactMigrationValue(value: unknown): unknown {
   return redactMigrationValueInternal(value, new WeakSet<object>());
 }
 
+/** Redacts sensitive fields from one migration item before report/output serialization. */
 export function redactMigrationItem(item: MigrationItem): MigrationItem {
   return redactMigrationValue(item) as MigrationItem;
 }
 
+/** Redacts sensitive fields from a full migration plan before report/output serialization. */
 export function redactMigrationPlan<T extends MigrationPlan>(plan: T): T {
   return redactMigrationValue(plan) as T;
 }

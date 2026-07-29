@@ -1,37 +1,29 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+// Enforces a hard-zero policy for Knip's unused files.
 import { fileURLToPath } from "node:url";
 import {
-  KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST,
-  KNIP_UNUSED_FILE_ALLOWLIST,
-} from "./deadcode-unused-files.allowlist.mjs";
+  isLikelyRepoFilePath,
+  KNIP_MAX_BUFFER_BYTES,
+  runKnip,
+  uniqueSorted,
+} from "./deadcode-knip-runner.mjs";
 
-const KNIP_VERSION = "6.8.0";
-const KNIP_ARGS = [
-  "--config",
-  "config/knip.config.ts",
-  "--production",
-  "--no-progress",
-  "--reporter",
-  "compact",
-  "--files",
-  "--no-config-hints",
+export { KNIP_MAX_BUFFER_BYTES };
+
+const KNIP_COMMON_ARGS = ["--no-progress", "--reporter", "compact", "--files", "--no-config-hints"];
+
+const KNIP_SCANS = [
+  {
+    name: "production unused-file scan",
+    args: ["--config", "config/knip.config.ts", "--production"],
+  },
+  {
+    name: "full-tree unused-file scan",
+    args: ["--config", "config/knip.all-exports.config.ts"],
+  },
 ];
 
-function normalizeRepoPath(value) {
-  return value.replaceAll("\\", "/").replace(/^\.\//u, "");
-}
-
-function uniqueSorted(values) {
-  return [...new Set(values.map(normalizeRepoPath))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-function isLikelyRepoFilePath(value) {
-  return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
-}
-
+/** Parses compact Knip output into unused file paths. */
 export function parseKnipCompactUnusedFiles(output) {
   const files = [];
   let inUnusedFilesSection = false;
@@ -48,10 +40,7 @@ export function parseKnipCompactUnusedFiles(output) {
     }
 
     const separatorIndex = line.lastIndexOf(": ");
-    if (separatorIndex === -1) {
-      continue;
-    }
-    if (sawUnusedFilesSection && !inUnusedFilesSection) {
+    if (separatorIndex === -1 || (sawUnusedFilesSection && !inUnusedFilesSection)) {
       continue;
     }
     const file = line.slice(separatorIndex + 2).trim();
@@ -63,101 +52,85 @@ export function parseKnipCompactUnusedFiles(output) {
   return uniqueSorted(files);
 }
 
-export function compareUnusedFilesToAllowlist(
-  actualFiles,
-  allowlistFiles,
-  optionalAllowlistFiles = [],
-) {
-  const actual = uniqueSorted(actualFiles);
-  const allowed = uniqueSorted(allowlistFiles);
-  const optionalAllowed = uniqueSorted(optionalAllowlistFiles);
-  const allowedOrOptionalSet = new Set([...allowed, ...optionalAllowed]);
-  const actualSet = new Set(actual);
+/** Runs Knip and returns parsed unused-file results. */
+export async function runKnipUnusedFiles(params = {}) {
+  return await runKnip([...KNIP_SCANS[0].args, ...KNIP_COMMON_ARGS], {
+    ...params,
+    scanName: KNIP_SCANS[0].name,
+  });
+}
 
+/** Rejects every unused file reported by Knip. */
+export function checkUnusedFiles(output) {
+  const files = parseKnipCompactUnusedFiles(output);
   return {
-    actual,
-    allowed,
-    unexpected: actual.filter((file) => !allowedOrOptionalSet.has(file)),
-    stale: allowed.filter((file) => !actualSet.has(file)),
-    duplicateAllowedCount: allowlistFiles.length - new Set(allowlistFiles).size,
-    allowlistIsSorted:
-      JSON.stringify(allowlistFiles.map(normalizeRepoPath)) === JSON.stringify(allowed),
+    ok: files.length === 0,
+    files,
+    message:
+      files.length === 0
+        ? ""
+        : [
+            "Unused files are not allowed:",
+            ...files.map((file) => `  ${file}`),
+            "Delete the files or model their real entrypoints in Knip.",
+          ].join("\n"),
   };
 }
 
-export function formatUnusedFileComparison(comparison) {
-  const lines = [];
-  if (!comparison.allowlistIsSorted) {
-    lines.push("deadcode unused-file allowlist is not sorted.");
+/** Validates both Knip process completion and the unused-file report. */
+export function checkKnipUnusedFileScanResult(result) {
+  if (result.errorCode || result.status === null || result.status !== 0) {
+    return {
+      ok: false,
+      failureReason: result.errorCode ?? result.signal ?? `exit status ${String(result.status)}`,
+      message: "",
+    };
   }
-  if (comparison.duplicateAllowedCount > 0) {
-    lines.push(
-      `deadcode unused-file allowlist contains ${comparison.duplicateAllowedCount} duplicate entr${
-        comparison.duplicateAllowedCount === 1 ? "y" : "ies"
-      }.`,
-    );
-  }
-  if (comparison.unexpected.length > 0) {
-    lines.push("Unexpected unused files:");
-    lines.push(...comparison.unexpected.map((file) => `  ${file}`));
-  }
-  if (comparison.stale.length > 0) {
-    lines.push("Stale allowlist entries:");
-    lines.push(...comparison.stale.map((file) => `  ${file}`));
-  }
-  return lines.join("\n");
-}
-
-export function runKnipUnusedFiles() {
-  const result = spawnSync(
-    "pnpm",
-    ["--config.minimum-release-age=0", "dlx", `knip@${KNIP_VERSION}`, ...KNIP_ARGS],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  return {
-    status: result.status,
-    signal: result.signal,
-    output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
-  };
-}
-
-export function checkUnusedFiles(
-  output,
-  allowlistFiles = KNIP_UNUSED_FILE_ALLOWLIST,
-  optionalAllowlistFiles = KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST,
-) {
-  const actual = parseKnipCompactUnusedFiles(output);
-  const comparison = compareUnusedFilesToAllowlist(actual, allowlistFiles, optionalAllowlistFiles);
-  return {
-    ok:
-      comparison.allowlistIsSorted &&
-      comparison.duplicateAllowedCount === 0 &&
-      comparison.unexpected.length === 0 &&
-      comparison.stale.length === 0,
-    comparison,
-    message: formatUnusedFileComparison(comparison),
-  };
-}
-
-function main() {
-  const result = runKnipUnusedFiles();
   const check = checkUnusedFiles(result.output);
-  if (!check.ok) {
-    if (check.message) {
-      console.error(check.message);
-    }
-    process.exitCode = 1;
-    return;
-  }
+  return { ok: check.ok, failureReason: "", message: check.message };
+}
 
-  console.log(
-    `[deadcode] Knip unused-file allowlist matched ${check.comparison.actual.length} intentional entries.`,
+async function main() {
+  // The scans are independent Knip child processes over separate configs;
+  // running them concurrently halves the lane's serial wall clock.
+  const results = await Promise.all(
+    KNIP_SCANS.map(async (scan) => ({
+      scan,
+      result: await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name }),
+    })),
   );
+  for (const { scan, result } of results) {
+    if (!reportUnusedFileScan(scan, result)) {
+      process.exitCode = 1;
+      return;
+    }
+  }
+  console.log("[deadcode] Knip production and full-tree unused-file checks passed with 0 entries.");
+}
+
+function reportUnusedFileScan(scan, result) {
+  const validation = checkKnipUnusedFileScanResult(result);
+  if (validation.failureReason) {
+    console.error(
+      `deadcode ${scan.name} failed: ${validation.failureReason}${
+        result.errorMessage ? `: ${result.errorMessage}` : ""
+      }`,
+    );
+    if (result.output) {
+      console.error(result.output);
+    }
+    return false;
+  }
+  if (!validation.ok) {
+    if (validation.message) {
+      console.error(`${scan.name}:\n${validation.message}`);
+    }
+    return false;
+  }
+  console.log(`[deadcode] Knip ${scan.name} passed with 0 entries.`);
+  return true;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main();
+  await main();
 }

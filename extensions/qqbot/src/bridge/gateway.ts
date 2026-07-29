@@ -7,16 +7,15 @@
  */
 
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EngineAdapters } from "../engine/adapter/index.js";
 import {
   startGateway as coreStartGateway,
   type CoreGatewayContext,
 } from "../engine/gateway/gateway.js";
-import type { GatewayPluginRuntime } from "../engine/gateway/types.js";
 import { initSender, registerAccount } from "../engine/messaging/sender.js";
 import type { EngineLogger } from "../engine/types.js";
-import * as _audioModule from "../engine/utils/audio.js";
+import * as audioModule from "../engine/utils/audio.js";
 import { formatDuration } from "../engine/utils/format.js";
 import { debugLog, debugError } from "../engine/utils/log.js";
 import type { ResolvedQQBotAccount } from "../types.js";
@@ -24,14 +23,18 @@ import { ensurePlatformAdapter } from "./bootstrap.js";
 import { setBridgeLogger } from "./logger.js";
 import { toGatewayAccount } from "./narrowing.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
-import { getQQBotRuntime, getQQBotRuntimeForEngine } from "./runtime.js";
-import { createSdkHistoryAdapter, createSdkMentionGateAdapter } from "./sdk-adapter.js";
+import { getQQBotRuntime } from "./runtime.js";
+import {
+  createSdkAccessAdapter,
+  createSdkHistoryAdapter,
+  createSdkMentionGateAdapter,
+} from "./sdk-adapter.js";
 
 // ---- One-time startup initialization (module-level) ----
 
-const _pluginVersion = resolveQQBotPluginVersion(import.meta.url);
+const pluginVersion = resolveQQBotPluginVersion(import.meta.url);
 initSender({
-  pluginVersion: _pluginVersion,
+  pluginVersion,
   openclawVersion: resolveRuntimeServiceVersion(),
 });
 
@@ -44,6 +47,7 @@ export interface GatewayContext {
   onReady?: (data: unknown) => void;
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   log?: {
     info: (msg: string) => void;
     error: (msg: string) => void;
@@ -71,25 +75,26 @@ export interface GatewayContext {
  * happens here. The engine receives a fully-populated
  * {@link EngineAdapters} object with zero global singletons.
  */
-function createEngineAdapters(_runtime: GatewayPluginRuntime): EngineAdapters {
+function createEngineAdapters(): EngineAdapters {
   return {
     history: createSdkHistoryAdapter(),
     mentionGate: createSdkMentionGateAdapter(),
+    access: createSdkAccessAdapter(),
     audioConvert: {
-      convertSilkToWav: _audioModule.convertSilkToWav,
-      isVoiceAttachment: _audioModule.isVoiceAttachment,
+      convertSilkToWav: audioModule.convertSilkToWav,
+      isVoiceAttachment: audioModule.isVoiceAttachment,
       formatDuration,
     },
     outboundAudio: {
       audioFileToSilkBase64: async (p: string, f?: string[]) =>
-        (await _audioModule.audioFileToSilkBase64(p, f)) ?? undefined,
-      isAudioFile: (p: string, m?: string) => _audioModule.isAudioFile(p, m),
-      shouldTranscodeVoice: (p: string) => _audioModule.shouldTranscodeVoice(p),
-      waitForFile: (p: string, ms?: number) => _audioModule.waitForFile(p, ms),
+        (await audioModule.audioFileToSilkBase64(p, f)) ?? undefined,
+      isAudioFile: (p: string, m?: string) => audioModule.isAudioFile(p, m),
+      shouldTranscodeVoice: (p: string) => audioModule.shouldTranscodeVoice(p),
+      waitForFile: (p: string, ms?: number) => audioModule.waitForFile(p, ms),
     },
     commands: {
       resolveVersion: resolveRuntimeServiceVersion,
-      pluginVersion: _pluginVersion,
+      pluginVersion,
       approveRuntimeGetter: () => {
         const rt = getQQBotRuntime();
         return { config: rt.config };
@@ -108,7 +113,9 @@ function createEngineAdapters(_runtime: GatewayPluginRuntime): EngineAdapters {
 export async function startGateway(ctx: GatewayContext): Promise<void> {
   ensurePlatformAdapter();
 
-  const runtime = getQQBotRuntimeForEngine();
+  const pluginRuntime = getQQBotRuntime();
+  const runtime = pluginRuntime as unknown as CoreGatewayContext["runtime"];
+  const getCurrentConfig = () => pluginRuntime.config.current() as OpenClawConfig;
   const accountLogger = createAccountLogger(ctx.log, ctx.account.accountId);
 
   // Per-account registration (still global — sender is a leaf utility).
@@ -127,7 +134,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       context: { account: ctx.account },
       abortSignal: ctx.abortSignal,
     });
-    accountLogger.info(`approval.native context registered (lease=${!!lease})`);
+    accountLogger.info(`approval.native context registered (lease=${Boolean(lease)})`);
   } else {
     accountLogger.info("No channelRuntime — skipping approval.native registration");
   }
@@ -136,12 +143,14 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     account: toGatewayAccount(ctx.account),
     abortSignal: ctx.abortSignal,
     cfg: ctx.cfg,
+    getCurrentConfig,
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,
+    onDisconnected: ctx.onDisconnected,
     log: accountLogger,
     runtime,
-    adapters: createEngineAdapters(runtime),
+    adapters: createEngineAdapters(),
   };
 
   return coreStartGateway(coreCtx);

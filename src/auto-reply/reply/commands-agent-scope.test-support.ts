@@ -1,3 +1,4 @@
+// Shared command test mocks for resolving agent scope and directories.
 import { vi } from "vitest";
 
 export const resolveSessionAgentIdMock = vi.fn(() => "main");

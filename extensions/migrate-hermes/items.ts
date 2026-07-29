@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements items behavior.
 import type { MigrationItem } from "openclaw/plugin-sdk/migration";
 import {
   createMigrationItem,
@@ -5,11 +6,12 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
-import { readString } from "./helpers.js";
+import { isRecord, readString } from "./helpers.js";
 
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
 export const HERMES_REASON_DEFAULT_MODEL_CONFIGURED = "default model already configured";
-export const HERMES_REASON_INCLUDE_SECRETS = "use --include-secrets to import";
+export const HERMES_REASON_MODEL_PROVIDER_CONFLICT = "model provider config conflict";
+export const HERMES_REASON_INCLUDE_SECRETS = "auth credential migration not selected";
 export const HERMES_REASON_AUTH_PROFILE_EXISTS = "auth profile exists";
 export const HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE = "config runtime unavailable";
 export const HERMES_REASON_MISSING_SECRET_METADATA = "missing secret metadata";
@@ -43,6 +45,25 @@ export function readHermesModelDetails(item: MigrationItem): { model: string } |
   return model ? { model } : undefined;
 }
 
+export function findHermesModelProviderDependency(
+  items: MigrationItem[],
+  model: string,
+): MigrationItem | undefined {
+  const separator = model.indexOf("/");
+  const provider = separator > 0 ? model.slice(0, separator) : "";
+  if (!provider) {
+    return undefined;
+  }
+  return items.find((item) => {
+    const value = item.details?.value;
+    return (
+      item.id.startsWith("config:model-provider:") &&
+      isRecord(value) &&
+      Object.hasOwn(value, provider)
+    );
+  });
+}
+
 export function createHermesSecretItem(params: {
   id: string;
   source?: string;
@@ -50,9 +71,14 @@ export function createHermesSecretItem(params: {
   includeSecrets?: boolean;
   existsAlready?: boolean;
   details: {
-    envVar: string;
+    envVar?: string;
     provider: string;
     profileId: string;
+    mode?: "token";
+    sourceKind?: "hermes-auth-json" | "hermes-env" | "opencode-auth-json";
+    sourceProvider?: string;
+    sourceCredentialId?: string;
+    secretField?: string;
   };
 }): MigrationItem {
   const skipped = !params.includeSecrets;
@@ -74,13 +100,39 @@ export function createHermesSecretItem(params: {
   });
 }
 
-export function readHermesSecretDetails(
-  item: MigrationItem,
-): { envVar: string; provider: string; profileId: string } | undefined {
+export function readHermesSecretDetails(item: MigrationItem):
+  | {
+      envVar?: string;
+      provider: string;
+      profileId: string;
+      mode?: "token";
+      sourceKind?: string;
+      sourceProvider?: string;
+      sourceCredentialId?: string;
+      secretField?: string;
+    }
+  | undefined {
   const envVar = readString(item.details?.envVar);
   const provider = readString(item.details?.provider);
   const profileId = readString(item.details?.profileId);
-  return envVar && provider && profileId ? { envVar, provider, profileId } : undefined;
+  if (!provider || !profileId) {
+    return undefined;
+  }
+  const mode = item.details?.mode === "token" ? "token" : undefined;
+  const sourceKind = readString(item.details?.sourceKind);
+  const sourceProvider = readString(item.details?.sourceProvider);
+  const sourceCredentialId = readString(item.details?.sourceCredentialId);
+  const secretField = readString(item.details?.secretField);
+  return {
+    ...(envVar ? { envVar } : {}),
+    provider,
+    profileId,
+    ...(mode ? { mode } : {}),
+    ...(sourceKind ? { sourceKind } : {}),
+    ...(sourceProvider ? { sourceProvider } : {}),
+    ...(sourceCredentialId ? { sourceCredentialId } : {}),
+    ...(secretField ? { secretField } : {}),
+  };
 }
 
 export function hermesItemConflict(item: MigrationItem, reason: string): MigrationItem {

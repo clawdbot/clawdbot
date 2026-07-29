@@ -1,8 +1,7 @@
+// Memory Core plugin module implements cli.host behavior.
 export {
-  colorize,
   defaultRuntime,
   formatErrorMessage,
-  isRich,
   resolveCommandSecretRefsViaGateway,
   setVerbose,
   shortenHomeInString,

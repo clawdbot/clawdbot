@@ -1,3 +1,4 @@
+// Tests channel approval authorization and sender validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createResolvedApproverActionAuthAdapter } from "../plugin-sdk/approval-auth-helpers.js";
 

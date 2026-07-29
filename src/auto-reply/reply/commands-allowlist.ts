@@ -1,11 +1,15 @@
+import { expectDefined } from "@openclaw/normalization-core";
+/** Handles /allowlist commands across config and pairing-store targets. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import {
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   addChannelAllowFromStoreEntry,
@@ -13,18 +17,15 @@ import {
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { applyAllowlistConfigMutation, AutoReplyConfigMutationError } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 
 type AllowlistScope = "dm" | "group" | "all";
@@ -109,7 +110,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   }
 
   for (; i < tokens.length; i += 1) {
-    const token = tokens[i];
+    const token = expectDefined(tokens[i], "tokens entry at i");
     const lowered = normalizeOptionalLowercaseString(token) ?? "";
     if (lowered === "--resolve" || lowered === "resolve") {
       resolve = true;
@@ -264,6 +265,7 @@ async function readAllowlistConfig(params: {
   );
 }
 
+/** Command handler for listing, adding, and removing allowlist entries. */
 export const handleAllowlistCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -309,6 +311,13 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     channelId,
     parsedAccount: parsed.account,
     ctxAccountId: params.ctx.AccountId,
+  });
+  const originChannelId =
+    params.command.channelId ?? normalizeChannelId(resolveCommandSurfaceChannel(params));
+  const originAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
   });
   const plugin = getChannelPlugin(channelId);
 
@@ -421,7 +430,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingAdminScope = requireGatewayClientScope(params, {
     label: "/allowlist write",
     allowedScopes: ["operator.admin"],
     missingText: "❌ /allowlist add|remove requires operator.admin for gateway clients.",
@@ -439,8 +448,20 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return disabled;
   }
 
+  if (parsed.scope === "group" && parsed.target === "store") {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Pairing-store allowlist edits apply to DMs only; omit --store for groups.",
+      },
+    };
+  }
+
   const shouldUpdateConfig = parsed.target !== "store";
-  const shouldTouchStore = parsed.target !== "config" && Boolean(plugin?.pairing);
+  // Pairing stores authorize DMs only. Group edits must stay config-scoped or a
+  // group-only sender could gain or lose unrelated direct-message access.
+  const shouldTouchStore =
+    parsed.scope !== "group" && parsed.target !== "config" && Boolean(plugin?.pairing);
 
   if (shouldUpdateConfig) {
     if (parsed.scope === "all") {
@@ -457,6 +478,8 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         },
       };
     }
+    const applyConfigEdit = plugin.allowlist.applyConfigEdit;
+    const editScope = parsed.scope;
 
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
@@ -491,10 +514,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
       channel: params.command.channel,
-      channelId,
-      accountId,
+      originChannelId,
+      originAccountId,
       gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: editResult.writeTarget,
+      fallbackChannelId: channelId,
     });
     if (deniedText) {
       return {
@@ -507,18 +531,21 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const configChanged = editResult.changed;
 
     if (configChanged) {
-      const validated = validateConfigObjectWithPlugins(parsedConfig);
-      if (!validated.ok) {
-        const issue = validated.issues[0];
-        return {
-          shouldContinue: false,
-          reply: { text: `⚠️ Config invalid after update (${issue.path}: ${issue.message}).` },
-        };
+      try {
+        await applyAllowlistConfigMutation({
+          cfg: params.cfg,
+          accountId,
+          scope: editScope,
+          action: parsed.action,
+          entry: parsed.entry,
+          applyConfigEdit,
+        });
+      } catch (error) {
+        if (error instanceof AutoReplyConfigMutationError) {
+          return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+        }
+        throw error;
       }
-      await replaceConfigFile({
-        nextConfig: validated.config,
-        afterWrite: { mode: "auto" },
-      });
     }
 
     if (!configChanged && !shouldTouchStore) {
@@ -560,6 +587,22 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     };
   }
 
+  const storeDeniedText = resolveConfigWriteDeniedText({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    originChannelId,
+    originAccountId,
+    gatewayClientScopes: params.ctx.GatewayClientScopes,
+    target: resolveExplicitConfigWriteTarget({ channelId, accountId }),
+    fallbackChannelId: channelId,
+  });
+  if (storeDeniedText) {
+    return {
+      shouldContinue: false,
+      reply: { text: storeDeniedText },
+    };
+  }
+
   await updatePairingStoreAllowlist({
     action: parsed.action,
     channelId,
@@ -568,7 +611,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
-  const scopeLabel = parsed.scope === "dm" ? "DM" : "group";
+  const scopeLabel = parsed.scope === "group" ? "group" : "DM";
   return {
     shouldContinue: false,
     reply: { text: `✅ ${scopeLabel} allowlist ${actionLabel} in pairing store.` },

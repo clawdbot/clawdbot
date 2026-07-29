@@ -1,3 +1,4 @@
+// Msteams plugin module implements oauth.flow behavior.
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
   generateOAuthState,

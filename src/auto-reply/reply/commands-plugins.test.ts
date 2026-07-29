@@ -1,11 +1,12 @@
+// Tests plugin command install, listing, and config behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
-import { buildPluginsCommandParams } from "./commands.test-harness.js";
+import { buildPluginsCommandParams, type ConfigSnapshotMock } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
@@ -22,11 +23,11 @@ vi.mock("../../cli/plugins-command-helpers.js", () => ({
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),
 }));
 
-vi.mock("../../cli/plugins-install-persist.js", () => ({
+vi.mock("../../plugins/install-persistence.js", () => ({
   persistPluginInstall: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+vi.mock("../../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutationMock,
 }));
 
@@ -34,6 +35,39 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: async (params: {
+    afterWrite?: unknown;
+    transform: (
+      currentConfig: OpenClawConfig,
+      context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+    ) =>
+      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
+      | {
+          nextConfig: OpenClawConfig;
+          result?: unknown;
+        };
+  }) => {
+    const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+    const previousHash = snapshot.hash ?? null;
+    const currentConfig = structuredClone(
+      snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+    );
+    const transformContext = { snapshot, previousHash, attempt: 0 };
+    const transformed = await params.transform(currentConfig, transformContext);
+    const afterWrite = params.afterWrite ?? { mode: "auto" };
+    await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+    return {
+      path: snapshot.path ?? "/tmp/openclaw.json",
+      previousHash,
+      persistedHash: "persisted-hash",
+      snapshot,
+      nextConfig: transformed.nextConfig,
+      result: transformed.result,
+      attempts: 1,
+      afterWrite,
+      followUp: { action: "none" },
+    };
+  },
 }));
 
 vi.mock("../../infra/archive.js", () => ({
@@ -45,6 +79,9 @@ vi.mock("../../infra/clawhub.js", () => ({
 }));
 
 vi.mock("../../plugins/clawhub.js", () => ({
+  CLAWHUB_INSTALL_ERROR_CODE: {
+    CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "clawhub_risk_acknowledgement_required",
+  },
   installPluginFromClawHub: vi.fn(),
 }));
 
@@ -95,11 +132,65 @@ function buildCfg(): OpenClawConfig {
   };
 }
 
-function buildPluginsParams(commandBodyNormalized: string, cfg: OpenClawConfig) {
-  return buildPluginsCommandParams({
+const WRITE_GATEWAY_SCOPES = ["operator.admin", "operator.write", "operator.pairing"];
+
+function buildPluginsParams(
+  commandBodyNormalized: string,
+  cfg: OpenClawConfig,
+  options?: { gatewayClientScopes?: string[]; omitGatewayClientScopes?: boolean },
+) {
+  const params = buildPluginsCommandParams({
     commandBodyNormalized,
     cfg,
+    gatewayClientScopes: options?.gatewayClientScopes,
   });
+  if (options?.omitGatewayClientScopes) {
+    delete params.ctx.GatewayClientScopes;
+  }
+  return params;
+}
+
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function getNestedRecord(record: Record<string, unknown>, key: string, label: string) {
+  return requireRecord(record[key], label);
+}
+
+function expectPluginEnabledInConfig(config: unknown, enabled: boolean) {
+  const configRecord = requireRecord(config, "config");
+  const plugins = getNestedRecord(configRecord, "plugins", "config.plugins");
+  const entries = getNestedRecord(plugins, "entries", "config.plugins.entries");
+  const superpowers = getNestedRecord(entries, "superpowers", "superpowers entry");
+  expect(superpowers.enabled).toBe(enabled);
+}
+
+function expectLastReplaceConfig(enabled: boolean) {
+  const calls = (replaceConfigFileMock as unknown as MockCalls).mock.calls;
+  const [payload] = calls.at(-1) ?? [];
+  const payloadRecord = requireRecord(payload, "replace config payload");
+  expect(Object.keys(payloadRecord).toSorted()).toEqual(["afterWrite", "nextConfig"]);
+  expect(payloadRecord.afterWrite).toEqual({ mode: "auto" });
+  expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
+}
+
+function expectLastRegistryRefresh(enabled: boolean) {
+  const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
+  const [payload] = calls.at(-1) ?? [];
+  const payloadRecord = requireRecord(payload, "registry refresh payload");
+  expect(Object.keys(payloadRecord).toSorted()).toEqual(["config", "logger", "reason"]);
+  expect(payloadRecord.reason).toBe("policy-changed");
+  const logger = getNestedRecord(payloadRecord, "logger", "registry refresh logger");
+  expect(logger.warn).toEqual(expect.any(Function));
+  expectPluginEnabledInConfig(payloadRecord.config, enabled);
 }
 
 describe("handlePluginsCommand", () => {
@@ -198,68 +289,87 @@ describe("handlePluginsCommand", () => {
     expect(result?.reply?.text).toContain("requires operator.admin");
   });
 
+  it("blocks channel-authorized non-owner plugin toggles before config mutation", async () => {
+    const params = buildPluginsParams("/plugins enable superpowers", buildCfg(), {
+      omitGatewayClientScopes: true,
+    });
+    params.command.channel = "telegram";
+    params.command.channelId = "telegram";
+    params.command.surface = "telegram";
+    params.command.senderId = "telegram-user-3";
+    params.command.senderIsOwner = false;
+    params.command.isAuthorizedSender = true;
+    params.ctx.Provider = "telegram";
+    params.ctx.Surface = "telegram";
+
+    const result = await handlePluginsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
+  });
+
+  it("allows gateway clients with operator.admin to toggle plugins", async () => {
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+    const params = buildPluginsParams("/plugins disable superpowers", buildCfg(), {
+      gatewayClientScopes: ["operator.admin", "operator.write"],
+    });
+    params.command.senderIsOwner = false;
+
+    const result = await handlePluginsCommand(params, true);
+
+    expect(result?.reply?.text).toContain('Plugin "superpowers" disabled');
+    expectLastReplaceConfig(false);
+    expectLastRegistryRefresh(false);
+  });
+
   it("enables and disables a discovered plugin", async () => {
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
 
-    const enableParams = buildPluginsParams("/plugins enable superpowers", buildCfg());
+    const enableParams = buildPluginsParams("/plugins enable superpowers", buildCfg(), {
+      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+    });
     enableParams.command.senderIsOwner = true;
 
     const enableResult = await handlePluginsCommand(enableParams, true);
     expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
-        afterWrite: { mode: "auto" },
-      }),
-    );
-    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        reason: "policy-changed",
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
-      }),
-    );
+    expectLastReplaceConfig(true);
+    expectLastRegistryRefresh(true);
 
-    const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg());
+    const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg(), {
+      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+    });
     disableParams.command.senderIsOwner = true;
 
     const disableResult = await handlePluginsCommand(disableParams, true);
     expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: false }),
-            }),
-          }),
-        }),
-        afterWrite: { mode: "auto" },
-      }),
-    );
-    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        reason: "policy-changed",
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: false }),
-            }),
-          }),
-        }),
-      }),
-    );
+    expectLastReplaceConfig(false);
+    expectLastRegistryRefresh(false);
+  });
+
+  it("refuses plugin enablement in Nix mode before reading or replacing config", async () => {
+    const previousNixMode = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      const params = buildPluginsParams("/plugins enable superpowers", buildCfg(), {
+        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+      });
+      params.command.senderIsOwner = true;
+
+      const result = await handlePluginsCommand(params, true);
+      expect(result?.reply?.text).toContain("OPENCLAW_NIX_MODE=1");
+      expect(result?.reply?.text).toContain("nix-openclaw#quick-start");
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousNixMode === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previousNixMode;
+      }
+    }
   });
 
   it("resolves write targets by indexed plugin name without loading diagnostics", async () => {
@@ -277,18 +387,20 @@ describe("handlePluginsCommand", () => {
     });
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
 
-    const params = buildPluginsParams("/plugins enable Super Powers", buildCfg());
+    const params = buildPluginsParams("/plugins enable Super Powers", buildCfg(), {
+      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+    });
     params.command.senderIsOwner = true;
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalled();
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
   });
 
   it("returns an explicit unauthorized reply for native /plugins list", async () => {
     const params = buildPluginsParams("/plugins list", buildCfg());
-    params.command.senderIsOwner = false;
+    params.command.isAuthorizedSender = false;
     params.ctx.Provider = "telegram";
     params.ctx.Surface = "telegram";
     params.ctx.CommandSource = "native";

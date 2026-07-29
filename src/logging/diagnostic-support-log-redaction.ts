@@ -1,9 +1,12 @@
+// Support log redaction helpers scrub sensitive fields from diagnostic log payloads.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 
+// Sanitizes JSON log records before they enter support bundles.
 const LOG_STRING_FIELD_RE =
   /^(?:action|channel|code|component|endpoint|event|handshake|kind|level|localAddr|logger|method|model|module|msg|name|outcome|phase|pluginId|provider|reason|remoteAddr|requestId|runId|service|source|status|subsystem|surface|target|time|traceId|type)$/iu;
 const LOG_SCALAR_FIELD_RE =
@@ -25,17 +28,11 @@ function byteLength(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
 function createLogRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
 
+/** Parses and sanitizes one log line into safe support-bundle metadata. */
 export function sanitizeSupportLogRecord(
   line: string,
   redaction: SupportRedactionContext,
@@ -50,7 +47,7 @@ export function sanitizeSupportLogRecord(
     };
   }
 
-  const source = asRecord(parsed);
+  const source = asOptionalRecord(parsed);
   if (!source) {
     return {
       omitted: "non-object",
@@ -89,7 +86,7 @@ function addLogTapeMetaFields(
   source: Record<string, unknown>,
   redaction: SupportRedactionContext,
 ): void {
-  const meta = asRecord(source[LOGTAPE_META_FIELD]);
+  const meta = asOptionalRecord(source[LOGTAPE_META_FIELD]);
   if (!meta) {
     return;
   }
@@ -120,8 +117,9 @@ function addLogTapeArgFields(
     .filter(([key]) => LOGTAPE_ARG_FIELD_RE.test(key))
     .toSorted(([left], [right]) => Number(left) - Number(right));
 
+  // LogTape stores message args as numeric keys; only structured safe fields survive.
   for (const [, value] of args) {
-    const record = typeof value === "string" ? parseJsonRecord(value) : asRecord(value);
+    const record = typeof value === "string" ? parseJsonRecord(value) : asOptionalRecord(value);
     if (record) {
       addLogObjectFields(sanitized, record, redaction);
       continue;
@@ -163,7 +161,7 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
     return undefined;
   }
   try {
-    return asRecord(JSON.parse(trimmed));
+    return asOptionalRecord(JSON.parse(trimmed));
   } catch {
     return undefined;
   }

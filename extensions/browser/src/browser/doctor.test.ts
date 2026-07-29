@@ -1,5 +1,16 @@
+// Browser tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildBrowserDoctorReport } from "./doctor.js";
+
+function collectWarningCheckIds(checks: readonly { id: string; status: string }[]): string[] {
+  const ids: string[] = [];
+  for (const check of checks) {
+    if (check.status === "warn") {
+      ids.push(check.id);
+    }
+  }
+  return ids;
+}
 
 describe("buildBrowserDoctorReport", () => {
   it("reports stopped managed browsers as launchable diagnostics", () => {
@@ -32,10 +43,9 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(true);
-    expect(report.checks.find((check) => check.id === "cdp-websocket")).toMatchObject({
-      status: "info",
-      summary: "Browser is launchable but not running",
-    });
+    const websocketCheck = report.checks.find((check) => check.id === "cdp-websocket");
+    expect(websocketCheck?.status).toBe("info");
+    expect(websocketCheck?.summary).toBe("Browser is launchable but not running");
   });
 
   it("fails when Chrome MCP attach is not ready", () => {
@@ -65,9 +75,8 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(false);
-    expect(report.checks.find((check) => check.id === "attach-target")).toMatchObject({
-      status: "fail",
-    });
+    const attachCheck = report.checks.find((check) => check.id === "attach-target");
+    expect(attachCheck?.status).toBe("fail");
   });
 
   it("keeps managed launch warnings non-fatal", () => {
@@ -101,10 +110,15 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(true);
-    expect(report.checks.some((check) => check.status === "warn")).toBe(true);
-    expect(report.checks.find((check) => check.id === "display")).toMatchObject({
-      summary: "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
-    });
+    expect(collectWarningCheckIds(report.checks)).toEqual([
+      "managed-executable",
+      "display",
+      "linux-sandbox",
+    ]);
+    const displayCheck = report.checks.find((check) => check.id === "display");
+    expect(displayCheck?.summary).toBe(
+      "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
+    );
   });
 
   it("reports Linux no-display fallback without a display warning", () => {
@@ -137,9 +151,95 @@ describe("buildBrowserDoctorReport", () => {
       },
     });
 
-    expect(report.checks.find((check) => check.id === "headless-mode")).toMatchObject({
-      status: "pass",
-    });
+    const headlessCheck = report.checks.find((check) => check.id === "headless-mode");
+    expect(headlessCheck?.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "display")).toBeUndefined();
+  });
+
+  it("reports cached software graphics facts without failing doctor", () => {
+    const report = buildBrowserDoctorReport({
+      status: {
+        enabled: true,
+        profile: "openclaw",
+        driver: "openclaw",
+        transport: "cdp",
+        running: true,
+        cdpReady: true,
+        cdpHttp: true,
+        pid: 4321,
+        cdpPort: 18800,
+        cdpUrl: "http://127.0.0.1:18800",
+        chosenBrowser: "chromium",
+        detectedBrowser: "chromium",
+        detectedExecutablePath: "/usr/bin/chromium",
+        detectError: null,
+        userDataDir: "/tmp/openclaw",
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        executablePath: null,
+        attachOnly: false,
+        graphics: {
+          status: "available",
+          observedAt: 123,
+          acceleration: "software",
+          renderer: "ANGLE (Google, SwiftShader Device)",
+          vendor: "Google Inc.",
+          version: "OpenGL ES 3.0",
+          backend: "(gl=angle,angle=swiftshader)",
+          devices: [],
+          featureStatus: { webgl: "enabled_readback" },
+          disabledFeatures: [],
+          driverBugWorkarounds: [],
+          videoDecoding: [],
+          videoEncoding: [],
+        },
+      },
+    });
+
+    expect(report.ok).toBe(true);
+    const graphicsCheck = report.checks.find((check) => check.id === "graphics");
+    expect(graphicsCheck?.status).toBe("info");
+    expect(graphicsCheck?.summary).toContain("software");
+    expect(graphicsCheck?.summary).toContain("SwiftShader");
+  });
+
+  it("warns when a running managed browser cannot provide graphics facts", () => {
+    const report = buildBrowserDoctorReport({
+      status: {
+        enabled: true,
+        profile: "openclaw",
+        driver: "openclaw",
+        transport: "cdp",
+        running: true,
+        cdpReady: true,
+        cdpHttp: true,
+        pid: 4321,
+        cdpPort: 18800,
+        cdpUrl: "http://127.0.0.1:18800",
+        chosenBrowser: "chromium",
+        detectedBrowser: "chromium",
+        detectedExecutablePath: "/usr/bin/chromium",
+        detectError: null,
+        userDataDir: "/tmp/openclaw",
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        executablePath: null,
+        attachOnly: false,
+        graphics: {
+          status: "unavailable",
+          observedAt: 123,
+          reason: "SystemInfo domain unavailable",
+        },
+      },
+    });
+
+    expect(report.ok).toBe(true);
+    const graphicsCheck = report.checks.find((check) => check.id === "graphics");
+    expect(graphicsCheck).toMatchObject({
+      status: "warn",
+      summary: "unavailable: SystemInfo domain unavailable",
+    });
   });
 });

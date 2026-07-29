@@ -1,3 +1,6 @@
+/**
+ * Shared assertions for import-time side effect detection.
+ */
 function formatImportSideEffectCall(args: readonly unknown[]): string {
   if (args.length === 0) {
     return "(no args)";

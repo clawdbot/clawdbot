@@ -1,7 +1,11 @@
+// Migrate Hermes tests cover model.apply plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it } from "vitest";
-import { HERMES_REASON_DEFAULT_MODEL_CONFIGURED } from "./items.js";
+import {
+  HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
+  HERMES_REASON_MODEL_PROVIDER_CONFLICT,
+} from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import {
   cleanupTempRoots,
@@ -10,6 +14,18 @@ import {
   makeTempRoot,
   writeFile,
 } from "./test/provider-helpers.js";
+
+function defaultModelItem(status: "migrated" | "conflict") {
+  return {
+    id: "config:default-model",
+    kind: "config",
+    action: "update",
+    target: "agents.defaults.model",
+    status,
+    ...(status === "conflict" ? { reason: HERMES_REASON_DEFAULT_MODEL_CONFIGURED } : {}),
+    details: { model: "openai/gpt-5.4" },
+  };
+}
 
 describe("Hermes migration model apply", () => {
   afterEach(async () => {
@@ -56,14 +72,7 @@ describe("Hermes migration model apply", () => {
       }),
     );
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:default-model",
-          status: "migrated",
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([defaultModelItem("migrated")]);
     expect(writtenConfig?.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.4",
       fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
@@ -120,14 +129,7 @@ describe("Hermes migration model apply", () => {
       }),
     );
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:default-model",
-          status: "migrated",
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([defaultModelItem("migrated")]);
     expect(writtenConfig?.agents?.list?.[0]?.model).toEqual({
       primary: "openai/gpt-5.4",
       fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
@@ -161,16 +163,57 @@ describe("Hermes migration model apply", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:default-model",
-          status: "conflict",
-          reason: HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([defaultModelItem("conflict")]);
     expect(result.summary.conflicts).toBe(1);
     expect(lateConfig.agents?.defaults?.model).toBe("anthropic/claude-sonnet-4.6");
+  });
+
+  it("does not apply a custom default after its provider develops a late conflict", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(root, "report");
+    await writeFile(
+      path.join(source, "config.yaml"),
+      [
+        "model:",
+        "  provider: custom:acme",
+        "  default: imported-model",
+        "providers:",
+        "  acme:",
+        "    base_url: https://new.example.test/v1",
+        "    transport: openai_chat",
+        "",
+      ].join("\n"),
+    );
+    const lateConfig = {
+      agents: { defaults: { workspace: workspaceDir } },
+      models: {
+        providers: {
+          acme: {
+            baseUrl: "https://old.example.test/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(lateConfig) });
+    const ctx = makeContext({ source, stateDir, workspaceDir, reportDir });
+    const plan = await provider.plan(ctx);
+
+    const result = await provider.apply(ctx, plan);
+
+    expect(result.items.find((item) => item.id === "config:model-provider:acme")?.status).toBe(
+      "conflict",
+    );
+    expect(result.items.find((item) => item.id === "config:default-model")).toEqual(
+      expect.objectContaining({
+        status: "conflict",
+        reason: HERMES_REASON_MODEL_PROVIDER_CONFLICT,
+      }),
+    );
+    expect(lateConfig.agents?.defaults?.model).toBeUndefined();
   });
 });

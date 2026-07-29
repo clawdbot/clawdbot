@@ -1,3 +1,4 @@
+// Migrate Claude helper module supports helpers behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,24 +7,19 @@ import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord as sharedIsRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveHomePath(input: string): string {
-  if (input === "~") {
-    return os.homedir();
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
   }
-  if (input.startsWith("~/")) {
-    return path.join(os.homedir(), input.slice(2));
-  }
-  return path.resolve(input);
+  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, os.homedir()));
 }
 
 export async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return await pathExists(filePath);
 }
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
@@ -68,9 +64,7 @@ export async function readJsonObject(
   }
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+export const isRecord = sharedIsRecord;
 
 export function childRecord(
   root: Record<string, unknown> | undefined,
@@ -92,7 +86,11 @@ export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
         : path.basename(item.source);
     const header = `\n\n<!-- Imported from Claude: ${label} -->\n\n`;
     await fs.mkdir(path.dirname(item.target), { recursive: true });
-    await fs.appendFile(item.target, `${header}${content.trimEnd()}\n`, "utf8");
+    await appendRegularFile({
+      filePath: item.target,
+      content: `${header}${content.trimEnd()}\n`,
+      rejectSymlinkParents: true,
+    });
     return { ...item, status: "migrated" };
   } catch (err) {
     return markMigrationItemError(item, err instanceof Error ? err.message : String(err));

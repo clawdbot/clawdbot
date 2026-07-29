@@ -1,3 +1,4 @@
+// Opencode tests cover onboard plugin behavior.
 import {
   expectProviderOnboardAllowlistAlias,
   expectProviderOnboardPrimaryAndFallbacks,

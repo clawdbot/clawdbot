@@ -1,19 +1,26 @@
+// Maintains plugin setup entries discovered from manifests and light exports.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
+import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
+import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
+import { pluginSetupRegistryLoaderState } from "./setup-registry-loader-state.js";
 import type {
   CliBackendPlugin,
   OpenClawPluginModule,
@@ -49,14 +56,14 @@ type SetupAutoEnableProbeEntry = {
   probe: PluginSetupAutoEnableProbe;
 };
 
-export type PluginSetupRegistryDiagnosticCode =
+type PluginSetupRegistryDiagnosticCode =
   | "setup-descriptor-runtime-disabled"
   | "setup-descriptor-provider-missing-runtime"
   | "setup-descriptor-provider-runtime-undeclared"
   | "setup-descriptor-cli-backend-missing-runtime"
   | "setup-descriptor-cli-backend-runtime-undeclared";
 
-export type PluginSetupRegistryDiagnostic = {
+type PluginSetupRegistryDiagnostic = {
   pluginId: string;
   code: PluginSetupRegistryDiagnosticCode;
   declaredId?: string;
@@ -86,17 +93,32 @@ const NOOP_LOGGER: PluginLogger = {
   error() {},
 };
 
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const MAX_SETUP_REGISTRY_CACHE_ENTRIES = 16;
+let setupRegistrySnapshotIdSeq = 0;
+let setupRegistrySnapshotIds = new WeakMap<object, string>();
+const setupManifestRegistryCache = new PluginLruCache<PluginManifestRegistry>(
+  MAX_SETUP_REGISTRY_CACHE_ENTRIES,
+);
+const pluginSetupRegistryCache = new PluginLruCache<PluginSetupRegistry>(
+  MAX_SETUP_REGISTRY_CACHE_ENTRIES,
+);
 
-export function clearPluginSetupRegistryCache(): void {
-  moduleLoaders.clear();
+function clearPluginSetupRegistryCache(): void {
+  pluginSetupRegistryLoaderState.moduleLoaders.clear();
+  setupRegistrySnapshotIds = new WeakMap();
+  setupManifestRegistryCache.clear();
+  pluginSetupRegistryCache.clear();
 }
 
+registerPluginMetadataProcessMemoLifecycleClear(clearPluginSetupRegistryCache);
 function getModuleLoader(modulePath: string) {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+    cache: pluginSetupRegistryLoaderState.moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
+    ...(pluginSetupRegistryLoaderState.moduleLoaderFactory
+      ? { createLoader: pluginSetupRegistryLoaderState.moduleLoaderFactory }
+      : {}),
   });
 }
 
@@ -148,10 +170,7 @@ function collectConfiguredPluginEntryIds(config: OpenClawConfig): string[] {
   if (!entries || typeof entries !== "object") {
     return [];
   }
-  return Object.keys(entries)
-    .map((pluginId) => pluginId.trim())
-    .filter(Boolean)
-    .toSorted();
+  return normalizeStringEntries(Object.keys(entries)).toSorted();
 }
 
 function resolveRelevantSetupMigrationPluginIds(params: {
@@ -201,8 +220,46 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
+function rewriteBundledSetupSourceToBuiltArtifact(
+  source: string,
+  record: PluginManifestRecord,
+): string {
+  if (record.origin !== "bundled") {
+    return source;
+  }
+  const rootDir = path.resolve(record.rootDir);
+  const sourcePath = path.resolve(source);
+  const extensionsDir = path.dirname(rootDir);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return source;
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
+    return source;
+  }
+  const relativeSource = path.relative(rootDir, sourcePath);
+  if (relativeSource === "" || relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) {
+    return source;
+  }
+  const artifactRelativePath = relativeSource.replace(/\.[^.]+$/u, ".js");
+  for (const artifactRootName of ["dist-runtime", "dist"] as const) {
+    const candidate = path.join(
+      packageRoot,
+      artifactRootName,
+      "extensions",
+      path.basename(rootDir),
+      artifactRelativePath,
+    );
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return source;
+}
+
 function resolveLoadableSetupRuntimeSource(record: PluginManifestRecord): string | null {
-  return record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  const source = record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  return source ? rewriteBundledSetupSourceToBuiltArtifact(source, record) : null;
 }
 
 function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {
@@ -286,6 +343,109 @@ function matchesProvider(provider: ProviderPlugin, providerId: string): boolean 
   );
 }
 
+function resolveSetupRegistryCacheKey(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
+}): string | null {
+  const env = params?.env ?? process.env;
+  if (env !== process.env) {
+    return null;
+  }
+  return createPluginCacheKey([
+    "setup-registry",
+    resolvePluginControlPlaneFingerprint({
+      config: params?.config,
+      env,
+      workspaceDir: params?.workspaceDir,
+    }),
+    resolvePluginMetadataEnvFingerprint(env),
+    resolveCurrentSetupSnapshotCacheId(),
+    process.cwd(),
+    params?.pluginIds ? [...params.pluginIds].toSorted() : null,
+  ]);
+}
+
+function resolveCurrentSetupSnapshotCacheId(): string {
+  const { snapshot } = getCurrentPluginMetadataSnapshotState();
+  if (!snapshot || typeof snapshot !== "object") {
+    return "nosnap";
+  }
+  let id = setupRegistrySnapshotIds.get(snapshot);
+  if (id === undefined) {
+    id = `s${++setupRegistrySnapshotIdSeq}`;
+    setupRegistrySnapshotIds.set(snapshot, id);
+  }
+  return id;
+}
+
+function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const cached = seen.get(value);
+  if (cached !== undefined) {
+    return cached as T;
+  }
+  if (value instanceof Date) {
+    const clone = new Date(value);
+    seen.set(value, clone);
+    return clone as T;
+  }
+  if (value instanceof RegExp) {
+    const clone = new RegExp(value.source, value.flags);
+    clone.lastIndex = value.lastIndex;
+    seen.set(value, clone);
+    return clone as T;
+  }
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    clone.push(...value.map((entry) => cloneSetupRegistryValue(entry, seen)));
+    return clone as T;
+  }
+  if (value instanceof Map) {
+    const clone = new Map<unknown, unknown>();
+    seen.set(value, clone);
+    for (const [key, entry] of value.entries()) {
+      clone.set(cloneSetupRegistryValue(key, seen), cloneSetupRegistryValue(entry, seen));
+    }
+    return clone as T;
+  }
+  if (value instanceof Set) {
+    const clone = new Set<unknown>();
+    seen.set(value, clone);
+    for (const entry of value.values()) {
+      clone.add(cloneSetupRegistryValue(entry, seen));
+    }
+    return clone as T;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    // Class-prototyped values are shared by reference: setup registrations must
+    // treat them as immutable, or a caller mutation corrupts later cache hits.
+    return value;
+  }
+  const clone = Object.create(prototype) as Record<PropertyKey, unknown>;
+  seen.set(value, clone);
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor) {
+      continue;
+    }
+    if ("value" in descriptor) {
+      descriptor.value = cloneSetupRegistryValue(descriptor.value, seen);
+    }
+    Object.defineProperty(clone, key, descriptor);
+  }
+  return clone as T;
+}
+
+function cloneSetupRegistry(registry: PluginSetupRegistry): PluginSetupRegistry {
+  return cloneSetupRegistryValue(registry);
+}
+
 function loadSetupManifestRegistry(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -293,13 +453,24 @@ function loadSetupManifestRegistry(params?: {
   pluginIds?: readonly string[];
 }) {
   const env = params?.env ?? process.env;
-  return loadPluginManifestRegistryForPluginRegistry({
+  const cacheKey = resolveSetupRegistryCacheKey(params);
+  if (cacheKey !== null) {
+    const cached = setupManifestRegistryCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     pluginIds: params?.pluginIds,
     includeDisabled: true,
   });
+  if (cacheKey !== null) {
+    setupManifestRegistryCache.set(cacheKey, registry);
+  }
+  return registry;
 }
 
 function findUniqueSetupManifestOwner(params: {
@@ -411,7 +582,7 @@ export function resolvePluginSetupRegistry(params?: {
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
   const scopedPluginIds = params?.pluginIds
-    ? new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean))
+    ? new Set(normalizeUniqueStringEntries(params.pluginIds))
     : null;
   if (scopedPluginIds && scopedPluginIds.size === 0) {
     const empty = {
@@ -422,6 +593,15 @@ export function resolvePluginSetupRegistry(params?: {
       diagnostics: [],
     } satisfies PluginSetupRegistry;
     return empty;
+  }
+
+  // Cache only self-scanned results; a caller-supplied manifestRegistry owns the derivation.
+  const resultCacheKey = params?.manifestRegistry ? null : resolveSetupRegistryCacheKey(params);
+  if (resultCacheKey !== null) {
+    const cached = pluginSetupRegistryCache.get(resultCacheKey);
+    if (cached) {
+      return cloneSetupRegistry(cached);
+    }
   }
 
   const providers: SetupProviderEntry[] = [];
@@ -526,6 +706,10 @@ export function resolvePluginSetupRegistry(params?: {
     autoEnableProbes,
     diagnostics,
   } satisfies PluginSetupRegistry;
+  if (resultCacheKey === null) {
+    return registry;
+  }
+  pluginSetupRegistryCache.set(resultCacheKey, cloneSetupRegistry(registry));
   return registry;
 }
 
@@ -733,3 +917,4 @@ export function resolvePluginSetupAutoEnableReasons(params: {
 
   return reasons;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

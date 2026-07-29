@@ -1,3 +1,4 @@
+// Matrix tests cover shared plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixAuth } from "./types.js";
 
@@ -35,6 +36,20 @@ function authFor(accountId: string): MatrixAuth {
     initialSyncLimit: undefined,
     encryption: false,
   };
+}
+
+async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void> {
+  let rejection: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    rejection = error;
+  }
+
+  expect(rejection).toBeInstanceOf(Error);
+  const error = rejection as Error;
+  expect(error.name).toBe("AbortError");
+  expect(error.message).toBe("Matrix startup aborted");
 }
 
 function createMockClient(name: string) {
@@ -212,11 +227,20 @@ describe("resolveSharedMatrixClient", () => {
       accountId: "ops",
     });
     expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-    expect(createMatrixClientMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "ops",
-      }),
-    );
+    expect(createMatrixClientMock).toHaveBeenCalledWith({
+      accessToken: "token-ops",
+      accountId: "ops",
+      allowPrivateNetwork: undefined,
+      deviceId: "OPS-DEVICE",
+      dispatcherPolicy: undefined,
+      encryption: false,
+      homeserver: "https://matrix.example.org",
+      initialSyncLimit: undefined,
+      localTimeoutMs: undefined,
+      password: "secret",
+      ssrfPolicy: undefined,
+      userId: "@ops:example.org",
+    });
   });
 
   it("honors startClient false even when the caller acquires a shared lease", async () => {
@@ -297,10 +321,7 @@ describe("resolveSharedMatrixClient", () => {
     });
     abortController.abort();
 
-    await expect(canceledWaiter).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectMatrixStartupAbort(canceledWaiter);
 
     resolveStartup();
     await expect(ownerPromise).resolves.toBe(mainClient);
@@ -321,10 +342,7 @@ describe("resolveSharedMatrixClient", () => {
       abortSignal: abortController.signal,
     });
     abortController.abort();
-    await expect(abortedWaiter).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectMatrixStartupAbort(abortedWaiter);
 
     const followerPromise = resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "main" });
     expect(mainClient.start).toHaveBeenCalledTimes(1);

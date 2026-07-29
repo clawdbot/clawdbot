@@ -9,7 +9,9 @@ import type {
 } from "../plugins/types.js";
 export {
   jsonResult,
+  readNonNegativeIntegerParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
@@ -24,6 +26,7 @@ export {
   normalizeFreshness,
   normalizeToIsoDate,
   parseIsoDateRange,
+  parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,
@@ -60,6 +63,7 @@ export {
   readCache,
   readResponseText,
   resolveCacheTtlMs,
+  resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
   writeCache,
 } from "../agents/tools/web-shared.js";
@@ -73,21 +77,3 @@ export type {
   WebSearchProviderToolDefinition,
   WebSearchProviderToolExecutionContext,
 };
-
-/**
- * @deprecated Implement provider-owned `createTool(...)` directly on the
- * returned WebSearchProviderPlugin instead of routing through core.
- */
-export function createPluginBackedWebSearchProvider(
-  provider: WebSearchProviderPlugin,
-): WebSearchProviderPlugin {
-  return {
-    ...provider,
-    createTool: () => {
-      throw new Error(
-        `createPluginBackedWebSearchProvider(${provider.id}) is no longer supported. ` +
-          "Define provider-owned createTool(...) directly in the extension's WebSearchProviderPlugin.",
-      );
-    },
-  };
-}

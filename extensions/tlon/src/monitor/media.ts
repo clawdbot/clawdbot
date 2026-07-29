@@ -1,17 +1,18 @@
+// Tlon plugin module implements media behavior.
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
-  fetchRemoteMedia,
+  readRemoteMediaBuffer,
   MAX_IMAGE_BYTES,
-  saveMediaBuffer,
+  saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { getDefaultSsrFPolicy } from "../urbit/context.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
-const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 interface ExtractedImage {
   url: string;
@@ -24,11 +25,31 @@ interface DownloadedMedia {
   originalUrl: string;
 }
 
+type TlonInboundMedia = { path: string; contentType: string };
+
+/** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
+export function buildTlonInboundMediaPrompt(
+  messageText: string,
+  attachments: readonly TlonInboundMedia[],
+): { body: string; media: TlonInboundMedia[] } {
+  const media = attachments.map((attachment) => ({ ...attachment }));
+  if (media.length === 0) {
+    return { body: messageText, media };
+  }
+  const mediaLines = media
+    .map(
+      (attachment) =>
+        `[media attached: ${attachment.path} (${attachment.contentType}) | ${attachment.path}]`,
+    )
+    .join("\n");
+  return { body: `${mediaLines}\n${messageText}`, media };
+}
+
 /**
  * Extract image blocks from Tlon message content.
  * Returns array of image URLs found in the message.
  */
-export function extractImageBlocks(content: unknown): ExtractedImage[] {
+function extractImageBlocks(content: unknown): ExtractedImage[] {
   if (!content || !Array.isArray(content)) {
     return [];
   }
@@ -54,10 +75,7 @@ export function extractImageBlocks(content: unknown): ExtractedImage[] {
  * Download a media file from URL to local storage.
  * Returns the local path where the file was saved.
  */
-export async function downloadMedia(
-  url: string,
-  mediaDir?: string,
-): Promise<DownloadedMedia | null> {
+async function downloadMedia(url: string, mediaDir?: string): Promise<DownloadedMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
@@ -66,29 +84,24 @@ export async function downloadMedia(
       return null;
     }
 
-    const fetched = await fetchRemoteMedia({
+    const fetchOptions = {
       url,
       maxBytes: MAX_IMAGE_BYTES,
-      readIdleTimeoutMs: TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
-      ssrfPolicy: getDefaultSsrFPolicy(),
+      ...TLON_MEDIA_FETCH_TIMEOUTS,
+      ssrfPolicy: undefined,
       requestInit: { method: "GET" },
-    });
+    };
 
     if (!mediaDir) {
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        MAX_IMAGE_BYTES,
-        fetched.fileName,
-      );
+      const saved = await saveRemoteMedia(fetchOptions);
       return {
         localPath: saved.path,
-        contentType: saved.contentType ?? fetched.contentType ?? "application/octet-stream",
+        contentType: saved.contentType ?? "application/octet-stream",
         originalUrl: url,
       };
     }
 
+    const fetched = await readRemoteMediaBuffer(fetchOptions);
     await mkdir(mediaDir, { recursive: true });
     const ext =
       getExtensionFromFileName(fetched.fileName) ||
@@ -118,19 +131,7 @@ function getExtensionFromFileName(fileName?: string): string | null {
 }
 
 function getExtensionFromContentType(contentType: string): string | null {
-  const map: Record<string, string> = {
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/png": "png",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "audio/mpeg": "mp3",
-    "audio/ogg": "ogg",
-  };
-  return map[contentType.split(";")[0].trim()] ?? null;
+  return extensionForMime(contentType)?.replace(/^\./u, "") ?? null;
 }
 
 function getExtensionFromUrl(url: string): string | null {

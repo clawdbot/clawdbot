@@ -1,9 +1,13 @@
+// Exercises MCP stdio process lifecycle, JSON-RPC IO, and close escalation.
+import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const killProcessTreeMock = vi.hoisted(() => vi.fn());
+const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => ({
   ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
@@ -12,9 +16,12 @@ vi.mock("node:child_process", async () => ({
 
 vi.mock("../process/kill-tree.js", () => ({
   killProcessTree: killProcessTreeMock,
+  signalProcessTree: signalProcessTreeMock,
 }));
 
 class MockChildProcess extends EventEmitter {
+  // Minimal child-process surface needed by the transport: stdio streams,
+  // pid, and lifecycle events.
   exitCode: number | null = null;
   pid = 4321;
   stdin = new PassThrough();
@@ -27,12 +34,14 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useRealTimers();
     spawnMock.mockReset();
     killProcessTreeMock.mockReset();
+    signalProcessTreeMock.mockReset();
   });
 
   it("starts stdio MCP servers in a disposable process group on POSIX", async () => {
+    // Detached POSIX process groups let OpenClaw clean up child tool servers
+    // without relying on shell-specific process trees.
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({
       command: "npx",
@@ -45,11 +54,7 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    const [command, args, options] = spawnMock.mock.calls[0] as [
-      string,
-      string[],
-      { env?: NodeJS.ProcessEnv },
-    ];
+    const [command, args, options] = spawnMock.mock.calls.at(0) as [string, string[], SpawnOptions];
     if (process.platform === "linux") {
       expect(command).toBe("/bin/sh");
       expect(args).toEqual([
@@ -63,15 +68,11 @@ describe("OpenClawStdioClientTransport", () => {
       expect(command).toBe("npx");
       expect(args).toEqual(["-y", "example-mcp"]);
     }
-    expect(options).toEqual(
-      expect.objectContaining({
-        cwd: "/tmp/example",
-        detached: process.platform !== "win32",
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      }),
-    );
-    expect(options.env).toEqual(expect.objectContaining({ EXAMPLE: "1" }));
+    expect(options.cwd).toBe("/tmp/example");
+    expect(options.detached).toBe(process.platform !== "win32");
+    expect(options.shell).toBe(false);
+    expect(options.stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(options.env?.EXAMPLE).toBe("1");
     expect(transport.pid).toBe(4321);
     expect(transport.stderr).toBeInstanceOf(PassThrough);
   });
@@ -80,7 +81,6 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -89,18 +89,65 @@ describe("OpenClawStdioClientTransport", () => {
 
     const closing = transport.close();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: true });
 
     child.exitCode = 0;
     child.emit("close", 0);
     await closing;
   });
 
+  it("force-SIGKILLs synchronously when killProcessTree's grace expires (#86412)", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const closing = transport.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: true });
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+
+    // killProcessTree's SIGKILL is .unref()'d (#86412); close() force-SIGKILLs
+    // synchronously instead.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
+
+    child.exitCode = 0;
+    child.emit("close", 0);
+    await closing;
+  });
+
+  it("force-closes an in-flight repeated graceful shutdown before returning", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const closing = transport.close();
+    const repeatedClose = transport.close();
+    const forced = transport.forceClose();
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
+
+    child.exitCode = 0;
+    child.emit("close", 0);
+    await expect(forced).resolves.toBeUndefined();
+    await expect(closing).resolves.toBeUndefined();
+    await expect(repeatedClose).resolves.toBeUndefined();
+    expect(transport.pid).toBeNull();
+  });
+
   it("does not kill the process tree when graceful stdio close exits", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -118,7 +165,6 @@ describe("OpenClawStdioClientTransport", () => {
   it("sends and receives JSON-RPC messages over stdio", async () => {
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const onmessage = vi.fn();
@@ -152,16 +198,15 @@ describe("OpenClawStdioClientTransport", () => {
     };
     child.stdin = brokenStdin;
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 2, method: "ping" }),
-    ).rejects.toThrow("EPIPE");
+    await expect(transport.send({ jsonrpc: "2.0", id: 2, method: "ping" })).rejects.toThrow(
+      "EPIPE",
+    );
   });
 
   it("rejects send() when stdin.write throws synchronously (#75438)", async () => {
@@ -172,15 +217,33 @@ describe("OpenClawStdioClientTransport", () => {
     };
     child.stdin = brokenStdin;
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
-    ).rejects.toThrow("write after end");
+    await expect(transport.send({ jsonrpc: "2.0", id: 3, method: "ping" })).rejects.toThrow(
+      "write after end",
+    );
+  });
+
+  it("reports stderr pipe errors without an unhandled error crash", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx", stderr: "pipe" });
+    const onerror = vi.fn();
+    Object.assign(transport, { onerror });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const error = new Error("simulated pipe error");
+    expect(() => child.stderr?.emit("error", error)).not.toThrow();
+    expect(onerror).toHaveBeenCalledWith(error);
+
+    child.stderr.write("server diagnostic");
+    expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
   });
 });

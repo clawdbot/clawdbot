@@ -1,5 +1,8 @@
+// Reply payload tests cover reply target parsing, media payloads, and approval metadata.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTtsSupplementMediaPayload,
   countOutboundMedia,
   createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
@@ -7,25 +10,51 @@ import {
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  getReplyPayloadTtsSupplement,
   isReasoningReplyPayload,
   isNumericTargetId,
+  markReplyPayloadAsTtsSupplement,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
   sendMediaWithLeadingCaption,
+  sendPayloadTextChunkSequence,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
 
 describe("isReasoningReplyPayload", () => {
   it.each([
     { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
-    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
-    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    { name: "prefix", payload: { text: "  \n Thinking\n_hidden_" }, expected: true },
+    {
+      name: "legacy animated prefix",
+      payload: { text: "Thinking...\n\n_hidden_" },
+      expected: true,
+    },
+    { name: "legacy prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Thinking\n> _hidden_" }, expected: true },
+    {
+      name: "visible prose starting with thinking",
+      payload: { text: "Thinking... this is the answer" },
+      expected: false,
+    },
+    {
+      name: "visible exact thinking label",
+      payload: { text: "Thinking..." },
+      expected: false,
+    },
+    {
+      name: "visible thinking status line",
+      payload: { text: "Thinking...\nI'll check that now" },
+      expected: false,
+    },
     {
       name: "mid-message mention",
-      payload: { text: "Intro\nReasoning: visible discussion" },
+      payload: { text: "Intro\nThinking: visible discussion" },
       expected: false,
     },
     { name: "missing text", payload: {}, expected: false },
@@ -90,7 +119,229 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
   });
 });
 
+describe("sendPayloadTextChunkSequence", () => {
+  it.each([
+    { name: "empty", chunks: [], expectedCalls: [], expectedResult: undefined },
+    { name: "single", chunks: ["one"], expectedCalls: [["one", 0, true]], expectedResult: "one" },
+    {
+      name: "multiple",
+      chunks: ["one", "two"],
+      expectedCalls: [
+        ["one", 0, true],
+        ["two", 1, false],
+      ],
+      expectedResult: "two",
+    },
+  ])("sends $name chunk sequences", async ({ chunks, expectedCalls, expectedResult }) => {
+    const calls: Array<[string, number, boolean]> = [];
+    const results: string[] = [];
+    const result = await sendPayloadTextChunkSequence({
+      chunks,
+      send: async ({ text, index, isFirst }) => {
+        calls.push([text, index, isFirst]);
+        return text;
+      },
+      onResult: (value) => {
+        results.push(value);
+      },
+    });
+
+    expect(calls).toEqual(expectedCalls);
+    expect(results).toEqual(chunks);
+    expect(result).toBe(expectedResult);
+  });
+});
+
+describe("sendPayloadMediaSequence", () => {
+  it("treats the first non-empty URL as the first media send", async () => {
+    const calls: Array<{ text: string; mediaUrl: string; index: number; isFirst: boolean }> = [];
+
+    const result = await sendPayloadMediaSequence({
+      text: "caption",
+      mediaUrls: ["", "https://example.com/image.png"],
+      send: async (input) => {
+        calls.push(input);
+        return input.mediaUrl;
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        index: 1,
+        isFirst: true,
+      },
+    ]);
+    expect(result).toBe("https://example.com/image.png");
+  });
+
+  it("returns undefined when every media URL is empty", async () => {
+    const send = vi.fn();
+
+    await expect(
+      sendPayloadMediaSequence({ text: "caption", mediaUrls: [""], send }),
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("uses the no-media fallback when every media URL is empty", async () => {
+    const send = vi.fn();
+    const sendNoMedia = vi.fn(async () => "text-result");
+
+    await expect(
+      sendPayloadMediaSequenceOrFallback({
+        text: "caption",
+        mediaUrls: ["", ""],
+        send,
+        sendNoMedia,
+        fallbackResult: "fallback-result",
+      }),
+    ).resolves.toBe("text-result");
+    expect(send).not.toHaveBeenCalled();
+    expect(sendNoMedia).toHaveBeenCalledOnce();
+  });
+
+  it("does not use the no-media fallback when a media send returns undefined", async () => {
+    const send = vi.fn(async () => undefined);
+    const sendNoMedia = vi.fn(async () => undefined);
+
+    await expect(
+      sendPayloadMediaSequenceOrFallback({
+        text: "caption",
+        mediaUrls: ["https://example.com/image.png"],
+        send,
+        sendNoMedia,
+        fallbackResult: undefined,
+      }),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledOnce();
+    expect(sendNoMedia).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendTextMediaPayload", () => {
+  it("does not duplicate a caption when a media sender returns undefined", async () => {
+    const sendMediaMock = vi.fn(async () => undefined);
+    const sendText = vi.fn();
+    const sendMedia = sendMediaMock as unknown as NonNullable<
+      Parameters<typeof sendTextMediaPayload>[0]["adapter"]["sendMedia"]
+    >;
+
+    await expect(
+      sendTextMediaPayload({
+        channel: "test",
+        ctx: {
+          cfg: {},
+          to: "target",
+          text: "caption",
+          payload: { text: "caption", mediaUrl: "https://example.com/image.png" },
+        },
+        adapter: { sendMedia, sendText },
+      }),
+    ).resolves.toBeUndefined();
+    expect(sendMediaMock).toHaveBeenCalledOnce();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to text when every media URL is empty", async () => {
+    const sendMedia = vi.fn();
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+
+    const result = await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "caption",
+        payload: { text: "caption", mediaUrls: ["", ""] },
+      },
+      adapter: { sendMedia, sendText },
+    });
+
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "caption" }));
+    expect(result).toEqual({ channel: "test", messageId: "caption" });
+  });
+
+  it("reports each completed text chunk before a later chunk fails", async () => {
+    const sendText = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "test", messageId: "ab" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendTextMediaPayload({
+        channel: "test",
+        ctx: {
+          cfg: {},
+          to: "target",
+          text: "",
+          payload: { text: "abcd" },
+          onDeliveryResult,
+        },
+        adapter: {
+          textChunkLimit: 2,
+          chunker: () => ["ab", "cd"],
+          sendText,
+        },
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith({ channel: "test", messageId: "ab" });
+  });
+
+  it("does not report callback-aware text sends twice", async () => {
+    const onDeliveryResult = vi.fn();
+    const result = { channel: "test", messageId: "m1" };
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: { text: "hello" },
+        onDeliveryResult,
+      },
+      adapter: {
+        sendText: async (ctx) => {
+          await ctx.onDeliveryResult?.(result);
+          return result;
+        },
+      },
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report callback-aware media sends twice", async () => {
+    const onDeliveryResult = vi.fn();
+    const result = { channel: "test", messageId: "m1" };
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: { mediaUrl: "https://example.com/a.png" },
+        onDeliveryResult,
+      },
+      adapter: {
+        sendMedia: async (ctx) => {
+          await ctx.onDeliveryResult?.(result);
+          return result;
+        },
+      },
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+  });
+
   it("uses an implicit single-use reply only for the first text chunk", async () => {
     const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
 
@@ -206,6 +457,69 @@ describe("normalizeOutboundReplyPayload", () => {
     });
   });
 
+  it("preserves rich outbound fields from loose payload objects", () => {
+    const presentation = {
+      blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+    };
+    const interactive = {
+      blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+    };
+    const channelData = { webchat: { cardId: "card-1" } };
+
+    expect(
+      normalizeOutboundReplyPayload({
+        presentation,
+        presentationTextMode: "fallback",
+        interactive,
+        channelData,
+        trustedLocalMedia: true,
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      presentation,
+      presentationTextMode: "fallback",
+      interactive,
+      channelData,
+      sensitiveMedia: undefined,
+      replyToId: undefined,
+    });
+  });
+
+  it("normalizes portable location and video-note hints", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          name: "  Eiffel Tower ",
+          address: " Champ de Mars ",
+        },
+        videoAsNote: true,
+      }),
+    ).toMatchObject({
+      location: {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+      videoAsNote: true,
+    });
+  });
+
+  it.each(["source", "isLive", "caption"])(
+    "rejects unsupported outbound location %s semantics from loose payloads",
+    (field) => {
+      expect(() =>
+        normalizeOutboundReplyPayload({
+          location: { latitude: 1, longitude: 2, [field]: "unsupported" },
+        }),
+      ).toThrow(`${field} is not supported`);
+    },
+  );
+
   it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
     const handler = vi.fn(async () => {});
     const deliver = createNormalizedOutboundDeliverer(handler);
@@ -223,6 +537,48 @@ describe("normalizeOutboundReplyPayload", () => {
       sensitiveMedia: true,
       replyToId: undefined,
       mediaUrls: undefined,
+    });
+  });
+});
+
+describe("TTS supplement payload helpers", () => {
+  it("marks media payloads as TTS supplements without treating spokenText alone as enough", () => {
+    const explicitTtsCommandPayload = {
+      mediaUrl: "file:///tmp/tts.mp3",
+      spokenText: "read this",
+    };
+
+    expect(getReplyPayloadTtsSupplement(explicitTtsCommandPayload)).toBeUndefined();
+
+    const marked = markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this");
+
+    expect(getReplyPayloadTtsSupplement(marked)).toEqual({ spokenText: "read this" });
+    expect(
+      getReplyPayloadTtsSupplement(
+        markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this", {
+          visibleTextAlreadyDelivered: true,
+        }),
+      ),
+    ).toEqual({ spokenText: "read this", visibleTextAlreadyDelivered: true });
+  });
+
+  it("strips visible content while keeping TTS supplement media fallback text", () => {
+    expect(
+      buildTtsSupplementMediaPayload(
+        markReplyPayloadAsTtsSupplement({
+          text: "visible",
+          mediaUrl: "file:///tmp/tts.mp3",
+          audioAsVoice: true,
+          presentation: { title: "visible", blocks: [] },
+          interactive: { blocks: [] },
+          btw: { question: "side" },
+        }),
+      ),
+    ).toEqual({
+      mediaUrl: "file:///tmp/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "visible",
+      ttsSupplement: { spokenText: "visible" },
     });
   });
 });
@@ -346,6 +702,39 @@ describe("hasOutboundReplyContent", () => {
       payload: { text: "   ", mediaUrls: ["https://example.com/a.png"] },
       options: { trimText: true },
       expected: true,
+    },
+    {
+      name: "detects presentation-only content",
+      payload: {
+        text: "   ",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+        },
+      },
+      options: { trimText: true },
+      expected: true,
+    },
+    {
+      name: "detects interactive-only content",
+      payload: {
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "detects channel data-only content",
+      payload: { channelData: { webchat: { cardId: "card-1" } } },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "ignores empty rich payload fields",
+      payload: { presentation: { blocks: [] }, interactive: { blocks: [] }, channelData: {} },
+      options: undefined,
+      expected: false,
     },
   ])("$name", ({ payload, options, expected }) => {
     expect(hasOutboundReplyContent(payload, options)).toBe(expected);
@@ -518,14 +907,26 @@ describe("sendMediaWithLeadingCaption", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaUrl: "https://example.com/a.png",
-        caption: "hello",
-        index: 0,
-        isFirst: true,
-      }),
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [errorPayload] = expectDefined(
+      (
+        onError.mock.calls as unknown as Array<
+          [
+            {
+              mediaUrl?: string;
+              caption?: string;
+              index?: number;
+              isFirst?: boolean;
+            },
+          ]
+        >
+      )[0],
+      "(onError.mock.calls as unknown as Array<\n        [\n          {\n            mediaUrl?: string;\n            caption?: string;\n            index?: number;\n            isFirst?: boolean;\n          },\n        ]\n      >)[0] test invariant",
     );
+    expect(errorPayload.mediaUrl).toBe("https://example.com/a.png");
+    expect(errorPayload.caption).toBe("hello");
+    expect(errorPayload.index).toBe(0);
+    expect(errorPayload.isFirst).toBe(true);
     expect(send).toHaveBeenNthCalledWith(2, {
       mediaUrl: "https://example.com/b.png",
       caption: undefined,

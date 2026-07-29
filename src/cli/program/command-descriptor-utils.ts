@@ -1,18 +1,23 @@
+// Utilities for defining safe Commander placeholder descriptors and descriptor catalogs.
 import type { Command } from "commander";
-import { sanitizeForLog } from "../../terminal/ansi.js";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
-export type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;
+/** Minimal descriptor shape used before a command is fully registered. */
+type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description" | "hidden">;
 
 const SAFE_COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-export type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor> = {
+/** Descriptor catalog plus derived name lists used by lazy command registration. */
+type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor> = {
   descriptors: readonly TDescriptor[];
   getDescriptors: () => readonly TDescriptor[];
   getNames: () => string[];
   getCommandsWithSubcommands: () => string[];
+  getParentDefaultHelpCommands: () => string[];
 };
 
+/** Normalize and validate a command descriptor name for safe Commander registration. */
 export function normalizeCommandDescriptorName(name: string): string | null {
   const normalized = name.trim();
   return SAFE_COMMAND_NAME_PATTERN.test(normalized) ? normalized : null;
@@ -26,22 +31,31 @@ function assertSafeCommandDescriptorName(name: string): string {
   return normalized;
 }
 
+/** Strip unsafe terminal content from descriptor descriptions. */
 export function sanitizeCommandDescriptorDescription(description: string): string {
   return sanitizeForLog(description).trim();
 }
 
-export function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
+/** Return descriptor names in registration order. */
+function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
   return descriptors.map((descriptor) => descriptor.name);
 }
 
-export function getCommandsWithSubcommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+/** Return descriptor names that should remain parent commands with subcommands. */
+function getCommandsWithSubcommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
+/** Return descriptors whose parent command should show help by default. */
+function getParentDefaultHelpCommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
+  return descriptors
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name);
+}
+
+/** Merge descriptor groups while keeping the first descriptor for each command name. */
 export function collectUniqueCommandDescriptors<TDescriptor extends CommandDescriptorLike>(
   descriptorGroups: readonly (readonly TDescriptor[])[],
 ): TDescriptor[] {
@@ -59,6 +73,7 @@ export function collectUniqueCommandDescriptors<TDescriptor extends CommandDescr
   return descriptors;
 }
 
+/** Create a descriptor catalog with stable derived lists. */
 export function defineCommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor>(
   descriptors: readonly TDescriptor[],
 ): CommandDescriptorCatalog<TDescriptor> {
@@ -67,9 +82,11 @@ export function defineCommandDescriptorCatalog<TDescriptor extends NamedCommandD
     getDescriptors: () => descriptors,
     getNames: () => getCommandDescriptorNames(descriptors),
     getCommandsWithSubcommands: () => getCommandsWithSubcommands(descriptors),
+    getParentDefaultHelpCommands: () => getParentDefaultHelpCommands(descriptors),
   };
 }
 
+/** Add safe placeholder commands to Commander without duplicating existing command names. */
 export function addCommandDescriptorsToProgram(
   program: Command,
   descriptors: readonly CommandDescriptorLike[],
@@ -80,7 +97,9 @@ export function addCommandDescriptorsToProgram(
     if (existingCommands.has(name)) {
       continue;
     }
-    program.command(name).description(sanitizeCommandDescriptorDescription(descriptor.description));
+    program
+      .command(name, { hidden: descriptor.hidden })
+      .description(sanitizeCommandDescriptorDescription(descriptor.description));
     existingCommands.add(name);
   }
   return existingCommands;

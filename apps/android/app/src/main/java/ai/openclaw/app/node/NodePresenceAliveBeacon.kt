@@ -1,15 +1,22 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.takeUtf16Safe
 import android.os.Build
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 internal object NodePresenceAliveBeacon {
+  /** Gateway event emitted by Android when background execution confirms liveness. */
   const val EVENT_NAME: String = "node.presence.alive"
+
+  /** Avoids spamming presence when multiple background triggers fire together. */
   const val MIN_SUCCESS_INTERVAL_MS: Long = 10 * 60 * 1000
   private const val MAX_RESPONSE_JSON_CHARS: Int = 16 * 1024
 
+  /**
+   * Source of the liveness event, serialized as gateway-stable wire values.
+   */
   enum class Trigger(
     val rawValue: String,
   ) {
@@ -21,6 +28,9 @@ internal object NodePresenceAliveBeacon {
     Connect("connect"),
   }
 
+  /**
+   * Minimal gateway response fields used to decide whether a liveness event was accepted.
+   */
   data class ResponsePayload(
     val ok: Boolean?,
     val event: String?,
@@ -30,6 +40,7 @@ internal object NodePresenceAliveBeacon {
 
   private val json = Json { ignoreUnknownKeys = true }
 
+  /** Skips sends after a recent successful presence update. */
   fun shouldSkipRecentSuccess(
     nowMs: Long,
     lastSuccessAtMs: Long?,
@@ -41,7 +52,8 @@ internal object NodePresenceAliveBeacon {
     return elapsed >= 0 && elapsed < minIntervalMs
   }
 
-  fun androidPlatformLabel(): String {
+  /** Human-readable Android version label included in presence payloads. */
+  fun androidPlatformMetadata(): String {
     val release =
       Build.VERSION.RELEASE
         ?.trim()
@@ -50,6 +62,7 @@ internal object NodePresenceAliveBeacon {
     return "Android $release (SDK ${Build.VERSION.SDK_INT})"
   }
 
+  /** Builds the compact JSON payload consumed by gateway node-presence handlers. */
   fun makePayloadJson(
     trigger: Trigger,
     sentAtMs: Long,
@@ -71,8 +84,11 @@ internal object NodePresenceAliveBeacon {
       pushTransport?.trim()?.takeIf { it.isNotEmpty() }?.let { put("pushTransport", JsonPrimitive(it)) }
     }.toString()
 
+  /** Parses the gateway response while rejecting empty, oversized, or malformed payloads. */
   fun decodeResponse(payloadJson: String?): ResponsePayload? {
     val raw = payloadJson?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    // Bound log/IPC responses before JSON parsing to avoid memory spikes from
+    // malformed gateway replies.
     if (raw.length > MAX_RESPONSE_JSON_CHARS) return null
     val obj =
       try {
@@ -88,11 +104,12 @@ internal object NodePresenceAliveBeacon {
     )
   }
 
+  /** Sanitizes gateway response reasons before writing them into Android logs. */
   fun sanitizeReasonForLog(raw: String?): String {
     val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: "unsupported"
     return value
       .map { ch -> if (ch.isISOControl()) ' ' else ch }
       .joinToString("")
-      .take(200)
+      .takeUtf16Safe(200)
   }
 }

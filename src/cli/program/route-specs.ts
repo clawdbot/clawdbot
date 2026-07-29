@@ -1,3 +1,4 @@
+// Preparsed route specs for commands implemented outside Commander action registration.
 import { hasFlag } from "../argv.js";
 import { cliCommandCatalog, type CliCommandCatalogEntry } from "../command-catalog.js";
 import { matchesCommandPath } from "../command-path-matches.js";
@@ -7,6 +8,7 @@ import {
   type AnyRoutedCommandDefinition,
 } from "./routed-command-definitions.js";
 
+/** Runtime route with optional preflight and plugin-preload policy. */
 export type RouteSpec = {
   matches: (path: string[]) => boolean;
   canRun?: (argv: string[]) => boolean;
@@ -43,6 +45,7 @@ function createParsedRoute(params: {
   };
 }
 
+/** Route specs generated from catalog entries with parseable routed-command definitions. */
 export const routedCommands: RouteSpec[] = cliCommandCatalog
   .filter(
     (
@@ -50,9 +53,7 @@ export const routedCommands: RouteSpec[] = cliCommandCatalog
     ): entry is CliCommandCatalogEntry & { route: { id: keyof typeof routedCommandDefinitions } } =>
       Boolean(entry.route),
   )
-  .map((entry) =>
-    createParsedRoute({
-      entry,
-      definition: routedCommandDefinitions[entry.route.id],
-    }),
-  );
+  .flatMap((entry) => {
+    const definition = routedCommandDefinitions[entry.route.id];
+    return definition ? [createParsedRoute({ entry, definition })] : [];
+  });

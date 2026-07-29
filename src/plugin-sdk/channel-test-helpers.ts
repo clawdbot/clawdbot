@@ -1,8 +1,10 @@
+// Channel test helper exports provide shared fixtures for plugin channel contract tests.
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
+  installChannelDmPolicyContractSuite,
   installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
@@ -12,14 +14,18 @@ export {
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   initializeGlobalHookRunner,
   releasePinnedPluginChannelRegistry,
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
-export { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
+export {
+  createTestInboundDebounceFlush,
+  createPluginRuntimeMediaMock,
+  createPluginRuntimeMock,
+  type PluginRuntimeMediaMock,
+} from "./test-helpers/plugin-runtime-mock.js";
 export {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
@@ -46,3 +52,4 @@ export {
   formatLocalEnvelopeTimestamp,
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
+export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";

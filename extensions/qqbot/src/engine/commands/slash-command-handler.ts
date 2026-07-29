@@ -5,6 +5,9 @@
  * Handles urgent commands, normal slash commands, and file delivery.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
+import type { QQBotIngressEffectOnce } from "../gateway/ingress-effects.js";
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount, EngineLogger } from "../gateway/types.js";
 import { sendDocument } from "../messaging/outbound.js";
@@ -25,11 +28,26 @@ export interface SlashCommandHandlerContext {
   log?: EngineLogger;
   getMessagePeerId: (msg: QueuedMessage) => string;
   getQueueSnapshot: (peerId: string) => QueueSnapshot;
+  resolveCommandAuthorized?: (params: {
+    isGroup: boolean;
+    senderId: string;
+    conversationId: string;
+    allowFrom?: Array<string | number>;
+    groupAllowFrom?: Array<string | number>;
+    commandsAllowFrom?: Array<string | number>;
+  }) => boolean | Promise<boolean>;
 }
 
 // ============ Constants ============
 
 const URGENT_COMMANDS = ["/stop"];
+
+class SlashCommandIngressEffectError extends Error {
+  constructor(readonly effectCause: unknown) {
+    super("QQBot slash-command ingress effect failed");
+    this.name = "SlashCommandIngressEffectError";
+  }
+}
 
 // ============ trySlashCommandOrEnqueue ============
 
@@ -42,6 +60,7 @@ const URGENT_COMMANDS = ["/stop"];
 export async function trySlashCommand(
   msg: QueuedMessage,
   ctx: SlashCommandHandlerContext,
+  ingress?: { eventId: string; effectOnce: QQBotIngressEffectOnce },
 ): Promise<"handled" | "urgent" | "enqueue"> {
   const { account, log } = ctx;
   const content = (msg.content ?? "").trim();
@@ -50,13 +69,41 @@ export async function trySlashCommand(
     return "enqueue";
   }
 
+  const isGroup = msg.type === "group" || msg.type === "guild";
+  const groupCommandLevel = isGroup
+    ? resolveGroupCommandLevelFromAccountConfig(
+        account.config,
+        msg.groupOpenid ?? msg.channelId ?? null,
+      )
+    : undefined;
+  const commandsAllowFrom = resolveQQBotCommandsAllowFrom(ctx.cfg);
+  const commandAuthorized = ctx.resolveCommandAuthorized
+    ? await ctx.resolveCommandAuthorized({
+        isGroup,
+        senderId: msg.senderId,
+        conversationId: msg.groupOpenid ?? msg.channelId ?? msg.senderId,
+        allowFrom: account.config?.allowFrom,
+        groupAllowFrom: account.config?.groupAllowFrom,
+        commandsAllowFrom,
+      })
+    : resolveSlashCommandAuth({
+        senderId: msg.senderId,
+        isGroup,
+        allowFrom: account.config?.allowFrom,
+        groupAllowFrom: account.config?.groupAllowFrom,
+        commandsAllowFrom,
+      });
+
   // Urgent command detection — bypass queue and execute immediately.
   const contentLower = content.toLowerCase();
   const isUrgentCommand = URGENT_COMMANDS.some(
     (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
   );
   if (isUrgentCommand) {
-    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
+    if (isGroup && !commandAuthorized) {
+      return "enqueue";
+    }
+    log?.info(`Urgent command detected: ${truncateUtf16Safe(content, 20)}`);
     return "urgent";
   }
 
@@ -77,14 +124,20 @@ export async function trySlashCommand(
     accountId: account.accountId,
     appId: account.appId,
     accountConfig: account.config,
-    commandAuthorized: resolveSlashCommandAuth({
-      senderId: msg.senderId,
-      isGroup: msg.type === "group" || msg.type === "guild",
-      allowFrom: account.config?.allowFrom,
-      groupAllowFrom: account.config?.groupAllowFrom,
-      commandsAllowFrom: resolveQQBotCommandsAllowFrom(ctx.cfg),
-    }),
+    commandAuthorized,
+    groupCommandLevel,
     queueSnapshot: ctx.getQueueSnapshot(peerId),
+    ...(ingress
+      ? {
+          runIngressEffectOnce: async <T>(params: { effect: string; run: () => Promise<T> }) => {
+            try {
+              return await ingress.effectOnce.runOnce({ eventId: ingress.eventId, ...params });
+            } catch (error) {
+              throw new SlashCommandIngressEffectError(error);
+            }
+          },
+        }
+      : {}),
   };
 
   try {
@@ -142,6 +195,9 @@ export async function trySlashCommand(
 
     return "handled";
   } catch (err) {
+    if (err instanceof SlashCommandIngressEffectError) {
+      throw err.effectCause;
+    }
     log?.error(`Slash command error: ${String(err)}`);
     return "enqueue";
   }

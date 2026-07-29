@@ -1,3 +1,4 @@
+// Status JSON command tests cover runtime invocation and structured status JSON output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 

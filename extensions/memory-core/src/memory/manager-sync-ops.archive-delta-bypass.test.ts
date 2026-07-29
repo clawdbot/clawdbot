@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync ops.archive delta bypass plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +53,8 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
   };
   protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
+  protected providerUnavailableReason?: string;
+  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
   protected db = null as unknown as DatabaseSync;
 
   readonly syncCalls: SyncParams[] = [];
@@ -80,6 +83,10 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
   protected async sync(params?: SyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
   }
@@ -97,6 +104,10 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
   }
 
   protected pruneEmbeddingCacheIfNeeded(): void {}
+
+  protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,
@@ -152,9 +163,9 @@ describe("session archive delta bypass", () => {
 
     await harness.processPendingSessionDeltas();
 
-    expect(harness.getDirtySessionFiles()).toEqual([]);
+    expect(harness.getDirtySessionFiles()).toStrictEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
-    expect(harness.syncCalls).toEqual([]);
+    expect(harness.syncCalls).toStrictEqual([]);
   });
 
   it("keeps live transcripts below the configured thresholds", async () => {
@@ -164,8 +175,8 @@ describe("session archive delta bypass", () => {
 
     await harness.processPendingSessionDeltas();
 
-    expect(harness.getDirtySessionFiles()).toEqual([]);
+    expect(harness.getDirtySessionFiles()).toStrictEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
-    expect(harness.syncCalls).toEqual([]);
+    expect(harness.syncCalls).toStrictEqual([]);
   });
 });

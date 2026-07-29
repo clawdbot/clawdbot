@@ -1,3 +1,5 @@
+// HTTP request trace tests ensure gateway request scope reaches logs and
+// diagnostic events for per-request debugging.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,10 +11,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getLogger, resetLogger, setLoggerOverride } from "../logging.js";
+import { flushLogger } from "../logging/logger.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -29,14 +31,13 @@ async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promi
 }
 
 async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): Promise<void> {
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
 }
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
-  resetDiagnosticTraceContextForTest();
   setLoggerOverride(null);
   resetLogger();
 });
@@ -56,7 +57,6 @@ describe("gateway HTTP request trace scope", () => {
       run: async () => {
         setLoggerOverride({ level: "info", file: logPath });
         const httpServer = createGatewayHttpServer({
-          canvasHost: null,
           clients: new Set(),
           controlUiEnabled: false,
           controlUiBasePath: "/__control__",
@@ -88,16 +88,16 @@ describe("gateway HTTP request trace scope", () => {
       expect(activeTraceInHandler?.spanId).toMatch(/^[0-9a-f]{16}$/);
       expect(events).toEqual([{ trace: activeTraceInHandler, type: "message.queued" }]);
 
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const traceRecord = fs
         .readFileSync(logPath, "utf8")
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>)
         .find((record) => record.message === "handled request trace");
-      expect(traceRecord).toMatchObject({
-        traceId: activeTraceInHandler?.traceId,
-        spanId: activeTraceInHandler?.spanId,
-      });
+      expect(traceRecord?.traceId).toBe(activeTraceInHandler?.traceId);
+      expect(traceRecord?.spanId).toBe(activeTraceInHandler?.spanId);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -1,3 +1,4 @@
+// Vitest contracts channel surface config wires the contracts channel surface test shard.
 import {
   channelSurfaceContractPatterns,
   createContractsVitestConfig,

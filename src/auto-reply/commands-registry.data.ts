@@ -1,3 +1,4 @@
+/** Built-in and channel-derived command registry data for auto-reply commands. */
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { getActivePluginChannelRegistryVersionFromState } from "../plugins/runtime-channel-state.js";
 import {
@@ -8,6 +9,7 @@ import {
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 import { listThinkingLevels } from "./thinking.js";
 
+/** Builds and caches the chat-command registry for the current channel-plugin registry version. */
 type ChannelPlugin = ReturnType<typeof listLoadedChannelPlugins>[number];
 
 function supportsNativeCommands(plugin: ChannelPlugin): boolean {
@@ -39,6 +41,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
   return commands;
 }
 
+/** Returns the current command registry, including dynamic dock commands for native surfaces. */
 export function getChatCommands(): ChatCommandDefinition[] {
   const registryVersion = getActivePluginChannelRegistryVersionFromState();
   if (cachedCommands && registryVersion === cachedRegistryVersion) {

@@ -1,3 +1,6 @@
+/**
+ * Mock IncomingMessage builder for webhook and HTTP request tests.
+ */
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 

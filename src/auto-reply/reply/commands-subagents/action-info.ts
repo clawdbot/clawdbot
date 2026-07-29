@@ -1,39 +1,32 @@
+// Formats detailed subagent run information for the info action.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionStore } from "../../../config/sessions/store-load.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { formatRunLabel, formatRunStatus } from "../subagents-utils.js";
 import {
-  formatRunLabel,
-  formatRunStatus,
-  resolveSubagentTargetFromRuns,
-} from "../subagents-utils.js";
-import { type SubagentsCommandContext } from "./shared.js";
-
-const RECENT_WINDOW_MINUTES = 30;
-
-function stopWithText(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
-}
-
-function formatTimestamp(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  return new Date(valueMs).toISOString();
-}
+  resolveSubagentEntryForToken,
+  stopWithText,
+  type SubagentsCommandContext,
+} from "./shared.js";
 
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
   }
-  return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
+  const timestamp = timestampMsToIsoString(valueMs);
+  if (!timestamp) {
+    return "n/a";
+  }
+  return `${timestamp} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
 function resolveDisplayStatus(
@@ -49,47 +42,18 @@ function resolveDisplayStatus(
   return status === "error" ? "failed" : status;
 }
 
-function resolveSubagentEntryForToken(
-  runs: SubagentsCommandContext["runs"],
-  token: string | undefined,
-): { entry: SubagentsCommandContext["runs"][number] } | { reply: CommandHandlerResult } {
-  const resolved = resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: RECENT_WINDOW_MINUTES,
-    label: (entry) => formatRunLabel(entry),
-    isActive: (entry) =>
-      !entry.endedAt ||
-      Math.max(
-        0,
-        countPendingDescendantRunsFromRuns(
-          getSubagentRunsSnapshotForRead(subagentRuns),
-          entry.childSessionKey,
-        ),
-      ) > 0,
-    errors: {
-      missingTarget: "Missing subagent id.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent id: ${value}`,
-    },
-  });
-  if (!resolved.entry) {
-    return { reply: stopWithText(`⚠️ ${resolved.error ?? "Unknown subagent."}`) };
-  }
-  return { entry: resolved.entry };
-}
-
 function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
-  const store = loadSessionStore(storePath);
-  return { entry: store[childKey] };
+  return {
+    entry: loadSessionEntryReadOnly({
+      storePath,
+      sessionKey: childKey,
+      clone: false,
+    }),
+  };
 }
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
@@ -140,7 +104,6 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
     `Started: ${formatTimestampWithAge(run.startedAt)}`,

@@ -1,3 +1,4 @@
+// Discord plugin module implements inbound job behavior.
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
@@ -11,6 +12,7 @@ type DiscordInboundJobRuntimeField =
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
@@ -22,10 +24,15 @@ export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+  };
 };
 
-export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+  // Serialize work by the eventual session route so one conversation cannot
+  // race itself when Discord channel and session identifiers differ.
   const sessionKey = ctx.route.sessionKey?.trim();
   if (sessionKey) {
     return sessionKey;
@@ -39,13 +46,14 @@ export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightCon
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
     discordRestFetch,
     message,
@@ -71,10 +79,11 @@ export function buildDiscordInboundJob(
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

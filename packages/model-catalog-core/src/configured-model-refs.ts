@@ -1,0 +1,149 @@
+// Collects configured model references from OpenClaw config-shaped objects.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
+/** One configured model reference plus its config path. */
+export type ConfiguredModelRef = {
+  path: string;
+  value: string;
+};
+
+/** Agent config keys that can contain direct model references. */
+export const AGENT_MODEL_CONFIG_KEYS = [
+  "model",
+  "utilityModel",
+  "imageModel",
+  "voiceModel",
+  "pdfModel",
+] as const;
+
+/** List raw refs from one string or primary/fallback model selector. */
+export function listModelRefsFromConfigValue(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof value.primary === "string") {
+    refs.push(value.primary);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback === "string") {
+        refs.push(fallback);
+      }
+    }
+  }
+  return refs;
+}
+
+/** Collect configured model references from agents, channels, hooks, and message config. */
+export function collectConfiguredModelRefs(
+  config: unknown,
+  options: { includeChannelModelOverrides?: boolean } = {},
+): ConfiguredModelRef[] {
+  const refs: ConfiguredModelRef[] = [];
+  const pushModelRef = (path: string, value: unknown) => {
+    if (typeof value === "string" && value.trim()) {
+      refs.push({ path, value: value.trim() });
+    }
+  };
+  const collectModelConfig = (path: string, value: unknown) => {
+    if (typeof value === "string") {
+      pushModelRef(path, value);
+      return;
+    }
+    if (!isRecord(value)) {
+      return;
+    }
+    pushModelRef(`${path}.primary`, value.primary);
+    if (Array.isArray(value.fallbacks)) {
+      for (const [index, entry] of value.fallbacks.entries()) {
+        pushModelRef(`${path}.fallbacks.${index}`, entry);
+      }
+    }
+  };
+  const collectFromAgent = (path: string, agent: unknown) => {
+    if (!isRecord(agent)) {
+      return;
+    }
+    for (const key of AGENT_MODEL_CONFIG_KEYS) {
+      collectModelConfig(`${path}.${key}`, agent[key]);
+    }
+    const mediaModels = isRecord(agent.mediaModels) ? agent.mediaModels : {};
+    for (const capability of ["image", "video", "music"] as const) {
+      collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability]);
+    }
+    pushModelRef(
+      `${path}.heartbeat.model`,
+      isRecord(agent.heartbeat) ? agent.heartbeat.model : undefined,
+    );
+    collectModelConfig(
+      `${path}.subagents.model`,
+      isRecord(agent.subagents) ? agent.subagents.model : undefined,
+    );
+    if (isRecord(agent.compaction)) {
+      pushModelRef(`${path}.compaction.model`, agent.compaction.model);
+      pushModelRef(
+        `${path}.compaction.memoryFlush.model`,
+        isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
+      );
+    }
+    if (isRecord(agent.models)) {
+      for (const modelRef of Object.keys(agent.models)) {
+        pushModelRef(`${path}.models.${modelRef}`, modelRef);
+      }
+    }
+  };
+
+  const root = isRecord(config) ? config : {};
+  const agents = isRecord(root.agents) ? root.agents : {};
+  collectFromAgent("agents.defaults", agents.defaults);
+  if (isRecord(agents.entries)) {
+    for (const [agentId, entry] of Object.entries(agents.entries)) {
+      collectFromAgent(`agents.entries.${agentId}`, entry);
+    }
+  } else if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      collectFromAgent(`agents.list.${index}`, entry);
+    }
+  }
+  if (options.includeChannelModelOverrides !== false) {
+    const channels = isRecord(root.channels) ? root.channels : {};
+    const modelByChannel = isRecord(channels.modelByChannel) ? channels.modelByChannel : {};
+    for (const [channelId, channelMap] of Object.entries(modelByChannel)) {
+      if (!isRecord(channelMap)) {
+        continue;
+      }
+      for (const [targetId, modelRef] of Object.entries(channelMap)) {
+        pushModelRef(`channels.modelByChannel.${channelId}.${targetId}`, modelRef);
+      }
+    }
+  }
+  const hooks = isRecord(root.hooks) ? root.hooks : {};
+  if (Array.isArray(hooks.mappings)) {
+    for (const [index, mapping] of hooks.mappings.entries()) {
+      pushModelRef(`hooks.mappings.${index}.model`, isRecord(mapping) ? mapping.model : undefined);
+    }
+  }
+  pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
+  pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
+  pushModelRef(
+    "channels.discord.voice.model",
+    isRecord(root.channels) &&
+      isRecord(root.channels.discord) &&
+      isRecord(root.channels.discord.voice)
+      ? root.channels.discord.voice.model
+      : undefined,
+  );
+  return refs;
+}
+
+/** Collect only configured model reference values. */
+export function collectConfiguredModelRefValues(
+  config: unknown,
+  options?: { includeChannelModelOverrides?: boolean },
+): string[] {
+  return collectConfiguredModelRefs(config, options).map((ref) => ref.value);
+}

@@ -1,6 +1,13 @@
+// Plugin tool contract tests cover bundled plugin tool schemas and invocation contracts.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath,
+} from "../../test-utils/repo-files.js";
 
 type PluginManifestFile = {
   id?: unknown;
@@ -10,6 +17,11 @@ type PluginManifestFile = {
 };
 
 function walkFiles(dir: string): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    return gitFiles;
+  }
+
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
@@ -25,11 +37,66 @@ function walkFiles(dir: string): string[] {
   return files;
 }
 
+function repoRelativePath(filePath: string): string {
+  return toRepoRelativePath(process.cwd(), filePath);
+}
+
+function isSkippedRepoPath(relativePath: string): boolean {
+  return relativePath
+    .split("/")
+    .some((part) => part === "node_modules" || part === "dist" || part.startsWith("."));
+}
+
+function listGitFiles(dir: string): string[] | null {
+  const relativeDir = repoRelativePath(dir);
+  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
+    return null;
+  }
+  const files = listGitTrackedFiles({ pathspecs: relativeDir });
+  if (!files) {
+    return null;
+  }
+  return files
+    .filter((line) => !isSkippedRepoPath(line))
+    .map((line) => path.join(process.cwd(), ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
+    .toSorted();
+}
+
+function listGitPluginManifestPaths(extensionsDir: string): string[] | null {
+  const relativeDir = repoRelativePath(extensionsDir);
+  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
+    return null;
+  }
+  const files = listGitTrackedFiles({ pathspecs: relativeDir });
+  if (!files) {
+    return null;
+  }
+  return files
+    .filter((line) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(line))
+    .map((line) => path.join(process.cwd(), ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
+    .toSorted();
+}
+
+function listPluginManifestPaths(extensionsDir: string): string[] {
+  const gitPaths = listGitPluginManifestPaths(extensionsDir);
+  if (gitPaths) {
+    return gitPaths;
+  }
+
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => path.join(extensionsDir, entry.name, "openclaw.plugin.json"))
+    .filter((manifestPath) => fs.existsSync(manifestPath));
+}
+
 function isProductionSource(filePath: string): boolean {
   if (!/\.(?:cjs|mjs|js|ts|tsx)$/.test(filePath)) {
     return false;
   }
-  const normalized = filePath.split(path.sep).join("/");
+  const normalized = toRepoPath(filePath);
   return !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized);
 }
 
@@ -126,12 +193,18 @@ function splitTopLevelArgs(args: string): string[] {
       continue;
     }
     if (char === "," && depth === 0) {
-      parts.push(args.slice(start, index).trim());
+      const part = args.slice(start, index).trim();
+      if (part.length > 0) {
+        parts.push(part);
+      }
       start = index + 1;
     }
   }
-  parts.push(args.slice(start).trim());
-  return parts.filter(Boolean);
+  const part = args.slice(start).trim();
+  if (part.length > 0) {
+    parts.push(part);
+  }
+  return parts;
 }
 
 function extractStringLiterals(source: string): string[] {
@@ -196,50 +269,65 @@ function normalizeManifestTools(value: unknown): string[] {
 }
 
 describe("bundled plugin tool manifest contracts", () => {
-  it("declares every production registerTool owner in contracts.tools", () => {
+  let toolContractFailures: string[] = [];
+
+  beforeAll(() => {
+    listGitTrackedFiles({ pathspecs: "extensions" });
+    toolContractFailures = collectToolContractFailures(path.join(process.cwd(), "extensions"));
+  });
+
+  it("lists plugin tool contract inputs from git without walking extension roots", () => {
     const extensionsDir = path.join(process.cwd(), "extensions");
-    const failures: string[] = [];
+    expectNoReaddirSyncDuring(() => {
+      const manifestPaths = listPluginManifestPaths(extensionsDir);
+      const sourceFiles = manifestPaths[0]
+        ? walkFiles(path.dirname(manifestPaths[0])).filter(isProductionSource)
+        : [];
 
-    for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) {
-        continue;
-      }
-      const pluginDir = path.join(extensionsDir, entry.name);
-      const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-      if (!fs.existsSync(manifestPath)) {
-        continue;
-      }
+      expect(manifestPaths.length).toBeGreaterThan(0);
+      expect(sourceFiles.length).toBeGreaterThan(0);
+    });
+  });
 
-      const manifest = readManifest(manifestPath);
-      const pluginId = typeof manifest.id === "string" ? manifest.id : entry.name;
-      const declaredTools = new Set(normalizeManifestTools(manifest.contracts?.tools));
-      const registeredNames = new Set<string>();
-      let registerCallCount = 0;
+  it("declares every production registerTool owner in contracts.tools", () => {
+    expect(toolContractFailures).toStrictEqual([]);
+  });
+});
 
-      for (const filePath of walkFiles(pluginDir).filter(isProductionSource)) {
-        const source = fs.readFileSync(filePath, "utf-8");
-        for (const call of listRegisterToolCalls(source)) {
-          registerCallCount += 1;
-          for (const name of extractStaticRegisteredToolNames(call)) {
-            registeredNames.add(name);
-          }
+function collectToolContractFailures(extensionsDir: string): string[] {
+  const failures: string[] = [];
+
+  for (const manifestPath of listPluginManifestPaths(extensionsDir)) {
+    const pluginDir = path.dirname(manifestPath);
+    const manifest = readManifest(manifestPath);
+    const pluginId = typeof manifest.id === "string" ? manifest.id : path.basename(pluginDir);
+    const declaredTools = new Set(normalizeManifestTools(manifest.contracts?.tools));
+    const registeredNames = new Set<string>();
+    let registerCallCount = 0;
+
+    for (const filePath of walkFiles(pluginDir).filter(isProductionSource)) {
+      const source = fs.readFileSync(filePath, "utf-8");
+      for (const call of listRegisterToolCalls(source)) {
+        registerCallCount += 1;
+        for (const name of extractStaticRegisteredToolNames(call)) {
+          registeredNames.add(name);
         }
-      }
-
-      if (registerCallCount === 0) {
-        continue;
-      }
-      if (declaredTools.size === 0) {
-        failures.push(`${pluginId}: registers agent tools but has no contracts.tools`);
-        continue;
-      }
-
-      const missing = [...registeredNames].filter((name) => !declaredTools.has(name)).toSorted();
-      if (missing.length > 0) {
-        failures.push(`${pluginId}: missing contracts.tools for ${missing.join(", ")}`);
       }
     }
 
-    expect(failures).toEqual([]);
-  });
-});
+    if (registerCallCount === 0) {
+      continue;
+    }
+    if (declaredTools.size === 0) {
+      failures.push(`${pluginId}: registers agent tools but has no contracts.tools`);
+      continue;
+    }
+
+    const missing = [...registeredNames].filter((name) => !declaredTools.has(name)).toSorted();
+    if (missing.length > 0) {
+      failures.push(`${pluginId}: missing contracts.tools for ${missing.join(", ")}`);
+    }
+  }
+
+  return failures;
+}

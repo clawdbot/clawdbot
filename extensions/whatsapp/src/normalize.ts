@@ -1,5 +1,7 @@
+// Whatsapp helper module supports normalize behavior.
 export {
   looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppMessagingTarget,
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,

@@ -1,3 +1,4 @@
+/** Guardrail tests for channel contract secret surfaces. */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +12,7 @@ const CORE_SECRET_SURFACE_GUARDS = [
     path: "src/secrets/runtime-config-collectors-channels.ts",
     forbiddenPatterns: [
       /["']irc["']/,
-      /["']bluebubbles["']/,
+      /["']imessage["']/,
       /["']msteams["']/,
       /["']nextcloud-talk["']/,
     ],
@@ -20,7 +21,7 @@ const CORE_SECRET_SURFACE_GUARDS = [
     path: "src/secrets/target-registry-data.ts",
     forbiddenPatterns: [
       /channels\.irc\./,
-      /channels\.bluebubbles\./,
+      /channels\.imessage\./,
       /channels\.msteams\./,
       /channels\.nextcloud-talk\./,
       /plugins\.entries\.(?:brave|google|exa|xai|moonshot|perplexity|firecrawl|tavily|minimax)\.config\.web(?:Search|Fetch)\.apiKey/,

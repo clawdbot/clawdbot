@@ -1,3 +1,4 @@
+// Windows Git script supports OpenClaw repository automation.
 import path from "node:path";
 import type { WindowsGuest } from "./guest-transports.ts";
 import { die, run, say } from "./host-command.ts";
@@ -12,21 +13,31 @@ export async function prepareMinGitZip(tgzDir: string): Promise<string> {
       String.raw`import json
 import urllib.request
 
-req = urllib.request.Request(
-    "https://api.github.com/repos/git-for-windows/git/releases/latest",
-    headers={
-        "User-Agent": "openclaw-parallels-smoke",
-        "Accept": "application/vnd.github+json",
-    },
-)
-with urllib.request.urlopen(req, timeout=30) as response:
-    data = json.load(response)
+preferred_names = [
+    "MinGit-2.55.0.3-64-bit.zip",
+    "MinGit-2.55.0.3-arm64.zip",
+]
+fallback_urls = {
+    "MinGit-2.55.0.3-arm64.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-arm64.zip",
+    "MinGit-2.55.0.3-64-bit.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
+}
+
+try:
+    req = urllib.request.Request(
+        "https://api.github.com/repos/git-for-windows/git/releases/latest",
+        headers={
+            "User-Agent": "openclaw-parallels-smoke",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as response:
+        data = json.load(response)
+except Exception:
+    print(preferred_names[0])
+    print(fallback_urls[preferred_names[0]])
+    raise SystemExit(0)
 
 assets = data.get("assets", [])
-preferred_names = [
-    "MinGit-2.53.0.2-arm64.zip",
-    "MinGit-2.53.0.2-64-bit.zip",
-]
 
 best = None
 for wanted in preferred_names:
@@ -45,9 +56,9 @@ if best is None:
             continue
         if "busybox" in name:
             continue
-        if "-arm64." in name:
+        if "-64-bit." in name:
             rank = 0
-        elif "-64-bit." in name:
+        elif "-arm64." in name:
             rank = 1
         elif "-32-bit." in name:
             rank = 2
@@ -71,17 +82,30 @@ print(best["browser_download_url"])`,
   }
   const zipPath = path.join(tgzDir, name);
   say(`Download ${name}`);
-  run("curl", [
-    "--retry",
-    "5",
-    "--retry-delay",
-    "3",
-    "--retry-all-errors",
-    "-fsSL",
-    url,
-    "-o",
-    zipPath,
-  ]);
+  run(
+    "curl",
+    [
+      "--retry",
+      "5",
+      "--retry-delay",
+      "3",
+      "--retry-all-errors",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "--retry-max-time",
+      "120",
+      "-fsSL",
+      url,
+      "-o",
+      zipPath,
+    ],
+    {
+      // curl can start one final 120s transfer at the retry-window edge.
+      timeoutMs: 270_000,
+    },
+  );
   return zipPath;
 }
 
@@ -114,7 +138,7 @@ if (Test-Path $portableGit) {
   Remove-Item $portableGit -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $portableGit | Out-Null
-curl.exe -fsSL ${psSingleQuote(minGitUrl)} -o $archive
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(minGitUrl)} -o $archive
 tar.exe -xf $archive -C $portableGit
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"

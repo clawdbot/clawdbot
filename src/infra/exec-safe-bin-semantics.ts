@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Applies semantic validators for safe-bin command arguments.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type SafeBinSemanticValidationParams = {
   binName?: string;
@@ -10,22 +11,17 @@ type SafeBinSemanticRule = {
   configWarning?: string;
 };
 
-const JQ_ENV_FILTER_PATTERN = /(^|[^.$A-Za-z0-9_])env([^A-Za-z0-9_]|$)/;
-const JQ_ENV_VARIABLE_PATTERN = /\$ENV\b/;
 const ALWAYS_DENY_SAFE_BIN_SEMANTICS = () => false;
 
 const UNSAFE_SAFE_BIN_WARNINGS = {
   awk: "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-  jq: "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+  jq: "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
   sed: "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
 } as const;
 
 const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   jq: {
-    validate: ({ positional }) =>
-      !positional.some(
-        (token) => JQ_ENV_FILTER_PATTERN.test(token) || JQ_ENV_VARIABLE_PATTERN.test(token),
-      ),
+    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
     configWarning: UNSAFE_SAFE_BIN_WARNINGS.jq,
   },
   awk: {
@@ -54,6 +50,7 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   },
 };
 
+/** Normalizes a configured safe-bin entry to its executable basename without Windows suffixes. */
 export function normalizeSafeBinName(raw: string): string {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
@@ -69,10 +66,12 @@ function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefin
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }
 
+/** Applies command-specific semantic gates for executables that are risky as broad safeBins. */
 export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {
   return getSafeBinSemanticRule(params.binName)?.validate?.(params) ?? true;
 }
 
+/** Lists configured safeBins that need operator warnings because their semantics are broad. */
 export function listRiskyConfiguredSafeBins(entries: Iterable<string>): Array<{
   bin: string;
   warning: string;

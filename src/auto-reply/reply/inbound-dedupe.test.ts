@@ -1,7 +1,8 @@
+// Tests inbound dedupe state for repeated message ids.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { buildInboundDedupeKey, resetInboundDedupe } from "./inbound-dedupe.js";
+import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -14,44 +15,23 @@ const sharedInboundContext: MsgContext = {
   MessageSid: "msg-1",
 };
 
+function claimKey(ctx: MsgContext): string {
+  const result = claimInboundDedupe(ctx, { inFlight: new Set() });
+  expect(result.status).toBe("claimed");
+  if (result.status !== "claimed") {
+    throw new Error(`expected claimed inbound dedupe result, got ${result.status}`);
+  }
+  return result.key;
+}
+
 describe("inbound dedupe", () => {
   afterEach(() => {
     resetInboundDedupe();
   });
 
-  it("shares dedupe state across distinct module instances", async () => {
-    const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
-      import.meta.url,
-      "./inbound-dedupe.js?scope=shared-a",
-    );
-    const inboundB = await importFreshModule<typeof import("./inbound-dedupe.js")>(
-      import.meta.url,
-      "./inbound-dedupe.js?scope=shared-b",
-    );
-
-    inboundA.resetInboundDedupe();
-    inboundB.resetInboundDedupe();
-
-    try {
-      expect(inboundA.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(false);
-      expect(inboundB.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(true);
-    } finally {
-      inboundA.resetInboundDedupe();
-      inboundB.resetInboundDedupe();
-    }
-  });
-
   it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {
-    expect(
-      buildInboundDedupeKey({
-        ...sharedInboundContext,
-        MessageThreadId: 77,
-      }),
-    ).toBe(
-      buildInboundDedupeKey({
-        ...sharedInboundContext,
-        MessageThreadId: "77",
-      }),
+    expect(claimKey({ ...sharedInboundContext, MessageThreadId: 77 })).toBe(
+      claimKey({ ...sharedInboundContext, MessageThreadId: "77" }),
     );
   });
 
@@ -70,16 +50,19 @@ describe("inbound dedupe", () => {
 
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
-      expect(firstClaim).toMatchObject({ status: "claimed" });
-      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
-        status: "inflight",
-      });
+      expect(firstClaim.status).toBe("claimed");
       if (firstClaim.status !== "claimed") {
-        throw new Error("expected claimed inbound dedupe result");
+        throw new Error(`expected claimed inbound dedupe result, got ${firstClaim.status}`);
       }
-      inboundB.releaseInboundDedupe(firstClaim.key);
-      expect(inboundA.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+      const firstClaimKey = firstClaim.key;
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
+        status: "inflight",
+        key: firstClaimKey,
+      });
+      inboundB.releaseInboundDedupe(firstClaimKey);
+      expect(inboundA.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "claimed",
+        key: firstClaimKey,
       });
     } finally {
       inboundA.resetInboundDedupe();
@@ -102,13 +85,15 @@ describe("inbound dedupe", () => {
 
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
-      expect(firstClaim).toMatchObject({ status: "claimed" });
+      expect(firstClaim.status).toBe("claimed");
       if (firstClaim.status !== "claimed") {
-        throw new Error("expected claimed inbound dedupe result");
+        throw new Error(`expected claimed inbound dedupe result, got ${firstClaim.status}`);
       }
-      inboundA.commitInboundDedupe(firstClaim.key);
-      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+      const firstClaimKey = firstClaim.key;
+      inboundA.commitInboundDedupe(firstClaimKey);
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "duplicate",
+        key: firstClaimKey,
       });
     } finally {
       inboundA.resetInboundDedupe();

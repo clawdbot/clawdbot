@@ -1,3 +1,4 @@
+// Memory Core tests cover dreaming shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { includesSystemEventToken } from "./dreaming-shared.js";
 

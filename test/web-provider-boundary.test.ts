@@ -1,4 +1,4 @@
-import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
+// Web provider boundary tests enforce provider import boundaries.
 import { describe, expect, it } from "vitest";
 import {
   collectWebFetchProviderBoundaryViolations,
@@ -32,20 +32,17 @@ describe("web provider boundaries", () => {
     const violations = await webFetchViolationsPromise;
     const jsonOutput = await webFetchJsonOutputPromise;
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
     expect(jsonOutput.exitCode).toBe(0);
     expect(jsonOutput.stderr).toBe("");
-    expect(jsonOutput.json).toEqual([]);
+    expect(jsonOutput.json).toStrictEqual([]);
   });
 
   it("keeps web search provider boundary inventory empty, core-only, and sorted", async () => {
     const inventory = await webSearchInventoryPromise;
     const jsonOutput = await webSearchJsonOutputPromise;
 
-    expect(inventory).toEqual([]);
-    expect(inventory.some((entry) => entry.file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))).toBe(
-      false,
-    );
+    expect(inventory).toStrictEqual([]);
     expect(
       [...inventory].toSorted(
         (left, right) =>
@@ -57,6 +54,6 @@ describe("web provider boundaries", () => {
     ).toEqual(inventory);
     expect(jsonOutput.exitCode).toBe(0);
     expect(jsonOutput.stderr).toBe("");
-    expect(jsonOutput.json).toEqual([]);
+    expect(jsonOutput.json).toStrictEqual([]);
   });
 });

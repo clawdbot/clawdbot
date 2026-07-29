@@ -1,3 +1,4 @@
+// Tokenjuice tests cover manifest plugin behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -17,7 +18,7 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
     ) as TokenjuicePackageManifest;
 
-    expect(packageJson.dependencies?.tokenjuice).toBe("0.7.0");
+    expect(packageJson.dependencies?.tokenjuice).toBe("0.8.1");
   });
 
   it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {
@@ -25,6 +26,6 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as TokenjuicePluginManifest;
 
-    expect(manifest.contracts?.agentToolResultMiddleware).toEqual(["pi", "codex"]);
+    expect(manifest.contracts?.agentToolResultMiddleware).toEqual(["openclaw", "codex"]);
   });
 });

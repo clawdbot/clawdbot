@@ -1,3 +1,4 @@
+// Discord provider module implements model/runtime integration.
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -7,8 +8,8 @@ type EventEmitterLike = {
   removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
 };
 
-export function cleanupDiscordProviderStartup(params: {
-  deactivateMessageHandler?: () => void;
+export async function cleanupDiscordProviderStartup(params: {
+  deactivateMessageHandler?: () => void | Promise<void>;
   autoPresenceController?: { stop: () => void } | null;
   setStatus?: DiscordMonitorStatusSink;
   onEarlyGatewayDebug?: ((msg: unknown) => void) | undefined;
@@ -19,7 +20,7 @@ export function cleanupDiscordProviderStartup(params: {
   threadBindings: ThreadBindingManager;
   runtime: RuntimeEnv;
 }) {
-  params.deactivateMessageHandler?.();
+  await params.deactivateMessageHandler?.();
   params.autoPresenceController?.stop();
   params.setStatus?.({ connected: false });
   if (params.onEarlyGatewayDebug) {

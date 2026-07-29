@@ -1,6 +1,11 @@
+// Message action tests cover channel message action schema and invocation behavior.
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+  getPreparedMessageToolCatalog,
+} from "../../plugins/prepared-message-tool-catalog.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -8,18 +13,14 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
-  __testing,
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
   listCrossChannelSchemaSupportedMessageActions,
-  listChannelMessageActions,
-  listChannelMessageCapabilities,
-  listChannelMessageCapabilitiesForChannel,
   resolveChannelMessageToolMediaSourceParamKeys,
   resolveChannelMessageToolSchemaProperties,
 } from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
-import type { ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.public.js";
 
 const emptyRegistry = createTestRegistry([]);
 
@@ -75,36 +76,70 @@ describe("message action capability checks", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
-    __testing.resetLoggedMessageActionErrors();
     errorSpy.mockClear();
   });
 
   it("aggregates capabilities across plugins", () => {
     activateMessageActionTestRegistry();
 
-    expect(listChannelMessageCapabilities({} as OpenClawConfig).toSorted()).toEqual([
-      "delivery-pin",
-      "presentation",
-    ]);
     expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(true);
     expect(channelSupportsMessageCapability({} as OpenClawConfig, "delivery-pin")).toBe(true);
+  });
+
+  it("does not replace an explicitly empty prepared channel catalog", () => {
+    activateMessageActionTestRegistry();
+    const cfg = {} as OpenClawConfig;
+
+    expect(
+      channelSupportsMessageCapability(cfg, "presentation", EMPTY_PREPARED_MESSAGE_TOOL_CATALOG),
+    ).toBe(false);
+    expect(
+      resolveChannelMessageToolSchemaProperties({
+        cfg,
+        channel: "demo-buttons",
+        preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+      }),
+    ).toEqual({});
+  });
+
+  it("evaluates prepared discovery against each account context", () => {
+    const base = createChannelTestPluginBase({ id: "demo-account-scoped" });
+    const plugin: ChannelPlugin = {
+      ...base,
+      actions: {
+        describeMessageTool: ({ accountId }) => ({
+          actions: ["send"],
+          capabilities: accountId === "first" ? ["presentation"] : ["delivery-pin"],
+        }),
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    const preparedMessageToolCatalog = getPreparedMessageToolCatalog();
+    const cfg = {} as OpenClawConfig;
+
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg, channel: plugin.id, accountId: "first", preparedMessageToolCatalog },
+        "presentation",
+      ),
+    ).toBe(true);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg, channel: plugin.id, accountId: "second", preparedMessageToolCatalog },
+        "presentation",
+      ),
+    ).toBe(false);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg, channel: plugin.id, accountId: "second", preparedMessageToolCatalog },
+        "delivery-pin",
+      ),
+    ).toBe(true);
   });
 
   it("checks per-channel capabilities", () => {
     activateMessageActionTestRegistry();
 
-    expect(
-      listChannelMessageCapabilitiesForChannel({
-        cfg: {} as OpenClawConfig,
-        channel: "demo-buttons",
-      }),
-    ).toEqual(["presentation"]);
-    expect(
-      listChannelMessageCapabilitiesForChannel({
-        cfg: {} as OpenClawConfig,
-        channel: "demo-cards",
-      }),
-    ).toEqual(["delivery-pin"]);
     expect(
       channelSupportsMessageCapabilityForChannel(
         { cfg: {} as OpenClawConfig, channel: "demo-buttons" },
@@ -150,11 +185,11 @@ describe("message action capability checks", () => {
     );
 
     expect(
-      listChannelMessageCapabilitiesForChannel({
-        cfg: {} as OpenClawConfig,
-        channel: "demo-cards-alias",
-      }),
-    ).toEqual(["delivery-pin"]);
+      channelSupportsMessageCapabilityForChannel(
+        { cfg: {} as OpenClawConfig, channel: "demo-cards-alias" },
+        "delivery-pin",
+      ),
+    ).toBe(true);
   });
 
   it("uses unified message tool discovery for actions, capabilities, and schema", () => {
@@ -183,14 +218,55 @@ describe("message action capability checks", () => {
       createTestRegistry([{ pluginId: "demo-unified", source: "test", plugin: unifiedPlugin }]),
     );
 
-    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast", "react"]);
-    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual(["presentation"]);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(true);
     expect(
       resolveChannelMessageToolSchemaProperties({
         cfg: {} as OpenClawConfig,
         channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("keeps contributed schema properties optional so only action stays required", () => {
+    const contributingPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-contrib",
+        label: "Demo Contrib",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send"],
+          schema: {
+            properties: {
+              // Non-optional TypeBox schema: plugin forgot Type.Optional.
+              components: Type.Array(Type.String()),
+              // Cloning strips typebox's non-enumerable `~optional` marker;
+              // mirrors serialized/external plugin contributions.
+              chatRef: structuredClone(Type.Optional(Type.String())),
+              media: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-contrib", source: "test", plugin: contributingPlugin },
+      ]),
+    );
+
+    const properties = resolveChannelMessageToolSchemaProperties({
+      cfg: {} as OpenClawConfig,
+      channel: "demo-contrib",
+    });
+    // Regression: required leakage made every message tool call fail validation
+    // with "must have required properties chatRef, media, ...".
+    const toolSchema = Type.Object({ action: Type.String(), ...properties });
+    expect(toolSchema.required).toEqual(["action"]);
   });
 
   it("filters only actions that depend on current-channel-only schema", () => {
@@ -261,7 +337,7 @@ describe("message action capability checks", () => {
         cfg: {} as OpenClawConfig,
         channel: "demo-unscoped-schema",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("treats empty current-channel schema action lists as blocking no cross-channel actions", () => {
@@ -347,7 +423,7 @@ describe("message action capability checks", () => {
         action: "send",
         channel: "demo-media",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps flat media-source param discovery for backward compatibility", () => {
@@ -400,12 +476,10 @@ describe("message action capability checks", () => {
       createTestRegistry([{ pluginId: "demo-crashing", source: "test", plugin: crashingPlugin }]),
     );
 
-    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
-    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(false);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
-    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(false);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });

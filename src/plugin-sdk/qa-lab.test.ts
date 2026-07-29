@@ -1,3 +1,6 @@
+/**
+ * Tests QA Lab SDK facades and private runtime loading behavior.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

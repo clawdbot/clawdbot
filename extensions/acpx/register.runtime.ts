@@ -1,48 +1,35 @@
+/**
+ * Lazy ACPX runtime service registration. The plugin exposes an ACP backend
+ * immediately, then imports the heavier service only when a session needs it.
+ */
 import {
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
   type AcpRuntime,
-  type AcpRuntimeCapabilities,
-  type AcpRuntimeDoctorReport,
-  type AcpRuntimeStatus,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
-const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 
 type RealAcpxServiceModule = typeof import("./src/service.js");
 type CreateAcpxRuntimeServiceParams = NonNullable<
   Parameters<RealAcpxServiceModule["createAcpxRuntimeService"]>[0]
 >;
 
-type AcpxRuntimeLike = AcpRuntime & {
-  probeAvailability(): Promise<void>;
-  doctor?(): Promise<AcpRuntimeDoctorReport>;
-  isHealthy(): boolean;
-};
-
 type DeferredServiceState = {
   ctx: OpenClawPluginServiceContext | null;
   params: CreateAcpxRuntimeServiceParams;
-  realRuntime: AcpxRuntimeLike | null;
+  realRuntime: AcpRuntime | null;
   realService: OpenClawPluginService | null;
-  startPromise: Promise<AcpxRuntimeLike> | null;
+  startPromise: Promise<AcpRuntime> | null;
 };
 
-let serviceModulePromise: Promise<RealAcpxServiceModule> | null = null;
+const loadServiceModule = createLazyRuntimeModule(() => import("./src/service.js"));
 
-function loadServiceModule(): Promise<RealAcpxServiceModule> {
-  serviceModulePromise ??= import("./src/service.js");
-  return serviceModulePromise;
-}
-
-function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
-}
-
-async function startRealService(state: DeferredServiceState): Promise<AcpxRuntimeLike> {
+async function startRealService(state: DeferredServiceState): Promise<AcpRuntime> {
   if (state.realRuntime) {
     return state.realRuntime;
   }
@@ -50,64 +37,32 @@ async function startRealService(state: DeferredServiceState): Promise<AcpxRuntim
     throw new Error("ACPX runtime service is not started");
   }
   state.startPromise ??= (async () => {
-    const { createAcpxRuntimeService } = await loadServiceModule();
-    const service = createAcpxRuntimeService(state.params);
+    const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
+    const service = createAcpxRuntimeServiceLocal(state.params);
     state.realService = service;
     await service.start(state.ctx as OpenClawPluginServiceContext);
     const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);
     if (!backend?.runtime) {
       throw new Error("ACPX runtime service did not register an ACP backend");
     }
-    state.realRuntime = backend.runtime as AcpxRuntimeLike;
+    state.realRuntime = backend.runtime;
     return state.realRuntime;
   })();
-  return await state.startPromise;
+  try {
+    return await state.startPromise;
+  } catch (error) {
+    state.startPromise = null;
+    state.realService = null;
+    throw error;
+  }
 }
 
-function createDeferredRuntime(state: DeferredServiceState): AcpxRuntimeLike {
-  return {
-    async ensureSession(input) {
-      return await (await startRealService(state)).ensureSession(input);
-    },
-    async *runTurn(input) {
-      yield* (await startRealService(state)).runTurn(input);
-    },
-    async getCapabilities(input): Promise<AcpRuntimeCapabilities> {
-      const runtime = await startRealService(state);
-      return (await runtime.getCapabilities?.(input)) ?? { controls: [] };
-    },
-    async getStatus(input): Promise<AcpRuntimeStatus> {
-      const runtime = await startRealService(state);
-      return (await runtime.getStatus?.(input)) ?? {};
-    },
-    async setMode(input) {
-      await (await startRealService(state)).setMode?.(input);
-    },
-    async setConfigOption(input) {
-      await (await startRealService(state)).setConfigOption?.(input);
-    },
-    async doctor(): Promise<AcpRuntimeDoctorReport> {
-      const runtime = await startRealService(state);
-      return (await runtime.doctor?.()) ?? { ok: true, message: "ok" };
-    },
-    async prepareFreshSession(input) {
-      await (await startRealService(state)).prepareFreshSession?.(input);
-    },
-    async cancel(input) {
-      await (await startRealService(state)).cancel(input);
-    },
-    async close(input) {
-      await (await startRealService(state)).close(input);
-    },
-    async probeAvailability() {
-      await (await startRealService(state)).probeAvailability();
-    },
-    isHealthy() {
-      return state.realRuntime?.isHealthy() ?? false;
-    },
-  };
+function createDeferredRuntime(state: DeferredServiceState): AcpRuntime {
+  const resolveRuntime = () => startRealService(state);
+  return createLazyAcpRuntimeProxy(resolveRuntime);
 }
 
+/** Creates the plugin service that registers ACPX as an ACP runtime backend. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -128,11 +83,6 @@ export function createAcpxRuntimeService(
       }
 
       state.ctx = ctx;
-      if (shouldRunStartupProbe()) {
-        await startRealService(state);
-        return;
-      }
-
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
         runtime: createDeferredRuntime(state),

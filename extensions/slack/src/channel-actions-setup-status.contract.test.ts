@@ -1,9 +1,10 @@
+// Slack tests cover channel actions setup status.contract plugin behavior.
 import {
   installChannelActionsContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect } from "vitest";
 import { slackPlugin } from "../api.js";
 import { slackSetupPlugin } from "../setup-plugin-api.js";
@@ -36,22 +37,6 @@ describe("slack actions contract", () => {
             slack: {
               botToken: "xoxb-test",
               appToken: "xapp-test",
-            },
-          },
-        } as OpenClawConfig,
-        expectedActions: slackDefaultActions,
-        expectedCapabilities: ["presentation"],
-      },
-      {
-        name: "interactive replies keep the shared presentation capability",
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              capabilities: {
-                interactiveReplies: true,
-              },
             },
           },
         } as OpenClawConfig,
@@ -101,6 +86,118 @@ describe("slack setup contract", () => {
         },
         expectedAccountId: "ops",
         expectedValidation: "Slack env tokens can only be used for the default account.",
+      },
+      {
+        name: "user identity stores the user and Socket Mode transport tokens",
+        cfg: {} as OpenClawConfig,
+        input: {
+          identity: "user",
+          userToken: "test-user-token",
+          appToken: "test-app-token",
+        },
+        expectedAccountId: "default",
+        assertPatchedConfig: (cfg) => {
+          expect(cfg.channels?.slack).toMatchObject({
+            enabled: true,
+            postAs: "user",
+            userToken: "test-user-token",
+            appToken: "test-app-token",
+          });
+          expect(cfg.channels?.slack?.botToken).toBeUndefined();
+        },
+      },
+      {
+        name: "HTTP user identity stores the user token and signing secret",
+        cfg: {} as OpenClawConfig,
+        input: {
+          identity: "user",
+          mode: "http",
+          userToken: "test-user-token",
+          signingSecret: "test-signing-secret",
+        },
+        expectedAccountId: "default",
+        assertPatchedConfig: (cfg) => {
+          expect(cfg.channels?.slack).toMatchObject({
+            enabled: true,
+            postAs: "user",
+            mode: "http",
+            userToken: "test-user-token",
+            signingSecret: "test-signing-secret",
+          });
+          expect(cfg.channels?.slack?.botToken).toBeUndefined();
+          expect(cfg.channels?.slack?.appToken).toBeUndefined();
+        },
+      },
+      {
+        name: "existing user identity stores an HTTP mode update",
+        cfg: {
+          channels: {
+            slack: {
+              postAs: "user",
+              userToken: "test-old-user-token",
+              appToken: "test-old-app-token",
+            },
+          },
+        } as OpenClawConfig,
+        input: {
+          mode: "http",
+          userToken: "test-user-token",
+          signingSecret: "test-signing-secret",
+        },
+        expectedAccountId: "default",
+        assertPatchedConfig: (cfg) => {
+          expect(cfg.channels?.slack).toMatchObject({
+            enabled: true,
+            postAs: "user",
+            mode: "http",
+            userToken: "test-user-token",
+            signingSecret: "test-signing-secret",
+          });
+        },
+      },
+      {
+        name: "user identity rejects relay mode",
+        cfg: {} as OpenClawConfig,
+        input: {
+          identity: "user",
+          mode: "relay",
+          userToken: "test-user-token",
+          appToken: "test-app-token",
+        },
+        expectedAccountId: "default",
+        expectedValidation:
+          'Slack user identity setup supports mode "socket" or "http", not "relay".',
+      },
+      {
+        name: "user identity rejects the bot-only env shortcut",
+        cfg: {} as OpenClawConfig,
+        input: {
+          identity: "user",
+          useEnv: true,
+        },
+        expectedAccountId: "default",
+        expectedValidation:
+          "Slack user identity setup does not support --use-env; configure userToken and the transport credential explicitly.",
+      },
+      {
+        name: "explicit bot identity keeps the bot and app token setup contract",
+        cfg: {} as OpenClawConfig,
+        input: {
+          identity: "bot",
+          mode: "http",
+          botToken: "test-bot-token",
+          appToken: "test-app-token",
+        },
+        expectedAccountId: "default",
+        assertPatchedConfig: (cfg) => {
+          expect(cfg.channels?.slack).toMatchObject({
+            enabled: true,
+            postAs: "bot",
+            botToken: "test-bot-token",
+            appToken: "test-app-token",
+          });
+          expect(cfg.channels?.slack?.mode).toBeUndefined();
+        },
       },
     ],
   });

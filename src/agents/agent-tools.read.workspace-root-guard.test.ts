@@ -1,0 +1,317 @@
+/**
+ * Tests workspace-root path guarding for file tools.
+ * Covers container path mapping, malformed suffix cleanup, and normalized path
+ * forwarding for guarded operations.
+ */
+import path from "node:path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "./agent-tools.types.js";
+
+type AssertSandboxPath = typeof import("./sandbox-paths.js").assertSandboxPath;
+
+const mocks = vi.hoisted(() => ({
+  assertSandboxPath: vi.fn<AssertSandboxPath>(async () => ({
+    resolved: "/tmp/root",
+    relative: "",
+  })),
+}));
+
+vi.mock("./sandbox-paths.js", () => ({
+  assertSandboxPath: mocks.assertSandboxPath,
+}));
+
+function createToolHarness() {
+  const execute = vi.fn(async () => ({
+    content: [{ type: "text", text: "ok" }],
+  }));
+  const tool = {
+    name: "read",
+    description: "test tool",
+    inputSchema: { type: "object", properties: {} },
+    execute,
+  } as unknown as AnyAgentTool;
+  return { execute, tool };
+}
+
+async function loadModule() {
+  ({ wrapToolWorkspaceRootGuardWithOptions } = await import("./agent-tools.read.js"));
+}
+
+let wrapToolWorkspaceRootGuardWithOptions: typeof import("./agent-tools.read.js").wrapToolWorkspaceRootGuardWithOptions;
+
+describe("wrapToolWorkspaceRootGuardWithOptions", () => {
+  const root = path.resolve("/tmp/root");
+  const assertSandboxPathImpl: AssertSandboxPath = async ({ filePath }) => ({
+    resolved:
+      filePath.startsWith("file://") || path.isAbsolute(filePath)
+        ? filePath
+        : path.resolve(root, filePath),
+    relative: "",
+  });
+
+  beforeAll(loadModule);
+
+  beforeEach(() => {
+    mocks.assertSandboxPath.mockReset();
+    mocks.assertSandboxPath.mockImplementation(assertSandboxPathImpl);
+  });
+
+  it("maps container workspace paths to host workspace root", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc1", { path: "/workspace/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("strips malformed XML arg-value suffixes before guarding path params", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root);
+
+    await wrapped.execute("tc-suffix", { path: "docs/readme.md</arg_value>>" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "docs/readme.md",
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-suffix",
+      { path: "docs/readme.md" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("maps file:// container workspace paths to host workspace root", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc2", { path: "file:///workspace/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap remote-host file:// paths", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-remote-file-url", { path: "file://attacker/share/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "file://attacker/share/readme.md",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap malformed file:// container workspace paths", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-malformed-file-url", { path: "file:///workspace/%E0%A4%A" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "file:///workspace/%E0%A4%A",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap file:// container workspace paths with encoded separators", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-encoded-separator-file-url", {
+      path: "file:///workspace/%2FREADME.md",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "file:///workspace/%2FREADME.md",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("maps @-prefixed container workspace paths to host workspace root", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-at-container", { path: "@/workspace/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("normalizes @-prefixed absolute paths before guard checks", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-at-absolute", { path: "@/etc/passwd" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "/etc/passwd",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap absolute paths outside the configured container workdir", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc3", { path: "/workspace-two/secret.txt" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "/workspace-two/secret.txt",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("adds a workspace-safe temp hint when rejecting paths outside the workspace", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+    mocks.assertSandboxPath.mockImplementationOnce(async () => {
+      throw new Error("Path escapes sandbox root (/tmp/root): /tmp/repo_meta.jsonl");
+    });
+
+    await expect(
+      wrapped.execute("tc-outside-temp", { path: "/tmp/repo_meta.jsonl" }),
+    ).rejects.toThrow(
+      /Path escapes sandbox root .* Use a relative path under `.openclaw\/tmp\/` inside the workspace/,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("maps additional container mounts to their own guarded host roots", async () => {
+    const { tool } = createToolHarness();
+    const agentRoot = path.resolve("/tmp/agent-root");
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-agent-mount", { path: "/agent/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(agentRoot, "docs", "readme.md"),
+      cwd: agentRoot,
+      root: agentRoot,
+    });
+  });
+
+  it("normalizes container paths before matching additional mounts", async () => {
+    const { tool } = createToolHarness();
+    const skillRoot = path.resolve("/tmp/skill-root");
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      additionalContainerMounts: [{ containerRoot: "/workspace/skills", hostRoot: skillRoot }],
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-skill-traverse", { path: "/workspace/skills/../README.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "README.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("maps file URLs under additional container mounts", async () => {
+    const { tool } = createToolHarness();
+    const agentRoot = path.resolve("/tmp/agent-root");
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-agent-file-url", { path: "file:///agent/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(agentRoot, "docs", "readme.md"),
+      cwd: agentRoot,
+      root: agentRoot,
+    });
+  });
+
+  it("does not guard outPath by default", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-outpath-default", { outPath: "/workspace/videos/capture.mp4" });
+
+    expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+  });
+
+  it("guards custom outPath params when configured", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamKeys: ["outPath"],
+      normalizeGuardedPathParams: true,
+    });
+
+    await wrapped.execute("tc-outpath-custom", { outPath: "videos/capture.mp4" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "videos/capture.mp4",
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-outpath-custom",
+      { outPath: path.resolve(root, "videos", "capture.mp4") },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("rejects custom path params that become empty after suffix stripping", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamKeys: ["outPath"],
+      normalizeGuardedPathParams: true,
+    });
+
+    await expect(
+      wrapped.execute("tc-outpath-empty-suffix", { outPath: "</arg_value>>" }),
+    ).rejects.toThrow(/Malformed path parameter: outPath/);
+
+    expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+});

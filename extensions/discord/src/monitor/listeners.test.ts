@@ -1,3 +1,4 @@
+// Discord tests cover listeners plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
@@ -12,6 +13,15 @@ function createLogger() {
     error: vi.fn(),
     warn: vi.fn(),
   };
+}
+
+function firstErrorMessage(logger: ReturnType<typeof createLogger>): string {
+  const firstCall = logger.error.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("expected logger.error call");
+  }
+  expect(firstCall).toHaveLength(1);
+  return String(firstCall[0]);
 }
 
 function fakeEvent(channelId: string) {
@@ -32,7 +42,7 @@ async function flushAsyncWork() {
 }
 
 describe("DiscordMessageListener", () => {
-  it("returns immediately without awaiting handler completion", async () => {
+  it("waits for handler completion", async () => {
     let resolveHandler: (() => void) | undefined;
     const handlerDone = new Promise<void>((resolve) => {
       resolveHandler = resolve;
@@ -43,15 +53,13 @@ describe("DiscordMessageListener", () => {
     const logger = createLogger();
     const listener = new DiscordMessageListener(handler as never, logger as never);
 
-    await expect(listener.handle(fakeEvent("ch-1"), {} as never)).resolves.toBeUndefined();
-    // Handler was dispatched but may not have been called yet (fire-and-forget).
-    // Wait for the microtask to flush so the handler starts.
+    const handled = listener.handle(fakeEvent("ch-1"), {} as never);
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledTimes(1);
     expect(logger.error).not.toHaveBeenCalled();
 
     resolveHandler?.();
-    await handlerDone;
+    await expect(handled).resolves.toBeUndefined();
   });
 
   it("runs handlers for the same channel concurrently (no per-channel serialization)", async () => {
@@ -73,8 +81,8 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler as never, createLogger() as never);
 
     // Both messages target the same channel — previously serialized, now concurrent.
-    await listener.handle(fakeEvent("ch-1"), {} as never);
-    await listener.handle(fakeEvent("ch-1"), {} as never);
+    const handledA = listener.handle(fakeEvent("ch-1"), {} as never);
+    const handledB = listener.handle(fakeEvent("ch-1"), {} as never);
 
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledTimes(2);
@@ -89,7 +97,7 @@ describe("DiscordMessageListener", () => {
     expect(order).not.toContain("end:1");
 
     deferredA.resolve?.();
-    await flushAsyncWork();
+    await Promise.all([handledA, handledB]);
     expect(order).toContain("end:1");
   });
 
@@ -108,8 +116,8 @@ describe("DiscordMessageListener", () => {
     });
     const listener = new DiscordMessageListener(handler as never, createLogger() as never);
 
-    await listener.handle(fakeEvent("ch-a"), {} as never);
-    await listener.handle(fakeEvent("ch-b"), {} as never);
+    const handledA = listener.handle(fakeEvent("ch-a"), {} as never);
+    const handledB = listener.handle(fakeEvent("ch-b"), {} as never);
 
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledTimes(2);
@@ -122,7 +130,7 @@ describe("DiscordMessageListener", () => {
     expect(order).not.toContain("end:ch-a");
 
     deferredA.resolve?.();
-    await flushAsyncWork();
+    await Promise.all([handledA, handledB]);
     expect(order).toContain("end:ch-a");
   });
 
@@ -135,9 +143,8 @@ describe("DiscordMessageListener", () => {
 
     await expect(listener.handle(fakeEvent("ch-1"), {} as never)).resolves.toBeUndefined();
     await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("discord handler failed: Error: boom"),
-    );
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorMessage(logger)).toContain("discord handler failed: Error: boom");
   });
 
   it("calls onEvent callback for each message", async () => {
@@ -182,8 +189,9 @@ describe("DiscordInteractionListener", () => {
     await listener.handle({ id: "interaction-1" } as never, { handleInteraction } as never);
     await flushAsyncWork();
 
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("discord interaction handler failed: Error: interaction boom"),
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorMessage(logger)).toContain(
+      "discord interaction handler failed: Error: interaction boom",
     );
   });
 

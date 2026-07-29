@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Memory Wiki plugin module implements claim health behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -135,12 +136,25 @@ export function assessClaimFreshness(params: {
   claim: WikiClaim;
   now?: Date;
 }): WikiFreshness {
-  const latestTimestamp = resolveLatestTimestamp([
-    params.claim.updatedAt,
-    params.page.updatedAt,
-    ...params.claim.evidence.map((evidence) => evidence.updatedAt),
-  ]);
-  return buildFreshnessFromTimestamp({ timestamp: latestTimestamp, now: params.now });
+  let hasClaimTimestamp =
+    typeof params.claim.updatedAt === "string" && params.claim.updatedAt.trim().length > 0;
+  let latestTimestamp = resolveLatestTimestamp([params.claim.updatedAt]);
+  let latestMs = parseTimestamp(latestTimestamp) ?? -1;
+  for (const evidence of params.claim.evidence) {
+    if (typeof evidence.updatedAt === "string" && evidence.updatedAt.trim().length > 0) {
+      hasClaimTimestamp = true;
+    }
+    const evidenceMs = parseTimestamp(evidence.updatedAt);
+    if (evidenceMs === null || !evidence.updatedAt || evidenceMs <= latestMs) {
+      continue;
+    }
+    latestMs = evidenceMs;
+    latestTimestamp = evidence.updatedAt;
+  }
+  return buildFreshnessFromTimestamp({
+    timestamp: latestTimestamp ?? (hasClaimTimestamp ? undefined : params.page.updatedAt),
+    now: params.now,
+  });
 }
 
 function buildWikiClaimHealth(params: {

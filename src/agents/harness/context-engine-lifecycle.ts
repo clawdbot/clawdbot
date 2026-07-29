@@ -1,14 +1,77 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+/**
+ * Manages context-engine lifecycle hooks for native agent harnesses.
+ */
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
+import {
+  OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+  type ContextEngineHostSupport,
+} from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import type {
+  AssembleResult,
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
+} from "../../context-engine/types.js";
+import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
-export type HarnessContextEngine = ContextEngine;
+type HarnessContextEngine = ContextEngine;
+
+type HarnessRuntimeSettingsParams = {
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  contextEngineHostSupport?: ContextEngineHostSupport;
+  harnessId?: string | null;
+  runtimeId?: string | null;
+  providerId?: string | null;
+  requestedModelId?: string | null;
+  modelId?: string | null;
+  modelFamily?: string | null;
+  tokenBudget?: number | null;
+  maxOutputTokens?: number | null;
+  fallbackReason?: string | null;
+  degradedReason?: string | null;
+  contextEngine?: HarnessContextEngine;
+};
+
+function buildHarnessContextEngineRuntimeSettings(
+  params: HarnessRuntimeSettingsParams,
+): ContextEngineRuntimeSettings {
+  return (
+    params.runtimeSettings ??
+    (() => {
+      const selectedId = params.contextEngine?.info.id;
+      return buildContextEngineRuntimeSettings({
+        contextEngineHost: params.contextEngineHostSupport ?? OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        harnessId: params.harnessId,
+        runtimeId: params.runtimeId,
+        provider: params.providerId,
+        requestedModel: params.requestedModelId,
+        resolvedModel: params.modelId ?? params.requestedModelId,
+        // model.family is a real family value when the caller supplies one; it is
+        // never derived from the model id, which would put a concrete id in a
+        // field named "family". Defaults to null until a family value exists.
+        modelFamily: params.modelFamily ?? null,
+        selectedContextEngineId: selectedId,
+        contextEngineSelectionSource:
+          selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
+        promptTokenBudget: params.tokenBudget,
+        maxOutputTokens: params.maxOutputTokens,
+        fallbackReason: params.fallbackReason,
+        degradedReason: params.degradedReason,
+      });
+    })()
+  );
+}
 
 /**
  * Run optional bootstrap + bootstrap maintenance for a harness-owned context engine.
@@ -18,9 +81,20 @@ export async function bootstrapHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  contextEngineHostSupport?: ContextEngineHostSupport;
+  harnessId?: string | null;
+  runtimeId?: string | null;
+  providerId?: string | null;
+  requestedModelId?: string | null;
+  modelId?: string | null;
+  maxOutputTokens?: number | null;
+  fallbackReason?: string | null;
+  degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
@@ -32,21 +106,27 @@ export async function bootstrapHarnessContextEngine(params: {
     return;
   }
   try {
+    const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
     if (typeof params.contextEngine?.bootstrap === "function") {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
+        runtimeSettings,
+        runtimeContext: params.runtimeContext,
       });
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      runtimeSettings,
       config: params.config,
     });
   } catch (bootstrapErr) {
@@ -65,22 +145,87 @@ export async function assembleHarnessContextEngine(params: {
   tokenBudget?: number;
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  sandboxed?: boolean;
   modelId: string;
   prompt?: string;
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  contextEngineHostSupport?: ContextEngineHostSupport;
+  harnessId?: string | null;
+  runtimeId?: string | null;
+  providerId?: string | null;
+  requestedModelId?: string | null;
+  modelFamily?: string | null;
+  maxOutputTokens?: number | null;
+  fallbackReason?: string | null;
+  degradedReason?: string | null;
 }) {
   if (!params.contextEngine) {
     return undefined;
   }
-  return await params.contextEngine.assemble({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    messages: params.messages,
-    tokenBudget: params.tokenBudget,
-    ...(params.availableTools ? { availableTools: params.availableTools } : {}),
-    ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
-    model: params.modelId,
-    ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
-  });
+  const contextEngine = params.contextEngine;
+  const messages = stripRuntimeContextCustomMessages(params.messages);
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
+  const assemble = () =>
+    contextEngine.assemble({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      messages,
+      tokenBudget: params.tokenBudget,
+      ...(params.availableTools ? { availableTools: params.availableTools } : {}),
+      ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
+      model: params.modelId,
+      runtimeSettings,
+      ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+    });
+  const result =
+    contextEngine.info.id === "legacy"
+      ? await assemble()
+      : await runWithPreparedMemoryPromptSection(
+          {
+            availableTools: new Set(params.availableTools),
+            citationsMode: params.citationsMode,
+            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+            agentSessionKey: params.sessionKey,
+            sandboxed: params.sandboxed,
+          },
+          assemble,
+        );
+  return ensureAssembleResultShape(result, contextEngine.info.id);
+}
+
+/**
+ * Validate that a context engine's assemble() return value matches the
+ * AssembleResult contract before the runner consumes it. Engines that omit
+ * `messages` or return a non-array previously crashed the runner downstream
+ * when prompt assembly tried to read `activeSession.messages.length` (#75541).
+ *
+ * Throws a descriptive error so the runner's existing assemble try/catch can
+ * log the offending engine id and fall back to the unmodified pipeline
+ * messages instead of poisoning session state.
+ */
+function ensureAssembleResultShape(result: unknown, engineId: string): AssembleResult {
+  if (!result || typeof result !== "object") {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected an object with a "messages" array (got ${describeAssembleResultType(result)})`,
+    );
+  }
+  const candidate = result as { messages?: unknown };
+  if (!Array.isArray(candidate.messages)) {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected an object with a "messages" array (got messages of type ${describeAssembleResultType(candidate.messages)})`,
+    );
+  }
+  return result as AssembleResult;
+}
+
+function describeAssembleResultType(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  return typeof value;
 }
 
 /**
@@ -93,20 +238,38 @@ export async function finalizeHarnessContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   tokenBudget?: number;
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  contextEngineHostSupport?: ContextEngineHostSupport;
+  harnessId?: string | null;
+  runtimeId?: string | null;
+  providerId?: string | null;
+  requestedModelId?: string | null;
+  modelId?: string | null;
+  maxOutputTokens?: number | null;
+  fallbackReason?: string | null;
+  degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   sessionManager?: unknown;
   config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }) {
   if (!params.contextEngine) {
     return { postTurnFinalizationSucceeded: true };
   }
 
+  const conversationSnapshot = buildContextEngineConversationSnapshot({
+    messagesSnapshot: params.messagesSnapshot,
+    prePromptMessageCount: params.prePromptMessageCount,
+  });
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   let postTurnFinalizationSucceeded = true;
 
   if (typeof params.contextEngine.afterTurn === "function") {
@@ -114,18 +277,23 @@ export async function finalizeHarnessContextEngineTurn(params: {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
-        messages: params.messagesSnapshot,
-        prePromptMessageCount: params.prePromptMessageCount,
+        messages: conversationSnapshot.messages,
+        prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
+        runtimeSettings,
         runtimeContext: params.runtimeContext,
+        isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;
       params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
     }
   } else {
-    const newMessages = params.messagesSnapshot.slice(params.prePromptMessageCount);
+    const newMessages = conversationSnapshot.messages.slice(
+      conversationSnapshot.prePromptMessageCount,
+    );
     if (newMessages.length > 0) {
       if (typeof params.contextEngine.ingestBatch === "function") {
         try {
@@ -133,6 +301,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
             messages: newMessages,
+            isHeartbeat: params.isHeartbeat,
           });
         } catch (ingestErr) {
           postTurnFinalizationSucceeded = false;
@@ -145,6 +314,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
               message: msg,
+              isHeartbeat: params.isHeartbeat,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;
@@ -165,15 +335,33 @@ export async function finalizeHarnessContextEngineTurn(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      runtimeSettings,
       config: params.config,
     });
   }
 
   return { postTurnFinalizationSucceeded };
+}
+
+function buildContextEngineConversationSnapshot(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+}): { messages: AgentMessage[]; prePromptMessageCount: number } {
+  const prePromptMessages = stripRuntimeContextCustomMessages(
+    params.messagesSnapshot.slice(0, params.prePromptMessageCount),
+  );
+  const turnMessages = stripRuntimeContextCustomMessages(
+    params.messagesSnapshot.slice(params.prePromptMessageCount),
+  );
+  return {
+    messages: [...prePromptMessages, ...turnMessages],
+    prePromptMessageCount: prePromptMessages.length,
+  };
 }
 
 /**
@@ -201,24 +389,41 @@ export async function runHarnessContextEngineMaintenance(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  contextEngineHostSupport?: ContextEngineHostSupport;
+  harnessId?: string | null;
+  runtimeId?: string | null;
+  providerId?: string | null;
+  requestedModelId?: string | null;
+  modelId?: string | null;
+  tokenBudget?: number | null;
+  maxOutputTokens?: number | null;
+  fallbackReason?: string | null;
+  degradedReason?: string | null;
   executionMode?: "foreground" | "background";
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }) {
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   return await runContextEngineMaintenance({
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
     sessionFile: params.sessionFile,
     reason: params.reason,
     sessionManager: params.sessionManager as Parameters<
       typeof runContextEngineMaintenance
     >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
+    runtimeSettings,
     executionMode: params.executionMode,
+    onDeferredMaintenance: params.onDeferredMaintenance,
     config: params.config,
   });
 }

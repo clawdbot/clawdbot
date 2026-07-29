@@ -1,32 +1,26 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createPerplexityWebSearchProviderBase,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
-type PerplexityWebSearchRuntime = typeof import("./perplexity-web-search-provider.runtime.js");
-
-let perplexityWebSearchRuntimePromise: Promise<PerplexityWebSearchRuntime> | undefined;
-
-function loadPerplexityWebSearchRuntime(): Promise<PerplexityWebSearchRuntime> {
-  perplexityWebSearchRuntimePromise ??= import("./perplexity-web-search-provider.runtime.js");
-  return perplexityWebSearchRuntimePromise;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./perplexity-web-search-provider.runtime.js"),
+);
 
 function createPerplexityParameters(transport?: string): Record<string, unknown> {
   const properties: Record<string, unknown> = {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -62,13 +56,13 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       description: "Native Perplexity Search API only. Domain filter (max 20).",
     };
     properties.max_tokens = {
-      type: "number",
+      type: "integer",
       description: "Native Perplexity Search API only. Total content budget across all results.",
       minimum: 1,
       maximum: 1000000,
     };
     properties.max_tokens_per_page = {
-      type: "number",
+      type: "integer",
       description: "Native Perplexity Search API only. Max tokens extracted per page.",
       minimum: 1,
     };

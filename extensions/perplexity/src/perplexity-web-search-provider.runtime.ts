@@ -1,5 +1,7 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+// Perplexity provider module implements model/runtime integration.
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -7,6 +9,7 @@ import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
@@ -22,7 +25,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_PERPLEXITY_BASE_URL,
   inferPerplexityBaseUrlFromApiKey,
@@ -78,7 +81,7 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 } {
   const fromConfig = readConfiguredSecretString(
     perplexity?.apiKey,
-    "tools.web.search.perplexity.apiKey",
+    "plugins.entries.perplexity.config.webSearch.apiKey",
   );
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
@@ -139,6 +142,10 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
   };
 }
 
+async function readPerplexityJsonResponse<T>(response: Response, label: string): Promise<T> {
+  return await readProviderJsonResponse<T>(response, label);
+}
+
 function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
@@ -166,7 +173,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     Boolean(normalizeOptionalString(url)),
   );
   if (topLevel.length > 0) {
-    return [...new Set(topLevel)];
+    return uniqueStrings(topLevel);
   }
   const citations: string[] = [];
   for (const choice of data.choices ?? []) {
@@ -186,7 +193,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       }
     }
   }
-  return [...new Set(citations)];
+  return uniqueStrings(citations);
 }
 
 async function runPerplexitySearchApi(params: {
@@ -220,10 +227,10 @@ async function runPerplexitySearchApi(params: {
     body.search_language_filter = params.searchLanguageFilter;
   }
   if (params.searchAfterDate) {
-    body.search_after_date = params.searchAfterDate;
+    body.search_after_date_filter = params.searchAfterDate;
   }
   if (params.searchBeforeDate) {
-    body.search_before_date = params.searchBeforeDate;
+    body.search_before_date_filter = params.searchBeforeDate;
   }
   if (params.maxTokens !== undefined) {
     body.max_tokens = params.maxTokens;
@@ -246,7 +253,10 @@ async function runPerplexitySearchApi(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity Search");
       }
-      const data = (await res.json()) as PerplexitySearchApiResponse;
+      const data = await readPerplexityJsonResponse<PerplexitySearchApiResponse>(
+        res,
+        "Perplexity Search",
+      );
       return (data.results ?? []).map((entry) => ({
         title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
         url: entry.url ?? "",
@@ -289,7 +299,7 @@ async function runPerplexitySearch(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity");
       }
-      const data = (await res.json()) as PerplexitySearchResponse;
+      const data = await readPerplexityJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
       return {
         content: data.choices?.[0]?.message?.content ?? "No response",
         citations: extractPerplexityCitations(data),
@@ -308,14 +318,19 @@ export async function executePerplexitySearch(
     return {
       error: "missing_perplexity_api_key",
       message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure plugins.entries.perplexity.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(args, "freshness");
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
   if (rawFreshness && !freshness) {
@@ -332,8 +347,13 @@ export async function executePerplexitySearch(
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
   const domainFilter = readStringArrayParam(args, "domain_filter");
-  const maxTokens = readNumberParam(args, "max_tokens", { integer: true });
-  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", { integer: true });
+  const maxTokens = readPositiveIntegerParam(args, "max_tokens", {
+    max: 1_000_000,
+    message: "max_tokens must be a positive integer.",
+  });
+  const maxTokensPerPage = readPositiveIntegerParam(args, "max_tokens_per_page", {
+    message: "max_tokens_per_page must be a positive integer.",
+  });
 
   if (!structured) {
     if (country) {
@@ -525,7 +545,7 @@ export async function executePerplexitySearch(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   resolvePerplexityModel,
@@ -533,6 +553,8 @@ export const __testing = {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
+  readPerplexityJsonResponse,
   normalizeToIsoDate,
   isoToPerplexityDate,
 } as const;
+export { testing as __testing };

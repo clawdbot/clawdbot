@@ -1,3 +1,4 @@
+// Openai plugin module implements transport policy behavior.
 import type {
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -5,12 +6,11 @@ import type {
   ProviderWebSocketSessionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 
 const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
 const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
 function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -35,13 +35,10 @@ function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean
     return false;
   }
   if (normalizedProvider === "openai") {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
   }
   if (AZURE_PROVIDER_IDS.has(normalizedProvider)) {
     return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
-  }
-  if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
   }
   return false;
 }

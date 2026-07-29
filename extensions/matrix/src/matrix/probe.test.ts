@@ -1,3 +1,4 @@
+// Matrix tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();

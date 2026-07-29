@@ -1,3 +1,4 @@
+// Legacy config tests cover channel plugin config compatibility and migration helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 
@@ -85,12 +86,13 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     ]);
 
-    const rules = collectChannelLegacyConfigRules({
+    const config = {
       channels: {
         slack: {},
         "custom-chat": {},
       },
-    });
+    };
+    const rules = collectChannelLegacyConfigRules(config);
 
     expect(rules).toEqual([
       {
@@ -103,6 +105,7 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     ]);
     expect(listPluginDoctorLegacyConfigRulesMock).toHaveBeenCalledWith({
+      config,
       pluginIds: ["custom-chat"],
     });
   });
@@ -122,7 +125,7 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     });
 
-    expect(rules).toEqual([]);
+    expect(rules).toStrictEqual([]);
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });
 
@@ -151,7 +154,7 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     });
 
-    expect(rules).toEqual([]);
+    expect(rules).toStrictEqual([]);
     expect(getBootstrapChannelPluginMock).not.toHaveBeenCalled();
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });

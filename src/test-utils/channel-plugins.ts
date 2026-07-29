@@ -1,3 +1,4 @@
+// Constructs channel plugin registries and plugin fixtures for tests.
 import type {
   ChannelCapabilities,
   ChannelId,
@@ -5,54 +6,27 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
-export type TestChannelRegistration = {
+/** Registry entry shape used by channel tests without loading real plugins. */
+type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
+  origin?: "bundled" | "global" | "workspace" | "config";
 };
 
 export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
+  ...createEmptyPluginRegistry(),
   channels: channels as unknown as PluginRegistry["channels"],
   channelSetups: channels.map((entry) => ({
     pluginId: entry.pluginId,
     plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    ...(entry.origin ? { origin: entry.origin } : {}),
     source: entry.source,
     enabled: true,
   })),
-  providers: [],
-  speechProviders: [],
-  realtimeTranscriptionProviders: [],
-  realtimeVoiceProviders: [],
-  mediaUnderstandingProviders: [],
-  imageGenerationProviders: [],
-  videoGenerationProviders: [],
-  musicGenerationProviders: [],
-  webFetchProviders: [],
-  webSearchProviders: [],
-  migrationProviders: [],
-  codexAppServerExtensionFactories: [],
-  agentToolResultMiddlewares: [],
-  memoryEmbeddingProviders: [],
-  textTransforms: [],
-  agentHarnesses: [],
-  gatewayHandlers: {},
-  gatewayMethodScopes: {},
-  httpRoutes: [],
-  cliRegistrars: [],
-  reloads: [],
-  nodeHostCommands: [],
-  securityAuditCollectors: [],
-  services: [],
-  gatewayDiscoveryServices: [],
-  commands: [],
-  conversationBindingResolvedHandlers: [],
-  diagnostics: [],
 });
 
 export const createChannelTestPluginBase = (params: {
@@ -80,41 +54,16 @@ export const createChannelTestPluginBase = (params: {
   },
 });
 
-export const createMSTeamsTestPluginBase = (): Pick<
-  ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config"
-> => {
-  const base = createChannelTestPluginBase({
-    id: "msteams",
-    label: "Microsoft Teams",
-    docsPath: "/channels/msteams",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      selectionLabel: "Microsoft Teams (Bot Framework)",
-      blurb: "Teams SDK; enterprise support.",
-      aliases: ["teams"],
-    },
-  };
-};
-
-export const createMSTeamsTestPlugin = (params?: {
-  aliases?: string[];
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => {
-  const base = createMSTeamsTestPluginBase();
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      ...(params?.aliases ? { aliases: params.aliases } : {}),
-    },
-    ...(params?.outbound ? { outbound: params.outbound } : {}),
-  };
-};
+export const createDirectOutboundTestAdapter = (params: {
+  channel: ChannelId;
+  messageId?: string;
+  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+}): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
+  sendText: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+  sendMedia: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+});
 
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;
@@ -135,10 +84,7 @@ export const createOutboundTestPlugin = (params: {
   ...(params.messaging ? { messaging: params.messaging } : {}),
 });
 
-export type BindingResolverTestPlugin = Pick<
-  ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config"
-> & {
+type BindingResolverTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
   setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
 };
 

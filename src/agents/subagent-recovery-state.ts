@@ -1,7 +1,16 @@
+/**
+ * Subagent orphan recovery gate.
+ *
+ * Bounds automatic recovery attempts and tombstones repeatedly wedged session entries.
+ */
 import type { SessionEntry } from "../config/sessions.js";
 
 const SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS = 2;
 const SUBAGENT_RECOVERY_REWEDGE_WINDOW_MS = 2 * 60_000;
+
+function normalizeRecoveryAttempts(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
 
 type SubagentRecoveryGate =
   | {
@@ -14,6 +23,8 @@ type SubagentRecoveryGate =
       shouldMarkWedged: boolean;
     };
 
+// Attempts outside the rewedge window start a new small burst instead of
+// permanently consuming the session's automatic recovery budget.
 function isRecentRecoveryAttempt(entry: SessionEntry, now: number): boolean {
   const lastAttemptAt = entry.subagentRecovery?.lastAttemptAt;
   return (
@@ -55,7 +66,7 @@ export function evaluateSubagentRecoveryGate(
   }
 
   const previousAttempts = isRecentRecoveryAttempt(entry, now)
-    ? Math.max(0, entry.subagentRecovery?.automaticAttempts ?? 0)
+    ? normalizeRecoveryAttempts(entry.subagentRecovery?.automaticAttempts)
     : 0;
   if (previousAttempts >= SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS) {
     return {
@@ -89,7 +100,7 @@ export function markSubagentRecoveryAttempt(params: {
 export function markSubagentRecoveryWedged(params: {
   entry: SessionEntry;
   now: number;
-  runId?: string;
+  runId: string;
   reason: string;
 }): void {
   params.entry.abortedLastRun = false;
@@ -100,7 +111,7 @@ export function markSubagentRecoveryWedged(params: {
       SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS,
     ),
     lastAttemptAt: params.entry.subagentRecovery?.lastAttemptAt ?? params.now,
-    ...(params.runId ? { lastRunId: params.runId } : {}),
+    lastRunId: params.runId,
     wedgedAt: params.now,
     wedgedReason: params.reason,
   };

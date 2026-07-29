@@ -1,3 +1,4 @@
+// Rejects raw Node http2 imports in source and extension code.
 import fs from "node:fs";
 import path from "node:path";
 const SOURCE_ROOTS = ["src", "extensions"];
@@ -20,7 +21,7 @@ function collectFilesSync(rootDir, options) {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {

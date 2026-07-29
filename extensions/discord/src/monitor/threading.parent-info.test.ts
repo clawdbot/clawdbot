@@ -1,12 +1,13 @@
+// Discord tests cover threading.parent info plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
-import { __resetDiscordChannelInfoCacheForTest } from "./message-utils.js";
+import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 describe("resolveDiscordThreadParentInfo", () => {
   beforeEach(() => {
-    __resetDiscordChannelInfoCacheForTest();
+    clearDiscordChannelInfoCacheForTest();
   });
 
   it("falls back to fetched thread parentId when parentId is missing in payload", async () => {
@@ -151,6 +152,6 @@ describe("resolveDiscordThreadParentInfo", () => {
 
     expect(fetchChannel).toHaveBeenCalledTimes(1);
     expect(fetchChannel).toHaveBeenCalledWith("thread-1");
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 });

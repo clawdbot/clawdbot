@@ -1,6 +1,4 @@
-// Shared helpers for parsing MEDIA tokens from command/stdout text.
-
-import { parseFenceSpans } from "../markdown/fences.js";
+// Media parse helpers normalize media references from user and channel input.
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -10,13 +8,17 @@ import {
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
-} from "../shared/net/ip.js";
+} from "@openclaw/net-policy/ip";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { expectDefined } from "@openclaw/normalization-core";
+import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
-// Allow optional wrapping backticks and punctuation after the token; capture the core token.
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+/** Captures legacy MEDIA: attachment directives from model/tool output. */
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
-export type ParsedMediaOutputSegment =
+/** Ordered output segment emitted after visible text and extracted media are separated. */
+type ParsedMediaOutputSegment =
   | {
       type: "text";
       text: string;
@@ -26,15 +28,20 @@ export type ParsedMediaOutputSegment =
       url: string;
     };
 
-export type SplitMediaFromOutputOptions = {
+/** Controls which non-MEDIA syntaxes may be lifted into media attachments. */
+type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
+  extractMediaDirectives?: boolean;
 };
 
-export function normalizeMediaSource(src: string) {
-  return src.startsWith("file://") ? src.replace("file://", "") : src;
+const FILE_URL_PREFIX_RE = /^file:\/\//i;
+
+/** Converts file URLs into plain local paths before downstream media validation. */
+function normalizeMediaSource(src: string): string {
+  return src.replace(FILE_URL_PREFIX_RE, "");
 }
 
-const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:,]|$).*/s;
+const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
 
 function cleanCandidate(raw: string) {
   const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
@@ -168,7 +175,7 @@ function isValidMedia(
   if (!opts?.allowSpaces && /\s/.test(candidate)) {
     return false;
   }
-  if (/^https?:\/\//i.test(candidate)) {
+  if (hasHttpUrlPrefix(candidate)) {
     return isAllowedRemoteMediaUrl(candidate);
   }
 
@@ -254,7 +261,7 @@ function findMatchingBracket(
 }
 
 function isRemoteMarkdownImageMedia(candidate: string): boolean {
-  return /^https?:\/\//i.test(candidate) && isValidMedia(candidate);
+  return hasHttpUrlPrefix(candidate) && isValidMedia(candidate);
 }
 
 function parseMarkdownTitle(input: string, start: number): number | undefined {
@@ -340,7 +347,7 @@ function parseMarkdownImageDestination(
   let destinationEnd = index;
   let parenDepth = 0;
   while (index < input.length) {
-    const ch = input[index];
+    const ch = input.charAt(index);
     if (ch === "\\") {
       index += 2;
       destinationEnd = index;
@@ -475,14 +482,13 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
+/** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaFromOutput(
   raw: string,
   options: SplitMediaFromOutputOptions = {},
 ): {
   text: string;
   mediaUrls?: string[];
-  /** @deprecated Use mediaUrls[0]. */
-  mediaUrl?: string;
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -493,7 +499,8 @@ export function splitMediaFromOutput(
     return { text: "" };
   }
   const extractMarkdownImages = options.extractMarkdownImages === true;
-  const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const extractMediaDirectives = options.extractMediaDirectives !== false;
+  const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
@@ -520,13 +527,13 @@ export function splitMediaFromOutput(
   const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
   const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
 
-  // Collect tokens line by line so we can strip them cleanly.
+  // Line-wise parsing preserves visible text while letting MEDIA-only lines disappear cleanly.
   const lines = trimmedRaw.split("\n");
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
-    // Skip MEDIA extraction if this line is inside a fenced code block
+    // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
       pushTextSegment(line);
@@ -535,7 +542,7 @@ export function splitMediaFromOutput(
     }
 
     const trimmedStart = line.trimStart();
-    if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+    if (!extractMediaDirectives || !trimmedStart.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({ line, media })
         : { lineSegments: [], foundMedia: false };
@@ -575,7 +582,7 @@ export function splitMediaFromOutput(
       const start = match.index ?? 0;
       pieces.push(line.slice(cursor, start));
 
-      const payload = match[1];
+      const payload = expectDefined(match[1], "parse regex capture 1");
       const unwrapped = unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
       const parts = unwrapped ? [unwrapped] : payload.split(/\s+/).filter(Boolean);
@@ -597,7 +604,7 @@ export function splitMediaFromOutput(
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
       if (
         !unwrapped &&
         validCount === 1 &&
@@ -605,6 +612,7 @@ export function splitMediaFromOutput(
         /\s/.test(payloadValue) &&
         looksLikeLocalPath
       ) {
+        // A single valid split plus invalid leftovers can be one local path containing spaces.
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
@@ -708,7 +716,6 @@ export function splitMediaFromOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
-    mediaUrl: media[0],
     segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };

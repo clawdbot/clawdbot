@@ -1,31 +1,41 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+// Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
   normalizeAgentId,
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionScope } from "./types.js";
 
 const FALLBACK_DEFAULT_AGENT_ID = "main";
+export const SESSION_ROUTING_CHANGED_ERROR_REASON = "session-routing-changed";
 
+/** Builds the canonical main session key for an agent. */
 function buildMainSessionKey(agentId: string, mainKey?: string): string {
   return `agent:${normalizeAgentId(agentId)}:${normalizeMainKey(mainKey)}`;
 }
 
-export function resolveMainSessionKey(cfg?: {
-  session?: { scope?: SessionScope; mainKey?: string };
-  agents?: { list?: Array<{ id?: string; default?: boolean }> };
-}): string {
+/** Resolves the configured main session key, honoring global session scope. */
+export function resolveMainSessionKey(cfg: OpenClawConfig): string {
   if (cfg?.session?.scope === "global") {
     return "global";
   }
-  const agents = cfg?.agents?.list ?? [];
-  const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
-  return buildMainSessionKey(defaultAgentId, cfg?.session?.mainKey);
+  return buildMainSessionKey(resolveDefaultAgentId(cfg), cfg.session?.mainKey);
+}
+
+/** Stable fingerprint for the config values that canonicalize chat session keys. */
+export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const scope = cfg?.session?.scope ?? "per-sender";
+  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultAgentId)].join(
+    "|",
+  );
 }
 
 export { resolveAgentIdFromSessionKey };
 
+/** Resolves the main session key for one explicit agent. */
 export function resolveAgentMainSessionKey(params: {
   cfg?: { session?: { mainKey?: string } };
   agentId: string;
@@ -33,6 +43,7 @@ export function resolveAgentMainSessionKey(params: {
   return buildMainSessionKey(params.agentId, params.cfg?.session?.mainKey);
 }
 
+/** Resolves an explicit agent id to its canonical main session key. */
 export function resolveExplicitAgentSessionKey(params: {
   cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
   agentId?: string | null;
@@ -44,6 +55,7 @@ export function resolveExplicitAgentSessionKey(params: {
   return resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
 }
 
+/** Canonicalizes main-session aliases to the current scoped session key. */
 export function canonicalizeMainSessionAlias(params: {
   cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
   agentId: string;

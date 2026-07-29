@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { inspectDiscordAccount } from "./account-inspect.js";
+// Discord plugin module implements ui colors behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 const DEFAULT_DISCORD_ACCENT_COLOR = "#5865F2";
 
@@ -20,8 +20,6 @@ export function normalizeDiscordAccentColor(raw?: string | null): string | null 
   return normalized.toUpperCase();
 }
 
-export function resolveDiscordAccentColor(params: ResolveDiscordAccentColorParams): string {
-  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  const configured = normalizeDiscordAccentColor(account.config.ui?.components?.accentColor);
-  return configured ?? DEFAULT_DISCORD_ACCENT_COLOR;
+export function resolveDiscordAccentColor(_params: ResolveDiscordAccentColorParams): string {
+  return DEFAULT_DISCORD_ACCENT_COLOR;
 }

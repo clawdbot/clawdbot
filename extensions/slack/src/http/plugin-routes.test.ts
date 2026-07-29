@@ -1,3 +1,4 @@
+// Slack tests cover plugin routes plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +12,16 @@ function createApi(config: OpenClawConfig, registerHttpRoute = vi.fn()): OpenCla
     config,
     registerHttpRoute,
   });
+}
+
+function registeredRouteAt(registerHttpRoute: ReturnType<typeof vi.fn>, index: number) {
+  const call = registerHttpRoute.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected registered HTTP route ${index}`);
+  }
+  return call[0] as {
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  };
 }
 
 describe("registerSlackPluginHttpRoutes", () => {
@@ -42,7 +53,7 @@ describe("registerSlackPluginHttpRoutes", () => {
     };
     const api = createApi(cfg, registerHttpRoute);
 
-    expect(() => registerSlackPluginHttpRoutes(api)).not.toThrow();
+    registerSlackPluginHttpRoutes(api);
 
     const paths = registerHttpRoute.mock.calls
       .map((call) => (call[0] as { path: string }).path)
@@ -72,15 +83,11 @@ describe("registerSlackPluginHttpRoutes", () => {
 
     try {
       registerSlackPluginHttpRoutes(createApi({}, registerHttpRoute));
-      const route = registerHttpRoute.mock.calls[0]?.[0] as
-        | {
-            handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-          }
-        | undefined;
+      const route = registeredRouteAt(registerHttpRoute, 0);
       const req = { url: "/slack/events" } as IncomingMessage;
       const res = {} as ServerResponse;
 
-      await expect(route?.handler(req, res)).resolves.toBe(true);
+      await expect(route.handler(req, res)).resolves.toBe(true);
 
       expect(routeHandler).toHaveBeenCalledWith(req, res);
     } finally {

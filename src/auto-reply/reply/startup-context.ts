@@ -1,8 +1,12 @@
+// Loads startup context snippets injected into the first reply turn.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveUserTimezone } from "../../agents/date-time.js";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -31,52 +35,28 @@ export function shouldApplyStartupContext(params: {
 
 function resolveStartupContextLimits(cfg?: OpenClawConfig) {
   const startupContext = cfg?.agents?.defaults?.startupContext;
-  const clampInt = (value: number | undefined, fallback: number, min: number, max: number) => {
-    const numeric = Number.isFinite(value) ? Math.trunc(value as number) : fallback;
-    return Math.min(max, Math.max(min, numeric));
-  };
   return {
-    dailyMemoryDays: clampInt(
+    dailyMemoryDays: resolveIntegerOption(
       startupContext?.dailyMemoryDays,
       STARTUP_MEMORY_DAILY_DAYS,
-      1,
-      STARTUP_MEMORY_DAILY_DAYS_CAP,
+      { min: 1, max: STARTUP_MEMORY_DAILY_DAYS_CAP },
     ),
-    maxFileBytes: clampInt(
+    maxFileBytes: resolveIntegerOption(
       startupContext?.maxFileBytes,
       STARTUP_MEMORY_FILE_MAX_BYTES,
-      1,
-      STARTUP_MEMORY_FILE_MAX_BYTES_CAP,
+      { min: 1, max: STARTUP_MEMORY_FILE_MAX_BYTES_CAP },
     ),
-    maxFileChars: clampInt(
+    maxFileChars: resolveIntegerOption(
       startupContext?.maxFileChars,
       STARTUP_MEMORY_FILE_MAX_CHARS,
-      1,
-      STARTUP_MEMORY_FILE_MAX_CHARS_CAP,
+      { min: 1, max: STARTUP_MEMORY_FILE_MAX_CHARS_CAP },
     ),
-    maxTotalChars: clampInt(
+    maxTotalChars: resolveIntegerOption(
       startupContext?.maxTotalChars,
       STARTUP_MEMORY_TOTAL_MAX_CHARS,
-      1,
-      STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP,
+      { min: 1, max: STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP },
     ),
   };
-}
-
-function formatDateStamp(nowMs: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(nowMs));
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return new Date(nowMs).toISOString().slice(0, 10);
 }
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
@@ -115,7 +95,7 @@ function trimStartupMemoryContent(content: string, maxChars: number): string {
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  return `${trimmed.slice(0, maxChars)}\n...[truncated]...`;
+  return `${truncateUtf16Safe(trimmed, maxChars)}\n...[truncated]...`;
 }
 
 function escapeQuotedStartupMemory(content: string): string {
@@ -205,7 +185,7 @@ async function readStartupMemoryFile(params: {
   maxFileBytes: number;
 }): Promise<string | null> {
   const absolutePath = path.join(params.workspaceDir, params.relativePath);
-  const opened = await openBoundaryFile({
+  const opened = await openRootFile({
     absolutePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
@@ -226,7 +206,7 @@ async function listStartupMemoryPathsByDate(params: {
   stamps: string[];
 }): Promise<Map<string, string[]>> {
   const memoryDir = path.join(params.workspaceDir, "memory");
-  const uniqueStamps = Array.from(new Set(params.stamps));
+  const uniqueStamps = uniqueStrings(params.stamps);
   const fallback = new Map(uniqueStamps.map((stamp) => [stamp, [`${stamp}.md`]]));
   const stampSet = new Set(uniqueStamps);
 
@@ -265,10 +245,7 @@ async function listStartupMemoryPathsByDate(params: {
         })),
       ),
     );
-    const sluggedStatsByStamp = new Map<
-      string,
-      Array<{ name: string; stat: Awaited<ReturnType<typeof fs.promises.stat>> }>
-    >();
+    const sluggedStatsByStamp = new Map<string, Array<{ name: string; stat: fs.Stats }>>();
     for (const result of sluggedNameResults) {
       if (result.status !== "fulfilled") {
         continue;
@@ -287,7 +264,7 @@ async function listStartupMemoryPathsByDate(params: {
       uniqueStamps.map((stamp) => {
         const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
           .toSorted((left, right) => {
-            const mtimeDiff = Number(right.stat.mtimeMs) - Number(left.stat.mtimeMs);
+            const mtimeDiff = right.stat.mtimeMs - left.stat.mtimeMs;
             if (mtimeDiff !== 0) {
               return mtimeDiff;
             }

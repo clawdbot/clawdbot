@@ -1,3 +1,4 @@
+/** Test helper for OpenAI file-backed secret fixtures. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
@@ -106,8 +107,9 @@ export function expectResolvedOpenAIRuntime(agentDir: string) {
   const activeAuthStore = getActiveSecretsRuntimeSnapshot()?.authStores.find(
     (entry) => entry.agentDir === agentDir,
   )?.store;
-  expect(activeAuthStore?.profiles["openai:default"]).toMatchObject({
-    type: "api_key",
-    key: "sk-file-runtime",
-  });
+  const openaiProfile = activeAuthStore?.profiles["openai:default"];
+  expect(openaiProfile?.type).toBe("api_key");
+  if (openaiProfile?.type === "api_key") {
+    expect(openaiProfile.key).toBe("sk-file-runtime");
+  }
 }

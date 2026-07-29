@@ -1,9 +1,10 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+// Timer tight-loop tests cover cron service guards against immediate rearm loops.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
-import { armTimer, onTimer } from "./service/timer.js";
+import { armTimer } from "./service/timer.js";
+import { onTimer } from "./service/timer.test-support.js";
+import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -44,6 +45,14 @@ describe("CronService - armTimer tight loop prevention", () => {
     return calls
       .map(([, delay]: [unknown, unknown, ...unknown[]]) => delay)
       .filter((d: unknown): d is number => typeof d === "number");
+  }
+
+  function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {
+    const result = timeoutSpy.mock.results.at(-1);
+    if (!result || result.type !== "return") {
+      throw new Error("Expected setTimeout to return a timer handle");
+    }
+    return result.value;
   }
 
   function createTimerState(params: {
@@ -90,7 +99,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
     const delays = extractTimeoutDelays(timeoutSpy);
 
     // Before the fix, delay would be 0 (tight loop).
@@ -171,7 +180,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
     const delays = extractTimeoutDelays(timeoutSpy);
     expect(delays).toContain(60_000);
 
@@ -184,19 +193,10 @@ describe("CronService - armTimer tight loop prevention", () => {
     const now = Date.parse("2026-02-28T12:32:00.000Z");
     const pastDueMs = 17 * 60 * 1000;
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
+    });
 
     const state = createTimerState({
       storePath: store.storePath,
@@ -208,7 +208,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     await onTimer(state);
 
     expect(state.running).toBe(false);
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
 
     // The re-armed timer must NOT use delay=0. It should use at least
     // MIN_REFIRE_GAP_MS to prevent the hot-loop.

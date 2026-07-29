@@ -1,16 +1,22 @@
+// Facade runtime tests cover installed plugin facade loading and fallback resolution.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
   throwForBundledPluginPublicSurfaceAccess,
 } from "./facade-activation-check.runtime.js";
 import {
-  __testing,
+  testing,
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeRuntimeStateForTest,
@@ -23,6 +29,7 @@ const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGI
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const trustedBundledFixturesRoot = path.resolve("dist-runtime", "extensions");
 const trustedBundledFixtureDirs: string[] = [];
+type SnapshotPluginRecord = PluginMetadataSnapshot["manifestRegistry"]["plugins"][number];
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -63,7 +70,6 @@ function createBundledPluginDir(prefix: string, marker: string): string {
 
 function useBundledPluginDirOverrideForTest(dir: string): void {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
-  setBundledPluginsDirOverrideForTest(dir);
 }
 
 function createThrowingPluginDir(prefix: string): string {
@@ -91,8 +97,8 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   clearRuntimeConfigSnapshot();
+  clearCurrentPluginMetadataSnapshot();
   resetFacadeRuntimeStateForTest();
-  setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -112,12 +118,33 @@ afterEach(() => {
 });
 
 describe("plugin-sdk facade runtime", () => {
+  it("reuses successful facade locations without repeating filesystem probes", () => {
+    const dir = createBundledPluginDir("openclaw-facade-location-cache-", "cached");
+    useBundledPluginDirOverrideForTest(dir);
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const params = {
+      dirName: "demo",
+      artifactBasename: "api.js",
+    };
+
+    const first = testing.resolveFacadeModuleLocation(params);
+    expect(first).toEqual({
+      modulePath: path.join(dir, "demo", "api.js"),
+      boundaryRoot: dir,
+    });
+
+    existsSync.mockClear();
+
+    expect(testing.resolveFacadeModuleLocation(params)).toBe(first);
+    expect(existsSync).not.toHaveBeenCalled();
+  });
+
   it("honors trusted bundled plugin dir overrides", () => {
     const overrideA = createBundledPluginDir("openclaw-facade-runtime-a-", "override-a");
     const overrideB = createBundledPluginDir("openclaw-facade-runtime-b-", "override-b");
 
     useBundledPluginDirOverrideForTest(overrideA);
-    const fromA = __testing.resolveFacadeModuleLocation({
+    const fromA = testing.resolveFacadeModuleLocation({
       dirName: "demo",
       artifactBasename: "api.js",
     });
@@ -127,7 +154,7 @@ describe("plugin-sdk facade runtime", () => {
     });
 
     useBundledPluginDirOverrideForTest(overrideB);
-    const fromB = __testing.resolveFacadeModuleLocation({
+    const fromB = testing.resolveFacadeModuleLocation({
       dirName: "demo",
       artifactBasename: "api.js",
     });
@@ -141,27 +168,147 @@ describe("plugin-sdk facade runtime", () => {
     const overrideDir = createTrustedBundledFixtureRoot("openclaw-facade-runtime-empty-");
     useBundledPluginDirOverrideForTest(overrideDir);
 
-    const resolved = __testing.resolveFacadeModuleLocation({
+    const resolved = testing.resolveFacadeModuleLocation({
       dirName: "browser",
       artifactBasename: "browser-maintenance.js",
     });
 
     expect(resolved?.boundaryRoot).not.toBe(overrideDir);
     expect(resolved?.modulePath).toMatch(
-      /(?:^|\/)(?:extensions|dist-runtime\/extensions)\/browser\/browser-maintenance\.(?:ts|js)$/u,
+      /(?:^|[\\/])(?:extensions|dist-runtime[\\/]extensions)[\\/]browser[\\/]browser-maintenance\.(?:ts|js)$/u,
     );
   });
 
   it("does not fall back to package source surfaces when bundled plugins are disabled", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    testing.setFacadeActivationCheckRuntimeForTest({
+      resolveRegistryPluginModuleLocation: () => null,
+    } as never);
 
     expect(
-      __testing.resolveFacadeModuleLocation({
+      testing.resolveFacadeModuleLocation({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
     ).toBeNull();
+  });
+
+  it("does not reuse enabled facade locations when bundled plugins are disabled", () => {
+    const dir = createBundledPluginDir("openclaw-facade-location-disabled-", "enabled");
+    useBundledPluginDirOverrideForTest(dir);
+    const params = {
+      dirName: "demo",
+      artifactBasename: "api.js",
+    };
+
+    expect(testing.resolveFacadeModuleLocation(params)).toEqual({
+      modulePath: path.join(dir, "demo", "api.js"),
+      boundaryRoot: dir,
+    });
+
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    testing.setFacadeActivationCheckRuntimeForTest({
+      resolveRegistryPluginModuleLocation: () => null,
+    } as never);
+
+    expect(testing.resolveFacadeModuleLocation(params)).toBeNull();
+  });
+
+  it("does not reuse installed facade locations across custom environment profiles", () => {
+    const profileA: NodeJS.ProcessEnv = {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(path.sep, "openclaw-facade-profile-a"),
+    };
+    const profileB: NodeJS.ProcessEnv = {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(path.sep, "openclaw-facade-profile-b"),
+    };
+    const resolveRegistryPluginModuleLocation = vi.fn(({ env }: { env?: NodeJS.ProcessEnv }) => {
+      const stateDir = env?.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        return null;
+      }
+      const boundaryRoot = path.join(stateDir, "plugins", "demo");
+      return {
+        modulePath: path.join(boundaryRoot, "api.js"),
+        boundaryRoot,
+      };
+    });
+    testing.setFacadeActivationCheckRuntimeForTest({
+      resolveRegistryPluginModuleLocation,
+    } as never);
+
+    const params = { dirName: "demo", artifactBasename: "api.js" };
+    const profileARoot = path.join(profileA.OPENCLAW_STATE_DIR!, "plugins", "demo");
+    const profileBRoot = path.join(profileB.OPENCLAW_STATE_DIR!, "plugins", "demo");
+
+    expect(testing.resolveFacadeModuleLocation({ ...params, env: profileA })).toEqual({
+      modulePath: path.join(profileARoot, "api.js"),
+      boundaryRoot: profileARoot,
+    });
+    expect(testing.resolveFacadeModuleLocation({ ...params, env: profileB })).toEqual({
+      modulePath: path.join(profileBRoot, "api.js"),
+      boundaryRoot: profileBRoot,
+    });
+    expect(resolveRegistryPluginModuleLocation).toHaveBeenCalledTimes(2);
+    expect(resolveRegistryPluginModuleLocation).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ env: profileA }),
+    );
+    expect(resolveRegistryPluginModuleLocation).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ env: profileB }),
+    );
+  });
+
+  it("retries missing facade locations when a plugin artifact appears", () => {
+    const dir = createTrustedBundledFixtureRoot("openclaw-facade-location-retry-");
+    useBundledPluginDirOverrideForTest(dir);
+    testing.setFacadeActivationCheckRuntimeForTest({
+      resolveRegistryPluginModuleLocation: () => null,
+    } as never);
+    const params = {
+      dirName: "future-demo",
+      artifactBasename: "api.js",
+    };
+
+    expect(testing.resolveFacadeModuleLocation(params)).toBeNull();
+
+    const pluginDir = path.join(dir, params.dirName);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writePluginPackageJson(pluginDir, params.dirName);
+    fs.writeFileSync(path.join(pluginDir, "api.js"), 'export const marker = "ready";\n', "utf8");
+
+    expect(testing.resolveFacadeModuleLocation(params)).toEqual({
+      modulePath: path.join(pluginDir, "api.js"),
+      boundaryRoot: dir,
+    });
+  });
+
+  it("invalidates cached facade locations when plugin metadata changes", () => {
+    const dir = createBundledPluginDir("openclaw-facade-location-invalidation-", "original");
+    useBundledPluginDirOverrideForTest(dir);
+    const params = {
+      dirName: "demo",
+      artifactBasename: "api.js",
+    };
+    const first = testing.resolveFacadeModuleLocation(params);
+
+    fs.writeFileSync(
+      path.join(dir, "demo", "api.ts"),
+      'export const marker = "updated";\n',
+      "utf8",
+    );
+
+    expect(testing.resolveFacadeModuleLocation(params)).toBe(first);
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(testing.resolveFacadeModuleLocation(params)).toEqual({
+      modulePath: path.join(dir, "demo", "api.ts"),
+      boundaryRoot: dir,
+    });
   });
 
   it("returns the same object identity on repeated calls (sentinel consistency)", () => {
@@ -173,12 +320,12 @@ describe("plugin-sdk facade runtime", () => {
     };
     const loader = vi.fn(() => ({ marker: "identity-check" }));
 
-    const first = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const first = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "demo",
       loadModule: loader,
     });
-    const second = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const second = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "demo",
       loadModule: loader,
@@ -197,7 +344,7 @@ describe("plugin-sdk facade runtime", () => {
     };
     let reentered: { marker?: string } | undefined;
     const loader = vi.fn(() => {
-      reentered = __testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
+      reentered = testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
         location,
         trackedPluginId: "demo",
         loadModule: loader,
@@ -205,7 +352,7 @@ describe("plugin-sdk facade runtime", () => {
       return { marker: "circular-ok" };
     });
 
-    const loaded = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "demo",
       loadModule: loader,
@@ -226,10 +373,10 @@ describe("plugin-sdk facade runtime", () => {
     const reentryMarkers: Array<string | undefined> = [];
     const loader = vi.fn(() => ({ marker: "post-load-ok" }));
 
-    const loaded = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: () => {
-        const reentered = __testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
+        const reentered = testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
           location,
           trackedPluginId: "demo",
           loadModule: loader,
@@ -242,7 +389,8 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(loaded.marker).toBe("post-load-ok");
     expect(reentryMarkers.length).toBeGreaterThan(0);
-    expect(reentryMarkers.every((marker) => marker === "post-load-ok")).toBe(true);
+    const unexpectedReentryMarkers = reentryMarkers.filter((marker) => marker !== "post-load-ok");
+    expect(unexpectedReentryMarkers).toStrictEqual([]);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
     expect(loader).toHaveBeenCalledTimes(1);
   });
@@ -257,7 +405,7 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toThrow("plugin load failure");
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>
@@ -289,7 +437,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(access.allowed).toBe(false);
     expect(access.pluginId).toBe("discord");
-    expect(access.reason).toBeTruthy();
+    expect(access.reason).toMatch(/disabled|not enabled|not active/i);
     expect(() =>
       throwForBundledPluginPublicSurfaceAccess({
         access,
@@ -343,13 +491,48 @@ describe("plugin-sdk facade runtime", () => {
     };
 
     expect(access.allowed).toBe(true);
-    const loaded = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "discord",
       loadModule: loader,
     });
     expect(loaded.marker).toBe("runtime-api-enabled");
     expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects hardlinked artifacts under installed plugin roots", () => {
+    const installedDir = createTempDirSync("openclaw-facade-hardlink-");
+    const originalPath = path.join(installedDir, "original.js");
+    fs.writeFileSync(originalPath, 'export const marker = "hardlinked";\n', "utf8");
+    const artifactPath = path.join(installedDir, "runtime-api.js");
+    fs.linkSync(originalPath, artifactPath);
+
+    // Installed roots are outside the package/bundled roots, so the facade
+    // boundary open applies shouldRejectHardlinkedPluginFiles (nlink > 1 fails).
+    expect(() =>
+      testing.loadFacadeModuleAtLocationSync({
+        location: { modulePath: artifactPath, boundaryRoot: installedDir },
+        trackedPluginId: "line",
+      }),
+    ).toThrow(`Unable to open bundled plugin public surface ${artifactPath}`);
+  });
+
+  it("keeps hardlinked artifacts loadable under core-shipped roots", () => {
+    const rootDir = createTrustedBundledFixtureRoot("openclaw-facade-hardlink-bundled-");
+    const pluginDir = path.join(rootDir, "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const originalPath = path.join(pluginDir, "original.js");
+    fs.writeFileSync(originalPath, 'export const marker = "bundled-hardlink";\n', "utf8");
+    const artifactPath = path.join(pluginDir, "api.js");
+    fs.linkSync(originalPath, artifactPath);
+
+    const loader = vi.fn(() => ({ marker: "bundled-hardlink" }));
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+      location: { modulePath: artifactPath, boundaryRoot: rootDir },
+      trackedPluginId: "demo",
+      loadModule: loader,
+    });
+    expect(loaded.marker).toBe("bundled-hardlink");
   });
 
   it("resolves a globally-installed plugin whose rootDir basename matches the dirName", () => {
@@ -383,7 +566,7 @@ describe("plugin-sdk facade runtime", () => {
     );
 
     expect(
-      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
         registry: [
           {
             id: "line",
@@ -396,6 +579,56 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toEqual({
       modulePath: path.join(lineDir, "runtime-api.js"),
+      boundaryRoot: lineDir,
+    });
+  });
+
+  it("resolves a globally-installed plugin public surface from package dist", () => {
+    const lineDir = createTempDirSync("openclaw-facade-global-line-dist-");
+    fs.mkdirSync(path.join(lineDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(lineDir, "dist", "runtime-api.js"),
+      'export const marker = "global-line-dist";\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(lineDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/line",
+        version: "0.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          runtimeExtensions: ["./dist/index.js"],
+          channel: { id: "line" },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(lineDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "line",
+        channels: ["line"],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+      "utf8",
+    );
+
+    expect(
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
+        registry: [
+          {
+            id: "line",
+            rootDir: lineDir,
+            channels: ["line"],
+          },
+        ],
+        dirName: "line",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toEqual({
+      modulePath: path.join(lineDir, "dist", "runtime-api.js"),
       boundaryRoot: lineDir,
     });
   });
@@ -431,7 +664,7 @@ describe("plugin-sdk facade runtime", () => {
     );
 
     expect(
-      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
         registry: [
           {
             id: "line",
@@ -448,10 +681,10 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
-  it("keeps shared runtime-core facades available without plugin activation", () => {
+  it("keeps bundled extension runtime-core facades available without plugin activation", () => {
     setRuntimeConfigSnapshot({});
 
-    for (const dirName of ["speech-core", "image-generation-core", "media-understanding-core"]) {
+    for (const dirName of ["image-generation-core", "media-understanding-core"]) {
       expect(
         resolveActivationCheckBundledPluginPublicSurfaceAccess({
           dirName,
@@ -465,6 +698,23 @@ describe("plugin-sdk facade runtime", () => {
         pluginId: dirName,
       });
     }
+  });
+
+  it("does not treat package-backed speech-core as a bundled extension facade", () => {
+    setRuntimeConfigSnapshot({});
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "speech-core",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: "",
+        resolutionKey: "runtime-core:speech-core",
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "no bundled plugin manifest found for speech-core",
+    });
   });
 
   it("prefers the source runtime snapshot for facade activation checks", () => {
@@ -512,6 +762,143 @@ describe("plugin-sdk facade runtime", () => {
     ).toEqual({
       allowed: true,
       pluginId: "demo",
+    });
+  });
+
+  it("validates current snapshot against facade boundary config and ignores on mismatch", () => {
+    const dir = createTempDirSync("openclaw-facade-snapshot-validate-");
+    fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "demo", "runtime-api.js"),
+      'export const marker = "snapshot-validate";\n',
+      "utf8",
+    );
+    // Do NOT write openclaw.plugin.json on disk to force fallback to registry scan
+    useBundledPluginDirOverrideForTest(dir);
+
+    function createTestSnapshot(
+      params: {
+        config?: OpenClawConfig;
+        plugins?: SnapshotPluginRecord[];
+      } = {},
+    ): PluginMetadataSnapshot {
+      const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+      return {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 1,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        registryDiagnostics: [],
+        manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      };
+    }
+
+    const configWithPaths = {
+      plugins: {
+        load: { paths: ["/path/one"] },
+        entries: {
+          "demo-snapshot": { enabled: true },
+          demo: { enabled: true },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const matchedSnapshot = createTestSnapshot({
+      config: configWithPaths,
+      plugins: [
+        {
+          id: "demo-snapshot",
+          rootDir: path.join(dir, "demo"),
+          source: path.join(dir, "demo", "runtime-api.js"),
+          manifestPath: path.join(dir, "demo", "openclaw.plugin.json"),
+          channels: ["demo"],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "bundled" as const,
+        },
+      ],
+    });
+
+    setCurrentPluginMetadataSnapshot(matchedSnapshot, { config: configWithPaths });
+
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {
+          load: { paths: ["/path/two"] },
+          entries: {
+            "demo-snapshot": { enabled: true },
+            demo: { enabled: true },
+          },
+        },
+      },
+      {
+        plugins: {
+          load: { paths: ["/path/two"] },
+          entries: {
+            "demo-snapshot": { enabled: true },
+            demo: { enabled: true },
+          },
+        },
+      },
+    );
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "snapshot-validate-demo",
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "no bundled plugin manifest found for demo",
+    });
+
+    setRuntimeConfigSnapshot(configWithPaths, configWithPaths);
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "snapshot-validate-demo",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "demo-snapshot",
     });
   });
 });

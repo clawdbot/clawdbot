@@ -1,7 +1,12 @@
+// Discord plugin module implements listeners behavior.
 import {
   GatewayDispatchEvents,
   type APIMessage,
   type APIReaction,
+  type APIUnavailableGuild,
+  type APIVoiceState,
+  type GatewayGuildCreateDispatchData,
+  type GatewayGuildDeleteDispatchData,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadUpdateDispatchData,
 } from "discord-api-types/v10";
@@ -21,7 +26,7 @@ export type DiscordMessageDispatchData = {
   channel?: unknown;
 };
 
-export type DiscordReactionDispatchData = {
+type DiscordReactionDispatchData = {
   user_id?: string;
   channel_id: string;
   message_id: string;
@@ -36,7 +41,7 @@ export type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
-export abstract class BaseListener {
+abstract class BaseListener {
   abstract readonly type: string;
   abstract handle(data: unknown, client: Client): Promise<void> | void;
 }
@@ -49,9 +54,25 @@ export abstract class ResumedListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Resumed;
 }
 
+export abstract class GuildCreateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.GuildCreate;
+  abstract override handle(
+    data: GatewayGuildCreateDispatchData | APIUnavailableGuild,
+    client: Client,
+  ): Promise<void> | void;
+}
+
+export abstract class GuildDeleteListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.GuildDelete;
+  abstract override handle(
+    data: GatewayGuildDeleteDispatchData,
+    client: Client,
+  ): Promise<void> | void;
+}
+
 export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
-  abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;
+  abstract override handle(data: APIMessage, client: Client): Promise<void> | void;
 }
 
 export abstract class InteractionCreateListener extends BaseListener {
@@ -74,6 +95,11 @@ export abstract class PresenceUpdateListener extends BaseListener {
     data: GatewayPresenceUpdateDispatchData,
     client: Client,
   ): Promise<void> | void;
+}
+
+export abstract class VoiceStateUpdateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  abstract override handle(data: APIVoiceState, client: Client): Promise<void> | void;
 }
 
 export abstract class ThreadUpdateListener extends BaseListener {

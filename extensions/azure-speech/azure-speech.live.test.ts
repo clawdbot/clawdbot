@@ -1,8 +1,9 @@
+// Azure Speech tests cover azure speech plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
@@ -36,9 +37,7 @@ describeLive("azure speech plugin live", () => {
     });
 
     expect(voices?.length).toBeGreaterThan(100);
-    expect(voices).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "en-US-JennyNeural" })]),
-    );
+    expect(voices?.some((voice) => voice.id === "en-US-JennyNeural")).toBe(true);
   }, 120_000);
 
   it("synthesizes MP3, native Ogg/Opus voice notes, and telephony audio", async () => {

@@ -73,9 +73,8 @@ inline citations. The results include both the synthesized answer and the source
 URLs.
 
 - Citation URLs from Gemini grounding are automatically resolved from Google
-  redirect URLs to direct URLs.
-- Redirect resolution uses the SSRF guard path (HEAD + redirect checks +
-  http/https validation) before returning the final citation URL.
+  redirect URLs to direct URLs via a HEAD request through OpenClaw's SSRF-guarded
+  fetch path (redirect following, http/https validation).
 - Redirect resolution uses strict SSRF defaults, so redirects to
   private/internal targets are blocked.
 
@@ -88,8 +87,9 @@ still returns one synthesized answer with citations rather than an N-result
 list.
 
 `freshness` accepts `day`, `week`, `month`, `year`, and the shared shortcuts
-`pd`, `pw`, `pm`, and `py`. OpenClaw converts these values, or an explicit
-`date_after`/`date_before` range, into Gemini Google Search grounding's
+`pd`, `pw`, `pm`, and `py`. `day`/`pd` adds a recency instruction to the Gemini
+query instead of a hard 24-hour range. `week`, `month`, `year`, and explicit
+`date_after`/`date_before` ranges set Gemini Google Search grounding's
 `timeRangeFilter`. `country`, `language`, and `domain_filter` are not supported.
 
 ## Model selection

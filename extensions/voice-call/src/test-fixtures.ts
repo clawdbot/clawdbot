@@ -1,3 +1,4 @@
+// Voice Call plugin module implements test fixtures behavior.
 import type { VoiceCallConfig } from "./config.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
@@ -51,6 +52,7 @@ export function createVoiceCallBaseConfig(params?: {
       streamPath: "/voice/stream/realtime",
       instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
       toolPolicy: "safe-read-only",
+      consultPolicy: "auto",
       tools: [],
       fastContext: {
         enabled: false,
@@ -58,6 +60,13 @@ export function createVoiceCallBaseConfig(params?: {
         maxResults: 3,
         sources: ["memory", "sessions"],
         fallbackToConsult: false,
+      },
+      agentContext: {
+        enabled: false,
+        maxChars: 6000,
+        includeIdentity: true,
+        includeWorkspaceFiles: true,
+        files: ["SOUL.md", "IDENTITY.md", "USER.md"],
       },
       providers: {},
     },

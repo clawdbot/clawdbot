@@ -1,10 +1,13 @@
+// Reset preservation keeps user-selected model/auth overrides while dropping automatic fallbacks.
+import { hasSessionAutoModelFallbackProvenance } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type ResetPreservedSelectionState = Pick<
+type ResetPreservedSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
+  | "modelOverrideRouteResolution"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -30,13 +33,22 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  // Missing source on older entries means "user" unless fallback provenance proves the runtime
+  // created the override automatically.
   const preserveLegacyUserModelOverride =
     entry.modelOverrideSource === "user" ||
-    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
+    (entry.modelOverrideSource === undefined &&
+      Boolean(entry.modelOverride) &&
+      !recoveredAutoFallbackOverride);
   if (preserveLegacyUserModelOverride && entry.modelOverride) {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
     preserved.modelOverrideSource = "user";
+    if (entry.modelOverrideRouteResolution) {
+      preserved.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
+    }
   }
 
   if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {

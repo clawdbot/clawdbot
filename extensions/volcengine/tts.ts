@@ -1,4 +1,7 @@
+// Volcengine plugin module implements tts behavior.
 import * as crypto from "node:crypto";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type VolcengineTtsEncoding = "ogg_opus" | "mp3" | "pcm" | "wav";
@@ -26,6 +29,7 @@ const DEFAULT_LEGACY_VOICE = "zh_female_xiaohe_uranus_bigtts";
 const DEFAULT_CLUSTER = "volcano_tts";
 const DEFAULT_SEED_TTS_RESOURCE_ID = "seed-tts-1.0";
 const DEFAULT_SEED_TTS_APP_KEY = "aGjiRDfUWi";
+const VOLCENGINE_TTS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const BYTEPLUS_SEED_TTS_URL =
   "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional";
 const VOLCENGINE_LEGACY_TTS_URL = "https://openspeech.bytedance.com/api/v1/tts";
@@ -117,7 +121,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
     resourceId = DEFAULT_SEED_TTS_RESOURCE_ID,
     appKey = DEFAULT_SEED_TTS_APP_KEY,
     baseUrl = BYTEPLUS_SEED_TTS_URL,
-    speedRatio = 1.0,
+    speedRatio = 1,
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
@@ -133,7 +137,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
         format: audioFormat,
         sample_rate: 24_000,
       },
-      ...(speedRatio !== 1.0 ? { speed_ratio: speedRatio } : {}),
+      ...(speedRatio !== 1 ? { speed_ratio: speedRatio } : {}),
       ...(emotion ? { emotion } : {}),
     },
   });
@@ -157,12 +161,22 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
   });
 
   try {
-    const frames = parseSeedTtsFrames(await response.text());
+    const responseText = new TextDecoder().decode(
+      await readResponseWithLimit(response, VOLCENGINE_TTS_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`BytePlus Seed Speech TTS response exceeds ${maxBytes} bytes`),
+      }),
+    );
+    const frames = parseSeedTtsFrames(responseText);
     const chunks: Buffer[] = [];
     for (const frame of frames) {
       if (frame.code === 0) {
         if (frame.data) {
-          chunks.push(Buffer.from(frame.data, "base64"));
+          const canonicalAudio = canonicalizeBase64(frame.data);
+          if (!canonicalAudio) {
+            throw new Error("BytePlus Seed Speech TTS returned malformed base64 audio data");
+          }
+          chunks.push(Buffer.from(canonicalAudio, "base64"));
         }
         continue;
       }
@@ -196,9 +210,9 @@ async function legacyVolcengineTTS(
     voice = DEFAULT_LEGACY_VOICE,
     cluster = DEFAULT_CLUSTER,
     baseUrl = VOLCENGINE_LEGACY_TTS_URL,
-    speedRatio = 1.0,
-    volumeRatio = 1.0,
-    pitchRatio = 1.0,
+    speedRatio = 1,
+    volumeRatio = 1,
+    pitchRatio = 1,
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
@@ -239,13 +253,23 @@ async function legacyVolcengineTTS(
   });
 
   try {
-    const body = parseLegacyTtsResponse(await response.text());
+    const responseText = new TextDecoder().decode(
+      await readResponseWithLimit(response, VOLCENGINE_TTS_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Volcengine TTS response exceeds ${maxBytes} bytes`),
+      }),
+    );
+    const body = parseLegacyTtsResponse(responseText);
     if (!response.ok || body.code !== 3000 || !body.data) {
       throw new Error(
         `Volcengine TTS error ${body.code ?? response.status}: ${body.message ?? "unknown"}`,
       );
     }
-    return Buffer.from(body.data, "base64");
+    const canonicalAudio = canonicalizeBase64(body.data);
+    if (!canonicalAudio) {
+      throw new Error("Volcengine TTS returned malformed base64 audio data");
+    }
+    return Buffer.from(canonicalAudio, "base64");
   } finally {
     await release();
   }

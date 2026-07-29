@@ -1,12 +1,15 @@
+// Whatsapp plugin module implements setup surface behavior.
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
   setSetupChannelEnabled,
+  createSetupTranslator,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { formatWhatsAppWebAuthStatusState, readWebAuthState } from "./auth-store.js";
-import { finalizeWhatsAppSetup } from "./setup-finalize.js";
+
+const t = createSetupTranslator();
 
 const channel = "whatsapp" as const;
 
@@ -23,10 +26,10 @@ async function readWhatsAppSetupLinkState(
 export const whatsappSetupWizard: ChannelSetupWizard = {
   channel,
   status: {
-    configuredLabel: "linked",
-    unconfiguredLabel: "not linked",
-    configuredHint: "linked",
-    unconfiguredHint: "not linked",
+    configuredLabel: t("wizard.channels.statusLinked"),
+    unconfiguredLabel: t("wizard.channels.statusNotLinked"),
+    configuredHint: t("wizard.channels.statusLinked"),
+    unconfiguredHint: t("wizard.channels.statusNotLinked"),
     configuredScore: 5,
     unconfiguredScore: 4,
     resolveConfigured: async ({ cfg, accountId }) => {
@@ -60,8 +63,8 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
   },
   resolveShouldPromptAccountIds: ({ shouldPromptAccountIds }) => shouldPromptAccountIds,
   credentials: [],
-  finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime }) =>
-    await finalizeWhatsAppSetup({ cfg, accountId, forceAllowFrom, prompter, runtime }),
+  finalize: async (params) =>
+    await (await import("./setup-finalize.js")).finalizeWhatsAppSetup(params),
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   onAccountRecorded: (accountId, options) => {
     options?.onAccountId?.(channel, accountId);

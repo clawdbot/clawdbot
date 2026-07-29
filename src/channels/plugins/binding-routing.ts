@@ -1,3 +1,8 @@
+/**
+ * Channel binding route resolver.
+ *
+ * Applies configured and runtime conversation bindings to agent route resolution.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -8,12 +13,16 @@ import {
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveConfiguredBinding } from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 
 const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
 
+/**
+ * Route resolution after applying a configured channel binding.
+ */
 export type ConfiguredBindingRouteResult = {
   bindingResolution: ConfiguredBindingResolution | null;
   route: ResolvedAgentRoute;
@@ -21,6 +30,9 @@ export type ConfiguredBindingRouteResult = {
   boundAgentId?: string;
 };
 
+/**
+ * Route resolution after applying a runtime conversation binding record.
+ */
 export type RuntimeConversationBindingRouteResult = {
   bindingRecord: SessionBindingRecord | null;
   route: ResolvedAgentRoute;
@@ -65,6 +77,9 @@ function isPluginOwnedRuntimeBindingRecord(record: SessionBindingRecord | null):
   );
 }
 
+/**
+ * Rewrites an agent route when the current conversation matches a configured binding.
+ */
 export function resolveConfiguredBindingRoute(
   params: {
     cfg: OpenClawConfig;
@@ -92,6 +107,8 @@ export function resolveConfiguredBindingRoute(
   }
   const boundAgentId =
     resolveAgentIdFromSessionKey(boundSessionKey) || bindingResolution.statefulTarget.agentId;
+  // Configured bindings own the session key, so recompute last-route policy against that target
+  // before downstream delivery records the route.
   return {
     bindingResolution,
     boundSessionKey,
@@ -109,6 +126,9 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
+/**
+ * Rewrites an agent route using a persisted runtime conversation binding, when applicable.
+ */
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
@@ -125,8 +145,21 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
+  if (isCronRunSessionKey(boundSessionKey)) {
+    // Cron run sessions are isolated and short-lived; never route live channel traffic into them.
+    logVerbose(
+      `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
+    );
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
   getSessionBindingService().touch(bindingRecord.bindingId);
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    // Plugin-owned binding records are observed but not route-rewritten by core; the owning
+    // plugin is responsible for its runtime target handoff.
     return {
       bindingRecord,
       route: params.route,
@@ -151,6 +184,9 @@ export function resolveRuntimeConversationBindingRoute(
   };
 }
 
+/**
+ * Ensures a configured binding target is ready without blocking route resolution indefinitely.
+ */
 export async function ensureConfiguredBindingRouteReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
@@ -168,6 +204,7 @@ export async function ensureConfiguredBindingRouteReady(params: {
     if (result !== timeoutToken) {
       return result;
     }
+    // Let late driver work finish for diagnostics, but return a bounded failure to the caller.
     logVerbose(
       `configured binding route ready check timed out after ${
         CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
@@ -178,7 +215,7 @@ export async function ensureConfiguredBindingRouteReady(params: {
         logVerbose(
           `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
         ),
-      (err) =>
+      (err: unknown) =>
         logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
     );
     return { ok: false, error: "Configured binding route ready check timed out" };

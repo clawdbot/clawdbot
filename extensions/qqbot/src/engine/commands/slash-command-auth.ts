@@ -1,9 +1,9 @@
 /**
  * Pre-dispatch authorization for requireAuth slash commands.
  *
- * Unlike the access-stage's `resolveCommandAuthorized` (which permits
- * `dm_policy_open` senders — i.e. anyone), this function requires the
- * sender to appear in an **explicit non-wildcard** allowFrom list.
+ * Unlike the inbound message ingress command projection (which permits
+ * open-policy chat senders), this function requires the sender to appear in an
+ * **explicit non-wildcard** allowFrom list.
  *
  * Rationale: sensitive operations (log export, file deletion, approval
  * config changes) must be gated behind a deliberate operator decision.

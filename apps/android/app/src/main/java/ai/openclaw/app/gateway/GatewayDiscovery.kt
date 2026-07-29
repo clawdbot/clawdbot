@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import android.annotation.TargetApi
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.DnsResolver
@@ -12,6 +11,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.CancellationSignal
 import android.util.Log
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,13 +49,49 @@ import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+private fun createDnsResolver(context: Context): DnsResolver =
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+    createContextDnsResolver(context)
+  } else {
+    createLegacyDnsResolver()
+  }
+
+@RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolver(context, null)
+
+@Suppress("DEPRECATION")
+private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
+
+internal fun gatewayDiscoveryStatusText(
+  localCount: Int,
+  wideAreaRcode: Int?,
+  wideAreaCount: Int,
+): String {
+  val wide =
+    when (wideAreaRcode) {
+      null -> "Wide: ?"
+      Rcode.NOERROR -> "Wide: $wideAreaCount"
+      Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
+      else -> "Wide: ${Rcode.string(wideAreaRcode)}"
+    }
+
+  return when {
+    localCount == 0 && wideAreaRcode == null -> "Searching for gateways…"
+    localCount == 0 -> wide
+    else -> "Local: $localCount • $wide"
+  }
+}
+
+/**
+ * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
+ */
 class GatewayDiscovery(
   context: Context,
   private val scope: CoroutineScope,
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-  private val dns = DnsResolver.getInstance()
+  private val dns = createDnsResolver(context)
   private val serviceType = "_openclaw-gw._tcp."
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"
@@ -63,9 +99,13 @@ class GatewayDiscovery(
   private val localById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val unicastById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val _gateways = MutableStateFlow<List<GatewayEndpoint>>(emptyList())
+
+  /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
   private val _statusText = MutableStateFlow("Searching…")
+
+  /** Short diagnostic text shown by connect UI while discovery is running. */
   val statusText: StateFlow<String> = _statusText.asStateFlow()
 
   private var unicastJob: Job? = null
@@ -130,6 +170,8 @@ class GatewayDiscovery(
     val cm = connectivity ?: return
     cm.activeNetwork?.let(availableNetworks::add)
     try {
+      // Track all networks so wide-area DNS can prefer VPN/split-DNS answers
+      // even when Android's active network is not the VPN.
       cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
     } catch (_: Throwable) {
       // ignore (best-effort)
@@ -139,14 +181,6 @@ class GatewayDiscovery(
   private fun startLocalDiscovery() {
     try {
       nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-    } catch (_: Throwable) {
-      // ignore (best-effort)
-    }
-  }
-
-  private fun stopLocalDiscovery() {
-    try {
-      nsd.stopServiceDiscovery(discoveryListener)
     } catch (_: Throwable) {
       // ignore (best-effort)
     }
@@ -168,13 +202,14 @@ class GatewayDiscovery(
 
   private fun resolve(serviceInfo: NsdServiceInfo) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      // Android 14+ streams service updates; older releases require one-shot resolve calls.
       resolveWithServiceInfoCallback(serviceInfo)
     } else {
       resolveLegacy(serviceInfo)
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+  @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
   private fun resolveWithServiceInfoCallback(serviceInfo: NsdServiceInfo) {
     val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
     val id = stableId(serviceName, "local.")
@@ -255,6 +290,7 @@ class GatewayDiscovery(
     val tlsEnabled = txtBool(resolved, "gatewayTls")
     val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
     val id = stableId(serviceName, "local.")
+    // Local NSD gives the socket host/port; TXT ports are retained as gateway metadata only.
     localById[id] =
       GatewayEndpoint(
         stableId = id,
@@ -278,39 +314,24 @@ class GatewayDiscovery(
     return legacyHostAddress(resolved)
   }
 
-  private fun legacyHostAddress(resolved: NsdServiceInfo): String? {
-    return try {
+  private fun legacyHostAddress(resolved: NsdServiceInfo): String? =
+    try {
       val host = NsdServiceInfo::class.java.getMethod("getHost").invoke(resolved) as? InetAddress
       host?.hostAddress
     } catch (_: Throwable) {
       null
     }
-  }
 
   private fun publish() {
     _gateways.value =
+      // Merge local and wide-area results deterministically for stable UI selection.
       (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
-    _statusText.value = buildStatusText()
-  }
-
-  private fun buildStatusText(): String {
-    val localCount = localById.size
-    val wideRcode = lastWideAreaRcode
-    val wideCount = lastWideAreaCount
-
-    val wide =
-      when (wideRcode) {
-        null -> "Wide: ?"
-        Rcode.NOERROR -> "Wide: $wideCount"
-        Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
-        else -> "Wide: ${Rcode.string(wideRcode)}"
-      }
-
-    return when {
-      localCount == 0 && wideRcode == null -> "Searching for gateways…"
-      localCount == 0 -> "$wide"
-      else -> "Local: $localCount • $wide"
-    }
+    _statusText.value =
+      gatewayDiscoveryStatusText(
+        localCount = localById.size,
+        wideAreaRcode = lastWideAreaRcode,
+        wideAreaCount = lastWideAreaCount,
+      )
   }
 
   private fun stableId(
@@ -370,6 +391,7 @@ class GatewayDiscovery(
           ?: resolveHostUnicast(targetFqdn)
           ?: continue
 
+      // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
         recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
           .orEmpty()
@@ -455,6 +477,7 @@ class GatewayDiscovery(
     val system = queryViaSystemDns(query)
     if (records(system, Section.ANSWER).any { it.type == type }) return system
 
+    // Android's DnsResolver can miss split-DNS answers; retry with dnsjava against network DNS servers.
     val direct = createDirectResolver() ?: return system
     return try {
       val msg = direct.send(query)
@@ -529,26 +552,27 @@ class GatewayDiscovery(
     val cm = connectivity ?: return null
 
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    trackedNetworks(cm).firstOrNull { n ->
-      val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-      caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-    }?.let { return it }
+    trackedNetworks(cm)
+      .firstOrNull { n ->
+        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+      }?.let { return it }
 
     return cm.activeNetwork
   }
 
-  private fun trackedNetworks(cm: ConnectivityManager): List<Network> {
-    return buildList {
+  private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
+    buildList {
       cm.activeNetwork?.let(::add)
       addAll(availableNetworks)
     }.distinct()
-  }
 
   private fun createDirectResolver(): Resolver? {
     val cm = connectivity ?: return null
 
     val candidateNetworks =
       buildList {
+        // Put VPN DNS first so Tailscale split-horizon names win over public DNS.
         trackedNetworks(cm)
           .firstOrNull { n ->
             val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false

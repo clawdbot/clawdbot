@@ -1,6 +1,13 @@
-import type { MessageEntity } from "@grammyjs/types";
+// Telegram plugin module implements reply parameters behavior.
+import { GrammyError } from "grammy";
+import type { MessageEntity } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+
+const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const GrammyErrorCtor: typeof GrammyError | undefined =
+  typeof GrammyError === "function" ? GrammyError : undefined;
 
 type TelegramReplyParameters = {
   message_id: number;
@@ -27,8 +34,8 @@ export function resolveTelegramSendThreadSpec(params: {
   if (messageThreadId == null) {
     return undefined;
   }
-  // Telegram supports DM topics; keep direct chat thread IDs and rely on
-  // thread-not-found retry fallback when a plain DM rejects them.
+  // Telegram supports DM topics; keep direct chat thread IDs and let invalid
+  // topics fail closed instead of sending to the base chat.
   return {
     id: messageThreadId,
     scope: params.chatType === "direct" ? "dm" : "forum",
@@ -110,6 +117,13 @@ export function getTelegramNativeQuoteReplyMessageId(
   }
   const messageId = (replyParameters as { message_id?: unknown }).message_id;
   return typeof messageId === "number" && Number.isFinite(messageId) ? messageId : undefined;
+}
+
+export function isTelegramQuoteParamError(err: unknown): boolean {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+    return QUOTE_PARAM_RE.test(err.description);
+  }
+  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
 export function removeTelegramNativeQuoteParam(

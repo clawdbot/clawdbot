@@ -1,13 +1,16 @@
+// Shared parsing, diffing, and reporting helpers for inventory guard scripts.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const parsedTypeScriptSourceCache = new Map();
 const sourceTextCache = new Map();
 
+/** Convert an absolute file path to a repo-relative POSIX path. */
 export function normalizeRepoPath(repoRoot, filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
+/** Resolve a relative or absolute module specifier to a repo-relative path. */
 export function resolveRepoSpecifier(repoRoot, specifier, importerFile) {
   if (specifier.startsWith(".")) {
     return normalizeRepoPath(repoRoot, path.resolve(path.dirname(importerFile), specifier));
@@ -18,7 +21,8 @@ export function resolveRepoSpecifier(repoRoot, specifier, importerFile) {
   return null;
 }
 
-export function visitModuleSpecifiers(ts, sourceFile, visit) {
+/** Visit static and dynamic module specifiers in a parsed TypeScript source file. */
+export function visitModuleSpecifiers(ts, sourceFile, visit, options = {}) {
   function walk(node) {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       visit({
@@ -50,6 +54,39 @@ export function visitModuleSpecifiers(ts, sourceFile, visit) {
         specifier: node.arguments[0].text,
         specifierNode: node.arguments[0],
       });
+    } else if (
+      options.includeCommonJs &&
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "require" &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteralLike(node.arguments[0])
+    ) {
+      visit({
+        kind: "commonjs-require",
+        node,
+        specifier: node.arguments[0].text,
+        specifierNode: node.arguments[0],
+      });
+    } else if (
+      options.includeImportMetaUrl &&
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "URL" &&
+      node.arguments?.length >= 2 &&
+      ts.isStringLiteralLike(node.arguments[0]) &&
+      ts.isPropertyAccessExpression(node.arguments[1]) &&
+      node.arguments[1].name.text === "url" &&
+      ts.isMetaProperty(node.arguments[1].expression) &&
+      node.arguments[1].expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[1].expression.name.text === "meta"
+    ) {
+      visit({
+        kind: "import-meta-url",
+        node,
+        specifier: node.arguments[0].text,
+        specifierNode: node.arguments[0],
+      });
     }
 
     ts.forEachChild(node, walk);
@@ -58,6 +95,7 @@ export function visitModuleSpecifiers(ts, sourceFile, visit) {
   walk(sourceFile);
 }
 
+/** Diff expected and actual inventory entries using JSON identity. */
 export function diffInventoryEntries(expected, actual, compareEntries) {
   const expectedKeys = new Set(expected.map((entry) => JSON.stringify(entry)));
   const actualKeys = new Set(actual.map((entry) => JSON.stringify(entry)));
@@ -71,10 +109,12 @@ export function diffInventoryEntries(expected, actual, compareEntries) {
   };
 }
 
+/** Write one line to a stream without each caller repeating newline handling. */
 export function writeLine(stream, text) {
   stream.write(`${text}\n`);
 }
 
+/** Collect import/export/dynamic-import references from source text without full parsing. */
 export function collectModuleReferencesFromSource(source) {
   const lineStarts = computeLineStarts(source);
   const isCodePosition = createCodePositionChecker(source);
@@ -191,6 +231,7 @@ function lineFromPosition(lineStarts, position) {
   return high + 1;
 }
 
+/** Memoize an async factory while resetting the cache after failures. */
 export function createCachedAsync(factory) {
   let cachedPromise = null;
   return async function getCachedValue() {
@@ -208,6 +249,7 @@ export function createCachedAsync(factory) {
   };
 }
 
+/** Format grouped inventory entries for human-readable guard output. */
 export function formatGroupedInventoryHuman(params, inventory) {
   if (inventory.length === 0) {
     return `${params.rule}\n${params.cleanMessage}`;
@@ -227,12 +269,12 @@ export function formatGroupedInventoryHuman(params, inventory) {
   return lines.join("\n");
 }
 
+/** Parse TypeScript files and collect sorted inventory entries from each source file. */
 export async function collectTypeScriptInventory(params) {
   const inventory = [];
-  const scriptKind = params.scriptKind ?? params.ts.ScriptKind.TS;
 
   for (const filePath of params.files) {
-    const cacheKey = `${scriptKind}:${filePath}`;
+    const cacheKey = `${params.scriptKind ?? "auto"}:${filePath}`;
     let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
     if (!sourceFile) {
       let source = sourceTextCache.get(filePath);
@@ -248,7 +290,7 @@ export async function collectTypeScriptInventory(params) {
         source,
         params.ts.ScriptTarget.Latest,
         true,
-        scriptKind,
+        params.scriptKind,
       );
       parsedTypeScriptSourceCache.set(cacheKey, sourceFile);
     }
@@ -258,6 +300,7 @@ export async function collectTypeScriptInventory(params) {
   return inventory.toSorted(params.compareEntries);
 }
 
+/** Run a baseline inventory check and return the intended process exit code. */
 export async function runBaselineInventoryCheck(params) {
   const streams = params.io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = params.argv.includes("--json");

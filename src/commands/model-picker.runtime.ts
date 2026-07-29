@@ -1,3 +1,4 @@
+/** Runtime dependency bundle for provider/model picker flows. */
 import {
   resolveProviderModelPickerFlowContributions,
   resolveProviderModelPickerFlowEntries,
@@ -9,6 +10,7 @@ import {
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 
+/** Lazy runtime methods consumed by model picker command flows. */
 export const modelPickerRuntime = {
   resolveProviderModelPickerContributions: resolveProviderModelPickerFlowContributions,
   resolveProviderModelPickerEntries: resolveProviderModelPickerFlowEntries,

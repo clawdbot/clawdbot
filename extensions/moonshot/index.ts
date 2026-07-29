@@ -1,17 +1,16 @@
+// Moonshot plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { MOONSHOT_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-  MOONSHOT_DEFAULT_MODEL_REF,
-} from "./onboard.js";
-import { buildMoonshotProvider } from "./provider-catalog.js";
+import { applyMoonshotConfig, applyMoonshotConfigCn } from "./onboard.js";
+import { buildMoonshotProvider, MOONSHOT_DEFAULT_MODEL_REF } from "./provider-catalog.js";
+import { isMoonshotAlwaysThinkingModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
+const moonshotThinkingStreamHooks = buildProviderStreamFamilyHooks("moonshot-thinking");
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -20,11 +19,12 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Moonshot",
     docsPath: "/providers/moonshot",
+    aliases: ["moonshotai", "moonshot-ai"],
     auth: [
       {
         methodId: "api-key",
         label: "Kimi API key (.ai)",
-        hint: "Kimi K2.6 + Kimi",
+        hint: "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -32,13 +32,13 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfig(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.6)",
+          groupLabel: "Moonshot AI (Kimi)",
         },
       },
       {
         methodId: "api-key-cn",
         label: "Kimi API key (.cn)",
-        hint: "Kimi K2.6 + Kimi",
+        hint: "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -46,7 +46,7 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.6)",
+          groupLabel: "Moonshot AI (Kimi)",
         },
       },
     ],
@@ -54,24 +54,24 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMoonshotProvider,
       buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
-    // Kimi K2+ returns native tool_call IDs shaped like `functions.<name>:<index>`.
-    // Sanitizing them to alphanumeric-only breaks Kimi's serving-layer matching in
-    // multi-turn replay. See openclaw/openclaw#62319.
-    ...buildProviderReplayFamilyHooks({
-      family: "openai-compatible",
-      sanitizeToolCallIds: false,
-    }),
-    ...MOONSHOT_THINKING_STREAM_HOOKS,
-    resolveThinkingProfile: () => ({
-      levels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "on" },
-      ],
-      defaultLevel: "off",
-    }),
+    buildReplayPolicy: ({ modelApi, modelId }) =>
+      buildOpenAICompatibleReplayPolicy(modelApi, {
+        modelId,
+        sanitizeToolCallIds: modelApi === "openai-completions",
+        duplicateToolCallIdStyle: "openai",
+        dropReasoningFromHistory: false,
+      }),
+    ...moonshotThinkingStreamHooks,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      isMoonshotAlwaysThinkingModelId(ctx.modelId)
+        ? moonshotThinkingStreamHooks.wrapStreamFn?.(ctx)
+        : ctx.streamFn,
+    resolveThinkingProfile,
+    isModernModelRef: ({ modelId }) => isMoonshotAlwaysThinkingModelId(modelId),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

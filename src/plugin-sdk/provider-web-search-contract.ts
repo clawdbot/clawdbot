@@ -38,9 +38,11 @@ export type {
 } from "./provider-web-search-contract-fields.js";
 
 type CreateWebSearchProviderSelectionOptions = CreateWebSearchProviderContractFieldsOptions & {
+  /** Plugin id to enable when this provider is selected through setup/configuration flows. */
   selectionPluginId?: string;
 };
 
+/** Build the public web-search provider hooks, including optional selection-time plugin enabling. */
 export function createWebSearchProviderContractFields(
   options: CreateWebSearchProviderSelectionOptions,
 ): Pick<

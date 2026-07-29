@@ -1,12 +1,11 @@
+// Covers context-window guard thresholds and user-facing warning/block text.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
-  CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
-  resolveContextWindowGuardThresholds,
   resolveContextWindowInfo,
 } from "./context-window-guard.js";
 
@@ -96,6 +95,8 @@ describe("context-window-guard", () => {
   });
 
   it("prefers models.providers.*.models[].contextTokens over contextWindow", () => {
+    // contextTokens is the effective usable window; contextWindow can be larger
+    // provider metadata and should not overstate prompt budget.
     const cfg = openRouterModelConfig({ contextWindow: 1_050_000, contextTokens: 12_000 });
 
     const info = resolveContextWindowInfo({
@@ -113,7 +114,64 @@ describe("context-window-guard", () => {
     });
   });
 
-  it("normalizes provider aliases when reading models config context windows", () => {
+  it("matches bare provider model config ids against provider-scoped runtime model ids", () => {
+    const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "openrouter/tiny",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 936_000,
+    });
+  });
+
+  it("matches provider-scoped config ids against bare runtime model ids", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "openrouter/tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_000_000,
+                contextTokens: 936_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "tiny",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 936_000,
+    });
+  });
+
+  it("does not read models config context windows across provider id variants", () => {
+    // Provider id variants are not aliases in config lookup; crossing them would
+    // silently apply the wrong operator override.
     const cfg = {
       models: {
         providers: {
@@ -145,8 +203,8 @@ describe("context-window-guard", () => {
     });
 
     expect(info).toEqual({
-      source: "modelsConfig",
-      tokens: 12_000,
+      source: "model",
+      tokens: 64_000,
     });
   });
 
@@ -169,6 +227,23 @@ describe("context-window-guard", () => {
     expect(guard.warnBelowTokens).toBe(40_000);
     expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(false);
+  });
+
+  it("uses the selected agent cap instead of the default", () => {
+    const info = resolveContextWindowInfo({
+      cfg: { agents: { defaults: { contextTokens: 20_000 } } },
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      agentContextTokens: 40_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "agentContextTokens",
+      tokens: 40_000,
+      referenceTokens: 200_000,
+    });
   });
 
   it("does not override when cap exceeds base window", () => {
@@ -237,24 +312,22 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
-  it("exports threshold floors as expected", () => {
+  it("exports the public hard-min floor as expected", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(4_000);
-    expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(8_000);
   });
 
-  it("derives percentage-based thresholds above the safe floors", () => {
-    expect(resolveContextWindowGuardThresholds(1_000_000)).toEqual({
-      hardMinTokens: 100_000,
-      warnBelowTokens: 200_000,
+  it("derives percentage-based guard thresholds above the safe floors", () => {
+    const largeGuard = evaluateContextWindowGuard({
+      info: { tokens: 1_000_000, source: "model" },
     });
-    expect(resolveContextWindowGuardThresholds(64_000)).toEqual({
-      hardMinTokens: 6_400,
-      warnBelowTokens: 12_800,
+    expect(largeGuard.hardMinTokens).toBe(100_000);
+    expect(largeGuard.warnBelowTokens).toBe(200_000);
+
+    const mediumGuard = evaluateContextWindowGuard({
+      info: { tokens: 64_000, source: "model" },
     });
-    expect(resolveContextWindowGuardThresholds(Number.NaN)).toEqual({
-      hardMinTokens: 4_000,
-      warnBelowTokens: 8_000,
-    });
+    expect(mediumGuard.hardMinTokens).toBe(6_400);
+    expect(mediumGuard.warnBelowTokens).toBe(12_800);
   });
 
   it("derives guard thresholds from the reference window when capped", () => {
@@ -268,6 +341,8 @@ describe("context-window-guard", () => {
   });
 
   it("does not let inflated reference metadata hard-block a valid effective cap", () => {
+    // Reference metadata can be wildly large; hard blocking must be based on the
+    // effective cap so valid operator limits remain usable.
     const guard = evaluateContextWindowGuard({
       info: { tokens: 20_000, referenceTokens: 1_000_000_000, source: "agentContextTokens" },
     });

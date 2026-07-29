@@ -1,7 +1,14 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+/**
+ * System prompt report builder.
+ *
+ * Session metadata uses this report to account for prompt size, bootstrap file
+ * injection, skills, and tool schema footprint without storing raw prompt text.
+ */
+import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { AgentTool } from "./runtime/index.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
@@ -9,8 +16,12 @@ type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 const toolReportEntryCache = new WeakMap<AgentTool, ToolReportEntry>();
 const toolSchemaStatsCache = new WeakMap<
   object,
-  Pick<ToolReportEntry, "propertiesCount" | "schemaChars">
+  Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
 >();
+
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
 
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
@@ -39,22 +50,23 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 
 function buildToolSchemaStats(
   parameters: AgentTool["parameters"],
-): Pick<ToolReportEntry, "propertiesCount" | "schemaChars"> {
+): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
-    return { schemaChars: 0, propertiesCount: null };
+    return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
   }
   const cached = toolSchemaStatsCache.get(parameters);
   if (cached) {
     return cached;
   }
+  let schemaJson;
+  try {
+    schemaJson = JSON.stringify(parameters);
+  } catch {
+    schemaJson = "";
+  }
   const stats = {
-    schemaChars: (() => {
-      try {
-        return JSON.stringify(parameters).length;
-      } catch {
-        return 0;
-      }
-    })(),
+    schemaChars: schemaJson.length,
+    schemaHash: sha256(schemaJson),
     propertiesCount: (() => {
       const schema = parameters as Record<string, unknown>;
       const props = typeof schema.properties === "object" ? schema.properties : null;
@@ -64,6 +76,8 @@ function buildToolSchemaStats(
       return Object.keys(props as Record<string, unknown>).length;
     })(),
   };
+  // Tool parameter objects are reused across runs; cache their stable size/hash
+  // so report generation stays cheap during frequent prompt rebuilds.
   toolSchemaStatsCache.set(parameters, stats);
   return stats;
 }
@@ -78,7 +92,7 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const entry = { name, summaryChars, ...schemaStats };
+    const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;
   });
@@ -88,6 +102,7 @@ function measureRenderedProjectContextChars(systemPrompt: string): number {
   return extractBetween(systemPrompt, "\n# Project Context\n", "\n## Silent Replies\n").length;
 }
 
+/** Builds the stored report for a rendered system prompt and its inputs. */
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -105,6 +120,7 @@ export function buildSystemPromptReport(params: {
   injectedFiles: EmbeddedContextFile[];
   skillsPrompt: string;
   tools: AgentTool[];
+  currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
@@ -126,15 +142,18 @@ export function buildSystemPromptReport(params: {
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPromptChars,
+      hash: sha256(params.systemPrompt),
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
+    ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: buildBootstrapInjectionStats({
       bootstrapFiles: params.bootstrapFiles,
       injectedFiles: params.injectedFiles,
     }),
     skills: {
       promptChars: params.skillsPrompt.length,
+      hash: sha256(params.skillsPrompt),
       entries: skillsEntries,
     },
     tools: {

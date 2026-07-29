@@ -1,7 +1,9 @@
+// Verifies plugin manifest registry construction and lookups.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -11,6 +13,10 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
+let manifestChangeCase: {
+  firstName: string | undefined;
+  secondName: string | undefined;
+};
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -26,6 +32,14 @@ function mkdirSafe(dir: string) {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
+}
+
+function makeOpenClawDevSourceRoot() {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  mkdirSafe(path.join(root, "src"));
+  mkdirSafe(path.join(root, "extensions"));
+  return root;
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
@@ -85,6 +99,67 @@ function createPluginCandidate(params: {
   };
 }
 
+function createMsteamsClawHubInstallRecord(
+  installPath: string,
+  overrides: Partial<PluginInstallRecord> = {},
+): PluginInstallRecord {
+  const record: PluginInstallRecord = {
+    source: "clawhub",
+    spec: "clawhub:@openclaw/msteams",
+    installPath,
+    clawhubUrl: "https://clawhub.ai",
+    clawhubPackage: "@openclaw/msteams",
+    clawhubChannel: "official",
+  };
+  return { ...record, ...overrides };
+}
+
+function resolveMsteamsClawHubTrust(overrides: Partial<PluginInstallRecord> = {}) {
+  const dir = makeTempDir();
+  writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+  const registry = loadPluginManifestRegistry({
+    installRecords: {
+      msteams: createMsteamsClawHubInstallRecord(dir, overrides),
+    },
+    candidates: [
+      createPluginCandidate({
+        idHint: "msteams",
+        rootDir: dir,
+        packageName: "@openclaw/msteams",
+        origin: "global",
+      }),
+    ],
+  });
+  return registry.plugins[0]?.trustedOfficialInstall;
+}
+
+function resolveDiffsNpmTrust(overrides: Partial<PluginInstallRecord> = {}) {
+  const dir = makeTempDir();
+  writeManifest(dir, { id: "diffs", configSchema: { type: "object" } });
+  const registry = loadPluginManifestRegistry({
+    installRecords: {
+      diffs: {
+        source: "npm",
+        spec: "@openclaw/diffs",
+        installPath: dir,
+        resolvedName: "@openclaw/diffs",
+        resolvedVersion: "2026.7.16",
+        resolvedSpec: "@openclaw/diffs@2026.7.16",
+        ...overrides,
+      },
+    },
+    candidates: [
+      createPluginCandidate({
+        idHint: "diffs",
+        rootDir: dir,
+        packageName: "@openclaw/diffs",
+        origin: "global",
+      }),
+    ],
+  });
+  return registry.plugins[0]?.trustedOfficialInstall;
+}
+
 function loadRegistry(candidates: PluginCandidate[]) {
   return loadPluginManifestRegistry({
     candidates,
@@ -119,7 +194,65 @@ function expectRegistryDiagnosticContains(
   registry: ReturnType<typeof loadPluginManifestRegistry>,
   fragment: string,
 ) {
-  expect(registry.diagnostics.some((diag) => diag.message.includes(fragment))).toBe(true);
+  expect(registry.diagnostics.map((diag) => diag.message).join("\n")).toContain(fragment);
+}
+
+function expectNoRegistryDiagnosticContains(
+  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  fragment: string,
+) {
+  expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(fragment);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(
+    typeof value === "object" && value !== null && !Array.isArray(value),
+    `${label} object`,
+  ).toBe(true);
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  label: string,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function expectArrayIncludesAll(value: unknown, expected: readonly unknown[], label: string) {
+  expect(Array.isArray(value), `${label} array`).toBe(true);
+  for (const item of expected) {
+    expect(value as unknown[], `${label} item ${String(item)}`).toContain(item);
+  }
+}
+
+function expectDiagnosticFields(
+  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  expected: { level?: string; pluginId?: string; source?: string; messageIncludes?: string },
+) {
+  const diagnostic = registry.diagnostics.find((entry) => {
+    if (expected.level && entry.level !== expected.level) {
+      return false;
+    }
+    if (expected.pluginId && entry.pluginId !== expected.pluginId) {
+      return false;
+    }
+    if (expected.source && entry.source !== expected.source) {
+      return false;
+    }
+    if (expected.messageIncludes && !entry.message.includes(expected.messageIncludes)) {
+      return false;
+    }
+    return true;
+  });
+  if (!diagnostic) {
+    throw new Error(`Expected diagnostic ${expected.messageIncludes ?? ""}`);
+  }
 }
 
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
@@ -186,6 +319,35 @@ function loadRegistryForMinHostVersionCase(params: {
           install: {
             npmSpec: "@openclaw/synology-chat",
             minHostVersion: params.minHostVersion,
+          },
+        },
+      }),
+    ],
+  });
+}
+
+function loadRegistryForPluginApiCase(params: {
+  rootDir: string;
+  pluginApi: unknown;
+  env?: NodeJS.ProcessEnv;
+  origin?: "bundled" | "global" | "workspace" | "config";
+  idHint?: string;
+}) {
+  return loadPluginManifestRegistry({
+    ...(params.env ? { env: params.env } : {}),
+    candidates: [
+      createPluginCandidate({
+        idHint: params.idHint ?? "synology-chat",
+        rootDir: params.rootDir,
+        packageDir: params.rootDir,
+        origin: params.origin ?? "global",
+        packageManifest: {
+          install: {
+            npmSpec: "@openclaw/synology-chat",
+            minHostVersion: ">=2026.4.25",
+          },
+          compat: {
+            pluginApi: params.pluginApi as string,
           },
         },
       }),
@@ -283,8 +445,10 @@ function expectPluginRoot(
   pluginId: string,
 ) {
   const plugin = registry.plugins.find((entry) => entry.id === pluginId);
-  expect(plugin).toBeDefined();
-  return plugin?.rootDir ?? "";
+  if (!plugin) {
+    throw new Error(`expected plugin ${pluginId} in manifest registry`);
+  }
+  return plugin.rootDir;
 }
 
 function expectCachedPluginRoot(params: {
@@ -308,7 +472,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("reflects plugin manifest changes on the next registry load", () => {
+  beforeAll(() => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
@@ -332,7 +496,6 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const first = loadPluginManifestRegistry({ env });
-    expect(first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
 
     writeManifest(pluginDir, {
       id: "cached-manifest",
@@ -343,7 +506,116 @@ describe("loadPluginManifestRegistry", () => {
     fs.utimesSync(manifestPath, updatedAt, updatedAt);
 
     const second = loadPluginManifestRegistry({ env });
-    expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+    manifestChangeCase = {
+      firstName: first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
+      secondName: second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
+    };
+  });
+
+  it("reflects plugin manifest changes on the next registry load", () => {
+    expect(manifestChangeCase.firstName).toBe("Before");
+    expect(manifestChangeCase.secondName).toBe("After");
+  });
+
+  it("synthesizes an empty manifest for explicitly configured standalone files", () => {
+    const dir = makeTempDir();
+    const source = path.join(dir, "maintenance-access.ts");
+    writeTextFile(dir, "maintenance-access.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [source] } } },
+      candidates: [
+        createPluginCandidate({
+          idHint: "maintenance-access",
+          rootDir: dir,
+          sourceName: "maintenance-access.ts",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({
+        id: "maintenance-access",
+        source,
+        manifestPath: source,
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    ]);
+  });
+
+  it("keeps core-reserved ids unavailable to configured standalone files", () => {
+    const dir = makeTempDir();
+    const source = path.join(dir, "node-mcp.ts");
+    writeTextFile(dir, "node-mcp.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [source] } } },
+      candidates: [
+        createPluginCandidate({
+          idHint: "node-mcp",
+          rootDir: dir,
+          sourceName: "node-mcp.ts",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(registry, 'plugin manifest id "node-mcp" is reserved');
+  });
+
+  it("still requires manifests for explicitly configured directories", () => {
+    const dir = makeTempDir();
+    writeTextFile(dir, "index.ts", "export default { register() {} };");
+
+    const registry = loadPluginManifestRegistry({
+      config: { plugins: { load: { paths: [dir] } } },
+      env: hermeticEnv(),
+    });
+
+    expect(registry.plugins.filter((plugin) => plugin.origin === "config")).toStrictEqual([]);
+    expectRegistryDiagnosticContains(registry, "plugin manifest not found");
+  });
+
+  it("preserves optional manifest icon URLs on registry records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "icon-demo",
+      name: "Icon Demo",
+      icon: "https://cdn.simpleicons.org/simpleicons",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "icon-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
+  });
+
+  it("preserves manifest catalog metadata on registry records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "catalog-demo",
+      catalog: { featured: true, order: 20 },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "catalog-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.catalog).toEqual({ featured: true, order: 20 });
   });
 
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
@@ -374,6 +646,33 @@ describe("loadPluginManifestRegistry", () => {
       registry,
       "global plugin will be overridden by bundled plugin",
     );
+  });
+
+  it("rejects plugins whose declared ids collide after case folding", () => {
+    const upperDir = makeTempDir();
+    const lowerDir = makeTempDir();
+    writeManifest(upperDir, { id: "Case-Collision", configSchema: { type: "object" } });
+    writeManifest(lowerDir, { id: "case-collision", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "Case-Collision",
+        rootDir: upperDir,
+        origin: "workspace",
+      }),
+      createPluginCandidate({
+        idHint: "case-collision",
+        rootDir: lowerDir,
+        origin: "config",
+      }),
+    ]);
+
+    expect(registry.plugins).toStrictEqual([]);
+    expect(
+      registry.diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('collide as normalized id "case-collision"'),
+      ),
+    ).toHaveLength(2);
   });
 
   it("lets config-loaded plugins replace bundled duplicates", () => {
@@ -451,21 +750,13 @@ describe("loadPluginManifestRegistry", () => {
       config: { plugins: { entries: { "external-chat": { enabled: false } } } },
       candidates: [candidate],
     });
-    expect(
-      disabledRegistry.diagnostics.some((diagnostic) =>
-        diagnostic.message.includes("without channelConfigs metadata"),
-      ),
-    ).toBe(false);
+    expectNoRegistryDiagnosticContains(disabledRegistry, "without channelConfigs metadata");
 
     const allowlistRegistry = loadPluginManifestRegistry({
       config: { plugins: { allow: ["other-plugin"] } },
       candidates: [candidate],
     });
-    expect(
-      allowlistRegistry.diagnostics.some((diagnostic) =>
-        diagnostic.message.includes("without channelConfigs metadata"),
-      ),
-    ).toBe(false);
+    expectNoRegistryDiagnosticContains(allowlistRegistry, "without channelConfigs metadata");
   });
 
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
@@ -501,6 +792,41 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
+  it("prefers dev source bundled plugins over installed globals with the same id", () => {
+    const devSourceRoot = makeOpenClawDevSourceRoot();
+    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
+    const globalDir = makeTempDir();
+    const manifest = { id: "codex", configSchema: { type: "object" } };
+    mkdirSafe(bundledDir);
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+  });
+
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -534,30 +860,254 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
-  it("marks official installed npm globals as trusted official installs", () => {
+  it("marks official registry npm installs as trusted", () => {
+    expect(resolveDiffsNpmTrust()).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "npm-pack archive metadata",
+      overrides: {
+        sourcePath: "/tmp/diffs.tgz",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+      },
+    },
+    {
+      name: "local source path metadata",
+      overrides: { sourcePath: "/tmp/diffs.tgz" },
+    },
+    {
+      name: "linked local path",
+      overrides: { source: "path", sourcePath: "/tmp/diffs" },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "does not trust official package identity from $name",
+    ({ overrides }) => {
+      expect(resolveDiffsNpmTrust(overrides)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { name: "complete records", overrides: {} },
+    {
+      name: "versioned ClawHub specs",
+      overrides: { spec: "clawhub:@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "legacy spec-only records",
+      overrides: { clawhubPackage: undefined },
+    },
+    {
+      name: "package-only records",
+      overrides: { spec: undefined },
+    },
+    {
+      name: "matching npm resolved specs",
+      overrides: { resolvedSpec: "@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "matching ClawHub resolved specs",
+      overrides: { resolvedSpec: "clawhub:@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "matching resolved package names",
+      overrides: { resolvedName: "@openclaw/msteams" },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "marks official npm-only ClawHub installs with $name as trusted",
+    ({ overrides }) => {
+      expect(resolveMsteamsClawHubTrust(overrides)).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      name: "community ClawHub channel",
+      overrides: { clawhubChannel: "community" },
+    },
+    {
+      name: "private ClawHub channel",
+      overrides: { clawhubChannel: "private" },
+    },
+    {
+      name: "custom ClawHub URL",
+      overrides: { clawhubUrl: "https://example.invalid" },
+    },
+    {
+      name: "missing ClawHub URL",
+      overrides: { clawhubUrl: undefined },
+    },
+    {
+      name: "conflicting ClawHub package",
+      overrides: { clawhubPackage: "@openclaw/line" },
+    },
+    {
+      name: "conflicting requested spec",
+      overrides: { spec: "clawhub:@openclaw/line" },
+    },
+    {
+      name: "conflicting npm resolved spec",
+      overrides: { resolvedSpec: "@openclaw/line@2026.6.11" },
+    },
+    {
+      name: "conflicting ClawHub resolved spec",
+      overrides: { resolvedSpec: "clawhub:@openclaw/line@2026.6.11" },
+    },
+    {
+      name: "blank ClawHub package",
+      overrides: { clawhubPackage: " " },
+    },
+    {
+      name: "malformed ClawHub package",
+      overrides: { clawhubPackage: "@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "malformed requested spec",
+      overrides: { spec: "@openclaw/msteams" },
+    },
+    {
+      name: "malformed resolved spec",
+      overrides: { resolvedSpec: "file:plugin.tgz" },
+    },
+    {
+      name: "conflicting resolved package name",
+      overrides: { resolvedName: "@openclaw/line" },
+    },
+    {
+      name: "malformed resolved package name",
+      overrides: { resolvedName: "@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "missing package identities",
+      overrides: {
+        clawhubPackage: undefined,
+        spec: undefined,
+        resolvedSpec: undefined,
+      },
+    },
+    {
+      name: "resolved identity without ClawHub source identity",
+      overrides: {
+        clawhubPackage: undefined,
+        spec: undefined,
+        resolvedSpec: "@openclaw/msteams@2026.6.11",
+      },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "does not trust npm-only official ClawHub installs from $name",
+    ({ overrides }) => {
+      expect(resolveMsteamsClawHubTrust(overrides)).toBeUndefined();
+    },
+  );
+
+  it("does not trust ClawHub records from a different install path", () => {
+    expect(resolveMsteamsClawHubTrust({ installPath: makeTempDir() })).toBeUndefined();
+  });
+
+  it("does not trust a stale source path after switching to ClawHub", () => {
     const dir = makeTempDir();
-    writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        msteams: createMsteamsClawHubInstallRecord(makeTempDir(), { sourcePath: dir }),
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("does not trust custom ClawHub sources for catalog entries with a ClawHub spec", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
     const registry = loadPluginManifestRegistry({
       installRecords: {
-        "diagnostics-prometheus": {
-          source: "npm",
+        "diagnostics-otel": {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/diagnostics-otel",
           installPath: dir,
-          resolvedName: "@openclaw/diagnostics-prometheus",
-          resolvedVersion: "2026.5.3",
+          clawhubUrl: "https://example.invalid",
+          clawhubPackage: "@openclaw/diagnostics-otel",
+          clawhubChannel: "official",
         },
       },
       candidates: [
         createPluginCandidate({
-          idHint: "diagnostics-prometheus",
+          idHint: "diagnostics-otel",
           rootDir: dir,
-          packageName: "@openclaw/diagnostics-prometheus",
+          packageName: "@openclaw/diagnostics-otel",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("preserves legacy spec-only records for catalog-backed ClawHub installs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-otel": {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/diagnostics-otel@2026.5.18",
+          installPath: dir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-otel",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-otel",
           origin: "global",
         }),
       ],
     });
 
     expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
+  it("marks official diagnostics-otel config paths trusted when the install record matches", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-otel": {
+          source: "npm",
+          spec: "@openclaw/diagnostics-otel",
+          installPath: dir,
+          resolvedName: "@openclaw/diagnostics-otel",
+          resolvedVersion: "2026.5.18",
+          resolvedSpec: "@openclaw/diagnostics-otel@2026.5.18",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-otel",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-otel",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expectRecordFields(registry.plugins[0], "plugin", {
+      origin: "config",
+      trustedOfficialInstall: true,
+    });
   });
 
   it("preserves trusted official installs when a config path selects the installed package", () => {
@@ -590,12 +1140,10 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toEqual(
-      expect.objectContaining({
-        origin: "config",
-        trustedOfficialInstall: true,
-      }),
-    );
+    expectRecordFields(registry.plugins[0], "plugin", {
+      origin: "config",
+      trustedOfficialInstall: true,
+    });
   });
 
   it("does not trust unrecorded globals that spoof official ids", () => {
@@ -617,15 +1165,34 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
-  it("preserves provider auth env metadata from plugin manifests", () => {
+  it("does not trust unrecorded npm-only official ClawHub channel globals", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {},
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("normalizes provider metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
       enabledByDefault: true,
       enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
-      providers: ["openai", "openai-codex"],
-      providerAuthEnvVars: {
-        openai: ["OPENAI_API_KEY"],
+      providers: ["openai", "openai"],
+      setup: {
+        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
       },
       providerEndpoints: [
         {
@@ -678,7 +1245,7 @@ describe("loadPluginManifestRegistry", () => {
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
-        "openai-codex": "openai",
+        openai: "openai",
       },
       providerAuthChoices: [
         {
@@ -686,8 +1253,12 @@ describe("loadPluginManifestRegistry", () => {
           method: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          icon: "HTTPS://CDN.SIMPLEICONS.ORG/openai",
+          website: "https://platform.openai.com/api-keys",
           assistantPriority: 10,
           assistantVisibility: "visible",
+          appGuidedSecret: true,
+          appGuidedDiscovery: true,
         },
       ],
       configSchema: { type: "object" },
@@ -699,9 +1270,6 @@ describe("loadPluginManifestRegistry", () => {
       origin: "bundled",
     });
 
-    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
-      openai: ["OPENAI_API_KEY"],
-    });
     expect(registry.plugins[0]?.providerEndpoints).toEqual([
       {
         endpointClass: "openai-public",
@@ -743,7 +1311,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
-      "openai-codex": "openai",
+      openai: "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
@@ -753,8 +1321,54 @@ describe("loadPluginManifestRegistry", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        icon: "https://cdn.simpleicons.org/openai",
+        website: "https://platform.openai.com/api-keys",
         assistantPriority: 10,
         assistantVisibility: "visible",
+        appGuidedSecret: true,
+        appGuidedDiscovery: true,
+      },
+    ]);
+  });
+
+  it("drops non-HTTPS provider auth presentation URLs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "unsafe-auth-artwork",
+      providerAuthChoices: [
+        {
+          provider: "unsafe",
+          method: "api-key",
+          choiceId: "unsafe-api-key",
+          icon: "http://example.com/icon.svg",
+          website: "javascript:alert(1)",
+        },
+        {
+          provider: "oversized",
+          method: "api-key",
+          choiceId: "oversized-api-key",
+          icon: `https://example.com/${"a".repeat(2048)}`,
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "unsafe-auth-artwork",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      {
+        provider: "unsafe",
+        method: "api-key",
+        choiceId: "unsafe-api-key",
+      },
+      {
+        provider: "oversized",
+        method: "api-key",
+        choiceId: "oversized-api-key",
       },
     ]);
   });
@@ -1044,95 +1658,6 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
-  it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-openai",
-      providers: ["openai"],
-      providerAuthEnvVars: {
-        openai: ["OPENAI_API_KEY"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "external-openai",
-      rootDir: dir,
-      origin: "global",
-    });
-
-    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
-      openai: ["OPENAI_API_KEY"],
-    });
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        pluginId: "external-openai",
-        source: path.join(dir, "openclaw.plugin.json"),
-        message: expect.stringContaining(
-          "providerAuthEnvVars is deprecated compatibility metadata",
-        ),
-      }),
-    );
-  });
-
-  it("does not report deprecated providerAuthEnvVars when setup providers mirror env vars", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-openai",
-      providers: ["openai"],
-      setup: {
-        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
-      },
-      providerAuthEnvVars: {
-        openai: ["OPENAI_API_KEY"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "external-openai",
-      rootDir: dir,
-      origin: "global",
-    });
-
-    expect(registry.diagnostics).not.toContainEqual(
-      expect.objectContaining({
-        message: expect.stringContaining(
-          "providerAuthEnvVars is deprecated compatibility metadata",
-        ),
-      }),
-    );
-  });
-
-  it("sanitizes manifest-controlled fields in provider auth compatibility diagnostics", () => {
-    const dir = makeTempDir();
-    const lineBreak = String.fromCharCode(10);
-    const ansiRed = `${String.fromCharCode(27)}[31m`;
-    writeManifest(dir, {
-      id: `external${lineBreak}openai${ansiRed}`,
-      providers: ["openai"],
-      providerAuthEnvVars: {
-        [`openai${lineBreak}${ansiRed}`]: ["OPENAI_API_KEY"],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "external-openai",
-      rootDir: dir,
-      origin: "global",
-    });
-    const diagnostic = registry.diagnostics.find((entry) =>
-      entry.message.includes("providerAuthEnvVars is deprecated compatibility metadata"),
-    );
-
-    expect(diagnostic?.pluginId).toBe("externalopenai");
-    expect(diagnostic?.message).toContain("openai");
-    expect(diagnostic?.message).not.toContain(lineBreak);
-    expect(diagnostic?.message).not.toContain(ansiRed);
-  });
-
   it("reports non-bundled channel manifests without channel config descriptors", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -1148,14 +1673,12 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins[0]?.channels).toEqual(["external-chat"]);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        pluginId: "external-chat",
-        source: path.join(dir, "openclaw.plugin.json"),
-        message: expect.stringContaining("without channelConfigs metadata"),
-      }),
-    );
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "external-chat",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "without channelConfigs metadata",
+    });
   });
 
   it("sanitizes manifest-controlled fields in channel config descriptor diagnostics", () => {
@@ -1208,15 +1731,11 @@ describe("loadPluginManifestRegistry", () => {
       origin: "global",
     });
 
-    expect(registry.plugins[0]?.channelConfigs?.["external-chat"]?.schema).toMatchObject({
+    expectRecordFields(registry.plugins[0]?.channelConfigs?.["external-chat"]?.schema, "schema", {
       type: "object",
       additionalProperties: false,
     });
-    expect(
-      registry.diagnostics.some((diagnostic) =>
-        diagnostic.message.includes("without channelConfigs metadata"),
-      ),
-    ).toBe(false);
+    expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
   });
 
   it("hydrates supplemental official external catalog contracts for lagging npm manifests", () => {
@@ -1237,19 +1756,35 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]?.contracts?.tools).toEqual(["wecom_mcp"]);
-    expect(registry.plugins[0]?.channelConfigs?.wecom).toEqual(
-      expect.objectContaining({
+    const wecomConfig = expectRecordFields(
+      registry.plugins[0]?.channelConfigs?.wecom,
+      "wecom config",
+      {
         label: "WeCom",
-        schema: expect.objectContaining({
-          type: "object",
-        }),
-      }),
+      },
     );
-    expect(
-      registry.diagnostics.some((diagnostic) =>
-        diagnostic.message.includes("without channelConfigs metadata"),
-      ),
-    ).toBe(false);
+    expectRecordFields(wecomConfig.schema, "wecom schema", { type: "object" });
+    expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+  });
+
+  it("hydrates and overlays official external catalog curation metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "diffs",
+      catalog: { featured: false },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "diffs",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@openclaw/diffs",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.catalog).toEqual({ featured: false, order: 40 });
   });
 
   it("fills missing official external catalog descriptors for partial npm channel configs", () => {
@@ -1280,18 +1815,20 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.channelConfigs?.wecom).toEqual(
-      expect.objectContaining({
+    const wecomConfig = expectRecordFields(
+      registry.plugins[0]?.channelConfigs?.wecom,
+      "wecom config",
+      {
         label: "WeCom",
         description: "Enterprise WeChat conversation channel.",
-        schema: expect.objectContaining({
-          additionalProperties: false,
-          properties: {
-            corpId: { type: "string" },
-          },
-        }),
-      }),
+      },
     );
+    expectRecordFields(wecomConfig.schema, "wecom schema", {
+      additionalProperties: false,
+      properties: {
+        corpId: { type: "string" },
+      },
+    });
   });
 
   it("drops prototype-polluting channel config keys from plugin manifests", () => {
@@ -1335,23 +1872,25 @@ describe("loadPluginManifestRegistry", () => {
     });
     const channelConfigs = registry.plugins[0]?.channelConfigs;
 
-    expect(channelConfigs).toBeDefined();
+    if (!channelConfigs) {
+      throw new Error("expected external chat manifest channel config map");
+    }
     expect(Object.getPrototypeOf(channelConfigs)).toBe(null);
-    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "__proto__")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "constructor")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "prototype")).toBe(false);
-    expect(channelConfigs?.["safe-chat"]?.schema).toMatchObject({
+    expect(Object.hasOwn(channelConfigs, "__proto__")).toBe(false);
+    expect(Object.hasOwn(channelConfigs, "constructor")).toBe(false);
+    expect(Object.hasOwn(channelConfigs, "prototype")).toBe(false);
+    expectRecordFields(channelConfigs["safe-chat"]?.schema, "safe-chat schema", {
       type: "object",
       additionalProperties: false,
     });
   });
 
-  it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
+  it("falls back provider catalog source from .ts to emitted .js files", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "anthropic-vertex",
       providers: ["anthropic-vertex"],
-      providerDiscoveryEntry: "./provider-discovery.ts",
+      providerCatalogEntry: "./provider-discovery.ts",
       configSchema: { type: "object" },
     });
     fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
@@ -1365,6 +1904,267 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerDiscoverySource).toBe(
       path.join(dir, "provider-discovery.js"),
     );
+  });
+
+  it("resolves a manifest provider catalog source only once per registry build", () => {
+    const dir = makeTempDir();
+    const providerDiscoverySource = path.join(dir, "provider-discovery.js");
+    writeManifest(dir, {
+      id: "cached-provider",
+      providers: ["cached-provider"],
+      providerCatalogEntry: "./provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "cached-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
+    expect(
+      realpathSpy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource),
+    ).toHaveLength(1);
+  });
+
+  it("ignores provider catalog entries outside the plugin root", () => {
+    const root = makeTempDir();
+    const pluginDir = path.join(root, "plugin");
+    const outsideDir = path.join(root, "outside");
+    mkdirSafe(pluginDir);
+    mkdirSafe(outsideDir);
+    writeManifest(pluginDir, {
+      id: "outside-provider",
+      providers: ["outside-provider"],
+      providerCatalogEntry: "../outside/provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(
+      path.join(outsideDir, "provider-discovery.js"),
+      "export default {};\n",
+      "utf8",
+    );
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "outside-provider",
+      rootDir: pluginDir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "outside-provider",
+      source: path.join(pluginDir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores absolute provider catalog entries", () => {
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    writeManifest(dir, {
+      id: "absolute-provider",
+      providers: ["absolute-provider"],
+      providerCatalogEntry: outsideEntry,
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "absolute-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "absolute-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores provider catalog entries that resolve outside the plugin root", () => {
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-catalog.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    writeManifest(dir, {
+      id: "absolute-catalog",
+      providers: ["absolute-catalog"],
+      providerCatalogEntry: outsideEntry,
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "absolute-catalog",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "absolute-catalog",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores provider catalog entries that resolve through a symlink outside the plugin root", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+    writeManifest(dir, {
+      id: "symlink-provider",
+      providers: ["symlink-provider"],
+      providerCatalogEntry: "./provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "symlink-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "symlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores provider catalog .js fallbacks that resolve outside the plugin root", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+    writeManifest(dir, {
+      id: "fallback-symlink-provider",
+      providers: ["fallback-symlink-provider"],
+      providerCatalogEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "fallback-symlink-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "fallback-symlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores non-bundled provider catalog entries that are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    writeManifest(dir, {
+      id: "hardlink-provider",
+      providers: ["hardlink-provider"],
+      providerCatalogEntry: "./provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "hardlink-provider",
+      rootDir: dir,
+      origin: "config",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "hardlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores non-bundled provider catalog .js fallbacks that are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    writeManifest(dir, {
+      id: "fallback-hardlink-provider",
+      providers: ["fallback-hardlink-provider"],
+      providerCatalogEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "fallback-hardlink-provider",
+      rootDir: dir,
+      origin: "config",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "fallback-hardlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
   });
 
   it("preserves activation and setup descriptors from plugin manifests", () => {
@@ -1452,15 +2252,15 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         mediaUnderstandingProviders: ["openai"],
         imageGenerationProviders: ["openai"],
-        tools: ["image_generate"],
+        tools: ["image_generate", "memory_get"],
       },
       imageGenerationProviderMetadata: {
         openai: {
-          aliases: ["openai-codex"],
+          aliases: ["openai"],
           authProviders: ["openai"],
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               providerBaseUrl: {
                 provider: "openai",
                 defaultBaseUrl: "https://api.openai.com/v1",
@@ -1497,6 +2297,16 @@ describe("loadPluginManifestRegistry", () => {
             video: "ignored",
           },
           nativeDocumentInputs: ["pdf", "docx"],
+          documentModels: {
+            pdf: {
+              textExtraction: "gpt-5.4-mini",
+              image: false,
+              unsupported: "ignored",
+            },
+            docx: {
+              textExtraction: "ignored",
+            },
+          },
         },
       },
       toolMetadata: {
@@ -1504,16 +2314,20 @@ describe("loadPluginManifestRegistry", () => {
           optional: true,
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
             },
           ],
           configSignals: [
             {
               rootPath: "plugins.entries.openai.config",
               overlayPath: "image",
+              overlayMapPath: "accounts",
               required: ["apiKey"],
             },
           ],
+        },
+        memory_get: {
+          replaySafe: true,
         },
       },
       configSchema: { type: "object" },
@@ -1527,11 +2341,11 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.imageGenerationProviderMetadata).toEqual({
       openai: {
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         authProviders: ["openai"],
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             providerBaseUrl: {
               provider: "openai",
               defaultBaseUrl: "https://api.openai.com/v1",
@@ -1566,6 +2380,12 @@ describe("loadPluginManifestRegistry", () => {
           audio: 20,
         },
         nativeDocumentInputs: ["pdf"],
+        documentModels: {
+          pdf: {
+            textExtraction: "gpt-5.4-mini",
+            image: false,
+          },
+        },
       },
     });
     expect(registry.plugins[0]?.toolMetadata).toEqual({
@@ -1573,27 +2393,33 @@ describe("loadPluginManifestRegistry", () => {
         optional: true,
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
           },
         ],
         configSignals: [
           {
             rootPath: "plugins.entries.openai.config",
             overlayPath: "image",
+            overlayMapPath: "accounts",
             required: ["apiKey"],
           },
         ],
       },
+      memory_get: {
+        replaySafe: true,
+      },
     });
   });
 
-  it("preserves external auth provider contracts from plugin manifests", () => {
+  it("preserves provider hook contracts from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "acme-ai",
       providers: ["acme-ai"],
       contracts: {
         externalAuthProviders: ["acme-ai"],
+        usageProviders: ["acme-ai"],
+        workerProviders: [" static-ssh ", ""],
       },
       configSchema: { type: "object" },
     });
@@ -1606,35 +2432,38 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.contracts).toEqual({
       externalAuthProviders: ["acme-ai"],
+      usageProviders: ["acme-ai"],
+      workerProviders: ["static-ssh"],
     });
   });
 
-  it("preserves channel env metadata from plugin manifests", () => {
+  it("preserves host-trusted plugin contracts from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
-      id: "slack",
-      channels: ["slack"],
-      channelEnvVars: {
-        slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+      id: "workflow-harness",
+      contracts: {
+        agentToolResultMiddleware: ["openclaw", "codex"],
+        trustedToolPolicies: ["workflow-budget"],
       },
       configSchema: { type: "object" },
     });
 
     const registry = loadSingleCandidateRegistry({
-      idHint: "slack",
+      idHint: "workflow-harness",
       rootDir: dir,
-      origin: "bundled",
+      origin: "workspace",
     });
 
-    expect(registry.plugins[0]?.channelEnvVars).toEqual({
-      slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+    expect(registry.plugins[0]?.contracts).toEqual({
+      agentToolResultMiddleware: ["openclaw", "codex"],
+      trustedToolPolicies: ["workflow-budget"],
     });
   });
 
   it("preserves qa runner descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
-      id: "qa-matrix",
+      id: "qa-runner-fixture",
       qaRunners: [
         {
           commandName: "matrix",
@@ -1645,7 +2474,7 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const registry = loadSingleCandidateRegistry({
-      idHint: "qa-matrix",
+      idHint: "qa-runner-fixture",
       rootDir: dir,
       origin: "bundled",
     });
@@ -1712,6 +2541,46 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("normalizes config hint presentation values at the manifest boundary", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "phone-hints",
+      channels: ["phone-hints"],
+      configSchema: { type: "object" },
+      uiHints: {
+        phone: { label: "Phone", presentation: "phone-number" },
+        legacy: { help: "Keep this hint", presentation: "telephone" },
+        ignored: "not-an-object",
+      },
+      channelConfigs: {
+        "phone-hints": {
+          schema: { type: "object" },
+          uiHints: {
+            phone: { presentation: "phone-number" },
+            legacy: { help: "Keep this channel hint", presentation: "telephone" },
+            ignored: false,
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "phone-hints",
+      rootDir: dir,
+      origin: "workspace",
+    });
+    const plugin = registry.plugins[0];
+
+    expect(plugin?.configUiHints).toEqual({
+      phone: { label: "Phone", presentation: "phone-number" },
+      legacy: { help: "Keep this hint" },
+    });
+    expect(plugin?.channelConfigs?.["phone-hints"]?.uiHints).toEqual({
+      phone: { presentation: "phone-number" },
+      legacy: { help: "Keep this channel hint" },
+    });
+  });
+
   it("hydrates bundled channel config metadata onto manifest records", () => {
     const dir = makeTempDir();
     const registry = loadRegistry([
@@ -1733,13 +2602,11 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.channelConfigs?.telegram).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({
-          type: "object",
-        }),
-      }),
+    const telegramConfig = requireRecord(
+      registry.plugins[0]?.channelConfigs?.telegram,
+      "telegram config",
     );
+    expectRecordFields(telegramConfig.schema, "telegram schema", { type: "object" });
   });
 
   it("preserves manifest-owned config contracts from plugin manifests", () => {
@@ -1749,11 +2616,11 @@ describe("loadPluginManifestRegistry", () => {
       configSchema: { type: "object" },
       configContracts: {
         compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+        compatibilityRuntimePaths: ["legacyProvider.webhook"],
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
-          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+          paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
         },
       },
     });
@@ -1766,11 +2633,11 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.configContracts).toEqual({
       compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-      compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      compatibilityRuntimePaths: ["legacyProvider.webhook"],
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,
-        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
       },
     });
   });
@@ -1784,7 +2651,7 @@ describe("loadPluginManifestRegistry", () => {
         webSearchProviders: ["brave"],
       },
       configContracts: {
-        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+        compatibilityRuntimePaths: ["legacyProvider.webhook"],
       },
     });
 
@@ -1816,7 +2683,7 @@ describe("loadPluginManifestRegistry", () => {
           (plugin) =>
             (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
             (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(
-              "tools.web.search.apiKey",
+              "legacyProvider.webhook",
             ),
         )
         .map((plugin) => plugin.id),
@@ -1826,9 +2693,9 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      mediaUnderstandingProviders: ["openai", "openai"],
       imageGenerationProviders: ["openai"],
       configSchema: { type: "object" },
     });
@@ -1879,10 +2746,10 @@ describe("loadPluginManifestRegistry", () => {
       ...(env ? { env } : {}),
     });
 
-    expect(registry.plugins).toEqual([]);
+    expect(registry.plugins).toStrictEqual([]);
     expectRegistryDiagnosticContains(registry, expectedMessage);
     if (expectWarn) {
-      expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
+      expect(registry.diagnostics.map((diag) => diag.level)).toContain("warn");
     }
   });
 
@@ -1914,11 +2781,7 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["codex"]);
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("openclaw.install.minHostVersion must use"),
-      ),
-    ).toBe(false);
+    expectNoRegistryDiagnosticContains(registry, "openclaw.install.minHostVersion must use");
   });
 
   it("does not runtime-gate bundled source plugins by install minHostVersion", () => {
@@ -1943,10 +2806,74 @@ describe("loadPluginManifestRegistry", () => {
       env: { OPENCLAW_VERSION: "2026.4.30" } as NodeJS.ProcessEnv,
     });
 
-    expect(registry.plugins.some((plugin) => plugin.id === "codex")).toBe(true);
-    expect(registry.diagnostics.some((diag) => diag.message.includes("requires OpenClaw"))).toBe(
-      false,
+    expect(registry.plugins.map((plugin) => plugin.id)).toContain("codex");
+    expectNoRegistryDiagnosticContains(registry, "requires OpenClaw");
+  });
+
+  it("skips installed plugins whose package plugin API range is newer than the current host", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForPluginApiCase({
+      rootDir: dir,
+      pluginApi: ">=2026.5.27",
+      env: { OPENCLAW_VERSION: "2026.5.10-beta.1" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(
+      registry,
+      'plugin requires plugin API >=2026.5.27, but this host is 2026.5.10-beta.1; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")',
     );
+    expect(registry.diagnostics.map((diag) => diag.level)).toContain("warn");
+  });
+
+  it("skips installed plugins whose package plugin API metadata is malformed", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForPluginApiCase({
+      rootDir: dir,
+      pluginApi: 20260527,
+      env: { OPENCLAW_VERSION: "2026.5.27" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(
+      registry,
+      "plugin manifest invalid | package.json openclaw.compat.pluginApi must be a string",
+    );
+    expect(registry.diagnostics.map((diag) => diag.level)).toContain("error");
+  });
+
+  it("loads installed plugins when a beta host is on the package plugin API floor", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForPluginApiCase({
+      rootDir: dir,
+      pluginApi: ">=2026.5.27",
+      env: { OPENCLAW_VERSION: "2026.5.27-beta.1" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["synology-chat"]);
+    expectNoRegistryDiagnosticContains(registry, "requires plugin API");
+  });
+
+  it("does not runtime-gate bundled source plugins by package plugin API", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForPluginApiCase({
+      rootDir: dir,
+      pluginApi: ">=2026.5.27",
+      origin: "bundled",
+      idHint: "codex",
+      env: { OPENCLAW_VERSION: "2026.5.10-beta.1" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toContain("codex");
+    expectNoRegistryDiagnosticContains(registry, "requires plugin API");
   });
 
   it.each([
@@ -2096,8 +3023,8 @@ describe("loadPluginManifestRegistry", () => {
         bundleFormat: "codex",
         hooks: ["hooks"],
         skills: ["skills"],
-        bundleCapabilities: expect.arrayContaining(["hooks", "skills"]),
       },
+      expectedCapabilities: ["hooks", "skills"],
     },
     {
       name: "loads Claude bundle manifests with command roots and settings files",
@@ -2113,6 +3040,7 @@ describe("loadPluginManifestRegistry", () => {
           manifestRelativePath: ".claude-plugin/plugin.json",
           manifest: {
             name: "Claude Sample",
+            activation: { onStartup: false },
             skills: ["skill-packs/starter"],
             commands: "commands-pack",
           },
@@ -2124,8 +3052,9 @@ describe("loadPluginManifestRegistry", () => {
         bundleFormat: "claude",
         skills: ["skill-packs/starter", "commands-pack"],
         settingsFiles: ["settings.json"],
-        bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+        activation: { onStartup: false },
       },
+      expectedCapabilities: ["skills", "commands", "settings"],
     },
     {
       name: "loads manifestless Claude bundles into the registry",
@@ -2145,8 +3074,8 @@ describe("loadPluginManifestRegistry", () => {
         bundleFormat: "claude",
         skills: ["commands"],
         settingsFiles: ["settings.json"],
-        bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
       },
+      expectedCapabilities: ["skills", "commands", "settings"],
     },
     {
       name: "loads Cursor bundle manifests into the registry",
@@ -2172,16 +3101,10 @@ describe("loadPluginManifestRegistry", () => {
         format: "bundle",
         bundleFormat: "cursor",
         skills: ["skills", ".cursor/commands"],
-        bundleCapabilities: expect.arrayContaining([
-          "skills",
-          "commands",
-          "rules",
-          "hooks",
-          "mcpServers",
-        ]),
       },
+      expectedCapabilities: ["skills", "commands", "rules", "hooks", "mcpServers"],
     },
-  ] as const)("$name", ({ idHint, bundleFormat, setup, expected }) => {
+  ] as const)("$name", ({ idHint, bundleFormat, setup, expected, expectedCapabilities }) => {
     const registry = loadBundleRegistry({
       idHint,
       bundleFormat,
@@ -2189,7 +3112,12 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]).toMatchObject(expected);
+    expectRecordFields(registry.plugins[0], "bundle plugin", expected);
+    expectArrayIncludesAll(
+      registry.plugins[0]?.bundleCapabilities,
+      expectedCapabilities,
+      "bundle capabilities",
+    );
   });
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
@@ -2231,6 +3159,31 @@ describe("loadPluginManifestRegistry", () => {
     expectUnsafeWorkspaceManifestRejected({ id: "unsafe-hardlink", mode: "hardlink" });
   });
 
+  it("still rejects config manifest hardlinks outside the Nix store in Nix mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const fixture = prepareLinkedManifestFixture({
+      id: "unsafe-config-hardlink",
+      mode: "hardlink",
+    });
+    if (!fixture.linked) {
+      return;
+    }
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_NIX_MODE: "1" }),
+      candidates: [
+        createPluginCandidate({
+          idHint: "unsafe-config-hardlink",
+          rootDir: fixture.rootDir,
+          origin: "config",
+        }),
+      ],
+    });
+    expect(registry.plugins).toHaveLength(0);
+    expect(hasUnsafeManifestDiagnostic(registry)).toBe(true);
+  });
+
   it("allows bundled manifest paths that are hardlinked aliases", () => {
     if (process.platform === "win32") {
       return;
@@ -2245,7 +3198,7 @@ describe("loadPluginManifestRegistry", () => {
       rootDir: fixture.rootDir,
       origin: "bundled",
     });
-    expect(registry.plugins.some((entry) => entry.id === "bundled-hardlink")).toBe(true);
+    expect(registry.plugins.map((entry) => entry.id)).toContain("bundled-hardlink");
     expect(hasUnsafeManifestDiagnostic(registry)).toBe(false);
   });
 
@@ -2331,13 +3284,10 @@ describe("loadPluginManifestRegistry", () => {
       }),
     });
 
-    expect(olderHost.plugins).toEqual([]);
-    expect(
-      olderHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
-    ).toBe(true);
-    expect(newerHost.plugins.some((plugin) => plugin.id === "synology-chat")).toBe(true);
-    expect(
-      newerHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
-    ).toBe(false);
+    expect(olderHost.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(olderHost, "this host is 2026.3.21");
+    expect(newerHost.plugins.map((plugin) => plugin.id)).toContain("synology-chat");
+    expectNoRegistryDiagnosticContains(newerHost, "this host is 2026.3.21");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

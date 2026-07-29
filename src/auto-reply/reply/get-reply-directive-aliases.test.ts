@@ -1,3 +1,4 @@
+/** Tests directive alias parsing for get-reply command paths. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
@@ -23,15 +24,15 @@ describe("reply directive aliases", () => {
     const reservedCommands = new Set<string>();
     const cfg = configWithModelAlias("demo_skill");
 
-    expect(
-      parseInlineDirectives("/demo_skill", {
-        modelAliases: resolveConfiguredDirectiveAliases({
-          cfg,
-          commandTextHasSlash: true,
-          reservedCommands,
-        }),
+    const beforeSkillRegistration = parseInlineDirectives("/demo_skill", {
+      modelAliases: resolveConfiguredDirectiveAliases({
+        cfg,
+        commandTextHasSlash: true,
+        reservedCommands,
       }),
-    ).toEqual(expect.objectContaining({ hasModelDirective: true, cleaned: "" }));
+    });
+    expect(beforeSkillRegistration.hasModelDirective).toBe(true);
+    expect(beforeSkillRegistration.cleaned).toBe("");
 
     reserveSkillCommandNames({
       reservedCommands,
@@ -45,29 +46,29 @@ describe("reply directive aliases", () => {
       ],
     });
 
-    expect(
-      parseInlineDirectives("/demo_skill", {
-        modelAliases: resolveConfiguredDirectiveAliases({
-          cfg,
-          commandTextHasSlash: true,
-          reservedCommands,
-        }),
+    const afterSkillRegistration = parseInlineDirectives("/demo_skill", {
+      modelAliases: resolveConfiguredDirectiveAliases({
+        cfg,
+        commandTextHasSlash: true,
+        reservedCommands,
       }),
-    ).toEqual(expect.objectContaining({ hasModelDirective: false, cleaned: "/demo_skill" }));
+    });
+    expect(afterSkillRegistration.hasModelDirective).toBe(false);
+    expect(afterSkillRegistration.cleaned).toBe("/demo_skill");
   });
 
   it("does not expose chat command names as inline model aliases", () => {
     const cfg = configWithModelAlias(" help ");
     const reservedCommands = new Set(["help"]);
 
-    expect(
-      parseInlineDirectives("/help", {
-        modelAliases: resolveConfiguredDirectiveAliases({
-          cfg,
-          commandTextHasSlash: true,
-          reservedCommands,
-        }),
+    const parsed = parseInlineDirectives("/help", {
+      modelAliases: resolveConfiguredDirectiveAliases({
+        cfg,
+        commandTextHasSlash: true,
+        reservedCommands,
       }),
-    ).toEqual(expect.objectContaining({ hasModelDirective: false, cleaned: "/help" }));
+    });
+    expect(parsed.hasModelDirective).toBe(false);
+    expect(parsed.cleaned).toBe("/help");
   });
 });

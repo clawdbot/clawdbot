@@ -1,3 +1,4 @@
+// Mattermost tests cover slash http.send config plugin behavior.
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
@@ -53,7 +54,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("./runtime-api.js", () => {
   return {
     buildModelsProviderData: mockState.buildModelsProviderData,
-    createChannelReplyPipeline: vi.fn(() => ({
+    createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
     })),

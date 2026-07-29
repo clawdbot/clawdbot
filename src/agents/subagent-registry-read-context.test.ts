@@ -1,5 +1,8 @@
+// Subagent registry read-context tests cover the indexed snapshot used by hot
+// prompt/control paths instead of repeatedly scanning the run map.
 import { describe, expect, it } from "vitest";
 import {
+  buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -37,6 +40,29 @@ function listRunsForController(
 }
 
 describe("subagent registry read index", () => {
+  it("indexes the latest generation for each child session", () => {
+    const childSessionKey = "agent:main:subagent:restarted";
+    const olderGeneration = makeRun({
+      runId: "run-newer-created-at",
+      childSessionKey,
+      generation: 1,
+      createdAt: 200,
+    });
+    const latestGeneration = makeRun({
+      runId: "run-latest-generation",
+      childSessionKey: ` ${childSessionKey} `,
+      generation: 2,
+      createdAt: 100,
+    });
+
+    const index = buildLatestSubagentRunReadIndexFromRuns(
+      toRunMap([olderGeneration, latestGeneration]),
+    );
+
+    expect(index.getLatestSubagentRun(childSessionKey)).toBe(latestGeneration);
+    expect(index.getLatestSubagentRun("agent:main:subagent:missing")).toBeNull();
+  });
+
   it("matches existing query helpers while reusing one indexed snapshot", () => {
     const now = Date.now();
     const root = "agent:main:main";
@@ -95,7 +121,7 @@ describe("subagent registry read index", () => {
     const runs = new Map<string, SubagentRunRecord>();
     const index = buildSubagentRunReadIndexFromRuns({ runs });
 
-    expect(listRunsForController(index, "agent:main:main")).toEqual([]);
+    expect(listRunsForController(index, "agent:main:main")).toStrictEqual([]);
     expect(index.getDisplaySubagentRun("agent:main:subagent:missing")).toBeNull();
     expect(index.countActiveDescendantRuns("agent:main:main")).toBe(0);
   });
@@ -160,6 +186,8 @@ describe("subagent registry read index", () => {
   });
 
   it("keeps one snapshot stable for the lifetime of the context", () => {
+    // Read indexes are process-local snapshots; callers can reuse them through
+    // one prompt assembly without observing later registry mutations.
     const root = "agent:main:main";
     const runs = toRunMap([
       makeRun({

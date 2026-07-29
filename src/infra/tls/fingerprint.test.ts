@@ -1,3 +1,5 @@
+// Covers gateway TLS fingerprint normalization across prefixes, separators,
+// blank values, and malformed text.
 import { describe, expect, it } from "vitest";
 import { normalizeFingerprint } from "./fingerprint.js";
 

@@ -1,10 +1,18 @@
+// Signal plugin module implements event handler harness behavior.
 import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
 
 export function createBaseSignalEventHandlerDeps(
   overrides: Partial<SignalEventHandlerDeps> = {},
 ): SignalEventHandlerDeps {
   return {
-    runtime: { log: () => {}, error: () => {} } as any,
+    runtime: { log: () => {}, error: () => {} } as SignalEventHandlerDeps["runtime"],
+    statusReactionTiming: {
+      debounceMs: 0,
+      doneHoldMs: 0,
+      errorHoldMs: 0,
+      stallSoftMs: 60_000,
+      stallHardMs: 120_000,
+    },
     cfg: {},
     baseUrl: "http://localhost",
     accountId: "default",

@@ -1,3 +1,4 @@
+// Vitest extension misc config wires the extension misc test shard.
 import { miscExtensionTestRoots } from "./vitest.extension-misc-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

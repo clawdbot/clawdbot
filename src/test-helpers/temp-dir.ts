@@ -1,8 +1,14 @@
+// Temporary directory helpers create and clean up isolated test directories.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+// Temp-dir helpers share one mkdtemp root per suite prefix and hand out numbered
+// case dirs. That reduces filesystem churn while preserving per-test cleanup.
+// Roots are canonicalized (realpath) because macOS tmpdir sits behind a symlink
+// (/var -> /private/var) while production code realpaths state/session paths;
+// symlinked roots break tests that compare or intercept fs paths by equality.
 type PrefixRootState = {
   path: string;
   activeCount: number;
@@ -30,12 +36,15 @@ async function acquireAsyncPrefixRoot(options: {
   }
   const pending = pendingAsyncPrefixRoots.get(key);
   if (pending) {
+    // Concurrent tests with the same prefix wait for the same root creation
+    // instead of racing multiple mkdtemp roots.
     const state = await pending;
     state.activeCount += 1;
     return state;
   }
   const create = fs
     .mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix))
+    .then((root) => fs.realpath(root))
     .then((root) => ({ path: root, activeCount: 0 }));
   pendingAsyncPrefixRoots.set(key, create);
   try {
@@ -55,7 +64,9 @@ function acquireSyncPrefixRoot(options: { prefix: string; parentDir?: string }):
     cached.activeCount += 1;
     return cached;
   }
-  const root = fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix));
+  const root = fsSync.realpathSync(
+    fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
+  );
   const state = { path: root, activeCount: 1 };
   syncPrefixRoots.set(key, state);
   return state;
@@ -131,13 +142,17 @@ export async function withTempDir<T>(
   }
 }
 
+// Suite-level tracker for tests that need a stable root across multiple cases
+// while still creating isolated child directories.
 export function createSuiteTempRootTracker(options: { prefix: string; parentDir?: string }) {
   let root = "";
   let nextIndex = 0;
 
   return {
     async setup(): Promise<string> {
-      root = await fs.mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix));
+      root = await fs.realpath(
+        await fs.mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
+      );
       nextIndex = 0;
       return root;
     },

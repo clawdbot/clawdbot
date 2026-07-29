@@ -1,10 +1,13 @@
+/** Resolves effective plugin ids from config, installed records, and activation metadata. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
@@ -59,7 +62,7 @@ function collectBundledChannelOwnerPluginIds(params: {
     ? {
         ...params.env,
         OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
-        ...(params.env.VITEST || process.env.VITEST
+        ...(isVitestRuntimeEnv(params.env) || isVitestRuntimeEnv()
           ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
           : {}),
       }
@@ -92,7 +95,7 @@ function collectBundledChannelOwnerPluginIds(params: {
       }
     }
   }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
 }
 
 function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
@@ -118,7 +121,7 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
       ids.delete(pluginId);
     }
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }
 
 function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
@@ -139,6 +142,7 @@ function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[]
   return [pluginId];
 }
 
+/** Lists plugin ids that are effectively enabled for a config/discovery context. */
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -184,5 +188,5 @@ export function resolveEffectivePluginIds(params: {
   }).pluginIds) {
     ids.add(pluginId);
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }

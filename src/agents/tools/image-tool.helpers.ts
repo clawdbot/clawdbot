@@ -1,11 +1,18 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+/**
+ * Image/media understanding helper functions.
+ *
+ * Handles model config, data URL decoding, provider lookup, and reasoning-only response validation.
+ */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateBase64DecodedBytes } from "../../media/base64.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { AssistantMessage } from "../../llm/types.js";
+import { extractAssistantText } from "../embedded-agent-utils.js";
+import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { extractAssistantText } from "../pi-embedded-utils.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
+/** Image tool model config uses the shared tool model config shape. */
 export type ImageModelConfig = ToolModelConfig;
 
 const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
@@ -53,6 +60,7 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
   return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
 }
 
+/** Detects provider responses that contain only reasoning blocks and no usable image text. */
 export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
   if (extractAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
@@ -78,6 +86,7 @@ export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolea
   return false;
 }
 
+/** Decodes a base64 image data URL with optional decoded-size protection. */
 export function decodeDataUrl(
   dataUrl: string,
   opts?: { maxBytes?: number },
@@ -97,6 +106,7 @@ export function decodeDataUrl(
   }
   const b64 = (match[2] ?? "").trim();
   if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
+    // Estimate before decoding so oversized inline payloads do not allocate large buffers.
     throw new Error("Invalid data URL: payload exceeds size limit.");
   }
   const buffer = Buffer.from(b64, "base64");
@@ -106,6 +116,7 @@ export function decodeDataUrl(
   return { buffer, mimeType, kind: "image" };
 }
 
+/** Extracts assistant text or throws a provider/model-specific image failure. */
 export function coerceImageAssistantText(params: {
   message: AssistantMessage;
   provider: string;
@@ -130,6 +141,7 @@ export function coerceImageAssistantText(params: {
   throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }
 
+/** Reads imageModel defaults from config into the shared tool model config shape. */
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
@@ -201,7 +213,7 @@ function resolveProviderlessConfiguredImageModelRef(params: {
     return ref;
   }
   if (matches.length === 1) {
-    return matches[0];
+    return matches.at(0) ?? ref;
   }
   throw new Error(
     `Ambiguous image model "${ref}". Configure a provider-prefixed ref such as ${matches
@@ -210,6 +222,7 @@ function resolveProviderlessConfiguredImageModelRef(params: {
   );
 }
 
+/** Resolves providerless configured image model refs against configured provider models. */
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
   imageModelConfig: ImageModelConfig;
@@ -234,10 +247,14 @@ export function resolveConfiguredImageModelRefs(params: {
   };
 }
 
+/** Returns the configured vision-capable model for a provider, if present. */
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;
 }): string | null {
+  if (isMinimaxVlmProvider(params.provider)) {
+    return null;
+  }
   const providerCfg = findNormalizedProviderValue(
     params.cfg?.models?.providers,
     params.provider,

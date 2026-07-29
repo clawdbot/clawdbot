@@ -1,3 +1,4 @@
+// Msteams tests cover graph teams plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getChannelInfoMSTeams, listChannelsMSTeams } from "./graph-teams.js";
@@ -17,6 +18,14 @@ vi.mock("./graph.js", async (importOriginal) => {
 });
 
 const TOKEN = "test-graph-token";
+
+function graphFetchPathAt(index: number): string | undefined {
+  const call = mockState.fetchGraphJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Graph fetch call ${index}`);
+  }
+  return call[0]?.path;
+}
 
 describe("listChannelsMSTeams", () => {
   beforeEach(() => {
@@ -75,7 +84,7 @@ describe("listChannelsMSTeams", () => {
       teamId: "team-empty",
     });
 
-    expect(result.channels).toEqual([]);
+    expect(result.channels).toStrictEqual([]);
   });
 
   it("returns empty array when value is undefined", async () => {
@@ -86,7 +95,7 @@ describe("listChannelsMSTeams", () => {
       teamId: "team-no-value",
     });
 
-    expect(result.channels).toEqual([]);
+    expect(result.channels).toStrictEqual([]);
   });
 
   it("follows @odata.nextLink across multiple pages", async () => {
@@ -122,8 +131,7 @@ describe("listChannelsMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(3);
 
     // Second call should use the relative path stripped from the nextLink
-    const secondCallPath = mockState.fetchGraphJson.mock.calls[1]?.[0]?.path;
-    expect(secondCallPath).toBe(
+    expect(graphFetchPathAt(1)).toBe(
       "/teams/team-paged/channels?$select=id,displayName,description,membershipType&$skip=1",
     );
   });

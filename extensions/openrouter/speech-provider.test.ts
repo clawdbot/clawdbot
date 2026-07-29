@@ -1,30 +1,75 @@
+// Openrouter tests cover speech provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+const {
+  assertOkOrThrowHttpErrorMock,
+  postJsonRequestMock,
+  readProviderBinaryResponseMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn(),
+  readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
+    return new Uint8Array(await response.arrayBuffer());
+  }),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  readProviderBinaryResponse: readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
+
+function requireOpenRouterConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter speech config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter speech config request");
+  }
+  return request;
+}
+
+function requireOpenRouterPostRequest(): Record<string, unknown> {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter speech request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter speech request");
+  }
+  return request as Record<string, unknown>;
+}
+
+function requireHeaders(value: unknown): Headers {
+  if (!(value instanceof Headers)) {
+    throw new Error("expected OpenRouter speech request headers");
+  }
+  return value;
+}
 
 describe("openrouter speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
+    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
+  });
+
+  it("advertises the documented ElevenLabs route", () => {
+    expect(buildOpenRouterSpeechProvider().models).toContain("elevenlabs/eleven-turbo-v2");
   });
 
   it("normalizes provider-owned speech config", () => {
@@ -99,30 +144,51 @@ describe("openrouter speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openrouter",
-        capability: "audio",
-        baseUrl: "https://openrouter.ai/api/v1",
-        defaultHeaders: expect.objectContaining({
-          "Content-Type": "application/json",
-        }),
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://openrouter.ai/api/v1/audio/speech",
-        timeoutMs: 12_345,
-        body: {
-          model: "openai/gpt-4o-mini-tts-2025-12-15",
-          input: "hello",
-          voice: "nova",
-          response_format: "mp3",
-          speed: 1.2,
-        },
-      }),
-    );
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
+    expect(requireOpenRouterConfigRequest()).toEqual({
+      baseUrl: "https://openrouter.ai/api/v1",
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: false,
+      defaultHeaders: {
+        Authorization: "Bearer sk-openrouter",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+      },
+      provider: "openrouter",
+      capability: "audio",
+      transport: "http",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const request = requireOpenRouterPostRequest();
+    const headers = requireHeaders(request.headers);
+    expect(Object.fromEntries(headers.entries())).toEqual({
+      authorization: "Bearer sk-openrouter",
+      "content-type": "application/json",
+      "http-referer": "https://openclaw.ai",
+      "x-openrouter-title": "OpenClaw",
+    });
+    expect(request).toEqual({
+      url: "https://openrouter.ai/api/v1/audio/speech",
+      headers,
+      body: {
+        model: "openai/gpt-4o-mini-tts-2025-12-15",
+        input: "hello",
+        voice: "nova",
+        response_format: "mp3",
+        speed: 1.2,
+      },
+      timeoutMs: 12_345,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
+    expect(readProviderBinaryResponseMock).toHaveBeenCalledWith(
+      expect.any(Response),
+      "OpenRouter TTS API error",
+      "audio",
+    );
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.voiceCompatible).toBe(true);
@@ -134,9 +200,11 @@ describe("openrouter speech provider", () => {
 
     expect(
       provider.resolveConfig?.({ cfg: {} as never, rawConfig: {}, timeoutMs: 30_000 }),
-    ).toMatchObject({
+    ).toEqual({
       model: "hexgrad/kokoro-82m",
       voice: "af_alloy",
+      responseFormat: undefined,
+      provider: undefined,
     });
   });
 

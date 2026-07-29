@@ -51,7 +51,6 @@ paths:
   - src/plugins/runtime
   - src/plugins/runtime-state.ts
   - src/plugins/runtime.ts
-  - src/plugins/source-loader.ts
   - src/plugins/update.ts
   - src/plugins/validation-diagnostics.ts
   - src/plugin-sdk/*entry*.ts

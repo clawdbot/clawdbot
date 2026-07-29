@@ -1,3 +1,4 @@
+// Line plugin module implements gateway behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import {

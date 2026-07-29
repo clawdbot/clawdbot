@@ -1,28 +1,58 @@
+// OpenAI-compatible speech provider tests cover speech request and file output.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+const {
+  assertOkOrThrowHttpErrorMock,
+  postJsonRequestMock,
+  readProviderBinaryResponseMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn(),
+  readProviderBinaryResponseMock: vi.fn(async (response: Response, label: string) => {
+    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+    if (contentType === "application/json" || contentType?.startsWith("text/")) {
+      throw new Error(`${label}: malformed audio response`);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0) {
+      throw new Error(`${label}: malformed audio response`);
+    }
+    return bytes;
+  }),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  readProviderBinaryResponse: readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
+
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("missing first mock call");
+  }
+  const [arg] = call;
+  if (!arg || typeof arg !== "object") {
+    throw new Error("missing first mock argument");
+  }
+  return arg as Record<string, unknown>;
+}
 
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
+    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
   });
@@ -47,6 +77,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       },
     });
 
+    expect(provider.defaultModel).toBe("demo-tts");
     expect(
       provider.resolveConfig?.({
         cfg: {} as never,
@@ -122,34 +153,102 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       timeoutMs: 1234,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "https://example.test/v1",
-        defaultBaseUrl: "https://example.test/v1",
-        provider: "demo",
-        capability: "audio",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.test/v1/audio/speech",
-        timeoutMs: 1234,
-        body: {
-          model: "override-tts",
-          input: "hello",
-          voice: "verse",
-          response_format: "opus",
-          speed: 1.1,
-          provider: { order: ["openai"] },
-        },
-      }),
-    );
-    expect(result).toMatchObject({
-      audioBuffer: Buffer.from([4, 5, 6]),
-      outputFormat: "opus",
-      fileExtension: ".opus",
-      voiceCompatible: true,
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
+    const httpConfigRequest = requireFirstMockArg(resolveProviderHttpRequestConfigMock);
+    expect(httpConfigRequest.baseUrl).toBe("https://example.test/v1");
+    expect(httpConfigRequest.defaultBaseUrl).toBe("https://example.test/v1");
+    expect(httpConfigRequest.provider).toBe("demo");
+    expect(httpConfigRequest.capability).toBe("audio");
+
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const postRequest = requireFirstMockArg(postJsonRequestMock);
+    expect(postRequest.url).toBe("https://example.test/v1/audio/speech");
+    expect(postRequest.timeoutMs).toBe(1234);
+    expect(postRequest.body).toStrictEqual({
+      model: "override-tts",
+      input: "hello",
+      voice: "verse",
+      response_format: "opus",
+      speed: 1.1,
+      provider: { order: ["openai"] },
     });
+    expect(result.audioBuffer).toStrictEqual(Buffer.from([4, 5, 6]));
+    expect(result.outputFormat).toBe("opus");
+    expect(result.fileExtension).toBe(".opus");
+    expect(result.voiceCompatible).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects JSON success bodies from TTS responses as malformed audio", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ error: "not audio" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3"],
+      defaultResponseFormat: "mp3",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "voice-note",
+        timeoutMs: 1234,
+      }),
+    ).rejects.toThrow("Demo TTS API error: malformed audio response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects empty successful TTS bodies as malformed audio", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array(), { status: 200 }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3"],
+      defaultResponseFormat: "mp3",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "voice-note",
+        timeoutMs: 1234,
+      }),
+    ).rejects.toThrow("Demo TTS API error: malformed audio response");
     expect(release).toHaveBeenCalledOnce();
   });
 });

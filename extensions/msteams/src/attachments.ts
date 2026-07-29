@@ -1,15 +1,15 @@
+// Msteams plugin module implements attachments behavior.
 export {
   downloadMSTeamsBotFrameworkAttachments,
   isBotFrameworkPersonalChatId,
 } from "./attachments/bot-framework.js";
 export { downloadMSTeamsAttachments } from "./attachments/download.js";
-export { buildMSTeamsGraphMessageUrls, downloadMSTeamsGraphMedia } from "./attachments/graph.js";
+export { buildMSTeamsGraphMessageUrl, downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 export {
-  buildMSTeamsAttachmentPlaceholder,
   extractMSTeamsHtmlAttachmentIds,
+  resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
 } from "./attachments/html.js";
-export { buildMSTeamsMediaPayload } from "./attachments/payload.js";
 export type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,

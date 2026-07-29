@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
+// Finds core/plugin architecture boundary smells in TypeScript sources.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pMap from "p-map";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
   collectModuleReferencesFromSource,
@@ -164,20 +166,25 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
   return entries;
 }
 
+/**
+ * Collects architecture smell findings from the configured source roots.
+ */
 export async function collectArchitectureSmells() {
   if (!architectureSmellsPromise) {
     architectureSmellsPromise = (async () => {
       const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-      const entriesByFile = await Promise.all(
-        files.map(async (filePath) => {
+      const entriesByFile = await pMap(
+        files,
+        async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
           const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
           entries.push(...scanRuntimeTypeImplementationSmells(source, filePath));
           entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
           return entries;
-        }),
+        },
+        { concurrency: 32, stopOnError: true },
       );
       return entriesByFile.flat().toSorted(compareEntries);
     })();
@@ -216,9 +223,10 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+async function runArchitectureSmellsCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = argv.includes("--json");
+  const json = args.includes("--json");
   const inventory = await collectArchitectureSmells();
 
   if (json) {
@@ -231,7 +239,10 @@ async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
   return 0;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+/**
+ * Runs the architecture smell check and writes human/JSON output.
+ */
+export async function main(argv, io) {
   return await runArchitectureSmellsCheck(argv, io);
 }
 

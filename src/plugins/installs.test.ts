@@ -1,12 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
+// Covers plugin install record normalization and config interactions.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildNpmResolutionInstallFields,
+  recordPluginInstall,
+  resolveNpmInstallRecordSpec,
+} from "./installs.js";
 
 function expectRecordedInstall(pluginId: string, next: ReturnType<typeof recordPluginInstall>) {
-  expect(next.plugins?.installs?.[pluginId]).toMatchObject({
-    source: "npm",
-    spec: `${pluginId}@latest`,
+  expect(next).toEqual({
+    plugins: {
+      installs: {
+        [pluginId]: {
+          source: "npm",
+          spec: `${pluginId}@latest`,
+          installedAt: "2026-05-11T04:00:00.000Z",
+        },
+      },
+    },
   });
-  expect(typeof next.plugins?.installs?.[pluginId]?.installedAt).toBe("string");
 }
 
 function createExpectedResolutionFields(
@@ -29,6 +40,10 @@ function expectResolutionFieldsCase(params: {
 }) {
   expect(buildNpmResolutionInstallFields(params.input)).toEqual(params.expected);
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("buildNpmResolutionInstallFields", () => {
   it.each([
@@ -68,9 +83,214 @@ describe("buildNpmResolutionInstallFields", () => {
   ] as const)("$name", expectResolutionFieldsCase);
 });
 
+describe("resolveNpmInstallRecordSpec", () => {
+  it("uses an exact resolved registry spec when managed installs request pinning", () => {
+    expect(
+      resolveNpmInstallRecordSpec({
+        requestedSpec: "@openclaw/codex",
+        resolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.30-beta.1",
+          resolvedSpec: "@openclaw/codex@2026.5.30-beta.1",
+        },
+        pinResolvedRegistrySpec: true,
+      }),
+    ).toBe("@openclaw/codex@2026.5.30-beta.1");
+  });
+
+  it("keeps moving specs unless the caller owns managed pinning", () => {
+    expect(
+      resolveNpmInstallRecordSpec({
+        requestedSpec: "@openclaw/codex",
+        resolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.30-beta.1",
+          resolvedSpec: "@openclaw/codex@2026.5.30-beta.1",
+        },
+      }),
+    ).toBe("@openclaw/codex");
+  });
+
+  it("does not replace the requested spec with tags or non-registry resolutions", () => {
+    expect(
+      resolveNpmInstallRecordSpec({
+        requestedSpec: "@openclaw/codex",
+        resolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.30-beta.1",
+          resolvedSpec: "@openclaw/codex@beta",
+        },
+        pinResolvedRegistrySpec: true,
+      }),
+    ).toBe("@openclaw/codex");
+    expect(
+      resolveNpmInstallRecordSpec({
+        requestedSpec: "file:codex.tgz",
+        resolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.30-beta.1",
+          resolvedSpec: "file:codex.tgz",
+        },
+        pinResolvedRegistrySpec: true,
+      }),
+    ).toBe("file:codex.tgz");
+  });
+});
+
 describe("recordPluginInstall", () => {
   it("stores install metadata for the plugin id", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
+
     const next = recordPluginInstall({}, { pluginId: "demo", source: "npm", spec: "demo@latest" });
+
     expectRecordedInstall("demo", next);
+  });
+
+  it("clears stale ClawHub trust metadata when a later install omits it", () => {
+    const existing = recordPluginInstall(
+      {},
+      {
+        pluginId: "demo",
+        source: "clawhub",
+        spec: "clawhub:demo@1.0.0",
+        installPath: "/tmp/openclaw/plugins/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubTrustDisposition: "review-required",
+        clawhubTrustScanStatus: "suspicious",
+        clawhubTrustReasons: ["payload_strings"],
+        clawhubTrustPending: true,
+        clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+        clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
+      },
+    );
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "demo",
+      source: "clawhub",
+      spec: "clawhub:demo@1.1.0",
+      installPath: "/tmp/openclaw/plugins/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubTrustDisposition: "clean",
+      clawhubTrustCheckedAt: "2026-05-15T00:00:00.000Z",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+
+    expect(next.plugins?.installs?.demo).toEqual({
+      source: "clawhub",
+      spec: "clawhub:demo@1.1.0",
+      installPath: "/tmp/openclaw/plugins/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubTrustDisposition: "clean",
+      clawhubTrustCheckedAt: "2026-05-15T00:00:00.000Z",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+  });
+
+  it("replaces local npm-pack provenance on a registry reinstall", () => {
+    const localInstall = recordPluginInstall(
+      {},
+      {
+        pluginId: "diffs",
+        source: "npm",
+        spec: "/tmp/openclaw-diffs.tgz",
+        sourcePath: "/tmp/openclaw-diffs.tgz",
+        installPath: "/tmp/openclaw/plugins/diffs-local",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmTarballName: "openclaw-diffs-1.0.0.tgz",
+        installedAt: "2026-05-14T18:00:03.000Z",
+      },
+    );
+
+    const registryInstall = recordPluginInstall(localInstall, {
+      pluginId: "diffs",
+      source: "npm",
+      spec: "@openclaw/diffs",
+      installPath: "/tmp/openclaw/plugins/diffs",
+      resolvedName: "@openclaw/diffs",
+      resolvedVersion: "1.1.0",
+      resolvedSpec: "@openclaw/diffs@1.1.0",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+
+    expect(registryInstall.plugins?.installs?.diffs).toEqual({
+      source: "npm",
+      spec: "@openclaw/diffs",
+      installPath: "/tmp/openclaw/plugins/diffs",
+      resolvedName: "@openclaw/diffs",
+      resolvedVersion: "1.1.0",
+      resolvedSpec: "@openclaw/diffs@1.1.0",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+  });
+
+  it("moves an exact prior npm load path on same-version reinstall", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const customPath = `${previousInstallPath}/custom-child`;
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: { paths: [customPath, previousInstallPath, adjacentPath] },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+          beta: {
+            source: "npm" as const,
+            spec: "beta@1.0.0",
+            installPath: adjacentPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([customPath, nextInstallPath, adjacentPath]);
+    expect(next.plugins?.installs?.beta).toBe(existing.plugins.installs.beta);
+  });
+
+  it("preserves an existing replacement path position while removing stale managed paths", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: {
+          paths: [nextInstallPath, adjacentPath, previousInstallPath, nextInstallPath],
+        },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([nextInstallPath, adjacentPath]);
   });
 });

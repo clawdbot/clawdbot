@@ -8,7 +8,7 @@
  * Each account gets its own isolated resource stack:
  *
  * ```
- * _accountRegistry: Map<appId, AccountContext>
+ * accountRegistry: Map<appId, AccountContext>
  *
  * AccountContext {
  *   logger      — per-account prefixed logger
@@ -25,9 +25,10 @@
  */
 
 import os from "node:os";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
-import { MediaApi as MediaApiClass } from "../api/media.js";
+import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
 import { getNextMsgSeq } from "../api/routes.js";
@@ -41,12 +42,13 @@ import {
   type OutboundMeta,
   type UploadMediaResponse,
 } from "../types.js";
-import { LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
+import { getMaxUploadSize, LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";
 import { normalizeSource, type MediaSource, type RawMediaSource } from "./media-source.js";
+import { claimMessageReply } from "./outbound-reply.js";
 
 // ============ Re-exported types ============
 
@@ -54,12 +56,12 @@ export { UploadDailyLimitExceededError } from "../api/media-chunked.js";
 
 // ============ Plugin User-Agent ============
 
-let _pluginVersion = "unknown";
-let _openclawVersion = "unknown";
+let pluginVersion = "unknown";
+let openclawVersion = "unknown";
 
 /** Build the User-Agent string from the current plugin and framework versions. */
 function buildUserAgent(): string {
-  return `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${_openclawVersion})`;
+  return `QQBotPlugin/${pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${openclawVersion})`;
 }
 
 /** Return the current User-Agent string. */
@@ -73,17 +75,17 @@ export function getPluginUserAgent(): string {
  */
 export function initSender(options: { pluginVersion?: string; openclawVersion?: string }): void {
   if (options.pluginVersion) {
-    _pluginVersion = options.pluginVersion;
+    pluginVersion = options.pluginVersion;
   }
   if (options.openclawVersion) {
-    _openclawVersion = options.openclawVersion;
+    openclawVersion = options.openclawVersion;
   }
 }
 
 /** Update the OpenClaw framework version in the User-Agent (called after runtime injection). */
 export function setOpenClawVersion(version: string): void {
   if (version) {
-    _openclawVersion = version;
+    openclawVersion = version;
   }
 }
 
@@ -101,10 +103,10 @@ interface AccountContext {
 }
 
 /** Per-appId account registry — each account owns all its resources. */
-const _accountRegistry = new Map<string, AccountContext>();
+const accountRegistry = new Map<string, AccountContext>();
 
 /** Fallback logger for unregistered accounts (CLI / test scenarios). */
-const _fallbackLogger: EngineLogger = {
+const fallbackLogger: EngineLogger = {
   info: (msg: string) => debugLog(msg),
   error: (msg: string) => debugError(msg),
   warn: (msg: string) => debugWarn(msg),
@@ -171,7 +173,7 @@ export function registerAccount(
 ): void {
   const key = appId.trim();
   const md = options.markdownSupport === true;
-  _accountRegistry.set(key, buildAccountContext(options.logger, md));
+  accountRegistry.set(key, buildAccountContext(options.logger, md));
 }
 
 /**
@@ -184,7 +186,7 @@ export function registerAccount(
 export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
   const key = appId.trim();
   const md = options.markdownSupport === true;
-  const existing = _accountRegistry.get(key);
+  const existing = accountRegistry.get(key);
   if (existing) {
     // Re-create only MessageApi with updated config, reuse existing stack.
     existing.messageApi = new MessageApiClass(existing.client, existing.tokenMgr, {
@@ -193,7 +195,7 @@ export function initApiConfig(appId: string, options: { markdownSupport?: boolea
     });
     existing.markdownSupport = md;
   } else {
-    _accountRegistry.set(key, buildAccountContext(_fallbackLogger, md));
+    accountRegistry.set(key, buildAccountContext(fallbackLogger, md));
   }
 }
 
@@ -205,10 +207,10 @@ export function initApiConfig(appId: string, options: { markdownSupport?: boolea
  */
 function resolveAccount(appId: string): AccountContext {
   const key = appId.trim();
-  let ctx = _accountRegistry.get(key);
+  let ctx = accountRegistry.get(key);
   if (!ctx) {
-    ctx = buildAccountContext(_fallbackLogger, false);
-    _accountRegistry.set(key, ctx);
+    ctx = buildAccountContext(fallbackLogger, false);
+    accountRegistry.set(key, ctx);
   }
   return ctx;
 }
@@ -239,7 +241,7 @@ export function clearTokenCache(appId?: string): void {
   if (appId) {
     resolveAccount(appId).tokenMgr.clearCache(appId);
   } else {
-    for (const ctx of _accountRegistry.values()) {
+    for (const ctx of accountRegistry.values()) {
       ctx.tokenMgr.clearCache();
     }
   }
@@ -267,7 +269,7 @@ export function stopBackgroundTokenRefresh(appId?: string): void {
   if (appId) {
     resolveAccount(appId).tokenMgr.stopBackgroundRefresh(appId);
   } else {
-    for (const ctx of _accountRegistry.values()) {
+    for (const ctx of accountRegistry.values()) {
       ctx.tokenMgr.stopBackgroundRefresh();
     }
   }
@@ -349,7 +351,7 @@ export async function withTokenRetry<T>(
     if (looksLike401) {
       log?.warn?.(
         `Token retry triggered by string heuristic (err is not ApiError). ` +
-          `Consider propagating ApiError end-to-end. msg=${errMsg.slice(0, 120)}`,
+          `Consider propagating ApiError end-to-end. msg=${truncateUtf16Safe(errMsg, 120)}`,
       );
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
@@ -383,27 +385,44 @@ export async function sendText(
   target: DeliveryTarget,
   content: string,
   creds: AccountCreds,
-  opts?: { msgId?: string; messageReference?: string },
+  opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
 ): Promise<MessageResponse> {
-  const api = resolveAccount(creds.appId).messageApi;
+  const ctx = resolveAccount(creds.appId);
+  const api = ctx.messageApi;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
+  let msgId = opts?.msgId;
+
+  // MessageApi issues one POST. Higher-level token retries re-enter sendText,
+  // so every retry and target type claims another slot before reaching the wire.
+  if (msgId) {
+    const passive = claimMessageReply(msgId);
+    if (!passive.allowed) {
+      ctx.logger.warn?.(
+        `Passive reply unavailable for ${target.type}; falling back to a send without msg_id: ${passive.message}`,
+      );
+      msgId = undefined;
+    }
+  }
 
   if (target.type === "c2c" || target.type === "group") {
     const scope: ChatScope = target.type;
-    if (opts?.msgId) {
+    if (msgId) {
       return api.sendMessage(scope, target.id, content, c, {
-        msgId: opts.msgId,
-        messageReference: opts.messageReference,
+        msgId,
+        messageReference: opts?.messageReference,
+        forcePlainText: opts?.forcePlainText,
       });
     }
-    return api.sendProactiveMessage(scope, target.id, content, c);
+    return api.sendProactiveMessage(scope, target.id, content, c, {
+      forcePlainText: opts?.forcePlainText,
+    });
   }
 
   if (target.type === "dm") {
-    return api.sendDmMessage({ guildId: target.id, content, creds: c, msgId: opts?.msgId });
+    return api.sendDmMessage({ guildId: target.id, content, creds: c, msgId });
   }
 
-  return api.sendChannelMessage({ channelId: target.id, content, creds: c, msgId: opts?.msgId });
+  return api.sendChannelMessage({ channelId: target.id, content, creds: c, msgId });
 }
 
 // ============ Input notify ============
@@ -596,33 +615,52 @@ async function sendMediaInternal(
     maxSize: Number.MAX_SAFE_INTEGER,
   });
 
-  const uploadResult = await dispatchUpload(
-    ctx,
-    scope,
-    opts.target.id,
-    KIND_TO_FILE_TYPE[opts.kind],
-    source,
-    c,
-    opts.fileName,
-  );
+  try {
+    const uploadResult = await dispatchUpload(
+      ctx,
+      scope,
+      opts.target.id,
+      KIND_TO_FILE_TYPE[opts.kind],
+      source,
+      c,
+      opts.fileName,
+    );
 
-  // Content is semantically meaningful only for image / video — the voice
-  // and file APIs ignore it.
-  const msgContent = opts.kind === "image" || opts.kind === "video" ? opts.content : undefined;
+    // Content is semantically meaningful only for image / video — the voice
+    // and file APIs ignore it.
+    const msgContent = opts.kind === "image" || opts.kind === "video" ? opts.content : undefined;
 
-  const result = await ctx.mediaApi.sendMediaMessage(
-    scope,
-    opts.target.id,
-    uploadResult.file_info,
-    c,
-    {
-      msgId: opts.msgId,
-      content: msgContent,
-    },
-  );
+    // Uploads do not spend the reply budget; the following message POST does.
+    // Claim here so every media path and retry shares the text/typing ledger.
+    let msgId = opts.msgId;
+    if (msgId) {
+      const passive = claimMessageReply(msgId);
+      if (!passive.allowed) {
+        ctx.logger.warn?.(
+          `Passive media reply unavailable for ${scope}; falling back to proactive send: ${passive.message}`,
+        );
+        msgId = undefined;
+      }
+    }
 
-  notifyMediaHook(opts.creds.appId, result, buildOutboundMeta(opts, source));
-  return result;
+    const result = await ctx.mediaApi.sendMediaMessage(
+      scope,
+      opts.target.id,
+      uploadResult.file_info,
+      c,
+      {
+        msgId,
+        content: msgContent,
+      },
+    );
+
+    notifyMediaHook(opts.creds.appId, result, buildOutboundMeta(opts, source));
+    return result;
+  } finally {
+    if (source.kind === "localPath") {
+      await source.opened?.close().catch(() => undefined);
+    }
+  }
 }
 
 /**
@@ -647,11 +685,25 @@ async function dispatchUpload(
   fileName?: string,
 ): Promise<UploadMediaResponse> {
   switch (source.kind) {
-    case "url":
+    case "url": {
+      const buffer = await downloadDirectUploadUrl(source.url, {
+        maxBytes: getMaxUploadSize(fileType),
+      });
+      if (buffer.length >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source: { kind: "buffer", buffer, fileName },
+          creds,
+          fileName,
+        });
+      }
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
-        url: source.url,
+        buffer,
         fileName,
       });
+    }
     case "base64":
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
         fileData: source.data,
@@ -665,6 +717,12 @@ async function dispatchUpload(
           fileType,
           source,
           creds,
+          fileName,
+        });
+      }
+      if (source.opened) {
+        return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
+          buffer: await source.opened.handle.readFile(),
           fileName,
         });
       }
@@ -688,9 +746,9 @@ async function dispatchUpload(
         fileName: fileName ?? source.fileName,
       });
     default: {
-      const _exhaustive: never = source;
+      const exhaustive: never = source;
       throw new Error(
-        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
+        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(exhaustive)}`,
       );
     }
   }

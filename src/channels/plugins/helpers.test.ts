@@ -1,3 +1,4 @@
+// Channel plugin helper tests cover shared plugin helper behavior and edge cases.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {

@@ -1,13 +1,22 @@
-import { vi } from "vitest";
+/**
+ * Shared mocks for auth profile OAuth tests.
+ * Provides hoisted provider-runtime, CLI credential, doctor, and external CLI
+ * sync mocks so OAuth tests can stay focused on store behavior.
+ */
+import { afterAll, vi } from "vitest";
 import type { OAuthCredential } from "./types.js";
 
-const oauthProviderRuntimeMocks = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
-  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
-}));
+const oauthProviderRuntimeMocks = vi.hoisted(() => {
+  vi.resetModules();
+  return {
+    refreshProviderOAuthCredentialWithPluginMock: vi.fn(
+      async (_params?: { context?: unknown }) => undefined,
+    ),
+    formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
+  };
+});
 
+/** Return hoisted provider-runtime OAuth mocks for per-test setup. */
 export function getOAuthProviderRuntimeMocks() {
   return oauthProviderRuntimeMocks;
 }
@@ -40,9 +49,16 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.expires - now > 5 * 60 * 1000,
   isSafeToUseExternalCliCredential: () => true,
   readExternalCliBootstrapCredential: () => null,
-  readManagedExternalCliCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,
   shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
     existing !== incoming,
 }));
+
+afterAll(() => {
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("./doctor.js");
+  vi.doUnmock("./external-cli-sync.js");
+  vi.resetModules();
+});

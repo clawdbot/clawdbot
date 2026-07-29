@@ -1,11 +1,22 @@
+// Msteams plugin module implements graph behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
-
-const GRAPH_BETA = "https://graph.microsoft.com/beta";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
+import { createMSTeamsHttpError } from "./http-error.js";
+import {
+  MSTEAMS_REQUEST_TIMEOUT_MS,
+  resolveMSTeamsRequestTimeoutMs,
+  type MSTeamsRequestDeadline,
+  withMSTeamsRequestDeadline,
+} from "./request-timeout.js";
+import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
+
+const GRAPH_BETA = "https://graph.microsoft.com/beta";
 
 export type GraphUser = {
   id?: string;
@@ -14,12 +25,12 @@ export type GraphUser = {
   mail?: string;
 };
 
-type GraphGroup = {
+export type GraphGroup = {
   id?: string;
   displayName?: string;
 };
 
-type GraphChannel = {
+export type GraphChannel = {
   id?: string;
   displayName?: string;
 };
@@ -42,34 +53,49 @@ async function requestGraph(params: {
   headers?: Record<string, string>;
   body?: unknown;
   errorPrefix?: string;
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<Response> {
   const hasBody = params.body !== undefined;
-  const res = await fetch(`${params.root ?? GRAPH_ROOT}${params.path}`, {
-    method: params.method,
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-      ...(hasBody ? { "Content-Type": "application/json" } : {}),
-      ...params.headers,
+  const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: params.method,
+      headers: {
+        "User-Agent": buildUserAgent(),
+        Authorization: `Bearer ${params.token}`,
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
+        ...params.headers,
+      },
+      body: hasBody ? JSON.stringify(params.body) : undefined,
     },
-    body: hasBody ? JSON.stringify(params.body) : undefined,
+    auditContext: "msteams.graph",
+    timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `${params.errorPrefix ?? "Graph"} ${params.path} failed (${res.status}): ${text || "unknown error"}`,
-    );
+  let releaseInFinally = true;
+  try {
+    if (!response.ok) {
+      throw await createMSTeamsHttpError(
+        response,
+        `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
+      );
+    }
+    releaseInFinally = false;
+    return responseWithRelease(response, release);
+  } finally {
+    if (releaseInFinally) {
+      await release();
+    }
   }
-  return res;
 }
 
-async function readOptionalGraphJson<T>(res: Response): Promise<T> {
+async function readOptionalGraphJson<T>(res: Response, label: string): Promise<T> {
   // Use optional chaining to stay resilient to partial test mocks that do not
   // provide a status or Headers instance (they only shim `ok` + `json()`).
   if (res.status === 204 || res.headers?.get?.("content-length") === "0") {
     return undefined as T;
   }
-  return (await res.json()) as T;
+  return await readProviderJsonResponse<T>(res, label);
 }
 
 export async function fetchGraphJson<T>(params: {
@@ -80,6 +106,8 @@ export async function fetchGraphJson<T>(params: {
   method?: string;
   /** Request body (serialized as JSON). Only used for non-GET methods. */
   body?: unknown;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
@@ -87,8 +115,9 @@ export async function fetchGraphJson<T>(params: {
     method: params.method as "GET" | "POST" | "DELETE" | undefined,
     body: params.body,
     headers: params.headers,
+    deadline: params.deadline,
   });
-  return await readOptionalGraphJson<T>(res);
+  return await readOptionalGraphJson<T>(res, `Graph ${params.path} failed`);
 }
 
 /**
@@ -110,15 +139,13 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       },
     },
     auditContext: "msteams.graph.absolute",
+    timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `Graph ${params.url} failed (${response.status}): ${text || "unknown error"}`,
-      );
+      throw await createMSTeamsHttpError(response, `Graph ${params.url} failed`);
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, `Graph ${params.url} failed`);
   } finally {
     await release();
   }
@@ -131,7 +158,7 @@ type GraphPagedResponse<T> = {
 };
 
 /** Result of a paginated Graph API fetch. */
-type PaginatedResult<T> = {
+export type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
   found?: T;
@@ -196,6 +223,11 @@ export async function resolveGraphToken(
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
+  if (msteamsCfg?.cloud === "China") {
+    throw new Error(
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China until Graph requests are routed through the Azure China Graph endpoint.",
+    );
+  }
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
@@ -210,9 +242,12 @@ export async function resolveGraphToken(
     // Fall through to app-only token
   }
 
-  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));
   const tokenProvider = createMSTeamsTokenProvider(app);
-  const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+  const graphTokenValue = await withMSTeamsRequestDeadline({
+    label: "MS Teams Graph token",
+    work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
+  });
   const accessToken = readAccessToken(graphTokenValue);
   if (!accessToken) {
     throw new Error("MS Teams graph token unavailable");
@@ -221,11 +256,17 @@ export async function resolveGraphToken(
 }
 
 export async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
+  return (await listTeamsByNameWithPageInfo(token, query)).items;
+}
+
+export async function listTeamsByNameWithPageInfo(
+  token: string,
+  query: string,
+): Promise<PaginatedResult<GraphGroup>> {
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
   const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const { items } = await fetchAllGraphPages<GraphGroup>({ token, path, maxPages: 5 });
-  return items;
+  return await fetchAllGraphPages<GraphGroup>({ token, path });
 }
 
 export async function postGraphJson<T>(params: {
@@ -240,7 +281,7 @@ export async function postGraphJson<T>(params: {
     body: params.body,
     errorPrefix: "Graph POST",
   });
-  return readOptionalGraphJson<T>(res);
+  return readOptionalGraphJson<T>(res, `Graph POST ${params.path} failed`);
 }
 
 export async function postGraphBetaJson<T>(params: {
@@ -256,7 +297,7 @@ export async function postGraphBetaJson<T>(params: {
     body: params.body,
     errorPrefix: "Graph beta POST",
   });
-  return readOptionalGraphJson<T>(res);
+  return readOptionalGraphJson<T>(res, `Graph beta POST ${params.path} failed`);
 }
 
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
@@ -280,14 +321,17 @@ export async function patchGraphJson<T>(params: {
     body: params.body,
     errorPrefix: "Graph PATCH",
   });
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return (await res.json()) as T;
+  return readOptionalGraphJson<T>(res, `Graph PATCH ${params.path} failed`);
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
+  return (await listChannelsForTeamWithPageInfo(token, teamId)).items;
+}
+
+export async function listChannelsForTeamWithPageInfo(
+  token: string,
+  teamId: string,
+): Promise<PaginatedResult<GraphChannel>> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });
-  return items;
+  return await fetchAllGraphPages<GraphChannel>({ token, path });
 }

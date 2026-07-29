@@ -1,5 +1,7 @@
+// Tests queue cleanup behavior for expired state and dedupe records.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, clearSessionQueues } from "./cleanup.js";
+import { clearSessionQueues } from "./cleanup.js";
+import { testing } from "./cleanup.test-support.js";
 
 const followupQueueMocks = vi.hoisted(() => ({
   clearFollowupDrainCallback: vi.fn(),
@@ -22,20 +24,20 @@ vi.mock("../../../process/command-queue.js", () => ({
   clearCommandLane: commandQueueMocks.clearCommandLane,
 }));
 
-vi.mock("../../../agents/pi-embedded-runner/lanes.js", () => ({
+vi.mock("../../../agents/embedded-agent-runner/lanes.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 describe("clearSessionQueues", () => {
   afterEach(() => {
-    __testing.resetDepsForTests();
+    testing.resetDepsForTests();
     followupQueueMocks.clearFollowupDrainCallback.mockReset();
     followupQueueMocks.clearFollowupQueue.mockReset().mockReturnValue(2);
     commandQueueMocks.clearCommandLane.mockReset().mockReturnValue(3);
   });
 
   it("falls back to default runtime deps when injected deps are invalid", () => {
-    __testing.setDepsForTests({
+    testing.setDepsForTests({
       resolveEmbeddedSessionLane: undefined,
       clearCommandLane: undefined,
     });
@@ -53,12 +55,12 @@ describe("clearSessionQueues", () => {
   });
 
   it("falls back at call time when a test mutates deps to non-functions", () => {
-    __testing.setDepsForTests({
+    testing.setDepsForTests({
       resolveEmbeddedSessionLane: ((key: string) => `custom:${key}`) as never,
       clearCommandLane: ((lane: string) => (lane === "custom:alpha" ? 7 : 0)) as never,
     });
     (
-      __testing as {
+      testing as {
         setDepsForTests: (deps: Partial<Record<string, unknown>> | undefined) => void;
       }
     ).setDepsForTests({

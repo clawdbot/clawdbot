@@ -1,7 +1,9 @@
+// Plugin uninstall id resolver for registry ids, display names, npm specs, and ClawHub specs.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { PluginRecord } from "../plugins/registry.js";
 
+/** Resolve user input to the plugin id that should be removed from config/install records. */
 export function resolvePluginUninstallId<
   TPlugin extends Pick<PluginRecord, "id" | "name">,
 >(params: {
@@ -10,6 +12,10 @@ export function resolvePluginUninstallId<
   plugins: TPlugin[];
 }): { pluginId: string; plugin?: TPlugin } {
   const rawId = params.rawId.trim();
+  const resolveInstalledPlugin = (pluginId: string) => {
+    const plugin = params.plugins.find((entry) => entry.id === pluginId);
+    return plugin ? { pluginId, plugin } : { pluginId };
+  };
   const plugin = params.plugins.find((entry) => entry.id === rawId || entry.name === rawId);
   if (plugin) {
     return { pluginId: plugin.id, plugin };
@@ -22,7 +28,7 @@ export function resolvePluginUninstallId<
       install.resolvedName === rawId ||
       install.marketplacePlugin === rawId
     ) {
-      return { pluginId };
+      return resolveInstalledPlugin(pluginId);
     }
   }
 
@@ -34,7 +40,7 @@ export function resolvePluginUninstallId<
         parseClawHubPluginSpec(install.spec ?? "")?.name ??
         parseClawHubPluginSpec(install.resolvedSpec ?? "")?.name;
       if (installedClawHubName === requestedClawHub.name) {
-        return { pluginId };
+        return resolveInstalledPlugin(pluginId);
       }
     }
   }

@@ -1,14 +1,18 @@
 #!/usr/bin/env node
+// Validates release metadata-only changed scopes for CI routing.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mjs";
 
+const DEFAULT_GIT_TIMEOUT_MS = 60_000;
+const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
+const GIT_TIMEOUT_ENV = "OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS";
+
 const VERSION_ONLY_TEXT_PATHS = new Set([
-  "apps/android/app/build.gradle.kts",
-  "apps/ios/Config/Version.xcconfig",
-  "apps/ios/version.json",
+  "apps/android/Config/Version.properties",
+  "apps/android/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-  "src/config/schema.base.generated.ts",
 ]);
 
 function normalizePath(input) {
@@ -18,31 +22,74 @@ function normalizePath(input) {
     .replace(/^\.\/+/u, "");
 }
 
-function parseArgs(argv) {
+function readRefOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`Expected ${optionName} <ref>.`);
+  }
+  return value;
+}
+
+function resolveGitTimeoutMs(env = process.env) {
+  const raw = env[GIT_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.min(Math.trunc(parsed), MAX_GIT_TIMEOUT_MS));
+}
+
+export function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths =
+    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizePath);
   const args = { staged: false, base: "origin/main", head: "HEAD", paths: [] };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    } else if (arg === "--staged") {
+  for (let index = 0; index < flagArgv.length; index += 1) {
+    const arg = flagArgv[index];
+    if (arg === "--staged") {
       args.staged = true;
     } else if (arg === "--base") {
-      args.base = argv[++index] ?? "";
+      args.base = readRefOptionValue(flagArgv, index, arg);
+      index += 1;
     } else if (arg === "--head") {
-      args.head = argv[++index] ?? "";
+      args.head = readRefOptionValue(flagArgv, index, arg);
+      index += 1;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
     } else {
       args.paths.push(normalizePath(arg));
     }
   }
+  args.paths.push(...explicitPaths);
   return args;
 }
 
+function formatGitArgs(args) {
+  return args.join(" ");
+}
+
 function git(args) {
-  return execFileSync("git", args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  const timeout = resolveGitTimeoutMs();
+  try {
+    return execFileSync("git", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      timeout,
+    });
+  } catch (error) {
+    if (error?.signal === "SIGTERM" || error?.code === "ETIMEDOUT") {
+      throw new Error(
+        `release metadata guard: git ${formatGitArgs(args)} timed out after ${timeout}ms.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 function listChangedPaths(args) {
@@ -76,7 +123,9 @@ function readBeforeAfter(args, filePath) {
   const refs = refsFor(args);
   const before = readBlob(refs.before, filePath);
   let after = readBlob(refs.after, filePath);
-  if (!args.staged && existsSync(filePath)) {
+  // The worktree overlay covers uncommitted edits; an explicit --head SHA is
+  // a request for SHA-exact comparison and must not read the checkout.
+  if (!args.staged && args.head === "HEAD" && existsSync(filePath)) {
     const worktree = readBlob("WORKTREE", filePath);
     if (worktree !== after) {
       after = worktree;
@@ -118,8 +167,8 @@ function fail(message) {
   process.exitCode = 1;
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
+export function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
   const paths = listChangedPaths(args);
 
   for (const filePath of paths) {
@@ -151,4 +200,11 @@ function main() {
   console.error(`[release-metadata] ok (${paths.length} files)`);
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}

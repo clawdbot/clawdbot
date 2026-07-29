@@ -1,6 +1,9 @@
+// Fire-and-forget hook helpers schedule hook work without blocking hot paths.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS = 16;
 const DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS = 256;
@@ -19,7 +22,8 @@ type FireAndForgetHookState = {
   queue: FireAndForgetHookJob[];
 };
 
-export type FireAndForgetBoundedHookOptions = {
+/** Queue limits for bounded fire-and-forget hook execution. */
+type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
   timeoutMs?: number;
@@ -36,6 +40,13 @@ const getFireAndForgetHookState = () =>
 
 function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function resolveFireAndForgetHookTimeoutMs(value: number | undefined): number {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return resolveTimerTimeoutMs(value, DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS);
+  }
+  return resolveTimerTimeoutMs(DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS, 1);
 }
 
 function replaceLogControlCharacters(value: string): string {
@@ -57,19 +68,21 @@ function replaceLogControlCharacters(value: string): string {
   return result;
 }
 
+/** Format hook errors as bounded single-line log messages with secrets redacted upstream. */
 export function formatHookErrorForLog(err: unknown): string {
   const formatted = replaceLogControlCharacters(formatErrorMessage(err))
     .replace(/\s+/g, " ")
     .trim();
-  return (formatted || "unknown error").slice(0, MAX_HOOK_LOG_MESSAGE_LENGTH);
+  return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
+/** Run a hook promise without awaiting it, logging rejection safely. */
 export function fireAndForgetHook(
   task: Promise<unknown>,
   label: string,
   logger: (message: string) => void = logVerbose,
 ): void {
-  void task.catch((err) => {
+  void task.catch((err: unknown) => {
     logger(`${label}: ${formatHookErrorForLog(err)}`);
   });
 }
@@ -84,6 +97,8 @@ function runFireAndForgetHookJob(
   const timeout =
     job.timeoutMs > 0
       ? setTimeout(() => {
+          // Timeout is informational only; the hook promise may still settle
+          // later, but the log should not double-report an eventual rejection.
           didLogTimeout = true;
           job.logger(`${job.label}: timed out after ${job.timeoutMs}ms`);
         }, job.timeoutMs)
@@ -91,7 +106,7 @@ function runFireAndForgetHookJob(
 
   void Promise.resolve()
     .then(job.task)
-    .catch((err) => {
+    .catch((err: unknown) => {
       if (!didLogTimeout) {
         job.logger(`${job.label}: ${formatHookErrorForLog(err)}`);
       }
@@ -118,6 +133,7 @@ function drainFireAndForgetHookQueue(
   }
 }
 
+/** Queue a fire-and-forget hook with bounded concurrency, queue depth, and timeout logs. */
 export function fireAndForgetBoundedHook(
   task: () => Promise<unknown>,
   label: string,
@@ -133,10 +149,7 @@ export function fireAndForgetBoundedHook(
     options.maxQueue,
     DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS,
   );
-  const timeoutMs = positiveIntegerOrDefault(
-    options.timeoutMs,
-    DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveFireAndForgetHookTimeoutMs(options.timeoutMs);
 
   if (state.active >= maxConcurrency && state.queue.length >= maxQueue) {
     logger(`${label}: queue full; dropping hook`);

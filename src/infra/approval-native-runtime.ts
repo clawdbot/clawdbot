@@ -1,5 +1,8 @@
+// Creates channel-native approval runtimes and delivery flows.
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   resolveChannelNativeApprovalDeliveryPlan,
   type ChannelApprovalNativePlannedTarget,
@@ -11,7 +14,7 @@ import type {
   ChannelNativeApprovalTransportSpec,
   PreparedChannelNativeApprovalTarget,
 } from "./approval-native-runtime-types.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
+import { resolveApprovalRequestKind, type ChannelApprovalKind } from "./approval-types.js";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
@@ -34,6 +37,7 @@ type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
   deliveredTargets: ChannelApprovalNativePlannedTarget[];
 };
 
+/** Delivers an approval request to the adapter-planned native targets and returns pending entries. */
 export async function deliverApprovalRequestViaChannelNativePlan<
   TPreparedTarget,
   TPendingEntry,
@@ -93,6 +97,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
       if (!preparedTarget) {
         continue;
       }
+      // Dedupe after preparation because different surfaces can converge on the same message target.
       if (deliveredKeys.has(preparedTarget.dedupeKey)) {
         params.onDuplicateSkipped?.({
           plannedTarget,
@@ -136,10 +141,6 @@ export async function deliverApprovalRequestViaChannelNativePlan<
   };
 }
 
-function defaultResolveApprovalKind(request: ApprovalRequest): ChannelApprovalKind {
-  return request.id.startsWith("plugin:") ? "plugin" : "exec";
-}
-
 type ChannelNativeApprovalRuntimeAdapter<
   TPendingEntry,
   TPreparedTarget,
@@ -161,6 +162,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     channelLabel?: string;
     accountId?: string | null;
     nativeAdapter?: ChannelApprovalNativeAdapter | null;
+    /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
     resolveApprovalKind?: (request: TRequest) => ChannelApprovalKind;
     buildPendingContent: (params: {
       request: TRequest;
@@ -170,6 +172,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     onStopped?: () => Promise<void> | void;
   };
 
+/** Creates the shared gateway approval runtime backed by channel-native delivery hooks. */
 export function createChannelNativeApprovalRuntime<
   TPendingEntry,
   TPreparedTarget,
@@ -187,23 +190,35 @@ export function createChannelNativeApprovalRuntime<
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
   const resolveApprovalKind =
-    adapter.resolveApprovalKind ?? ((request: TRequest) => defaultResolveApprovalKind(request));
-  let runtimeRequest:
-    | ((method: string, params: Record<string, unknown>) => Promise<unknown>)
-    | null = null;
+    adapter.resolveApprovalKind ??
+    ((request: TRequest): ChannelApprovalKind => resolveApprovalRequestKind(request));
   const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
     adapter.eventKinds ?? ["exec"],
   );
-  const routeReporter = createApprovalNativeRouteReporter({
+  const gatewayRuntime = getGatewayNativeApprovalRuntime();
+  const createRouteReporter =
+    gatewayRuntime?.routeCoordinator.createReporter ?? createApprovalNativeRouteReporter;
+  const routeReporter = createRouteReporter({
     handledKinds: handledEventKinds,
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
     requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-      if (!runtimeRequest) {
-        throw new Error(`${adapter.label}: gateway client not connected`);
+      if (gatewayRuntime) {
+        if (method !== "send") {
+          throw new Error(`native approval route cannot dispatch ${method}`);
+        }
+        return await gatewayRuntime.requestRoute<T>(method, params);
       }
-      return (await runtimeRequest(method, params)) as T;
+      const { callGatewayLeastPrivilege } = await import("../gateway/call.js");
+      return await callGatewayLeastPrivilege<T>({
+        config: adapter.cfg,
+        ...(adapter.gatewayUrl ? { url: adapter.gatewayUrl } : {}),
+        method,
+        params,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      });
     },
   });
 
@@ -266,49 +281,49 @@ export function createChannelNativeApprovalRuntime<
           approvalKind,
           request,
           adapter: adapter.nativeAdapter,
-          prepareTarget: async ({ plannedTarget, request }) =>
+          prepareTarget: async ({ plannedTarget, request: requestCandidate }) =>
             await adapter.prepareTarget({
               plannedTarget,
-              request,
+              request: requestCandidate,
               approvalKind,
               pendingContent,
             }),
-          deliverTarget: async ({ plannedTarget, preparedTarget, request }) =>
+          deliverTarget: async ({ plannedTarget, preparedTarget, request: requestEntry }) =>
             await adapter.deliverTarget({
               plannedTarget,
               preparedTarget,
-              request,
+              request: requestEntry,
               approvalKind,
               pendingContent,
             }),
           onDeliveryError: adapter.onDeliveryError
-            ? ({ error, plannedTarget, request }) => {
+            ? ({ error, plannedTarget, request: requestResult }) => {
                 adapter.onDeliveryError?.({
                   error,
                   plannedTarget,
-                  request,
+                  request: requestResult,
                   approvalKind,
                   pendingContent,
                 });
               }
             : undefined,
           onDuplicateSkipped: adapter.onDuplicateSkipped
-            ? ({ plannedTarget, preparedTarget, request }) => {
+            ? ({ plannedTarget, preparedTarget, request: requestValue }) => {
                 adapter.onDuplicateSkipped?.({
                   plannedTarget,
                   preparedTarget,
-                  request,
+                  request: requestValue,
                   approvalKind,
                   pendingContent,
                 });
               }
             : undefined,
           onDelivered: adapter.onDelivered
-            ? ({ plannedTarget, preparedTarget, request, entry }) => {
+            ? ({ plannedTarget, preparedTarget, request: requestLocal, entry }) => {
                 adapter.onDelivered?.({
                   plannedTarget,
                   preparedTarget,
-                  request,
+                  request: requestLocal,
                   approvalKind,
                   pendingContent,
                   entry,
@@ -329,8 +344,6 @@ export function createChannelNativeApprovalRuntime<
       }
     },
   });
-
-  runtimeRequest = (method, params) => runtime.request(method, params);
 
   return {
     ...runtime,

@@ -1,3 +1,4 @@
+// Discord plugin module implements resolve allowlist common behavior.
 import type { DiscordGuildSummary } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -10,10 +11,10 @@ export function buildDiscordUnresolvedResults<T extends { input: string; resolve
   entries: string[],
   buildResult: (input: string) => T,
 ): T[] {
-  return entries.map((input) => buildResult(input));
+  return entries.map(buildResult);
 }
 
-export function findDiscordGuildByName(
+function findDiscordGuildByName(
   guilds: DiscordGuildSummary[],
   input: string,
 ): DiscordGuildSummary | undefined {

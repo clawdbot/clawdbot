@@ -1,3 +1,12 @@
+/**
+ * Channel config adapter and DM-access helpers for plugin setup.
+ *
+ * Not part of the config-schema facade trio despite the similar name: those
+ * export Zod schema builders, while this subpath owns config CRUD adapters,
+ * config-write authorization, and DM access/policy resolution for accounts.
+ */
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
@@ -15,8 +24,6 @@ import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export {
   ensureOpenDmPolicyAllowFromWildcard,
@@ -34,8 +41,11 @@ export {
 
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
+/** Origin scope used when authorizing channel config writes. */
 export type ConfigWriteScope = ConfigWriteScopeLike;
+/** Target account/channel for a config write authorization check. */
 export type ConfigWriteTarget = ConfigWriteTargetLike;
+/** Decision returned by channel config write policy helpers. */
 export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 type ChannelCrudConfigAdapter<ResolvedAccount> = Pick<
@@ -61,6 +71,7 @@ type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
   | "resolveDefaultTo"
 >;
 
+/** Returns whether config writes are enabled for a channel/account target. */
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
@@ -69,6 +80,7 @@ export function resolveChannelConfigWrites(params: {
   return resolveChannelConfigWritesShared(params);
 }
 
+/** Authorizes a channel config mutation against origin and target policy. */
 export function authorizeConfigWrite(params: {
   cfg: OpenClawConfig;
   origin?: ConfigWriteScope;
@@ -78,6 +90,7 @@ export function authorizeConfigWrite(params: {
   return authorizeConfigWriteShared(params);
 }
 
+/** Returns true when trusted internal message scopes can bypass config write policy. */
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
@@ -89,6 +102,7 @@ export function canBypassConfigWritePolicy(params: {
   });
 }
 
+/** Formats the denial message shown when config write authorization fails. */
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
   fallbackChannelId?: string | null;
@@ -166,9 +180,13 @@ export function createScopedAccountConfigAccessors<
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Config preserves caller-specific config subtype for account resolvers.
   Config extends OpenClawConfig = OpenClawConfig,
 >(params: {
+  /** Resolves the account used by read-only config accessors from `{ cfg, accountId }`. */
   resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
+  /** Reads raw allowlist entries from the resolved account. */
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  /** Formats allowlist entries for display or config inspection. */
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
+  /** Optional default destination selector; omitted when the channel has no default target. */
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
 }): Pick<
   ChannelConfigAdapter<ResolvedAccount>,
@@ -252,6 +270,8 @@ function resolveAccessorAccountWithFallback<
     | undefined,
   fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount,
 ): (params: ChannelConfigAccessorParams<Config>) => AccessorAccount {
+  // Read-only accessors can use a lighter account projection than runtime setup;
+  // fall back to the runtime resolver only when the channel has no projection hook.
   return resolveAccessorAccount ?? fallbackResolveAccessorAccount;
 }
 
@@ -548,6 +568,8 @@ export function createHybridChannelConfigBase<
     deleteAccount({ cfg, accountId }) {
       if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
         if (params.preserveSectionOnDefaultDelete) {
+          // Some hybrid channels keep non-account config at the root, so deleting
+          // default account credentials must clear only account-owned fields.
           return clearTopLevelChannelConfigFields({
             cfg,
             sectionKey: params.sectionKey,

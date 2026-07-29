@@ -37,6 +37,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_windows_ci:
+        description: "Run the focused Windows-native CI test shard after probing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -54,19 +59,21 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
           submodules: false
 
       - name: Probe native Windows
+        env:
+          TARGET_REF: ${{ inputs.target_ref || github.ref }}
         run: |
           $ErrorActionPreference = "Stop"
           Write-Host "runner=$env:RUNNER_NAME"
           Write-Host "machine=$env:COMPUTERNAME"
           Write-Host "workspace=$env:GITHUB_WORKSPACE"
-          Write-Host "target_ref=${{ inputs.target_ref || github.ref }}"
+          Write-Host "target_ref=$env:TARGET_REF"
           Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
           Write-Host ("arch=" + [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
           Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
@@ -78,10 +85,21 @@ jobs:
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
-          UBUNTU_WSL_ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz
         run: |
           $ErrorActionPreference = "Continue"
           $ok = $false
+          $restartRequired = $false
+
+          function Resolve-UbuntuWslRootfsUrl {
+            $osArch = ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLowerInvariant()
+            switch ($osArch) {
+              "x64" { $wslArch = "amd64" }
+              "arm64" { $wslArch = "arm64" }
+              default { throw "Unsupported Windows architecture for Ubuntu WSL rootfs: $osArch" }
+            }
+            Write-Host "ubuntu_wsl_rootfs_arch=$wslArch"
+            "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz"
+          }
 
           function Invoke-WslText {
             param([string[]] $Arguments)
@@ -110,9 +128,15 @@ jobs:
             Write-Host "wsl.exe=$($wsl.Source)"
             if ($env:ENABLE_WSL2_FEATURES -eq "true") {
               Write-Host "enable_wsl2_features=true"
-              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform", "Microsoft-Hyper-V-All")) {
+              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform")) {
                 dism.exe /online /enable-feature /featurename:$feature /all /norestart
                 Write-Host "enable_feature_${feature}_exit=$LASTEXITCODE"
+                if ($LASTEXITCODE -eq 3010) {
+                  $restartRequired = $true
+                }
+              }
+              if ($restartRequired) {
+                Write-Warning "wsl2_restart_required=true; Windows optional feature changes require a runner reboot before WSL2 can be imported."
               }
             }
 
@@ -125,46 +149,140 @@ jobs:
             Write-Host "wsl_list_exit=$($list.Code)"
 
             $distros = @(Get-WslDistros)
-            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true") {
+            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true" -and -not $restartRequired) {
               Write-Host "import_ubuntu_wsl2=true"
               $wslRoot = "C:\wsl\UbuntuProbe"
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
+              $rootfsUrl = Resolve-UbuntuWslRootfsUrl
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
-              Invoke-WebRequest -Uri $env:UBUNTU_WSL_ROOTFS_URL -OutFile $rootfs -UseBasicParsing
-              wsl.exe --import UbuntuProbe $wslRoot $rootfs --version 2
-              Write-Host "wsl_import_exit=$LASTEXITCODE"
+              Invoke-WebRequest `
+                -Uri $rootfsUrl `
+                -OutFile $rootfs `
+                -UseBasicParsing `
+                -ConnectionTimeoutSeconds 15 `
+                -OperationTimeoutSeconds 120
+              $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
+              Write-Host $import.Text
+              Write-Host "wsl_import_exit=$($import.Code)"
               $list = Invoke-WslText -Arguments @("--list", "--verbose")
               Write-Host $list.Text
               Write-Host "wsl_list_after_import_exit=$($list.Code)"
               $distros = @(Get-WslDistros)
+            } elseif ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true" -and $restartRequired) {
+              Write-Warning "import_ubuntu_wsl2=skipped_restart_required"
             }
 
             if ($distros.Count -gt 0) {
               $distro = $distros[0]
               Write-Host "wsl_probe_distro=$distro"
-              wsl.exe -d $distro --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+              $exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
+            } elseif ($restartRequired) {
+              $exec = [pscustomobject]@{ Code = 1; Text = "wsl_exec_skipped=restart_required" }
             } else {
-              wsl.exe --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+              $exec = Invoke-WslText -Arguments @("--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
             }
-            if ($LASTEXITCODE -eq 0) {
+            Write-Host $exec.Text
+            if ($exec.Code -eq 0) {
               $ok = $true
             }
-            Write-Host "wsl_exec_exit=$LASTEXITCODE"
+            Write-Host "wsl_exec_exit=$($exec.Code)"
           }
 
           if ($ok) {
             "wsl2_ok=true" >> $env:GITHUB_OUTPUT
+            "wsl2_restart_required=false" >> $env:GITHUB_OUTPUT
             "OPENCLAW_WSL2_PROBE_OK=true" >> $env:GITHUB_ENV
+            "OPENCLAW_WSL2_RESTART_REQUIRED=false" >> $env:GITHUB_ENV
             Write-Host "wsl2_ok=true"
           } else {
             "wsl2_ok=false" >> $env:GITHUB_OUTPUT
+            "wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
             "OPENCLAW_WSL2_PROBE_OK=false" >> $env:GITHUB_ENV
+            "OPENCLAW_WSL2_RESTART_REQUIRED=$($restartRequired.ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
             Write-Warning "wsl2_ok=false"
           }
 
           exit 0
 
+      - name: Try to exclude workspace from Windows Defender (best-effort)
+        if: ${{ inputs.run_windows_ci }}
+        shell: pwsh
+        run: |
+          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+          if (-not $cmd) {
+            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+            exit 0
+          }
+
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            Write-Host "Defender exclusions applied."
+          } catch {
+            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+          }
+
+      - name: Setup Node.js
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          REQUESTED_NODE_VERSION: "22.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+      - name: Setup pnpm
+        if: ${{ inputs.run_windows_ci }}
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 22.x
+
+      - name: Runtime versions
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Capture node path
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        run: |
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          if command -v cygpath >/dev/null 2>&1; then
+            node_bin="$(cygpath -u "$node_bin")"
+          fi
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Run Windows CI tests
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          CI: true
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
+          OPENCLAW_VITEST_MAX_WORKERS: 1
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          pnpm test:windows:ci
+
       - name: Keep runner alive for SSH inspection
+        if: ${{ always() && !cancelled() }}
         env:
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
         run: |
@@ -181,9 +299,13 @@ jobs:
           }
 
       - name: Enforce WSL2 requirement
-        if: ${{ inputs.require_wsl2 }}
+        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
         run: |
           if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
+            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
+              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
+              exit 1
+            }
             Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
             exit 1
           }

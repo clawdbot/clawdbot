@@ -1,6 +1,7 @@
+// Zalo plugin module implements runtime support behavior.
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-types";
-export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 export type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 export type {
   BaseProbeResult,
@@ -10,7 +11,6 @@ export type {
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
-export type { SenderGroupAccessDecision } from "openclaw/plugin-sdk/group-access";
 export type { ChannelPlugin, PluginRuntime, WizardPrompter } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -51,25 +51,19 @@ export {
   isNormalizedSenderAllowed,
 } from "openclaw/plugin-sdk/allow-from";
 export { addWildcardAllowFrom } from "openclaw/plugin-sdk/setup";
-export { evaluateSenderGroupAccess } from "openclaw/plugin-sdk/group-access";
 export { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export {
   warnMissingProviderGroupPolicyFallbackOnce,
   resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export {
   deliverTextOrMediaReply,
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
-export {
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-} from "openclaw/plugin-sdk/command-auth";
-export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 export { waitForAbortSignal } from "openclaw/plugin-sdk/runtime";
 export {
   applyBasicWebhookRequestGuards,

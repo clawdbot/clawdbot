@@ -1,3 +1,4 @@
+// Ollama tests cover provider models.ssrf plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
 

@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Qqbot plugin module implements slash command test support behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { CommandsPort } from "../adapter/commands.port.js";
 import { initCommands } from "./slash-commands-impl.js";
 
@@ -6,7 +7,7 @@ type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGette
 type ReplaceConfigFile = RuntimeConfigApi["replaceConfigFile"];
 type ReplaceConfigFileResult = Awaited<ReturnType<ReplaceConfigFile>>;
 
-export type WrittenQQBotConfig = {
+type WrittenQQBotConfig = {
   streaming?: unknown;
   accounts?: { default?: { streaming?: unknown } };
 };

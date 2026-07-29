@@ -1,3 +1,4 @@
+// Google API module exposes the plugin public contract.
 export {
   createGoogleThinkingPayloadWrapper,
   createGoogleThinkingStreamWrapper,

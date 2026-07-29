@@ -1,3 +1,4 @@
+// Slack API module exposes the plugin public contract.
 export type { ResolvedSlackAccount } from "./src/accounts.js";
 export type { SlackMessageEvent } from "./src/types.js";
 export { slackPlugin } from "./src/channel.js";

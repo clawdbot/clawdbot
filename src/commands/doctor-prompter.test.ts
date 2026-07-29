@@ -1,3 +1,4 @@
+// Doctor prompter tests cover confirmation prompt behavior and cancellation paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 

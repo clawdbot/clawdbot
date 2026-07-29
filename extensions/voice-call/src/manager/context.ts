@@ -1,4 +1,5 @@
-import type { VoiceCallConfig } from "../config.js";
+// Voice Call plugin module implements context behavior.
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallId, CallRecord } from "../types.js";
 
@@ -20,6 +21,7 @@ type CallManagerRuntimeState = {
 type CallManagerRuntimeDeps = {
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
+  coreSession?: VoiceCallCoreSessionConfig;
   storePath: string;
   webhookUrl: string | null;
 };
@@ -31,9 +33,17 @@ type CallManagerTransientState = {
   initialMessageInFlight: Set<CallId>;
 };
 
+export type StreamSessionIssuer = (request: {
+  providerName: "twilio" | "telnyx";
+  callId: CallId;
+  from?: string;
+  to?: string;
+  direction: "inbound" | "outbound";
+}) => { token: string; streamUrl: string } | undefined;
+
 type CallManagerHooks = {
-  /** Optional runtime hook invoked after an event transitions a call into answered state. */
   onCallAnswered?: (call: CallRecord) => void;
+  streamSessionIssuer?: StreamSessionIssuer;
 };
 
 export type CallManagerContext = CallManagerRuntimeState &

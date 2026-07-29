@@ -1,3 +1,4 @@
+/** Loads bundled channel config schema metadata from source or public surface modules. */
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -63,7 +64,7 @@ function isJsonSchemaConfigSurface(value: unknown): value is JsonSchemaObject {
     Array.isArray(candidate.oneOf) ||
     Array.isArray(candidate.allOf) ||
     Array.isArray(candidate.enum) ||
-    Object.prototype.hasOwnProperty.call(candidate, "const")
+    Object.hasOwn(candidate, "const")
   );
 }
 

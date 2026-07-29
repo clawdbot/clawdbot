@@ -1,7 +1,20 @@
+// ACPX tests cover config plugin behavior.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
+
+const requireFromTest = createRequire(import.meta.url);
+const TSX_IMPORT = requireFromTest.resolve("tsx");
+
+function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string }): string[] {
+  const distEntry = path.resolve(params.distEntry);
+  if (fs.existsSync(distEntry)) {
+    return [distEntry];
+  }
+  return ["--import", TSX_IMPORT, path.resolve(params.sourceEntry)];
+}
 
 describe("embedded acpx plugin config", () => {
   it("resolves workspace stateDir and cwd by default", () => {
@@ -16,7 +29,8 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
-    expect(resolved.agents).toEqual({});
+    expect(resolved.probeAgent).toBeUndefined();
+    expect(resolved.agents).toStrictEqual({});
   });
 
   it("keeps explicit timeoutSeconds config", () => {
@@ -28,17 +42,6 @@ describe("embedded acpx plugin config", () => {
     });
 
     expect(resolved.timeoutSeconds).toBe(300);
-  });
-
-  it("keeps explicit probeAgent config", () => {
-    const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        probeAgent: "claude",
-      },
-      workspaceDir: "/tmp/openclaw-acpx",
-    });
-
-    expect(resolved.probeAgent).toBe("claude");
   });
 
   it("accepts agent command overrides", () => {
@@ -58,16 +61,63 @@ describe("embedded acpx plugin config", () => {
     });
   });
 
-  it("leaves probeAgent undefined by default so the runtime picks its built-in probe agent", () => {
+  it("combines agent command with args array", () => {
     const resolved = resolveAcpxPluginConfig({
-      rawConfig: undefined,
+      rawConfig: {
+        agents: {
+          claude: {
+            command: "node",
+            args: ["/path/to/adapter.mjs", "--verbose"],
+          },
+          codex: {
+            command: "codex-acp",
+            args: ["--model", "gpt-5"],
+          },
+        },
+      },
       workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.probeAgent).toBeUndefined();
+    expect(resolved.agents).toEqual({
+      claude: "node /path/to/adapter.mjs --verbose",
+      codex: "codex-acp --model gpt-5",
+    });
   });
 
-  it("carries an explicit probeAgent through to the resolved plugin config, trimmed and lowercased", () => {
+  it("quotes agent args that need to survive command-line parsing as one token", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          custom: {
+            command: "node",
+            args: ["/tmp/My Adapter.mjs", "--flag=value with spaces", "owner's-choice"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      custom: "node '/tmp/My Adapter.mjs' '--flag=value with spaces' 'owner'\"'\"'s-choice'",
+    });
+  });
+
+  it("handles agent command without args (backward compat)", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          simple: { command: "simple-acp" },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      simple: "simple-acp",
+    });
+  });
+
+  it("carries an explicit probeAgent through to the resolved plugin config, trimmed", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
         probeAgent: "  OpenCode  ",
@@ -75,7 +125,7 @@ describe("embedded acpx plugin config", () => {
       workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.probeAgent).toBe("opencode");
+    expect(resolved.probeAgent).toBe("OpenCode");
   });
 
   it("rejects an empty probeAgent string", () => {
@@ -98,10 +148,13 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-plugin-tools"];
-    expect(server).toBeDefined();
-    expect(server.command).toBe(process.execPath);
-    expect(Array.isArray(server.args)).toBe(true);
-    expect(server.args?.length).toBeGreaterThan(0);
+    expect(server).toEqual({
+      command: process.execPath,
+      args: expectedMcpServerArgs({
+        sourceEntry: "src/mcp/plugin-tools-serve.ts",
+        distEntry: "dist/mcp/plugin-tools-serve.js",
+      }),
+    });
   });
 
   it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
@@ -113,10 +166,13 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-tools"];
-    expect(server).toBeDefined();
-    expect(server.command).toBe(process.execPath);
-    expect(Array.isArray(server.args)).toBe(true);
-    expect(server.args?.length).toBeGreaterThan(0);
+    expect(server).toEqual({
+      command: process.execPath,
+      args: expectedMcpServerArgs({
+        sourceEntry: "src/mcp/openclaw-tools-serve.ts",
+        distEntry: "dist/mcp/openclaw-tools-serve.js",
+      }),
+    });
   });
 
   it("resolves the plugin root from shared dist chunk paths", () => {
@@ -132,20 +188,100 @@ describe("embedded acpx plugin config", () => {
       fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
     ) as { configSchema?: unknown };
 
-    expect(manifest.configSchema).toMatchObject({
+    expect(manifest.configSchema).toStrictEqual({
       type: "object",
       additionalProperties: false,
-      properties: expect.objectContaining({
-        cwd: expect.any(Object),
-        stateDir: expect.any(Object),
-        probeAgent: expect.any(Object),
-        timeoutSeconds: expect.objectContaining({
+      properties: {
+        cwd: {
+          type: "string",
+          minLength: 1,
+        },
+        stateDir: {
+          type: "string",
+          minLength: 1,
+        },
+        permissionMode: {
+          type: "string",
+          enum: ["approve-all", "approve-reads", "deny-all"],
+        },
+        nonInteractivePermissions: {
+          type: "string",
+          enum: ["deny", "fail"],
+        },
+        pluginToolsMcpBridge: {
+          type: "boolean",
+        },
+        openClawToolsMcpBridge: {
+          type: "boolean",
+        },
+        strictWindowsCmdWrapper: {
+          type: "boolean",
+        },
+        timeoutSeconds: {
+          type: "number",
+          minimum: 0.001,
           default: 120,
-        }),
-        agents: expect.any(Object),
-        mcpServers: expect.any(Object),
-        openClawToolsMcpBridge: expect.any(Object),
-      }),
+        },
+        queueOwnerTtlSeconds: {
+          type: "number",
+          minimum: 0,
+        },
+        piSessionCatalog: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: {
+              type: "boolean",
+              default: true,
+            },
+          },
+        },
+        probeAgent: {
+          type: "string",
+          minLength: 1,
+        },
+        mcpServers: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                minLength: 1,
+                description: "Command to run the MCP server",
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+                description: "Arguments to pass to the command",
+              },
+              env: {
+                type: "object",
+                additionalProperties: { type: "string" },
+                description: "Environment variables for the MCP server",
+              },
+            },
+            required: ["command"],
+          },
+        },
+        agents: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                minLength: 1,
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            required: ["command"],
+          },
+        },
+      },
     });
   });
 });

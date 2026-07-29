@@ -1,3 +1,4 @@
+// Vitest extension channel single config helper supports extension channel single config test configuration.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createSingleChannelExtensionVitestConfig(

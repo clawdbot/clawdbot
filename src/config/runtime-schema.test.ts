@@ -1,3 +1,4 @@
+// Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -10,18 +11,25 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
-const mockReadConfigFileSnapshot = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
+const mockReadConfigFileSnapshot = vi.hoisted(() =>
+  vi.fn<(options?: { observe?: boolean }) => Promise<ConfigFileSnapshot>>(),
+);
 const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
+function explicitMainRoster(): OpenClawConfig {
+  return { agents: { list: [{ id: "main", default: true }] } };
+}
+
 vi.mock("./config.js", () => {
   return {
     getRuntimeConfig: () => mockLoadConfig(),
     loadConfig: () => mockLoadConfig(),
-    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+    readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
+      mockReadConfigFileSnapshot(...args),
   };
 });
 
@@ -38,6 +46,10 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => ({
     manifestRegistry: mockLoadPluginManifestRegistry(...args),
   }),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    mockGetCurrentPluginMetadataSnapshot(...args) ?? {
+      manifestRegistry: mockLoadPluginManifestRegistry(...args),
+    },
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -165,6 +177,16 @@ async function readSchemaNodes() {
   return { channelProps, entryProps };
 }
 
+function getManifestRegistryLoadArg(index = 0): Record<string, unknown> | undefined {
+  const arg = mockLoadPluginManifestRegistry.mock.calls[index]?.[0];
+  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
+}
+
+function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | undefined {
+  const arg = mockGetCurrentPluginMetadataSnapshot.mock.calls[index]?.[0];
+  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
+}
+
 beforeAll(async () => {
   ({ readBestEffortRuntimeConfigSchema, loadGatewayRuntimeConfigSchema } =
     await import("./runtime-schema.js"));
@@ -175,34 +197,64 @@ afterEach(() => {
 });
 
 describe("readBestEffortRuntimeConfigSchema", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue({});
-    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
-  });
+  let validConfigSchemaCase: {
+    channelProps: Record<string, unknown> | undefined;
+    entryProps: Record<string, unknown> | undefined;
+    loadArg: Record<string, unknown> | undefined;
+    manifestRegistryLoadCount: number;
+  };
 
-  it("merges manifest plugin metadata for valid configs", async () => {
+  beforeAll(async () => {
+    vi.clearAllMocks();
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
     mockReadConfigFileSnapshot.mockResolvedValueOnce(
       makeSnapshot({
         valid: true,
-        config: { plugins: { entries: { demo: { enabled: true } } } },
+        config: {
+          ...explicitMainRoster(),
+          plugins: { entries: { demo: { enabled: true } } },
+        },
       }),
     );
 
     const { channelProps, entryProps } = await readSchemaNodes();
+    validConfigSchemaCase = {
+      channelProps,
+      entryProps,
+      loadArg: getManifestRegistryLoadArg(),
+      manifestRegistryLoadCount: mockLoadPluginManifestRegistry.mock.calls.length,
+    };
+  });
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
+  });
+
+  it("merges manifest plugin metadata for valid configs", async () => {
+    const { channelProps, entryProps, loadArg, manifestRegistryLoadCount } = validConfigSchemaCase;
+    expect(manifestRegistryLoadCount).toBe(1);
+    expect(loadArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
+    expect(loadArg).not.toHaveProperty("cache", false);
+    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
+    expect(channelProps).toHaveProperty("telegram");
+    expect(channelProps).toHaveProperty("matrix");
+    expect(entryProps).toHaveProperty("demo");
+  });
+
+  it("reads the best-effort CLI schema without observing configuration health", async () => {
+    mockReadConfigFileSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ valid: true, config: explicitMainRoster() }),
     );
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledChannelConfigCollector",
-    );
-    expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.matrix).toBeTruthy();
-    expect(entryProps?.demo).toBeTruthy();
+
+    await readBestEffortRuntimeConfigSchema();
+
+    expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
   });
 
   it("falls back to bundled channel metadata when config is invalid", async () => {
@@ -210,17 +262,16 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { enabled: true } },
-      }),
-    );
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledChannelConfigCollector",
-    );
-    expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.slack).toBeTruthy();
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    const loadArg = getManifestRegistryLoadArg();
+    expect(loadArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { enabled: true },
+    });
+    expect(loadArg).not.toHaveProperty("cache", false);
+    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
+    expect(channelProps).toHaveProperty("telegram");
+    expect(channelProps).toHaveProperty("slack");
     expect(entryProps?.demo).toBeUndefined();
   });
 });
@@ -228,26 +279,28 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 describe("loadGatewayRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue({ plugins: { entries: { demo: { enabled: true } } } });
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
-  it("uses manifest metadata instead of booting plugin runtime", async () => {
+  it("uses manifest metadata instead of booting plugin runtime", () => {
     const result = loadGatewayRuntimeConfigSchema();
     const schema = result.schema as { properties?: Record<string, unknown> };
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
-    );
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledChannelConfigCollector",
-    );
-    expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.matrix).toBeTruthy();
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    const loadArg = getManifestRegistryLoadArg();
+    expect(loadArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
+    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
+    expect(channelProps).toHaveProperty("telegram");
+    expect(channelProps).toHaveProperty("matrix");
   });
 
   it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
@@ -288,15 +341,16 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
 
-    expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
-    );
+    expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    const metadataArg = getCurrentMetadataSnapshotArg();
+    expect(metadataArg?.config).toEqual({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true } } },
+    });
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(channelProps?.telegram).toBeTruthy();
+    expect(channelProps).toHaveProperty("telegram");
     expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");
-    expect(channelProps?.matrix).toBeTruthy();
+    expect(channelProps).toHaveProperty("matrix");
   });
 
   it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {

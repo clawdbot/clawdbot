@@ -1,3 +1,7 @@
+/**
+ * Brave Search test API barrel. Tests import normalized helpers through this
+ * path instead of deep runtime modules.
+ */
 import {
   mapBraveLlmContextResults,
   normalizeBraveCountry,
@@ -5,7 +9,8 @@ import {
   resolveBraveMode,
 } from "./src/brave-web-search-provider.shared.js";
 
-export const __testing = {
+/** Test-only Brave normalization helpers. */
+export const testing = {
   normalizeBraveCountry,
   normalizeBraveLanguageParams,
   resolveBraveMode,

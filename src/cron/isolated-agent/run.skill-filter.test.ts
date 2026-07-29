@@ -1,13 +1,11 @@
+// Skill filter tests cover active skill selection for isolated cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
   dispatchCronDeliveryMock,
-  getCliSessionIdMock,
+  getCliSessionBindingMock,
   isCliProviderMock,
   lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
@@ -23,8 +21,33 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const makeSkillJob = makeIsolatedAgentTurnJob;
-const makeSkillParams = makeIsolatedAgentTurnParams;
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function getMockCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function getFirstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  return requireRecord(getMockCallArg(mock, 0, 0, label), `${label} params`);
+}
 
 // ---------- tests ----------
 
@@ -32,15 +55,17 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   async function runSkillFilterCase(overrides?: Record<string, unknown>) {
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams(overrides));
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
     expect(result.status).toBe("ok");
     return result;
   }
 
   function expectDefaultModelCall(params: { primary: string; fallbacks: string[] }) {
     expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-    const callCfg = runWithModelFallbackMock.mock.calls[0][0].cfg;
-    const model = callCfg?.agents?.defaults?.model as { primary?: string; fallbacks?: string[] };
+    const callCfg = getFirstMockArg(runWithModelFallbackMock, "model fallback").cfg as
+      | { agents?: { defaults?: { model?: { primary?: string; fallbacks?: string[] } } } }
+      | undefined;
+    const model = callCfg?.agents?.defaults?.model;
     expect(model?.primary).toBe(params.primary);
     expect(model?.fallbacks).toEqual(params.fallbacks);
   }
@@ -62,10 +87,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       agentId: "scout",
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", [
-      "meme-factory",
-      "weather",
-    ]);
+    expect(getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot")).toHaveProperty(
+      "skillFilter",
+      ["meme-factory", "weather"],
+    );
   });
 
   it("omits skillFilter when agent has no skills config", async () => {
@@ -77,7 +102,12 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
     // When no skills config, skillFilter should be undefined (no filtering applied)
-    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1].skillFilter).toBeUndefined();
+    expect(
+      requireRecord(
+        getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot"),
+        "skill snapshot options",
+      ).skillFilter,
+    ).toBeUndefined();
   });
 
   it("passes empty skillFilter when agent explicitly disables all skills", async () => {
@@ -89,7 +119,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
     // Explicit empty skills list should forward [] to filter out all skills
-    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", []);
+    expect(getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot")).toHaveProperty(
+      "skillFilter",
+      [],
+    );
   });
 
   it("refreshes cached snapshot when skillFilter changes without version bump", async () => {
@@ -116,17 +149,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       agentId: "weather-bot",
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", [
-      "weather",
-    ]);
+    expect(getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot")).toHaveProperty(
+      "skillFilter",
+      ["weather"],
+    );
   });
 
   it("forces a fresh session for isolated cron runs", async () => {
     await runSkillFilterCase();
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
-    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
-      forceNew: true,
-    });
+    expect(getFirstMockArg(resolveCronSessionMock, "cron session").forceNew).toBe(true);
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
@@ -159,7 +191,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("model fallbacks", () => {
     const defaultFallbacks = [
       "anthropic/claude-opus-4-6",
-      "google-gemini-cli/gemini-3-pro-preview",
+      "google-gemini-cli/gemini-3.1-pro-preview",
       "nvidia/deepseek-ai/deepseek-v3.2",
     ];
 
@@ -169,7 +201,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
+              model: { primary: "openai/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -196,8 +228,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
-          job: makeSkillJob({
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
             payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
           }),
         }),
@@ -206,7 +238,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(result.status).toBe("ok");
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-      const runParams = runWithModelFallbackMock.mock.calls[0][0];
+      const runParams = getFirstMockArg(runWithModelFallbackMock, "model fallback");
       expect(runParams.provider).toBe("anthropic");
       expect(runParams.model).toBe("claude-sonnet-4-6");
     });
@@ -217,15 +249,17 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
+        makeIsolatedAgentParamsFixture({
           cfg: {
             agents: {
               defaults: {
-                model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
+                model: { primary: "openai/gpt-5.4", fallbacks: defaultFallbacks },
+                models: { "openai/gpt-5.4": {} },
+                modelPolicy: { allow: ["openai/gpt-5.4"] },
               },
             },
           },
-          job: makeSkillJob({
+          job: makeIsolatedAgentJobFixture({
             payload: {
               kind: "agentTurn",
               message: "test",
@@ -237,7 +271,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
       );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
@@ -249,8 +283,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
-          job: makeSkillJob({
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
             payload: { kind: "agentTurn", message: "test", model: "openai/" },
           }),
         }),
@@ -266,14 +300,18 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("CLI session handoff (issue #29774)", () => {
     it("passes the cron abort signal to CLI runs and drops late CLI results", async () => {
       const abortController = new AbortController();
-      let markCliStarted!: () => void;
+      let markCliStarted: (() => void) | undefined;
       const cliStarted = new Promise<void>((resolve) => {
         markCliStarted = resolve;
       });
 
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
-        expect(params.abortSignal).toBe(abortController.signal);
+        expect(params.abortSignal).not.toBe(abortController.signal);
+        expect(params.abortSignal?.aborted).toBe(false);
+        if (!markCliStarted) {
+          throw new Error("Expected CLI start marker callback to be initialized");
+        }
         markCliStarted();
         await new Promise<void>((resolve) => {
           params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
@@ -286,7 +324,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       mockCliFallbackInvocation();
 
       const runPromise = runCronIsolatedAgentTurn(
-        makeSkillParams({ abortSignal: abortController.signal }),
+        makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
       );
       await cliStarted;
       abortController.abort("cron: job execution timed out");
@@ -300,7 +338,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
       // Simulate a persisted CLI session ID from a previous run.
-      getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");
+      getCliSessionBindingMock.mockReturnValue({ sessionId: "prev-cli-session-abc" });
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
         payloads: [{ text: "output" }],
@@ -323,15 +361,15 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         isNewSession: true,
       });
 
-      await runCronIsolatedAgentTurn(makeSkillParams());
+      await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
       // Fresh session: cliSessionId must be undefined, not the stored value.
-      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty("cliSessionId", undefined);
+      expect(getFirstMockArg(runCliAgentMock, "CLI run")).toHaveProperty("cliSessionId", undefined);
     });
 
     it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
-      getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
+      getCliSessionBindingMock.mockReturnValue({ sessionId: "existing-cli-session-def" });
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
         payloads: [{ text: "output" }],
@@ -354,11 +392,11 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         isNewSession: false,
       });
 
-      await runCronIsolatedAgentTurn(makeSkillParams());
+      await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
       // Continuation: cliSessionId should be passed through for session resume.
-      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty(
+      expect(getFirstMockArg(runCliAgentMock, "CLI run")).toHaveProperty(
         "cliSessionId",
         "existing-cli-session-def",
       );

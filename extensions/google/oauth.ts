@@ -1,4 +1,5 @@
-import { clearCredentialsCache, extractGeminiCliCredentials } from "./oauth.credentials.js";
+// Google plugin module implements oauth behavior.
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import {
   buildAuthUrl,
   generateOAuthState,
@@ -8,10 +9,7 @@ import {
   waitForLocalCallback,
 } from "./oauth.flow.js";
 import type { GeminiCliOAuthContext, GeminiCliOAuthCredentials } from "./oauth.shared.js";
-import { exchangeCodeForTokens } from "./oauth.token.js";
-
-export { clearCredentialsCache, extractGeminiCliCredentials };
-export type { GeminiCliOAuthContext, GeminiCliOAuthCredentials };
+import { exchangeCodeForTokens, refreshTokensForGeminiCli } from "./oauth.token.js";
 
 export async function loginGeminiCliOAuth(
   ctx: GeminiCliOAuthContext,
@@ -41,10 +39,11 @@ export async function loginGeminiCliOAuth(
   }
 
   ctx.progress.update("Complete sign-in in browser...");
+  ctx.log(`\nOpen this URL in your browser:\n\n${authUrl}\n`);
   try {
     await ctx.openUrl(authUrl);
   } catch {
-    ctx.log(`\nOpen this URL in your browser:\n\n${authUrl}\n`);
+    // The URL is already visible; browser launch is best-effort.
   }
 
   try {
@@ -52,9 +51,10 @@ export async function loginGeminiCliOAuth(
       expectedState: state,
       timeoutMs: 5 * 60 * 1000,
       onProgress: (msg) => ctx.progress.update(msg),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     ctx.progress.update("Exchanging authorization code for tokens...");
-    return await exchangeCodeForTokens(code, verifier);
+    return await exchangeCodeForTokens(code, verifier, ctx.signal);
   } catch (err) {
     if (
       err instanceof Error &&
@@ -78,6 +78,8 @@ async function manualFlow(
 ): Promise<GeminiCliOAuthCredentials> {
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
+  await ctx.openUrl(authUrl);
+  await ctx.note(`Open this URL in your LOCAL browser:\n\n${authUrl}`, "Gemini CLI OAuth");
   ctx.progress.update("Waiting for you to paste the callback URL...");
   const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
   const parsed = parseCallbackInput(callbackInput);
@@ -88,5 +90,16 @@ async function manualFlow(
     throw new Error("OAuth state mismatch - please try again", cause ? { cause } : undefined);
   }
   ctx.progress.update("Exchanging authorization code for tokens...");
-  return exchangeCodeForTokens(parsed.code, verifier);
+  return exchangeCodeForTokens(parsed.code, verifier, ctx.signal);
+}
+
+export async function refreshGeminiCliOAuthToken(
+  credentials: Pick<GeminiCliOAuthCredentials, "refresh" | "email" | "projectId">,
+): Promise<OAuthCredential> {
+  const refreshed = await refreshTokensForGeminiCli(credentials);
+  return {
+    type: "oauth",
+    provider: "google-gemini-cli",
+    ...refreshed,
+  };
 }

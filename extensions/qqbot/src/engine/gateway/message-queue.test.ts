@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { createMessageQueue, mergeGroupMessages, type QueuedMessage } from "./message-queue.js";
+// Qqbot tests cover message queue plugin behavior.
+import { describe, expect, it, vi } from "vitest";
+import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 
 function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
   return {
@@ -14,94 +15,14 @@ function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
   };
 }
 
+function requireMergeMetadata(message: QueuedMessage): NonNullable<QueuedMessage["merge"]> {
+  if (!message.merge) {
+    throw new Error("expected QQBot merged message metadata");
+  }
+  return message.merge;
+}
+
 describe("engine/gateway/message-queue", () => {
-  describe("mergeGroupMessages", () => {
-    it("returns the single message unchanged", () => {
-      const m = groupMsg();
-      const merged = mergeGroupMessages([m]);
-      expect(merged).toBe(m);
-    });
-
-    it("joins content with sender prefix per line", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ senderName: "A", content: "hi" }),
-        groupMsg({ senderName: "B", content: "yo" }),
-      ]);
-      expect(merged.content).toBe("[A]: hi\n[B]: yo");
-      expect(merged.merge?.count).toBe(2);
-      expect(merged.merge?.messages).toHaveLength(2);
-    });
-
-    it("takes messageId / msgIdx / timestamp from the last message", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ messageId: "M1", msgIdx: "I1", timestamp: "T1" }),
-        groupMsg({ messageId: "M2", msgIdx: "I2", timestamp: "T2" }),
-      ]);
-      expect(merged.messageId).toBe("M2");
-      expect(merged.msgIdx).toBe("I2");
-      expect(merged.timestamp).toBe("T2");
-    });
-
-    it("takes refMsgIdx from the first message", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ refMsgIdx: "R1" }),
-        groupMsg({ refMsgIdx: "R2" }),
-      ]);
-      expect(merged.refMsgIdx).toBe("R1");
-    });
-
-    it("concatenates attachments in order", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({
-          attachments: [{ content_type: "image/png", url: "a" }],
-        }),
-        groupMsg({
-          attachments: [
-            { content_type: "image/png", url: "b" },
-            { content_type: "image/png", url: "c" },
-          ],
-        }),
-      ]);
-      expect(merged.attachments?.map((a) => a.url)).toEqual(["a", "b", "c"]);
-    });
-
-    it("deduplicates mentions by member/user openid", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Y" }] }),
-        groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Z" }] }),
-      ]);
-      expect(merged.mentions?.map((m) => m.member_openid)).toEqual(["X", "Y", "Z"]);
-    });
-
-    it("flags merged turn as @bot when ANY source was GROUP_AT_MESSAGE_CREATE", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ eventType: "GROUP_MESSAGE_CREATE" }),
-        groupMsg({ eventType: "GROUP_AT_MESSAGE_CREATE" }),
-      ]);
-      expect(merged.eventType).toBe("GROUP_AT_MESSAGE_CREATE");
-    });
-
-    it("keeps last eventType when no @bot event was present", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ eventType: "GROUP_MESSAGE_CREATE" }),
-        groupMsg({ eventType: "GROUP_MESSAGE_CREATE" }),
-      ]);
-      expect(merged.eventType).toBe("GROUP_MESSAGE_CREATE");
-    });
-
-    it("marks as bot only when every source is a bot", () => {
-      expect(
-        mergeGroupMessages([groupMsg({ senderIsBot: true }), groupMsg({ senderIsBot: false })])
-          .senderIsBot,
-      ).toBe(false);
-
-      expect(
-        mergeGroupMessages([groupMsg({ senderIsBot: true }), groupMsg({ senderIsBot: true })])
-          .senderIsBot,
-      ).toBe(true);
-    });
-  });
-
   describe("createMessageQueue enqueue / evict", () => {
     it("uses group peerId for group messages", () => {
       const q = createMessageQueue({ accountId: "a", isAborted: () => true });
@@ -161,7 +82,7 @@ describe("engine/gateway/message-queue", () => {
 
     it("group overflow drops bot messages first (via processor)", async () => {
       const seen: QueuedMessage[] = [];
-      let gate!: (value?: unknown) => void;
+      let gate: ((value?: unknown) => void) | undefined;
       const blocker = new Promise((res) => {
         gate = res;
       });
@@ -188,8 +109,13 @@ describe("engine/gateway/message-queue", () => {
       const peerQueueIds = q.getSnapshot("group:G1");
       expect(peerQueueIds.senderPending).toBe(3);
       // Release the processor and drain.
+      if (!gate) {
+        throw new Error("Expected QQBot queue gate callback to be initialized");
+      }
       gate();
-      await new Promise((res) => setTimeout(res, 0));
+      await vi.waitFor(() => {
+        expect(seen.length).toBeGreaterThan(1);
+      });
       const seenIds = seen.map((m) => m.messageId);
       expect(seenIds).toContain("First");
       // The bot message should NOT have been processed — it was evicted.
@@ -197,7 +123,9 @@ describe("engine/gateway/message-queue", () => {
       //  varies; we only assert the bot message id never appeared.)
       const mergedCall = seen.find((m) => (m.merge?.count ?? 0) > 1);
       if (mergedCall) {
-        expect(mergedCall.merge?.messages.map((m) => m.messageId)).not.toContain("B1");
+        expect(requireMergeMetadata(mergedCall).messages.map((m) => m.messageId)).not.toContain(
+          "B1",
+        );
       } else {
         expect(seenIds).not.toContain("B1");
       }
@@ -207,7 +135,7 @@ describe("engine/gateway/message-queue", () => {
       // Use a processor that never resolves so enqueued messages stay
       // buffered behind a single active worker — then clearUserQueue
       // should drop the rest.
-      let release!: () => void;
+      let release: (() => void) | undefined;
       const blocker = new Promise<void>((res) => {
         release = res;
       });
@@ -222,6 +150,9 @@ describe("engine/gateway/message-queue", () => {
       expect(q.getSnapshot("group:G1").senderPending).toBeGreaterThanOrEqual(0);
       const dropped = q.clearUserQueue("group:G1");
       expect(dropped).toBeGreaterThanOrEqual(0);
+      if (!release) {
+        throw new Error("Expected QQBot queue release callback to be initialized");
+      }
       release();
     });
   });
@@ -253,8 +184,8 @@ describe("engine/gateway/message-queue", () => {
       expect(seen.length).toBeGreaterThanOrEqual(1);
       expect(seen.length).toBeLessThan(3);
       const mergedCall = seen.find((m) => (m.merge?.count ?? 0) > 1);
-      expect(mergedCall).toBeDefined();
       expect(mergedCall?.content).toContain("[Alice]:");
+      expect(mergedCall?.merge?.count).toBeGreaterThan(1);
     });
 
     it("processes slash commands independently from regular messages", async () => {
@@ -275,8 +206,8 @@ describe("engine/gateway/message-queue", () => {
       aborted = true;
       // Command should appear as its own call (not merged with the others).
       const cmdCall = seen.find((m) => m.content === "/stop");
-      expect(cmdCall).toBeDefined();
-      expect(cmdCall?.merge).toBeUndefined();
+      expect(cmdCall?.content).toBe("/stop");
+      expect(cmdCall).not.toHaveProperty("merge");
     });
   });
 });

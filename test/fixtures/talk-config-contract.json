@@ -51,7 +51,7 @@
     {
       "id": "provider_mismatch_missing_resolved",
       "defaultProvider": "elevenlabs",
-      "payloadValid": false,
+      "payloadValid": true,
       "expectedSelection": null,
       "talk": {
         "provider": "acme",
@@ -65,7 +65,7 @@
     {
       "id": "ambiguous_providers_missing_resolved",
       "defaultProvider": "elevenlabs",
-      "payloadValid": false,
+      "payloadValid": true,
       "expectedSelection": null,
       "talk": {
         "providers": {
@@ -76,21 +76,6 @@
             "voiceId": "voice-normalized"
           }
         }
-      }
-    },
-    {
-      "id": "legacy_payload_fallback",
-      "defaultProvider": "elevenlabs",
-      "payloadValid": true,
-      "expectedSelection": {
-        "provider": "elevenlabs",
-        "normalizedPayload": true,
-        "voiceId": "voice-legacy",
-        "apiKey": "xxxxx"
-      },
-      "talk": {
-        "voiceId": "voice-legacy",
-        "apiKey": "xxxxx"
       }
     }
   ],

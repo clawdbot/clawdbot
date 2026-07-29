@@ -1,7 +1,10 @@
+// Browser tests cover server.agent contract form layout act commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeAll, describe, expect, it } from "vitest";
+import "../test-support/browser-security.mock.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installAgentContractHooks,
@@ -18,7 +21,15 @@ import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
+function requirePwMock<K extends keyof typeof pwMocks>(name: K): NonNullable<(typeof pwMocks)[K]> {
+  return expectDefined(pwMocks[name], `Playwright mock ${name}`);
+}
 const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
+
+beforeAll(async () => {
+  await import("../server.js");
+});
 
 type GuardedCurrentTabRouteCase = {
   method: "GET" | "POST";
@@ -26,6 +37,9 @@ type GuardedCurrentTabRouteCase = {
   body?: Record<string, unknown>;
   mockName:
     | "cookiesGetViaPlaywright"
+    | "downloadViaPlaywright"
+    | "executeActViaPlaywright"
+    | "highlightViaPlaywright"
     | "pdfViaPlaywright"
     | "getConsoleMessagesViaPlaywright"
     | "getPageErrorsViaPlaywright"
@@ -34,7 +48,8 @@ type GuardedCurrentTabRouteCase = {
     | "storageGetViaPlaywright"
     | "takeScreenshotViaPlaywright"
     | "traceStartViaPlaywright"
-    | "traceStopViaPlaywright";
+    | "traceStopViaPlaywright"
+    | "waitForDownloadViaPlaywright";
 };
 
 const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
@@ -72,6 +87,40 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     mockName: "responseBodyViaPlaywright",
   },
   {
+    method: "POST",
+    path: "/wait/download",
+    body: { targetId: "abcd1234", path: "report.pdf" },
+    mockName: "waitForDownloadViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/download",
+    body: { targetId: "abcd1234", ref: "e12", path: "report.pdf" },
+    mockName: "downloadViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/act",
+    body: { targetId: "abcd1234", kind: "evaluate", fn: "() => document.body.innerText" },
+    mockName: "executeActViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/act",
+    body: {
+      targetId: "abcd1234",
+      kind: "batch",
+      actions: [{ kind: "evaluate", fn: "() => document.body.innerText" }],
+    },
+    mockName: "executeActViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/highlight",
+    body: { targetId: "abcd1234", ref: "e1" },
+    mockName: "highlightViaPlaywright",
+  },
+  {
     method: "GET",
     path: "/cookies?targetId=abcd1234",
     mockName: "cookiesGetViaPlaywright",
@@ -95,6 +144,19 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
   },
 ] as const;
 
+const tabManagementActCases = [
+  {
+    kind: "resize",
+    body: { targetId: "abcd1234", kind: "resize", width: 1024, height: 768 },
+    mockName: "resizeViewportViaPlaywright",
+  },
+  {
+    kind: "close",
+    body: { targetId: "abcd1234", kind: "close" },
+    mockName: "closePageViaPlaywright",
+  },
+] as const;
+
 async function withSymlinkPathEscape<T>(params: {
   rootDir: string;
   run: (relativePath: string) => Promise<T>;
@@ -110,6 +172,44 @@ async function withSymlinkPathEscape<T>(params: {
     await fs.unlink(linkPath).catch(() => {});
     await fs.rm(outsideDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
+function requireMockArg(mock: MockWithCalls, callIndex = 0, argIndex = 0) {
+  return requireRecord(mock.mock.calls[callIndex]?.[argIndex], "mock call argument");
+}
+
+function expectBrowserCallFields(
+  mock: MockWithCalls,
+  expected: Record<string, unknown>,
+  callIndex = 0,
+) {
+  const arg = requireMockArg(mock, callIndex);
+  expect(typeof arg.cdpUrl).toBe("string");
+  expectRecordFields(arg, "browser call argument", expected);
+}
+
+function expectOkResult(result: unknown) {
+  expect(requireRecord(result, "response").ok).toBe(true);
 }
 
 describe("browser control server", () => {
@@ -128,14 +228,11 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
       expect(select.ok).toBe(true);
-      expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: expect.any(String),
-          targetId: "abcd1234",
-          ref: "5",
-          values: ["a", "b"],
-        }),
-      );
+      expectBrowserCallFields(requirePwMock("selectOptionViaPlaywright"), {
+        targetId: "abcd1234",
+        ref: "5",
+        values: ["a", "b"],
+      });
 
       const fillCases: Array<{
         input: Record<string, unknown>;
@@ -160,12 +257,13 @@ describe("browser control server", () => {
           fields: [input],
         });
         expect(fill.ok).toBe(true);
-        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith(
-          expect.objectContaining({
-            cdpUrl: expect.any(String),
+        expectBrowserCallFields(
+          requirePwMock("fillFormViaPlaywright"),
+          {
             targetId: "abcd1234",
             fields: [expected],
-          }),
+          },
+          requirePwMock("fillFormViaPlaywright").mock.calls.length - 1,
         );
       }
 
@@ -175,14 +273,11 @@ describe("browser control server", () => {
         height: 600,
       });
       expect(resize.ok).toBe(true);
-      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: expect.any(String),
-          targetId: "abcd1234",
-          width: 800,
-          height: 600,
-        }),
-      );
+      expectBrowserCallFields(requirePwMock("resizeViewportViaPlaywright"), {
+        targetId: "abcd1234",
+        width: 800,
+        height: 600,
+      });
 
       const resizeZero = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "resize",
@@ -191,7 +286,7 @@ describe("browser control server", () => {
       });
       expect(resizeZero.code).toBe("ACT_INVALID_REQUEST");
       expect(resizeZero.error).toContain("resize requires positive width and height");
-      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+      expect(requirePwMock("resizeViewportViaPlaywright")).toHaveBeenCalledTimes(1);
 
       const resizeNegative = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "resize",
@@ -200,20 +295,27 @@ describe("browser control server", () => {
       });
       expect(resizeNegative.code).toBe("ACT_INVALID_REQUEST");
       expect(resizeNegative.error).toContain("resize requires positive width and height");
-      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+      expect(requirePwMock("resizeViewportViaPlaywright")).toHaveBeenCalledTimes(1);
+
+      const resizeTooLarge = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: 8193,
+        height: 600,
+      });
+      expect(resizeTooLarge.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeTooLarge.error).toContain("resize width and height must not exceed 8192");
+      expect(requirePwMock("resizeViewportViaPlaywright")).toHaveBeenCalledTimes(1);
 
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
       });
       expect(wait.ok).toBe(true);
-      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: state.cdpBaseUrl,
-          targetId: "abcd1234",
-          timeMs: 5,
-        }),
-      );
+      expectBrowserCallFields(requirePwMock("waitForViaPlaywright"), {
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        timeMs: 5,
+      });
 
       const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",
@@ -221,15 +323,14 @@ describe("browser control server", () => {
       });
       expect(evalRes.ok).toBe(true);
       expect(evalRes.result).toBe("ok");
-      expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: state.cdpBaseUrl,
-          targetId: "abcd1234",
-          fn: "() => 1",
-          ref: undefined,
-          signal: expect.any(AbortSignal),
-        }),
-      );
+      const evalCall = requireMockArg(requirePwMock("evaluateViaPlaywright"));
+      expectRecordFields(evalCall, "evaluate call", {
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        fn: "() => 1",
+        ref: undefined,
+      });
+      expect(evalCall.signal).toBeInstanceOf(AbortSignal);
     },
     slowTimeoutMs,
   );
@@ -252,26 +353,23 @@ describe("browser control server", () => {
       );
 
       expect(batchRes.ok).toBe(true);
-      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: expect.any(String),
-          targetId: "abcd1234",
-          stopOnError: false,
-          evaluateEnabled: true,
-          actions: [
-            {
-              kind: "click",
-              selector: "button.save",
-              doubleClick: true,
-              delayMs: 25,
-            },
-            {
-              kind: "wait",
-              fn: "() => window.ready === true",
-            },
-          ],
-        }),
-      );
+      expectBrowserCallFields(requirePwMock("batchViaPlaywright"), {
+        targetId: "abcd1234",
+        stopOnError: false,
+        evaluateEnabled: true,
+        actions: [
+          {
+            kind: "click",
+            selector: "button.save",
+            doubleClick: true,
+            delayMs: 25,
+          },
+          {
+            kind: "wait",
+            fn: "() => window.ready === true",
+          },
+        ],
+      });
     },
     slowTimeoutMs,
   );
@@ -290,22 +388,20 @@ describe("browser control server", () => {
       });
 
       expect(batchRes.ok).toBe(true);
-      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actions: [
-            {
-              kind: "type",
-              selector: "input.name",
-              text: "  padded  ",
-            },
-            {
-              kind: "type",
-              selector: "input.clearable",
-              text: "",
-            },
-          ],
-        }),
-      );
+      expectRecordFields(requireMockArg(requirePwMock("batchViaPlaywright")), "batch call", {
+        actions: [
+          {
+            kind: "type",
+            selector: "input.name",
+            text: "  padded  ",
+          },
+          {
+            kind: "type",
+            selector: "input.clearable",
+            text: "",
+          },
+        ],
+      });
     },
     slowTimeoutMs,
   );
@@ -322,7 +418,7 @@ describe("browser control server", () => {
 
       expect(batchRes.error).toContain("click requires ref or selector");
       expect(batchRes.code).toBe("ACT_INVALID_REQUEST");
-      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+      expect(requirePwMock("batchViaPlaywright")).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );
@@ -339,7 +435,7 @@ describe("browser control server", () => {
 
       expect(batchRes.error).toContain("batched action targetId must match request targetId");
       expect(batchRes.code).toBe("ACT_TARGET_ID_MISMATCH");
-      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+      expect(requirePwMock("batchViaPlaywright")).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );
@@ -355,7 +451,7 @@ describe("browser control server", () => {
       });
 
       expect(batchRes.error).toContain("click delayMs exceeds maximum of 5000ms");
-      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+      expect(requirePwMock("batchViaPlaywright")).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );
@@ -371,10 +467,69 @@ describe("browser control server", () => {
       });
 
       expect(batchRes.error).toContain("batch exceeds maximum of 100 actions");
-      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+      expect(requirePwMock("batchViaPlaywright")).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );
+
+  it("rejects loose response body numeric options before dispatch", async () => {
+    const base = await startServerAndBase();
+    const beforeCalls = requirePwMock("responseBodyViaPlaywright").mock.calls.length;
+
+    const timeoutRes = await postJson<{ error?: string }>(`${base}/response/body`, {
+      url: "**/api/data",
+      timeoutMs: "1e3",
+    });
+    expect(timeoutRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const maxCharsRes = await postJson<{ error?: string }>(`${base}/response/body`, {
+      url: "**/api/data",
+      maxChars: "0x10",
+    });
+    expect(maxCharsRes.error).toContain("maxChars must be a positive integer.");
+
+    expect(requirePwMock("responseBodyViaPlaywright")).toHaveBeenCalledTimes(beforeCalls);
+  });
+
+  it("rejects loose hook and download timeout options before dispatch", async () => {
+    const base = await startServerAndBase();
+    const uploadCalls = requirePwMock("armFileUploadViaPlaywright").mock.calls.length;
+    const atomicUploadCalls = requirePwMock("uploadViaPlaywright").mock.calls.length;
+    const dialogCalls = requirePwMock("armDialogViaPlaywright").mock.calls.length;
+    const waitCalls = requirePwMock("waitForDownloadViaPlaywright").mock.calls.length;
+    const downloadCalls = requirePwMock("downloadViaPlaywright").mock.calls.length;
+
+    const uploadRes = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
+      paths: ["a.txt"],
+      timeoutMs: "1e3",
+    });
+    expect(uploadRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const dialogRes = await postJson<{ error?: string }>(`${base}/hooks/dialog`, {
+      accept: true,
+      timeoutMs: "0x10",
+    });
+    expect(dialogRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
+      path: "report.pdf",
+      timeoutMs: "1000ms",
+    });
+    expect(waitRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const downloadRes = await postJson<{ error?: string }>(`${base}/download`, {
+      ref: "e12",
+      path: "report.pdf",
+      timeoutMs: "1.5",
+    });
+    expect(downloadRes.error).toContain("timeoutMs must be a positive integer.");
+
+    expect(requirePwMock("armFileUploadViaPlaywright")).toHaveBeenCalledTimes(uploadCalls);
+    expect(requirePwMock("uploadViaPlaywright")).toHaveBeenCalledTimes(atomicUploadCalls);
+    expect(requirePwMock("armDialogViaPlaywright")).toHaveBeenCalledTimes(dialogCalls);
+    expect(requirePwMock("waitForDownloadViaPlaywright")).toHaveBeenCalledTimes(waitCalls);
+    expect(requirePwMock("downloadViaPlaywright")).toHaveBeenCalledTimes(downloadCalls);
+  });
 
   it("agent contract: hooks + response + downloads + screenshot", async () => {
     const base = await startServerAndBase();
@@ -383,59 +538,69 @@ describe("browser control server", () => {
       paths: ["a.txt"],
       timeoutMs: 1234,
     });
-    expect(upload).toMatchObject({ ok: true });
-    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
-        paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
-        timeoutMs: 1234,
-      }),
-    );
+    expectOkResult(upload);
+    expectBrowserCallFields(requirePwMock("armFileUploadViaPlaywright"), {
+      targetId: "abcd1234",
+      // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
+      timeoutMs: 1234,
+    });
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["b.txt"],
       ref: "e12",
     });
-    expect(uploadWithRef).toMatchObject({ ok: true });
+    expectOkResult(uploadWithRef);
+    expectBrowserCallFields(requirePwMock("uploadViaPlaywright"), {
+      targetId: "abcd1234",
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "b.txt")],
+      ref: "e12",
+      signal: expect.any(AbortSignal),
+    });
 
     const uploadWithInputRef = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["c.txt"],
       inputRef: "e99",
     });
-    expect(uploadWithInputRef).toMatchObject({ ok: true });
+    expectOkResult(uploadWithInputRef);
 
     const uploadWithElement = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["d.txt"],
       element: "input[type=file]",
     });
-    expect(uploadWithElement).toMatchObject({ ok: true });
+    expectOkResult(uploadWithElement);
 
     const dialog = await postJson(`${base}/hooks/dialog`, {
       accept: true,
+      dialogId: "d1",
       timeoutMs: 5678,
     });
-    expect(dialog).toMatchObject({ ok: true });
+    expectOkResult(dialog);
+    expectBrowserCallFields(requirePwMock("armDialogViaPlaywright"), {
+      targetId: "abcd1234",
+      accept: true,
+      dialogId: "d1",
+      timeoutMs: 5678,
+    });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
       path: "report.pdf",
       timeoutMs: 1111,
     });
-    expect(waitDownload).toMatchObject({ ok: true });
+    expectOkResult(waitDownload);
 
     const download = await postJson(`${base}/download`, {
       ref: "e12",
       path: "report.pdf",
     });
-    expect(download).toMatchObject({ ok: true });
+    expectOkResult(download);
 
     const responseBody = await postJson(`${base}/response/body`, {
       url: "**/api/data",
       timeoutMs: 2222,
       maxChars: 10,
     });
-    expect(responseBody).toMatchObject({ ok: true });
+    expectOkResult(responseBody);
 
     const consoleRes = (await realFetch(`${base}/console?level=error`).then((r) => r.json())) as {
       ok: boolean;
@@ -455,12 +620,14 @@ describe("browser control server", () => {
     });
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
-    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      requireMockArg(requirePwMock("takeScreenshotViaPlaywright")),
+      "screenshot call",
+      {
         element: "body",
         type: "jpeg",
         timeoutMs: 3333,
-      }),
+      },
     );
   });
 
@@ -471,14 +638,14 @@ describe("browser control server", () => {
       paths: ["../../../../etc/passwd"],
     });
     expect(traversal.error).toContain("Invalid path");
-    expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
+    expect(requirePwMock("armFileUploadViaPlaywright")).not.toHaveBeenCalled();
 
     const absOutside = path.join(path.parse(DEFAULT_UPLOAD_DIR).root, "etc", "passwd");
     const abs = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
       paths: [absOutside],
     });
     expect(abs.error).toContain("Invalid path");
-    expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
+    expect(requirePwMock("armFileUploadViaPlaywright")).not.toHaveBeenCalled();
   });
 
   it("agent contract: stop endpoint", async () => {
@@ -497,7 +664,7 @@ describe("browser control server", () => {
       path: "../../pwned.zip",
     });
     expect(res.error).toContain("Invalid path");
-    expect(pwMocks.traceStopViaPlaywright).not.toHaveBeenCalled();
+    expect(requirePwMock("traceStopViaPlaywright")).not.toHaveBeenCalled();
   });
 
   it("trace stop accepts in-root relative output path", async () => {
@@ -507,13 +674,12 @@ describe("browser control server", () => {
     });
     expect(res.ok).toBe(true);
     expect(res.path).toContain("safe-trace.zip");
-    expect(pwMocks.traceStopViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        path: expect.stringContaining("safe-trace.zip"),
-      }),
-    );
+    const traceCall = requireMockArg(requirePwMock("traceStopViaPlaywright"));
+    expect(typeof traceCall.cdpUrl).toBe("string");
+    expectRecordFields(traceCall, "trace stop call", {
+      targetId: "abcd1234",
+    });
+    expect(String(traceCall.path)).toContain("safe-trace.zip");
   });
 
   it.each(guardedCurrentTabRouteCases)(
@@ -530,8 +696,22 @@ describe("browser control server", () => {
       });
       expect(res.status).toBe(400);
       const body = (await res.json()) as { error?: unknown };
-      expect(body.error).toEqual(expect.stringMatching(/(blocked|denied|not allowed|policy)/i));
+      expect(body.error).toBe(BROWSER_NAVIGATION_BLOCKED_MESSAGE);
       expect(pwMocks[routeCase.mockName]).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(tabManagementActCases)(
+    "allows tab-management act:$kind on disallowed current tab URLs",
+    async ({ body, mockName }) => {
+      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+      const base = await startServerAndBase();
+
+      const res = await postJson<{ ok?: boolean }>(`${base}/act`, body);
+
+      expect(res.ok).toBe(true);
+      expect(pwMocks[mockName]).toHaveBeenCalled();
     },
   );
 
@@ -541,7 +721,7 @@ describe("browser control server", () => {
       path: "../../pwned.pdf",
     });
     expect(waitRes.error).toContain("Invalid path");
-    expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
+    expect(requirePwMock("waitForDownloadViaPlaywright")).not.toHaveBeenCalled();
   });
 
   it("download rejects traversal path outside downloads dir", async () => {
@@ -551,7 +731,7 @@ describe("browser control server", () => {
       path: "../../pwned.pdf",
     });
     expect(downloadRes.error).toContain("Invalid path");
-    expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
+    expect(requirePwMock("downloadViaPlaywright")).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32")(
@@ -565,7 +745,7 @@ describe("browser control server", () => {
             path: pathEscape,
           });
           expect(res.error).toContain("Invalid path");
-          expect(pwMocks.traceStopViaPlaywright).not.toHaveBeenCalled();
+          expect(requirePwMock("traceStopViaPlaywright")).not.toHaveBeenCalled();
         },
       });
     },
@@ -582,7 +762,7 @@ describe("browser control server", () => {
             path: pathEscape,
           });
           expect(res.error).toContain("Invalid path");
-          expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
+          expect(requirePwMock("waitForDownloadViaPlaywright")).not.toHaveBeenCalled();
         },
       });
     },
@@ -600,7 +780,7 @@ describe("browser control server", () => {
             path: pathEscape,
           });
           expect(res.error).toContain("Invalid path");
-          expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
+          expect(requirePwMock("downloadViaPlaywright")).not.toHaveBeenCalled();
         },
       });
     },
@@ -615,13 +795,12 @@ describe("browser control server", () => {
       },
     );
     expect(res.ok).toBe(true);
-    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        path: expect.stringContaining("safe-wait.pdf"),
-      }),
-    );
+    const waitCall = requireMockArg(requirePwMock("waitForDownloadViaPlaywright"));
+    expect(typeof waitCall.cdpUrl).toBe("string");
+    expectRecordFields(waitCall, "wait download call", {
+      targetId: "abcd1234",
+    });
+    expect(String(waitCall.path)).toContain("safe-wait.pdf");
   });
 
   it("download accepts in-root relative output path", async () => {
@@ -631,13 +810,12 @@ describe("browser control server", () => {
       path: "safe-download.pdf",
     });
     expect(res.ok).toBe(true);
-    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        ref: "e12",
-        path: expect.stringContaining("safe-download.pdf"),
-      }),
-    );
+    const downloadCall = requireMockArg(requirePwMock("downloadViaPlaywright"));
+    expect(typeof downloadCall.cdpUrl).toBe("string");
+    expectRecordFields(downloadCall, "download call", {
+      targetId: "abcd1234",
+      ref: "e12",
+    });
+    expect(String(downloadCall.path)).toContain("safe-download.pdf");
   });
 });

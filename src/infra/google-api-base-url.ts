@@ -1,3 +1,4 @@
+// Normalizes Google Generative Language API base URLs.
 export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_GENERATIVE_LANGUAGE_HOST = "generativelanguage.googleapis.com";
 

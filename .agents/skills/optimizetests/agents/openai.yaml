@@ -1,6 +1,0 @@
-interface:
-  display_name: "Optimize Tests"
-  short_description: "Benchmark and speed up OpenClaw tests"
-  default_prompt: "Use $optimizetests to benchmark slow OpenClaw tests, optimize imports and duplicated setup, move misplaced core coverage to extensions, verify gates, commit scoped changes, push, and keep CI green without adding shards or dropping coverage."
-policy:
-  allow_implicit_invocation: false

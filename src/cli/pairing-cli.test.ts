@@ -1,5 +1,7 @@
+// Pairing CLI tests cover pairing command registration and pairing status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -41,6 +43,14 @@ const pairingIdLabels: Record<string, string> = {
   telegram: "telegramUserId",
   discord: "discordUserId",
 };
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listChannelPairingRequests,
@@ -126,7 +136,7 @@ describe("pairing cli", () => {
     });
   }
 
-  it("evaluates pairing channels when registering the CLI (not at import)", async () => {
+  it("evaluates pairing channels when registering the CLI (not at import)", () => {
     expect(listPairingChannels).not.toHaveBeenCalled();
 
     createProgram();
@@ -214,6 +224,30 @@ describe("pairing cli", () => {
     expect(listChannelPairingRequests).toHaveBeenCalledWith("slack");
   });
 
+  it("redirects to openclaw devices when no pairing channels are configured", async () => {
+    listPairingChannels.mockReturnValueOnce([]);
+
+    const error = await runPairing(["pairing", "list"]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("openclaw devices");
+    // Must not leak the empty enum that originally read like a bug.
+    expect(message).not.toContain("expected one of: )");
+    expect(message).not.toContain("()");
+    expect(listChannelPairingRequests).not.toHaveBeenCalled();
+  });
+
+  it("lists supported channels when one is required but omitted", async () => {
+    // Multiple channels configured (default mock) + no channel argument.
+    await expect(runPairing(["pairing", "list"])).rejects.toThrow(
+      "expected one of: telegram, discord, imessage",
+    );
+  });
+
   it("accepts channel as positional for approve (npm-run compatible)", async () => {
     mockApprovedPairing();
 
@@ -225,17 +259,17 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
-      expect(replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: {
-            commands: {
-              ownerAllowFrom: ["telegram:123"],
-            },
-          },
-        }),
-      );
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Command owner configured"));
+      const replaceCall = requireFirstMockCall(
+        replaceConfigFile.mock.calls,
+        "config replace",
+      )[0] as { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
+      expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
+      expect(log.mock.calls).toEqual([
+        [`${theme.success("Approved")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],
+        [
+          `${theme.success("Command owner configured")} ${theme.command("telegram:123")} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
+        ],
+      ]);
     } finally {
       log.mockRestore();
     }

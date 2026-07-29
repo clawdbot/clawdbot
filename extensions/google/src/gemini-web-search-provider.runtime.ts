@@ -1,16 +1,18 @@
+// Google provider module implements model/runtime integration.
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
+  readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
-  normalizeFreshness,
-  parseIsoDateRange,
+  MAX_SEARCH_COUNT,
+  parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveCitationRedirectUrl,
@@ -22,6 +24,8 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
 import {
   resolveGeminiConfig,
   resolveGeminiBaseUrl,
@@ -59,12 +63,28 @@ type GeminiGroundingResponse = {
   };
 };
 
+function throwMalformedGeminiResponse(): never {
+  throw new Error("Gemini API error: malformed JSON response");
+}
+
 const GEMINI_FRESHNESS_DAYS: Record<GeminiFreshness, number> = {
   day: 1,
   week: 7,
   month: 30,
   year: 365,
 };
+
+const GEMINI_DAY_FRESHNESS_HINT = "Prioritize web sources published in the last 24 hours.";
+
+// Gemini's google_search.time_range_filter accepts second-precision RFC 3339
+// only. Despite the underlying google.protobuf.Timestamp type accepting "0, 3,
+// 6 or 9 fractional digits", the Search grounding endpoint rejects any
+// non-zero fractional component with
+//   "[FIELD_INVALID] Granularity of nano is not supported".
+// Strip the fractional-second component before serializing.
+function toGeminiTimeRangeTimestamp(date: Date): string {
+  return date.toISOString().replace(/\.\d+Z$/, "Z");
+}
 
 function isoDateStart(value: string): string {
   return `${value}T00:00:00Z`;
@@ -73,20 +93,27 @@ function isoDateStart(value: string): string {
 function isoDateExclusiveEnd(value: string): string {
   const end = new Date(`${value}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + 1);
-  return end.toISOString();
+  return toGeminiTimeRangeTimestamp(end);
 }
 
 function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
   const start = new Date(now);
   start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
-  return start.toISOString();
+  return toGeminiTimeRangeTimestamp(start);
+}
+
+function queryWithSoftFreshness(query: string, freshness?: "day"): string {
+  if (freshness !== "day") {
+    return query;
+  }
+  return `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
 }
 
 function resolveGeminiTimeRangeFilter(
   args: Record<string, unknown>,
   now = new Date(),
 ):
-  | { timeRangeFilter?: GeminiTimeRangeFilter }
+  | { timeRangeFilter?: GeminiTimeRangeFilter; freshness?: "day" }
   | {
       error:
         | "invalid_freshness"
@@ -97,49 +124,40 @@ function resolveGeminiTimeRangeFilter(
       docs: string;
     } {
   const rawFreshness = readStringParam(args, "freshness");
-  const freshness = rawFreshness
-    ? (normalizeFreshness(rawFreshness, "perplexity") as GeminiFreshness | undefined)
-    : undefined;
-  if (rawFreshness && !freshness) {
-    return {
-      error: "invalid_freshness",
-      message: "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
-  if (rawFreshness && (rawDateAfter || rawDateBefore)) {
-    return {
-      error: "conflicting_time_filters",
-      message:
-        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-
-  const parsedDateRange = parseIsoDateRange({
+  const parsedTimeFilters = parseWebSearchTimeFilters({
     rawDateAfter,
     rawDateBefore,
+    rawFreshness,
+    freshnessProvider: "perplexity",
+    invalidFreshnessMessage:
+      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
     invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
     invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
     invalidDateRangeMessage: "date_after must be before date_before.",
   });
-  if ("error" in parsedDateRange) {
-    return parsedDateRange;
+  if ("error" in parsedTimeFilters) {
+    return parsedTimeFilters;
   }
 
+  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
   if (freshness) {
+    // Gemini rejects 24-hour google_search.timeRangeFilter windows, while
+    // wider freshness windows still preserve the hard grounding contract.
+    if (freshness === "day") {
+      return {
+        freshness,
+      };
+    }
     return {
       timeRangeFilter: {
         startTime: freshnessStartTime(freshness, now),
-        endTime: now.toISOString(),
+        endTime: toGeminiTimeRangeTimestamp(now),
       },
     };
   }
 
-  const { dateAfter, dateBefore } = parsedDateRange;
   if (!dateAfter && !dateBefore) {
     return {};
   }
@@ -147,14 +165,14 @@ function resolveGeminiTimeRangeFilter(
   return {
     timeRangeFilter: {
       startTime: dateAfter ? isoDateStart(dateAfter) : "1970-01-01T00:00:00Z",
-      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : now.toISOString(),
+      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimeRangeTimestamp(now),
     },
   };
 }
 
-export function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
+function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
   return (
-    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
+    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"]) ??
     readConfiguredSecretString(gemini?.providerApiKey, "models.providers.google.apiKey")
   );
@@ -183,6 +201,12 @@ async function runGeminiSearch(params: {
         headers: {
           "Content-Type": "application/json",
           "x-goog-api-key": params.apiKey,
+          ...resolveGoogleApiClientHeaders({
+            baseUrl: params.baseUrl,
+            api: "google-generative-ai",
+            capability: "other",
+            transport: "http",
+          }),
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: params.query }] }],
@@ -196,13 +220,10 @@ async function runGeminiSearch(params: {
         throw new Error(error.message.replace(/key=[^&\s]+/giu, "key=***"));
       }
 
-      let data: GeminiGroundingResponse;
-      try {
-        data = (await res.json()) as GeminiGroundingResponse;
-      } catch (error) {
-        const safeError = String(error).replace(/key=[^&\s]+/giu, "key=***");
-        throw new Error(`Gemini API returned invalid JSON: ${safeError}`, { cause: error });
-      }
+      const data = (await readProviderJsonObjectResponse(
+        res,
+        "Gemini API error",
+      )) as GeminiGroundingResponse;
 
       if (data.error) {
         const rawMessage = data.error.message || data.error.status || "unknown";
@@ -215,18 +236,49 @@ async function runGeminiSearch(params: {
         );
       }
 
-      const candidate = data.candidates?.[0];
-      const content =
-        candidate?.content?.parts
-          ?.map((part) => part.text)
-          .filter(Boolean)
-          .join("\n") ?? "No response";
-      const rawCitations = (candidate?.groundingMetadata?.groundingChunks ?? [])
-        .filter((chunk) => chunk.web?.uri)
-        .map((chunk) => ({
-          url: chunk.web!.uri!,
-          title: chunk.web?.title || undefined,
-        }));
+      if (!Array.isArray(data.candidates)) {
+        throwMalformedGeminiResponse();
+      }
+      const candidate = data.candidates[0];
+      if (!isRecord(candidate) || !isRecord(candidate.content)) {
+        throwMalformedGeminiResponse();
+      }
+      const parts = candidate.content.parts;
+      if (!Array.isArray(parts)) {
+        throwMalformedGeminiResponse();
+      }
+      const content = parts
+        .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : undefined))
+        .filter((text): text is string => Boolean(text))
+        .join("\n");
+      if (!content) {
+        throwMalformedGeminiResponse();
+      }
+      const groundingMetadata = candidate.groundingMetadata;
+      const groundingChunks =
+        groundingMetadata === undefined
+          ? []
+          : isRecord(groundingMetadata)
+            ? groundingMetadata.groundingChunks === undefined
+              ? []
+              : Array.isArray(groundingMetadata.groundingChunks)
+                ? groundingMetadata.groundingChunks
+                : undefined
+            : undefined;
+      if (!groundingChunks) {
+        throwMalformedGeminiResponse();
+      }
+      const rawCitations = groundingChunks.flatMap((chunk) => {
+        if (!isRecord(chunk) || !isRecord(chunk.web) || typeof chunk.web.uri !== "string") {
+          return [];
+        }
+        return [
+          {
+            url: chunk.web.uri,
+            title: typeof chunk.web.title === "string" ? chunk.web.title : undefined,
+          },
+        ];
+      });
 
       const citations: Array<{ url: string; title?: string }> = [];
       for (let index = 0; index < rawCitations.length; index += 10) {
@@ -278,7 +330,12 @@ export async function executeGeminiSearch(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveGeminiModel(geminiConfig);
   const baseUrl = resolveGeminiBaseUrl(geminiConfig);
   const cacheKey = buildSearchCacheKey([
@@ -287,6 +344,7 @@ export async function executeGeminiSearch(
     resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
     baseUrl,
     model,
+    timeRange.freshness,
     timeRange.timeRangeFilter?.startTime,
     timeRange.timeRangeFilter?.endTime,
   ]);
@@ -297,7 +355,7 @@ export async function executeGeminiSearch(
 
   const start = Date.now();
   const result = await runGeminiSearch({
-    query,
+    query: queryWithSoftFreshness(query, timeRange.freshness),
     apiKey,
     baseUrl,
     model,

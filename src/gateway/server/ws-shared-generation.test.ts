@@ -1,3 +1,6 @@
+/**
+ * Shared gateway-auth generation tests for WebSocket sessions.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 
@@ -14,7 +17,7 @@ describe("resolveSharedGatewaySessionGeneration", () => {
     };
 
     const base = resolveSharedGatewaySessionGeneration(baseAuth, ["127.0.0.1", "10.0.0.10"]);
-    expect(base).toBeDefined();
+    expect(base).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(
       resolveSharedGatewaySessionGeneration(
         {

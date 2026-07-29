@@ -23,6 +23,7 @@ run_logged agents-delete-shared-workspace docker_e2e_docker_cmd run --rm \
   -e OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
   -e OPENCLAW_SKIP_ACPX_RUNTIME=1 \
   -e OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1 \
+  -e OPENCLAW_GATEWAY_TOKEN=agents-delete-shared-workspace-token \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   -lc '

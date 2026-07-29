@@ -1,9 +1,14 @@
-import type { ConnectPairingRequiredReason } from "../gateway/protocol/connect-error-details.js";
+// Builds the data model for the standard `openclaw status` text report.
+// It converts scan/runtime state into table rows and section lines before rendering.
+
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
-import type { RenderTableOptions, TableColumn } from "../terminal/table.js";
+import type { SessionStatus, StatusSummary } from "../status/types.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusChannelsTableRows,
@@ -15,6 +20,7 @@ import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -25,8 +31,8 @@ import {
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
 
+/** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 export async function buildStatusCommandReportData(
   params: {
     opts: {
@@ -82,6 +88,7 @@ export async function buildStatusCommandReportData(
     formatUpdateAvailableHint: (update: StatusOverviewSurface["update"]) => string | null;
     accentDim: (value: string) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
     theme: {
       heading: (value: string) => string;
       muted: (value: string) => string;
@@ -111,6 +118,7 @@ export async function buildStatusCommandReportData(
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
     updateValue: params.updateValue,
+    updateRestartValue: params.updateRestartValue,
   });
 
   const sessionsColumns = [
@@ -118,7 +126,9 @@ export async function buildStatusCommandReportData(
     { key: "Kind", header: "Kind", minWidth: 6 },
     { key: "Age", header: "Age", minWidth: 9 },
     { key: "Model", header: "Model", minWidth: 14 },
+    { key: "Runtime", header: "Runtime", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
+    // Verbose mode exposes prompt-cache details because it can widen rows substantially.
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
   const securityAuditLines = params.securityAudit
@@ -134,6 +144,14 @@ export async function buildStatusCommandReportData(
         ),
         params.theme.muted(`Deep probe: ${params.formatCliCommand("openclaw status --deep")}`),
       ];
+  const retainedLost = params.summary.taskAuditRetainedLost;
+  // Lost task retention is operational noise unless the user requested deep/verbose status.
+  const retainedLostLine =
+    (params.opts.deep || params.opts.verbose) && retainedLost && retainedLost.count > 0
+      ? params.theme.muted(
+          `${retainedLost.count} lost task${retainedLost.count === 1 ? "" : "s"} retained until ${timestampMsToIsoString(retainedLost.nextCleanupAfter) ?? "cleanupAfter"}`,
+        )
+      : null;
 
   return {
     heading: params.theme.heading,
@@ -143,6 +161,7 @@ export async function buildStatusCommandReportData(
     overviewRows,
     showTaskMaintenanceHint: params.summary.taskAudit.errors > 0,
     taskMaintenanceHint: `Task maintenance: ${params.formatCliCommand("openclaw tasks maintenance --apply")}`,
+    retainedLostTaskLine: retainedLostLine,
     pluginCompatibilityLines: buildStatusPluginCompatibilityLines({
       notices: params.pluginCompatibility,
       formatNotice: params.formatPluginCompatibilityNotice,
@@ -154,6 +173,12 @@ export async function buildStatusCommandReportData(
       warn: params.theme.warn,
       muted: params.theme.muted,
       formatCliCommand: params.formatCliCommand,
+    }),
+    modelSelectionLines: buildStatusModelSelectionLines({
+      recent: params.summary.sessions.recent,
+      shortenText: params.shortenText,
+      warn: params.theme.warn,
+      muted: params.theme.muted,
     }),
     securityAuditLines,
     channelsColumns: statusChannelsTableColumns,

@@ -1,3 +1,4 @@
+// Qqbot tests cover format ref entry plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatRefEntryForAgent } from "./format-ref-entry.js";
 import type { RefIndexEntry } from "./types.js";
@@ -37,7 +38,7 @@ describe("engine/ref/format-ref-entry", () => {
     );
 
     expect(formatted).toBe(
-      'see these MEDIA:/tmp/photo.png MEDIA:https://example.test/voice.amr (transcript: "spoken words") [source: platform ASR] [file: notes.txt]',
+      'see these [image: /tmp/photo.png] [voice: https://example.test/voice.amr] (transcript: "spoken words") [source: platform ASR] [file: notes.txt]',
     );
   });
 
@@ -49,7 +50,7 @@ describe("engine/ref/format-ref-entry", () => {
           attachments: [{ type: "voice", localPath: "/tmp/voice.wav" }],
         }),
       ),
-    ).toBe("MEDIA:/tmp/voice.wav");
+    ).toBe("[voice: /tmp/voice.wav]");
   });
 
   it("returns an explicit empty marker for blank entries", () => {

@@ -1,8 +1,10 @@
+// Builds channel setup metadata from plugin light surfaces.
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
 function mergeChannelPluginSection<T>(
   baseValue: T | undefined,
@@ -49,7 +51,7 @@ export function mergeSetupRuntimeChannelPlugin(
   } as ChannelPlugin;
 }
 
-export type BundledRuntimeChannelRegistration = {
+type BundledRuntimeChannelRegistration = {
   id?: string;
   loadChannelPlugin?: () => ChannelPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
@@ -125,6 +127,7 @@ export function loadBundledRuntimeChannelPlugin(params: {
 export function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   usesBundledSetupContract?: boolean;
   loadError?: unknown;
 } {
@@ -137,6 +140,7 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
     loadSetupPlugin?: unknown;
     loadSetupSecrets?: unknown;
     setChannelRuntime?: unknown;
+    registerSetupRuntime?: unknown;
   };
   if (
     setupEntryRecord.kind === "bundled-channel-setup-entry" &&
@@ -166,6 +170,13 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
                 ) => void,
               }
             : {}),
+          ...(typeof setupEntryRecord.registerSetupRuntime === "function"
+            ? {
+                registerSetupRuntime: setupEntryRecord.registerSetupRuntime as (
+                  api: OpenClawPluginApi,
+                ) => void,
+              }
+            : {}),
         };
       }
     } catch (err) {
@@ -174,12 +185,18 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
   }
   const setup = resolved as {
     plugin?: unknown;
+    setChannelRuntime?: unknown;
   };
   if (!setup.plugin || typeof setup.plugin !== "object") {
     return {};
   }
   return {
     plugin: setup.plugin as ChannelPlugin,
+    ...(typeof setup.setChannelRuntime === "function"
+      ? {
+          setChannelRuntime: setup.setChannelRuntime as (runtime: PluginRuntime) => void,
+        }
+      : {}),
   };
 }
 
@@ -202,6 +219,22 @@ export function shouldLoadChannelPluginInSetupRuntime(params: {
   }
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
+  );
+}
+
+export function shouldDeferConfiguredChannelFullRuntimeMerge(params: {
+  manifestChannels: string[];
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  preferSetupRuntimeForChannelPlugins?: boolean;
+}): boolean {
+  return (
+    params.preferSetupRuntimeForChannelPlugins === true &&
+    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true &&
+    params.manifestChannels.some((channelId) =>
+      isChannelConfigured(params.cfg, channelId, params.env),
+    )
   );
 }
 

@@ -1,9 +1,11 @@
+/** Describes package-authored plugin install source metadata and pinning warnings. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginPackageInstall } from "./manifest.js";
 
-export type PluginInstallSourceWarning =
+/** Warning emitted while describing plugin package install source metadata. */
+type PluginInstallSourceWarning =
   | "invalid-clawhub-spec"
   | "invalid-npm-spec"
   | "invalid-default-choice"
@@ -14,13 +16,15 @@ export type PluginInstallSourceWarning =
   | "npm-spec-missing-integrity"
   | "npm-spec-package-name-mismatch";
 
-export type PluginInstallNpmPinState =
+/** Pinning state for npm plugin install metadata. */
+type PluginInstallNpmPinState =
   | "exact-with-integrity"
   | "exact-without-integrity"
   | "floating-with-integrity"
   | "floating-without-integrity";
 
-export type PluginInstallNpmSourceInfo = {
+/** Parsed npm install source metadata for a plugin package. */
+type PluginInstallNpmSourceInfo = {
   spec: string;
   packageName: string;
   expectedPackageName?: string;
@@ -31,17 +35,20 @@ export type PluginInstallNpmSourceInfo = {
   pinState: PluginInstallNpmPinState;
 };
 
-export type PluginInstallLocalSourceInfo = {
+/** Parsed local install source metadata for a plugin package. */
+type PluginInstallLocalSourceInfo = {
   path: string;
 };
 
-export type PluginInstallClawHubSourceInfo = {
+/** Parsed ClawHub install source metadata for a plugin package. */
+type PluginInstallClawHubSourceInfo = {
   spec: string;
   packageName: string;
   version?: string;
   exactVersion: boolean;
 };
 
+/** Parsed plugin install sources plus validation warnings. */
 export type PluginInstallSourceInfo = {
   defaultChoice?: PluginPackageInstall["defaultChoice"];
   clawhub?: PluginInstallClawHubSourceInfo;
@@ -50,7 +57,8 @@ export type PluginInstallSourceInfo = {
   warnings: readonly PluginInstallSourceWarning[];
 };
 
-export type DescribePluginInstallSourceOptions = {
+/** Options for describing expected plugin install source metadata. */
+type DescribePluginInstallSourceOptions = {
   expectedPackageName?: string | null;
 };
 
@@ -76,6 +84,7 @@ function normalizeExpectedPackageName(value: string | null | undefined): string 
   return parseRegistryNpmSpec(expected)?.name ?? expected;
 }
 
+/** Describes plugin install source metadata and warnings without mutating manifests. */
 export function describePluginInstallSource(
   install: PluginPackageInstall,
   options?: DescribePluginInstallSourceOptions,

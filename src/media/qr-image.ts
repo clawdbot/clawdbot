@@ -1,6 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+// QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
-import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
+import { tempWorkspace } from "../infra/private-temp-workspace.js";
+import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;
 const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
@@ -15,6 +16,7 @@ type QrPngRenderOptions = {
   marginModules?: number;
 };
 
+/** Temp-file write options kept to filename segments so callers cannot choose parent paths. */
 type QrPngTempFileOptions = QrPngRenderOptions & {
   tmpRoot: string;
   dirPrefix: string;
@@ -54,6 +56,7 @@ function resolveQrTempPathSegment(name: string, value: string): string {
   return value;
 }
 
+/** Renders QR text as raw PNG base64 after validating bounded renderer options. */
 export async function renderQrPngBase64(
   input: string,
   opts: QrPngRenderOptions = {},
@@ -73,21 +76,19 @@ export async function renderQrPngBase64(
     max: MAX_QR_PNG_MARGIN_MODULES,
   });
   const qrCode = await loadQrCodeRuntime();
-  const dataUrl = await qrCode.toDataURL(normalizeQrText(input), {
+  const png = await qrCode.toBuffer(input, {
     margin: marginModules,
     scale,
-    type: "image/png",
   });
-  if (!dataUrl.startsWith(QR_PNG_DATA_URL_PREFIX)) {
-    throw new Error("Expected qrcode to return a PNG data URL.");
-  }
-  return dataUrl.slice(QR_PNG_DATA_URL_PREFIX.length);
+  return png.toString("base64");
 }
 
-export function formatQrPngDataUrl(base64: string): string {
+/** Wraps PNG base64 in the exact data URL prefix expected by chat/media callers. */
+function formatQrPngDataUrl(base64: string): string {
   return `${QR_PNG_DATA_URL_PREFIX}${base64}`;
 }
 
+/** Renders QR text as a PNG data URL. */
 export async function renderQrPngDataUrl(
   input: string,
   opts: QrPngRenderOptions = {},
@@ -95,6 +96,7 @@ export async function renderQrPngDataUrl(
   return formatQrPngDataUrl(await renderQrPngBase64(input, opts));
 }
 
+/** Writes QR PNG output into a scoped temp directory and returns that directory as a media root. */
 export async function writeQrPngTempFile(
   input: string,
   opts: QrPngTempFileOptions,
@@ -102,17 +104,17 @@ export async function writeQrPngTempFile(
   const dirPrefix = resolveQrTempPathSegment("dirPrefix", opts.dirPrefix);
   const fileName = resolveQrTempPathSegment("fileName", opts.fileName ?? "qr.png");
   const pngBase64 = await renderQrPngBase64(input, opts);
-  const dirPath = await mkdtemp(path.join(opts.tmpRoot, dirPrefix));
-  const filePath = path.join(dirPath, fileName);
+  const workspace = await tempWorkspace({ rootDir: opts.tmpRoot, prefix: dirPrefix });
+  const dirPath = workspace.dir;
   try {
-    await writeFile(filePath, Buffer.from(pngBase64, "base64"));
+    const filePath = await workspace.write(fileName, Buffer.from(pngBase64, "base64"));
+    return {
+      filePath,
+      dirPath,
+      mediaLocalRoots: [dirPath],
+    };
   } catch (err) {
-    await rm(dirPath, { recursive: true, force: true }).catch(() => {});
+    await workspace.cleanup();
     throw err;
   }
-  return {
-    filePath,
-    dirPath,
-    mediaLocalRoots: [dirPath],
-  };
 }

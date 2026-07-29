@@ -1,3 +1,4 @@
+// Browser tests cover client fetch.attach only plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -37,7 +38,9 @@ describe("browser client fetch attachOnly diagnostics", () => {
       socket.on("close", () => sockets.delete(socket));
       socket.on("error", () => {});
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const port = (server.address() as { port: number }).port;
     const configPath = path.join(tempHome.home, ".openclaw", "openclaw.json");
     await fs.writeFile(
@@ -72,13 +75,17 @@ describe("browser client fetch attachOnly diagnostics", () => {
       const message = thrown instanceof Error ? thrown.message : String(thrown);
       expect(message).toContain("browser profile is external to OpenClaw");
       expect(message).toContain("Restarting the OpenClaw gateway will not launch it");
+      expect(message).toContain("Retry the browser tool once");
+      expect(message).toContain("If the same error persists");
       expect(message).not.toContain("Restart the OpenClaw gateway");
       expect(message).not.toContain("Do NOT retry the browser tool");
     } finally {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });

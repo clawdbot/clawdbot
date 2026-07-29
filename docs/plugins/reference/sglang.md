@@ -16,7 +16,7 @@ Adds SGLang model provider support to OpenClaw.
 
 ## Surface
 
-providers: sglang
+providers: `sglang`
 
 ## Related docs
 

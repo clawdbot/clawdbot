@@ -1,10 +1,13 @@
+// Defines plugin entry and install configuration types.
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
-    /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
+    /** Controls prompt mutation via before_prompt_build. */
     allowPromptInjection?: boolean;
     /**
-     * Controls access to raw conversation content from llm_input/llm_output/agent_end hooks.
+     * Controls access to raw conversation content from conversation hooks including
+     * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,
+     * before_agent_finalize, and agent_end.
      * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
      */
     allowConversationAccess?: boolean;
@@ -21,6 +24,17 @@ export type PluginEntryConfig = {
      * Use "*" to explicitly allow any model for this plugin.
      */
     allowedModels?: string[];
+  };
+  llm?: {
+    /** Explicitly allow this plugin to request a model override for api.runtime.llm.complete. */
+    allowModelOverride?: boolean;
+    /**
+     * Allowed completion model override targets as canonical provider/model refs.
+     * Use "*" to explicitly allow any model for this plugin.
+     */
+    allowedModels?: string[];
+    /** Explicitly allow this plugin to run completions against a non-default agent id. */
+    allowAgentIdOverride?: boolean;
   };
   config?: Record<string, unknown>;
 };
@@ -51,16 +65,6 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
-  /**
-   * Controls how bundled plugins participate in runtime provider discovery when
-   * `allow` is configured.
-   *
-   * - `"allowlist"` (default): bundled provider plugins are gated by `allow`
-   *   and `entries.<id>.enabled` like third-party plugins.
-   * - `"compat"`: legacy mode for migrated configs; bundled provider plugins
-   *   can be force-loaded regardless of the allowlist.
-   */
-  bundledDiscovery?: "compat" | "allowlist";
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;

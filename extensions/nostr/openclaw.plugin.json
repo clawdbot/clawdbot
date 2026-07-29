@@ -1,12 +1,11 @@
 {
   "id": "nostr",
+  "name": "Nostr",
+  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
   "activation": {
     "onStartup": false
   },
   "channels": ["nostr"],
-  "channelEnvVars": {
-    "nostr": ["NOSTR_PRIVATE_KEY"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

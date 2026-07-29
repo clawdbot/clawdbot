@@ -21,14 +21,21 @@ export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
 export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
+export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
+RUNTIME_ROOT="$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT"
+STATE_HOME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT:-$RUNTIME_ROOT/state-home}"
 mkdir -p "$ARTIFACT_ROOT"
-export TMPDIR="$ARTIFACT_ROOT/tmp"
-mkdir -p "$TMPDIR"
+mkdir -p "$RUNTIME_ROOT"
+export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
+export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
+mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
 export NPM_CONFIG_PREFIX="$npm_config_prefix"
-export npm_config_cache="$ARTIFACT_ROOT/npm-cache"
+export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"
+export NPM_CONFIG_CACHE="$npm_config_cache"
 export npm_config_tmp="$TMPDIR"
 mkdir -p "$npm_config_prefix" "$npm_config_cache"
+chmod 700 "$npm_config_cache" || true
 export PATH="$npm_config_prefix/bin:$PATH"
 
 SUMMARY_JSON="${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-$ARTIFACT_ROOT/summary.json}"
@@ -37,6 +44,9 @@ BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SUR
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
+COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
@@ -51,6 +61,7 @@ start_seconds=""
 status_seconds=""
 healthz_seconds=""
 readyz_seconds=""
+update_restart_seconds=""
 
 BASELINE_INSTALL_LOG="$ARTIFACT_ROOT/baseline-install.log"
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
@@ -63,6 +74,11 @@ READYZ_JSON="$ARTIFACT_ROOT/readyz.json"
 STATUS_JSON="$ARTIFACT_ROOT/status.json"
 STATUS_ERR="$ARTIFACT_ROOT/status.err"
 BASELINE_CONFIG_VALIDATE_LOG="$ARTIFACT_ROOT/baseline-config-validate.log"
+BASELINE_SERVICE_INSTALL_JSON="$ARTIFACT_ROOT/baseline-service-install.json"
+BASELINE_SERVICE_INSTALL_ERR="$ARTIFACT_ROOT/baseline-service-install.err"
+SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
+SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
+SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
@@ -113,6 +129,17 @@ normalize_baseline() {
   validate_baseline_package_spec "$baseline_spec"
 }
 
+validate_update_restart_mode() {
+  case "$UPDATE_RESTART_MODE" in
+    manual | auto-auth)
+      ;;
+    *)
+      echo "OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE must be manual or auto-auth; got: $UPDATE_RESTART_MODE" >&2
+      return 1
+      ;;
+  esac
+}
+
 json_event() {
   local phase="$1"
   local status="$2"
@@ -139,7 +166,9 @@ write_summary() {
     SUMMARY_CANDIDATE_VERSION="$candidate_version" \
     SUMMARY_INSTALLED_VERSION="$installed_version" \
     SUMMARY_SCENARIO="$SCENARIO" \
+    SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     SUMMARY_START_SECONDS="$start_seconds" \
+    SUMMARY_UPDATE_RESTART_SECONDS="$update_restart_seconds" \
     SUMMARY_HEALTHZ_SECONDS="$healthz_seconds" \
     SUMMARY_READYZ_SECONDS="$readyz_seconds" \
     SUMMARY_STATUS_SECONDS="$status_seconds" \
@@ -173,8 +202,10 @@ const summary = {
     version: process.env.SUMMARY_CANDIDATE_VERSION || null,
   },
   installedVersion: process.env.SUMMARY_INSTALLED_VERSION || null,
+  updateRestartMode: process.env.SUMMARY_UPDATE_RESTART_MODE || "manual",
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
+    updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
     healthzSeconds: numberOrNull(process.env.SUMMARY_HEALTHZ_SECONDS),
     readyzSeconds: numberOrNull(process.env.SUMMARY_READYZ_SECONDS),
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
@@ -197,6 +228,13 @@ cleanup() {
     kill "$plugin_registry_pid" >/dev/null 2>&1 || true
   fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
+  if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+    local shim_pid
+    shim_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
+    if [[ "$shim_pid" =~ ^[0-9]+$ ]] && [ "$shim_pid" -gt 1 ]; then
+      openclaw_e2e_terminate_gateways "$shim_pid"
+    fi
+  fi
 }
 
 on_error() {
@@ -359,7 +397,7 @@ fs.writeFileSync(
     {
       id: "brave",
       activation: { onStartup: false },
-      providerAuthEnvVars: { brave: ["BRAVE_API_KEY"] },
+      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
       contracts: { webSearchProviders: ["brave"] },
       configSchema: {
         type: "object",
@@ -387,7 +425,8 @@ fs.writeFileSync(
 );
 NODE
   tar -czf "$tarball" -C "$fixture_root" package
-  node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
     "@openclaw/brave-plugin" \
     "2026.5.2" \
@@ -402,13 +441,13 @@ NODE
       return 0
     fi
     if ! kill -0 "$plugin_registry_pid" 2>/dev/null; then
-      cat "$log_file" >&2 || true
+      openclaw_e2e_print_log "$log_file" >&2
       return 1
     fi
     sleep 0.1
   done
 
-  cat "$log_file" >&2 || true
+  openclaw_e2e_print_log "$log_file" >&2
   echo "Timed out waiting for configured plugin install npm fixture registry." >&2
   return 1
 }
@@ -611,16 +650,17 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
-  mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT"
+  rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
+  mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
 
 install_baseline() {
   normalize_baseline
   echo "Installing baseline package: $baseline_spec"
-  if ! npm install -g --prefix "$npm_config_prefix" "$baseline_spec" --no-fund --no-audit >"$BASELINE_INSTALL_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$npm_config_prefix" "$baseline_spec" --no-fund --no-audit >"$BASELINE_INSTALL_LOG" 2>&1; then
     echo "baseline npm install failed" >&2
-    cat "$BASELINE_INSTALL_LOG" >&2 || true
+    openclaw_e2e_print_log "$BASELINE_INSTALL_LOG" >&2
     return 1
   fi
   if ! command -v openclaw >/dev/null; then
@@ -637,7 +677,7 @@ install_baseline() {
   fi
   baseline_version="$installed_version"
   local version_output
-  if ! version_output="$(openclaw --version 2>&1)"; then
+  if ! version_output="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw --version 2>&1)"; then
     echo "baseline openclaw --version failed" >&2
     echo "$version_output" >&2
     return 1
@@ -651,7 +691,16 @@ install_baseline() {
 
 seed_state() {
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
-  openclaw_test_state_create "$ARTIFACT_ROOT/state-home" minimal
+  if [ "$ROOT_MANAGED_VPS" = "1" ]; then
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "root-managed VPS survivor mode must run as uid 0" >&2
+      return 1
+    fi
+    rm -rf /root/.openclaw /root/workspace
+    openclaw_test_state_create /root minimal
+  else
+    openclaw_test_state_create "$STATE_HOME_ROOT" minimal
+  fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 }
@@ -663,11 +712,274 @@ apply_baseline_config_recipe() {
 }
 
 validate_baseline_config() {
-  if ! openclaw config validate >"$BASELINE_CONFIG_VALIDATE_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate >"$BASELINE_CONFIG_VALIDATE_LOG" 2>&1; then
     echo "generated baseline config failed baseline validation" >&2
-    cat "$BASELINE_CONFIG_VALIDATE_LOG" >&2 || true
+    openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG" >&2
     return 1
   fi
+}
+
+install_update_restart_systemctl_shim() {
+  local shim_dir="$npm_config_prefix/bin"
+  mkdir -p "$shim_dir"
+  cat >"$shim_dir/systemctl" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
+pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
+daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+printf '%s\n' "$*" >>"$log_file"
+
+filtered=()
+for ((i = 1; i <= $#; i++)); do
+  arg="${!i}"
+  case "$arg" in
+    --user | --quiet | --no-page | --now)
+      ;;
+    --property)
+      i=$((i + 1))
+      ;;
+    *)
+      filtered+=("$arg")
+      ;;
+  esac
+done
+
+command="${filtered[0]:-status}"
+
+is_running() {
+  [ -s "$pid_file" ] || return 1
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" >/dev/null 2>&1
+}
+
+stop_gateway() {
+  [ -s "$pid_file" ] || return 0
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
+    kill "$pid" >/dev/null 2>&1 || true
+    for _ in $(seq 1 100); do
+      kill -0 "$pid" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$pid_file"
+}
+
+unit_path() {
+  printf '%s/.config/systemd/user/openclaw-gateway.service\n' "${HOME:?missing HOME}"
+}
+
+load_unit_environment() {
+  local unit="$1"
+  while IFS= read -r line; do
+    case "$line" in
+      EnvironmentFile=*)
+        local spec="${line#EnvironmentFile=}"
+        for token in $spec; do
+          local file="${token#-}"
+          [ -f "$file" ] || continue
+          set -a
+          # shellcheck disable=SC1090
+          . "$file"
+          set +a
+        done
+        ;;
+      Environment=*)
+        local assignment="${line#Environment=}"
+        assignment="${assignment#\"}"
+        assignment="${assignment%\"}"
+        export "$assignment"
+        ;;
+    esac
+  done <"$unit"
+}
+
+start_gateway() {
+  local unit
+  local exec_start
+  unit="$(unit_path)"
+  exec_start="$(sed -n 's/^ExecStart=//p' "$unit" | tail -n 1)"
+  [ -n "$exec_start" ] || {
+    echo "systemctl shim could not find ExecStart in $unit" >&2
+    return 1
+  }
+  (
+    load_unit_environment "$unit"
+    nohup bash -lc "exec $exec_start" >>"$daemon_log" 2>&1 &
+    printf '%s\n' "$!" >"$pid_file"
+  )
+}
+
+case "$command" in
+  daemon-reload | enable | disable)
+    exit 0
+    ;;
+  status)
+    is_running && exit 0
+    exit 0
+    ;;
+  stop)
+    stop_gateway
+    exit 0
+    ;;
+  restart | start)
+    stop_gateway
+    start_gateway
+    exit 0
+    ;;
+  is-enabled)
+    exit 0
+    ;;
+  is-active)
+    is_running && exit 0
+    exit 3
+    ;;
+  show)
+    if is_running; then
+      printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
+    else
+      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=0\nExecMainCode=0\n'
+    fi
+    exit 0
+    ;;
+  *)
+    echo "systemctl shim unsupported command: $*" >&2
+    exit 1
+    ;;
+esac
+SHIM
+  chmod +x "$shim_dir/systemctl"
+  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
+  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
+  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
+  export PATH="$shim_dir:$PATH"
+}
+
+install_update_restart_service_unit() {
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$BASELINE_SERVICE_INSTALL_JSON" 2>"$BASELINE_SERVICE_INSTALL_ERR"; then
+    echo "baseline gateway service install failed" >&2
+    openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_ERR" >&2
+    openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_JSON" >&2
+    return 1
+  fi
+}
+
+seed_update_restart_probe_device_auth() {
+  node --input-type=module <<'NODE'
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+const stateDir = process.env.OPENCLAW_STATE_DIR;
+if (!stateDir) {
+  throw new Error("missing OPENCLAW_STATE_DIR");
+}
+
+const base64UrlEncode = (buf) =>
+  buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+const ed25519SpkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
+const spki = crypto.createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
+const rawPublicKey =
+  spki.length === ed25519SpkiPrefix.length + 32 &&
+  spki.subarray(0, ed25519SpkiPrefix.length).equals(ed25519SpkiPrefix)
+    ? spki.subarray(ed25519SpkiPrefix.length)
+    : spki;
+const publicKeyRaw = base64UrlEncode(rawPublicKey);
+const deviceId = crypto.createHash("sha256").update(rawPublicKey).digest("hex");
+const token = base64UrlEncode(crypto.randomBytes(32));
+const now = Date.now();
+const scopes = ["operator.read"];
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // best-effort inside Docker
+  }
+}
+
+writeJson(path.join(stateDir, "identity", "device.json"), {
+  version: 1,
+  deviceId,
+  publicKeyPem,
+  privateKeyPem,
+  createdAtMs: now,
+});
+writeJson(path.join(stateDir, "identity", "device-auth.json"), {
+  version: 1,
+  deviceId,
+  tokens: {
+    operator: {
+      token,
+      role: "operator",
+      scopes,
+      updatedAtMs: now,
+    },
+  },
+});
+writeJson(path.join(stateDir, "devices", "paired.json"), {
+  [deviceId]: {
+    deviceId,
+    publicKey: publicKeyRaw,
+    displayName: "upgrade survivor restart probe",
+    platform: process.platform,
+    clientId: "upgrade-survivor",
+    clientMode: "probe",
+    role: "operator",
+    roles: ["operator"],
+    scopes,
+    approvedScopes: scopes,
+    tokens: {
+      operator: {
+        token,
+        role: "operator",
+        scopes,
+        createdAtMs: now,
+      },
+    },
+    createdAtMs: now,
+    approvedAtMs: now,
+  },
+});
+writeJson(path.join(stateDir, "devices", "pending.json"), {});
+NODE
+}
+
+write_update_restart_service_secretref_env() {
+  mkdir -p "$OPENCLAW_STATE_DIR"
+  local dotenv_path="$OPENCLAW_STATE_DIR/.env"
+  local tmp_path="$dotenv_path.tmp.$$"
+  if [ -f "$dotenv_path" ]; then
+    grep -v '^GATEWAY_AUTH_TOKEN_REF=' "$dotenv_path" >"$tmp_path" || true
+  else
+    : >"$tmp_path"
+  fi
+  # Managed restarts resolve SecretRefs from service-owned durable env, not the update caller.
+  printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
+  mv "$tmp_path" "$dotenv_path"
+}
+
+prepare_update_restart_probe() {
+  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
+    return 0
+  fi
+  echo "Preparing configured-auth gateway for automatic update restart."
+  install_update_restart_systemctl_shim
+  seed_update_restart_probe_device_auth
+  start_gateway legacy-ready-log-ok
+  write_update_restart_service_secretref_env
+  install_update_restart_service_unit
 }
 
 assert_baseline_state() {
@@ -712,29 +1024,105 @@ resolve_candidate_version() {
   export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 
+candidate_update_spec() {
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    printf '%s\n' "$CANDIDATE_SPEC"
+    return 0
+  fi
+  case "$CANDIDATE_SPEC" in
+    file:*)
+      printf '%s\n' "$CANDIDATE_SPEC"
+      ;;
+    *)
+      printf 'file:%s\n' "$CANDIDATE_SPEC"
+      ;;
+  esac
+}
+
+assert_update_json_ok() {
+  local file="$1"
+  node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    const raw = fs.readFileSync(file, "utf8");
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch (err) {
+      // Published baselines may emit legacy service-control logs before the JSON payload.
+      const jsonStart = raw.indexOf("{");
+      if (jsonStart === -1) {
+        throw err;
+      }
+      result = JSON.parse(raw.slice(jsonStart));
+    }
+    if (!result || result.status !== "ok") {
+      throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
+    }
+  ' "$file"
+}
+
 update_candidate() {
-  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$CANDIDATE_SPEC ($candidate_version)"
-  if ! openclaw update --tag "$CANDIDATE_SPEC" --yes --json --no-restart >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
+  local update_spec
+  update_spec="$(candidate_update_spec)"
+  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
+  local update_start=""
+  local update_end=""
+  local update_args=(update --tag "$update_spec" --yes --json)
+  local update_env=(
+    env
+    -u OPENCLAW_GATEWAY_TOKEN
+    -u OPENCLAW_GATEWAY_PASSWORD
+    -u OPENCLAW_ALLOW_ROOT
+  )
+  if [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+    update_args+=(--no-restart)
+  else
+    update_start="$(node -e "process.stdout.write(String(Date.now()))")"
+  fi
+  if [ "$ROOT_MANAGED_VPS" != "1" ]; then
+    update_env+=(OPENCLAW_ALLOW_ROOT=1)
+  fi
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
     echo "openclaw update failed" >&2
-    cat "$UPDATE_ERR" >&2 || true
-    cat "$UPDATE_JSON" >&2 || true
+    openclaw_e2e_print_log "$UPDATE_ERR" >&2
+    openclaw_e2e_print_log "$UPDATE_JSON" >&2
     return 1
+  fi
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    update_end="$(node -e "process.stdout.write(String(Date.now()))")"
+    update_restart_seconds=$(((update_end - update_start + 999) / 1000))
+    assert_update_json_ok "$UPDATE_JSON"
   fi
   installed_version="$(read_installed_version)"
 }
 
+assert_root_managed_vps_cli_usable() {
+  if [ "$ROOT_MANAGED_VPS" != "1" ]; then
+    return 0
+  fi
+  local root_cli_env=(
+    env
+    -u OPENCLAW_GATEWAY_TOKEN
+    -u OPENCLAW_GATEWAY_PASSWORD
+    -u OPENCLAW_ALLOW_ROOT
+  )
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw config file >"$ARTIFACT_ROOT/root-vps-config-file.out" 2>"$ARTIFACT_ROOT/root-vps-config-file.err"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw plugins >"$ARTIFACT_ROOT/root-vps-plugins.out" 2>"$ARTIFACT_ROOT/root-vps-plugins.err"
+}
+
 run_doctor() {
-  if ! openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
     echo "openclaw doctor failed" >&2
-    cat "$DOCTOR_LOG" >&2 || true
+    openclaw_e2e_print_log "$DOCTOR_LOG" >&2
     return 1
   fi
 }
 
 validate_post_doctor_config() {
-  if ! openclaw config validate >>"$DOCTOR_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate >>"$DOCTOR_LOG" 2>&1; then
     echo "post-doctor config validation failed" >&2
-    cat "$DOCTOR_LOG" >&2 || true
+    openclaw_e2e_print_log "$DOCTOR_LOG" >&2
     return 1
   fi
 }
@@ -763,6 +1151,9 @@ probe_gateway_endpoint() {
   if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING:-}" ]; then
     args+=(--allow-failing "$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING")
   fi
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED:-}" = "1" ]; then
+    args+=(--allow-degraded-ready)
+  fi
   args+=(--out "$out_file")
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${args[@]}"
@@ -772,52 +1163,63 @@ probe_gateway_endpoint() {
 
 start_gateway() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}"
+  local budget
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
+  env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    printf '%s\n' "$gateway_pid" >"$SYSTEMCTL_SHIM_PID_FILE"
+  fi
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
     echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
-    cat "$GATEWAY_LOG" >&2 || true
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     return 1
   fi
 }
 
+ensure_gateway_started() {
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    return 0
+  fi
+  start_gateway
+}
+
 check_gateway_probes() {
   healthz_seconds="$(probe_gateway_endpoint /healthz live "$HEALTHZ_JSON")"
-  export OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING="discord,telegram,whatsapp,feishu,matrix"
   readyz_seconds="$(probe_gateway_endpoint /readyz ready "$READYZ_JSON")"
-  unset OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING
 }
 
 check_gateway_status() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
+  local budget
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
   local status_start
   local status_end
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-  if ! openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
     echo "gateway status failed" >&2
-    cat "$STATUS_ERR" >&2 || true
-    cat "$GATEWAY_LOG" >&2 || true
+    openclaw_e2e_print_log "$STATUS_ERR" >&2
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     return 1
   fi
   status_end="$(node -e "process.stdout.write(String(Date.now()))")"
   status_seconds=$(((status_end - status_start + 999) / 1000))
   if [ "$status_seconds" -gt "$budget" ]; then
     echo "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s" >&2
-    cat "$STATUS_JSON" >&2 || true
+    openclaw_e2e_print_log "$STATUS_JSON" >&2
     return 1
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }
 
 phase storage-preflight storage_preflight
+phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase seed-state seed_state
@@ -830,7 +1232,9 @@ phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
+phase prepare-update-restart-probe prepare_update_restart_probe
 phase update-candidate update_candidate
+phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase configure-configured-plugin-install-fixture-registry configure_configured_plugin_install_fixture_registry
 phase doctor run_doctor
@@ -838,8 +1242,8 @@ phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_depend
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
-phase gateway-start start_gateway
+phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
 
-echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} startup=${start_seconds}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s updateRestart=${update_restart_seconds:-manual}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."

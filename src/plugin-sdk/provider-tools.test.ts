@@ -1,13 +1,16 @@
+// Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
 import {
-  applyXaiModelCompat,
   buildProviderToolCompatFamilyHooks,
+  inspectDeepSeekToolSchemas,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
+  inspectLlamacppGbnfToolSchemas,
   inspectOpenAIToolSchemas,
+  normalizeDeepSeekToolSchemas,
   normalizeGeminiToolSchemas,
+  normalizeLlamacppGbnfToolSchemas,
   normalizeOpenAIToolSchemas,
-  resolveXaiModelCompatPatch,
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
@@ -32,9 +35,19 @@ describe("buildProviderToolCompatFamilyHooks", () => {
   it("covers the tool compat family matrix", () => {
     const cases = [
       {
+        family: "deepseek" as const,
+        normalizeToolSchemas: normalizeDeepSeekToolSchemas,
+        inspectToolSchemas: inspectDeepSeekToolSchemas,
+      },
+      {
         family: "gemini" as const,
         normalizeToolSchemas: normalizeGeminiToolSchemas,
         inspectToolSchemas: inspectGeminiToolSchemas,
+      },
+      {
+        family: "llamacpp-gbnf" as const,
+        normalizeToolSchemas: normalizeLlamacppGbnfToolSchemas,
+        inspectToolSchemas: inspectLlamacppGbnfToolSchemas,
       },
       {
         family: "openai" as const,
@@ -49,6 +62,286 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.normalizeToolSchemas).toBe(testCase.normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(testCase.inspectToolSchemas);
     }
+  });
+
+  it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
+    const tools = [
+      {
+        name: "cron",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            job: {
+              type: "object",
+              properties: {
+                declarationKey: {
+                  type: "string",
+                  maxLength: 1999,
+                  pattern: "^\\S+$",
+                },
+                trigger: {
+                  anyOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        script: { type: "string", minLength: 1, maxLength: 65_536 },
+                        boundary: { type: "string", maxLength: 2000 },
+                      },
+                    },
+                    { type: "null" },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "ollama",
+      modelId: "qwen3.5",
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        job: {
+          type: "object",
+          properties: {
+            declarationKey: { type: "string", maxLength: 1999 },
+            trigger: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    script: { type: "string", minLength: 1 },
+                    boundary: { type: "string" },
+                  },
+                },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(hooks.inspectToolSchemas({ provider: "ollama", tools: normalized })).toEqual([]);
+  });
+
+  it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: {} }] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      model: {
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
+  it("applies ChatGPT Responses strict compat on first-party OpenAI API hosts", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: {} }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      model: {
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
+  it("leaves non-openai providers untouched by OpenAI strict compat", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: { type: "string" } }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+      model: {
+        provider: "anthropic",
+        api: "anthropic-messages",
+        id: "claude-opus-4-6",
+      } as never,
+      tools,
+    });
+    expect(normalized).toBe(tools);
+  });
+
+  it("collapses anyOf and oneOf unions for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "unusual-whales__get_balance_sheet_screener",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            date: {
+              description: "Balance sheet date",
+              anyOf: [{ type: "string" }, { type: "integer" }],
+            },
+            ticker: {
+              oneOf: [{ type: "string" }, { type: "null" }],
+            },
+          },
+          required: ["date"],
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        date: {
+          description: "Balance sheet date",
+          type: "string",
+        },
+        ticker: {
+          type: "string",
+          nullable: true,
+        },
+      },
+      required: ["date"],
+    });
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: {
+          provider: "deepseek",
+          api: "openai-completions",
+          id: "deepseek-v4-pro",
+        } as never,
+        tools: normalized,
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("preserves string-const unions as a flat enum for the deepseek family", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/86468 —
+    // Typebox `Type.Union([Type.Literal(...)])` collapses to anyOf of consts;
+    // the previous normalizer kept only the first const, hiding every other
+    // literal from the model.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "feishu_update_doc",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              description: "更新模式（必填）",
+              anyOf: [
+                { const: "overwrite", type: "string" },
+                { const: "append", type: "string" },
+                { const: "replace_range", type: "string" },
+              ],
+            },
+            optional_mode: {
+              anyOf: [
+                { const: "a", type: "string" },
+                { const: "b", type: "string" },
+                { type: "null" },
+              ],
+            },
+            single_const: {
+              anyOf: [{ const: "only", type: "string" }],
+            },
+          },
+          required: ["mode"],
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          description: "更新模式（必填）",
+          type: "string",
+          enum: ["overwrite", "append", "replace_range"],
+        },
+        optional_mode: {
+          type: "string",
+          enum: ["a", "b"],
+          nullable: true,
+        },
+        single_const: {
+          const: "only",
+          type: "string",
+        },
+      },
+      required: ["mode"],
+    });
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: {
+          provider: "deepseek",
+          api: "openai-completions",
+          id: "deepseek-v4-pro",
+        } as never,
+        tools: normalized,
+      }),
+    ).toStrictEqual([]);
   });
 
   it("normalizes parameter-free and typed-object schemas for the openai family", () => {
@@ -88,7 +381,59 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
+  });
+
+  it("repairs null and inferred OpenAI tool schema types", () => {
+    expect(
+      normalizeOpenAIParameters({
+        type: null,
+        description: null,
+        default: null,
+        properties: {
+          payload: {
+            properties: { value: { type: "string", format: null } },
+          },
+          tags: {
+            items: { type: "string" },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+    });
+  });
+
+  it("keeps unrepairable null schema constraints for downstream quarantine", () => {
+    // Null constraint keywords must not be silently dropped into a wider
+    // schema; only annotation nulls are repairable. An uninferable type: null
+    // is restored so projection rejects the tool instead of accepting
+    // undeclared arguments.
+    expect(
+      normalizeOpenAIParameters({
+        type: "object",
+        properties: {
+          payload: { type: null, description: "no shape hints" },
+          config: { type: "object", properties: {}, additionalProperties: null },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: { type: null, description: "no shape hints" },
+        config: { type: "object", properties: {}, required: [], additionalProperties: null },
+      },
+    });
   });
 
   it("preserves explicit empty properties maps when normalizing strict openai schemas", () => {
@@ -167,6 +512,49 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
+  it("repairs legacy and content schema applicators without changing property dependencies", () => {
+    expect(
+      normalizeOpenAIParameters({
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+        dependencies: {
+          mode: ["payload"],
+          payload: { type: "object" },
+        },
+        additionalItems: { type: "object" },
+        contentSchema: { type: "object" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+      dependencies: {
+        mode: ["payload"],
+        payload: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+      additionalItems: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      contentSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    });
+  });
+
   it("does not tighten or warn for permissive object schemas that use strict:false", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const permissiveParameters = {
@@ -198,12 +586,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(permissiveParameters);
-    expect(findOpenAIStrictSchemaViolations(permissiveParameters, "cron.parameters")).toEqual(
-      expect.arrayContaining([
-        "cron.parameters.required.schedule",
-        "cron.parameters.additionalProperties",
-      ]),
+    const strictSchemaViolations = findOpenAIStrictSchemaViolations(
+      permissiveParameters,
+      "cron.parameters",
     );
+    expect(strictSchemaViolations).toContain("cron.parameters.required.schedule");
+    expect(strictSchemaViolations).toContain("cron.parameters.additionalProperties");
     expect(
       hooks.inspectToolSchemas({
         provider: "openai",
@@ -217,7 +605,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools: [permissiveTool],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {
@@ -251,19 +639,19 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("suppresses openai strict-schema diagnostics because transport falls back to strict false", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
 
     const diagnostics = hooks.inspectToolSchemas({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
       } as never,
@@ -286,35 +674,6 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       ],
     });
 
-    expect(diagnostics).toEqual([]);
-  });
-
-  it("covers the shared xAI tool compat patch", () => {
-    const patch = resolveXaiModelCompatPatch();
-
-    expect(patch).toMatchObject({
-      toolSchemaProfile: "xai",
-      nativeWebSearchTool: true,
-      toolCallArgumentsEncoding: "html-entities",
-    });
-    expect(patch.unsupportedToolSchemaKeywords).toEqual(
-      expect.arrayContaining(["minLength", "maxLength", "minItems", "maxItems"]),
-    );
-
-    expect(
-      applyXaiModelCompat({
-        id: "grok-4",
-        compat: {
-          supportsUsageInStreaming: true,
-        },
-      }),
-    ).toMatchObject({
-      compat: {
-        supportsUsageInStreaming: true,
-        toolSchemaProfile: "xai",
-        nativeWebSearchTool: true,
-        toolCallArgumentsEncoding: "html-entities",
-      },
-    });
+    expect(diagnostics).toStrictEqual([]);
   });
 });

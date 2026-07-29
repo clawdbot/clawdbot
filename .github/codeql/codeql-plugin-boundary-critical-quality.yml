@@ -19,7 +19,6 @@ paths:
   - src/plugins/bundled-compat.ts
   - src/plugins/bundled-dir.ts
   - src/plugins/bundled-plugin-metadata.ts
-  - src/plugins/bundled-public-surface-runtime-root.ts
   - src/plugins/plugin-sdk-dist-alias.ts
   - src/plugins/captured-registration.ts
   - src/plugins/config-activation-shared.ts
@@ -46,7 +45,6 @@ paths:
   - src/plugins/runtime-state.ts
   - src/plugins/runtime.ts
   - src/plugins/sdk-alias.ts
-  - src/plugins/source-loader.ts
   - src/plugins/types.ts
   - src/plugins/validation-diagnostics.ts
   - src/plugins/web-provider-public-artifacts*.ts

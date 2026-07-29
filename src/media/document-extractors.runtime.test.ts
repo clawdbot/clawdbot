@@ -1,3 +1,4 @@
+// Document extractor runtime tests cover lazy document extraction adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolvePluginDocumentExtractorsMock } = vi.hoisted(() => ({
@@ -42,7 +43,7 @@ describe("extractDocumentContent", () => {
           },
         },
       }),
-    ).resolves.toMatchObject({ text: "pdf text", extractor: "pdf" });
+    ).resolves.toStrictEqual({ text: "pdf text", images: [], extractor: "pdf" });
 
     expect(extract).toHaveBeenCalledWith({
       buffer: Buffer.from("pdf"),
@@ -65,17 +66,23 @@ describe("extractDocumentContent", () => {
       },
     ]);
 
-    await expect(
-      extractDocumentContent({
+    let extractionError: unknown;
+    try {
+      await extractDocumentContent({
         buffer: Buffer.from("pdf"),
         mimeType: "application/pdf",
         maxPages: 1,
         maxPixels: 100,
         minTextChars: 10,
-      }),
-    ).rejects.toMatchObject({
-      message: "Document extraction failed for application/pdf",
-      cause,
-    });
+      });
+    } catch (error) {
+      extractionError = error;
+    }
+    expect(extractionError).toBeInstanceOf(Error);
+    if (!(extractionError instanceof Error)) {
+      throw new Error("expected extraction error");
+    }
+    expect(extractionError.message).toBe("Document extraction failed for application/pdf");
+    expect(extractionError.cause).toBe(cause);
   });
 });

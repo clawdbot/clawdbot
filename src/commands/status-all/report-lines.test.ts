@@ -1,3 +1,4 @@
+// Status-all report-lines tests verify rendered report structure and diagnosis section integration.
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { buildStatusAllReportLines } from "./report-lines.js";
@@ -20,10 +21,18 @@ describe("buildStatusAllReportLines", () => {
       progress,
       overviewRows: [{ Item: "Gateway", Value: "ok" }],
       channels: {
-        rows: [],
+        rows: [
+          {
+            id: "discord",
+            label: "Discord",
+            enabled: true,
+            state: "ok",
+            detail: "connected",
+          },
+        ],
         details: [],
       },
-      channelIssues: [],
+      channelIssues: [{ channel: "discord", message: `${"x".repeat(89)}🚀tail` }],
       agentStatus: {
         agents: [
           {
@@ -63,6 +72,7 @@ describe("buildStatusAllReportLines", () => {
         pluginCompatibility: [],
         channelsStatus: null,
         channelIssues: [],
+        deliveryDiagnostics: null,
         gatewayReachable: false,
         health: null,
         nodeOnlyGateway: null,
@@ -73,10 +83,11 @@ describe("buildStatusAllReportLines", () => {
     expect(output).toContain("Bootstrap file");
     expect(output).toContain("PRESENT");
     expect(output).toContain("ABSENT");
-    expect(diagnosisSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        secretDiagnostics: [],
-      }),
-    );
+    expect(output).not.toContain(String.fromCharCode(0xd83d));
+    expect(diagnosisSpy).toHaveBeenCalledOnce();
+    const [diagnosisOptions] = diagnosisSpy.mock.calls[0] as unknown as [
+      { secretDiagnostics?: unknown[] },
+    ];
+    expect(diagnosisOptions?.secretDiagnostics).toEqual([]);
   });
 });

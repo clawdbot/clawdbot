@@ -1,36 +1,14 @@
-import { spawnSync } from "node:child_process";
+// Vitest system load helper probes host load before expensive test lanes.
 
 type EnvMap = Record<string, string | undefined>;
 
-export type VitestProcessStats = {
+type VitestProcessStats = {
   otherVitestRootCount: number;
   otherVitestWorkerCount: number;
   otherVitestCpuPercent: number;
 };
 
-type PsResult = {
-  status: number | null;
-  stdout: string;
-};
-
-type DetectVitestProcessStatsOptions = {
-  platform?: NodeJS.Platform;
-  selfPid?: number;
-  runPs?: () => PsResult;
-};
-
-const EMPTY_VITEST_PROCESS_STATS: VitestProcessStats = {
-  otherVitestRootCount: 0,
-  otherVitestWorkerCount: 0,
-  otherVitestCpuPercent: 0,
-};
-
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true"]);
-
-function isExplicitlyEnabled(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? BOOLEAN_TRUE_VALUES.has(normalized) : false;
-}
 
 function isVitestWorkerArgs(args: string): boolean {
   return args.includes("/vitest/dist/workers/") || args.includes("\\vitest\\dist\\workers\\");
@@ -54,7 +32,11 @@ export function parseVitestProcessStats(
   psOutput: string,
   selfPid: number = process.pid,
 ): VitestProcessStats {
-  const stats = { ...EMPTY_VITEST_PROCESS_STATS };
+  const stats: VitestProcessStats = {
+    otherVitestRootCount: 0,
+    otherVitestWorkerCount: 0,
+    otherVitestCpuPercent: 0,
+  };
 
   for (const line of psOutput.split("\n")) {
     const trimmed = line.trim();
@@ -68,6 +50,9 @@ export function parseVitestProcessStats(
     }
 
     const [, rawPid, rawCpu, args] = match;
+    if (!rawPid || !rawCpu || args === undefined) {
+      continue;
+    }
     const pid = Number.parseInt(rawPid, 10);
     if (!Number.isFinite(pid) || pid === selfPid) {
       continue;
@@ -87,33 +72,6 @@ export function parseVitestProcessStats(
 
   stats.otherVitestCpuPercent = Number.parseFloat(stats.otherVitestCpuPercent.toFixed(1));
   return stats;
-}
-
-export function detectVitestProcessStats(
-  env: EnvMap = process.env,
-  options: DetectVitestProcessStatsOptions = {},
-): VitestProcessStats {
-  const platform = options.platform ?? process.platform;
-  if (platform === "win32") {
-    return { ...EMPTY_VITEST_PROCESS_STATS };
-  }
-
-  if (isExplicitlyEnabled(env.OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE)) {
-    return { ...EMPTY_VITEST_PROCESS_STATS };
-  }
-
-  const result =
-    options.runPs?.() ??
-    spawnSync("ps", ["-xao", "pid=,pcpu=,args="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-
-  if (result.status === 0 && typeof result.stdout === "string" && result.stdout.length > 0) {
-    return parseVitestProcessStats(result.stdout, options.selfPid ?? process.pid);
-  }
-
-  return { ...EMPTY_VITEST_PROCESS_STATS };
 }
 
 export function shouldPrintVitestThrottle(env: EnvMap = process.env): boolean {

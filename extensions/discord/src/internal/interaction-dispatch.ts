@@ -1,3 +1,4 @@
+// Discord plugin module implements interaction dispatch behavior.
 import { InteractionType, type APIInteraction } from "discord-api-types/v10";
 import {
   type BaseCommand,

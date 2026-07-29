@@ -1,5 +1,7 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Log line parsing helpers convert text log entries into structured records.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
+// Parser for JSON LogTape lines emitted by the OpenClaw logger.
 type ParsedLogLine = {
   time?: string;
   level?: string;
@@ -40,10 +42,11 @@ function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
   }
 }
 
+/** Parses a raw log line into compact metadata and message text, or null for non-JSON lines. */
 export function parseLogLine(raw: string): ParsedLogLine | null {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const meta = parsed._meta as Record<string, unknown> | undefined;
+    const meta = parsed["_meta"] as Record<string, unknown> | undefined;
     const nameMeta = parseMetaName(meta?.name);
     const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
     return {

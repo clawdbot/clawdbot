@@ -1,6 +1,6 @@
 ---
 name: sherpa-onnx-tts
-description: Local text-to-speech via sherpa-onnx (offline, no cloud)
+description: "Local text-to-speech via sherpa-onnx (offline, no cloud)"
 metadata:
   {
     "openclaw":
@@ -14,7 +14,7 @@ metadata:
               "id": "download-runtime-macos",
               "kind": "download",
               "os": ["darwin"],
-              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/sherpa-onnx-v1.12.23-osx-universal2-shared.tar.bz2",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.2/sherpa-onnx-v1.13.2-osx-universal2-shared.tar.bz2",
               "archive": "tar.bz2",
               "extract": true,
               "stripComponents": 1,
@@ -25,7 +25,7 @@ metadata:
               "id": "download-runtime-linux-x64",
               "kind": "download",
               "os": ["linux"],
-              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/sherpa-onnx-v1.12.23-linux-x64-shared.tar.bz2",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.2/sherpa-onnx-v1.13.2-linux-x64-shared.tar.bz2",
               "archive": "tar.bz2",
               "extract": true,
               "stripComponents": 1,
@@ -36,7 +36,7 @@ metadata:
               "id": "download-runtime-win-x64",
               "kind": "download",
               "os": ["win32"],
-              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/sherpa-onnx-v1.12.23-win-x64-shared.tar.bz2",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.2/sherpa-onnx-v1.13.2-win-x64-shared-MD-Release.tar.bz2",
               "archive": "tar.bz2",
               "extract": true,
               "stripComponents": 1,

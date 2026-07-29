@@ -1,6 +1,8 @@
+// File Transfer tests cover policy plugin behavior.
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the plugin-sdk runtime-config surface so we can drive the policy
 // reader from the test without booting a gateway. mutateConfigFile is also
@@ -28,6 +30,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-config-snapshot");
+  vi.doUnmock("openclaw/plugin-sdk/config-mutation");
+  vi.resetModules();
+});
+
 function withConfig(fileTransfer: Record<string, unknown> | undefined) {
   if (fileTransfer === undefined) {
     getRuntimeConfigMock.mockReturnValue({});
@@ -44,23 +52,33 @@ function withConfig(fileTransfer: Record<string, unknown> | undefined) {
   }
 }
 
+function expectResultFields(result: unknown, fields: Record<string, unknown>) {
+  if (typeof result !== "object" || result === null) {
+    throw new Error("policy result was not an object");
+  }
+  const record = result as Record<string, unknown>;
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
 describe("evaluateFilePolicy — default deny", () => {
   it("returns NO_POLICY when no plugin config block is present", () => {
     getRuntimeConfigMock.mockReturnValue({});
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: false, code: "NO_POLICY", askable: false });
+    expectResultFields(r, { ok: false, code: "NO_POLICY", askable: false });
   });
 
   it("returns NO_POLICY when plugin policy block is missing", () => {
     getRuntimeConfigMock.mockReturnValue({ plugins: { entries: { "file-transfer": {} } } });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: false, code: "NO_POLICY" });
+    expectResultFields(r, { ok: false, code: "NO_POLICY" });
   });
 
   it("returns NO_POLICY when no entry exists for the node and no '*' fallback", () => {
     withConfig({ "other-node": { allowReadPaths: ["/tmp/**"] } });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: false, code: "NO_POLICY" });
+    expectResultFields(r, { ok: false, code: "NO_POLICY" });
   });
 
   it("prefers the current runtime config over a stale passed plugin config", () => {
@@ -87,7 +105,7 @@ describe("evaluateFilePolicy — default deny", () => {
         },
       },
     });
-    expect(r).toMatchObject({ ok: true, reason: "matched-allow" });
+    expectResultFields(r, { ok: true, reason: "matched-allow" });
   });
 });
 
@@ -101,7 +119,7 @@ describe("evaluateFilePolicy — '..' traversal short-circuit", () => {
       kind: "read",
       path: "/allowed/../etc/passwd",
     });
-    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED", askable: false });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
     expect(r.ok ? "" : r.reason).toMatch(/\.\./);
   });
 
@@ -114,7 +132,7 @@ describe("evaluateFilePolicy — '..' traversal short-circuit", () => {
       kind: "read",
       path: "/tmp/foo/..",
     });
-    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED" });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
   });
 
   it("rejects bare '..'", () => {
@@ -122,7 +140,7 @@ describe("evaluateFilePolicy — '..' traversal short-circuit", () => {
       n1: { allowReadPaths: ["/**"] },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: ".." });
-    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED" });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
   });
 });
 
@@ -139,8 +157,82 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
       kind: "read",
       path: "/tmp/.ssh/id_rsa",
     });
-    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED", askable: false });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
     expect(r.ok ? "" : r.reason).toMatch(/deny/);
+  });
+
+  it("treats globstar slash as zero or more directories in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~/Downloads/**/*.pem"],
+      },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: path.join(os.homedir(), "Downloads", "key.pem"),
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+  });
+
+  it("preserves minimatch brace semantics in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~/Downloads/**/*.{pem,key}", "**/.{ssh,aws}/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", "api.key"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", ".aws", "credentials"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+  });
+
+  it.each([
+    {
+      label: "the bare denied directory",
+      requestedPath: path.join(os.homedir(), ".ssh"),
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the denied directory with a trailing separator",
+      requestedPath: `${path.join(os.homedir(), ".ssh")}/`,
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the bare denied directory on Windows",
+      requestedPath: "C:\\Users\\me\\.ssh",
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "a sibling sharing only the denied directory prefix",
+      requestedPath: path.join(os.homedir(), ".sshrc"),
+      expected: { ok: true },
+    },
+  ])("handles $label", ({ requestedPath, expected }) => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({ nodeId: "n1", kind: "read", path: requestedPath }),
+      expected,
+    );
   });
 
   it("denies even with ask=always (denyPaths is hard)", () => {
@@ -155,7 +247,7 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
       kind: "read",
       path: "/var/secrets/api.key",
     });
-    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED", askable: false });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
   });
 });
 
@@ -177,26 +269,27 @@ describe("evaluateFilePolicy — allow matching", () => {
       n1: { allowReadPaths: ["/tmp/**"], maxBytes: 1024 },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: true, maxBytes: 1024 });
+    expectResultFields(r, { ok: true, maxBytes: 1024 });
   });
 
   it("uses kind=write to consult allowWritePaths, not allowReadPaths", () => {
     withConfig({
       n1: { allowReadPaths: ["/tmp/**"], allowWritePaths: ["/srv/**"] },
     });
-    expect(evaluateFilePolicy({ nodeId: "n1", kind: "write", path: "/srv/out.txt" })).toMatchObject(
-      { ok: true },
-    );
-    expect(evaluateFilePolicy({ nodeId: "n1", kind: "write", path: "/tmp/out.txt" })).toMatchObject(
-      { ok: false, code: "POLICY_DENIED" },
-    );
+    expectResultFields(evaluateFilePolicy({ nodeId: "n1", kind: "write", path: "/srv/out.txt" }), {
+      ok: true,
+    });
+    expectResultFields(evaluateFilePolicy({ nodeId: "n1", kind: "write", path: "/tmp/out.txt" }), {
+      ok: false,
+      code: "POLICY_DENIED",
+    });
   });
 
   it("propagates followSymlinks=false by default and =true when configured", () => {
     withConfig({
       n1: { allowReadPaths: ["/tmp/**"] },
     });
-    expect(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" })).toMatchObject({
+    expectResultFields(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" }), {
       ok: true,
       followSymlinks: false,
     });
@@ -204,7 +297,7 @@ describe("evaluateFilePolicy — allow matching", () => {
     withConfig({
       n2: { allowReadPaths: ["/tmp/**"], followSymlinks: true },
     });
-    expect(evaluateFilePolicy({ nodeId: "n2", kind: "read", path: "/tmp/x" })).toMatchObject({
+    expectResultFields(evaluateFilePolicy({ nodeId: "n2", kind: "read", path: "/tmp/x" }), {
       ok: true,
       followSymlinks: true,
     });
@@ -215,26 +308,28 @@ describe("evaluateFilePolicy — allow matching", () => {
     withConfig({
       n1: { allowReadPaths: ["~/Screenshots/**"] },
     });
-    expect(
+    expectResultFields(
       evaluateFilePolicy({
         nodeId: "n1",
         kind: "read",
         path: path.join(home, "Screenshots", "shot.png"),
       }),
-    ).toMatchObject({ ok: true });
+      { ok: true },
+    );
   });
 
   it("matches Windows node paths without gateway-local path semantics", () => {
     withConfig({
       n1: { allowReadPaths: ["C:/Users/me/**"] },
     });
-    expect(
+    expectResultFields(
       evaluateFilePolicy({
         nodeId: "n1",
         kind: "read",
         path: "C:\\Users\\me\\file.txt",
       }),
-    ).toMatchObject({ ok: true });
+      { ok: true },
+    );
   });
 });
 
@@ -244,7 +339,7 @@ describe("evaluateFilePolicy — ask modes", () => {
       n1: { ask: "on-miss", allowReadPaths: ["/var/log/**"] },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({
+    expectResultFields(r, {
       ok: false,
       code: "POLICY_DENIED",
       askable: true,
@@ -262,7 +357,7 @@ describe("evaluateFilePolicy — ask modes", () => {
       },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({
+    expectResultFields(r, {
       ok: false,
       code: "POLICY_DENIED",
       askable: true,
@@ -277,7 +372,7 @@ describe("evaluateFilePolicy — ask modes", () => {
       n1: { ask: "on-miss", allowReadPaths: ["/tmp/**"] },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: true, reason: "matched-allow" });
+    expectResultFields(r, { ok: true, reason: "matched-allow" });
   });
 
   it("ask=always always returns ask-always (prompt on every call)", () => {
@@ -285,7 +380,7 @@ describe("evaluateFilePolicy — ask modes", () => {
       n1: { ask: "always", allowReadPaths: ["/tmp/**"] },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: true, reason: "ask-always", askMode: "always" });
+    expectResultFields(r, { ok: true, reason: "ask-always", askMode: "always" });
   });
 
   it("ask=off returns non-askable POLICY_DENIED on miss", () => {
@@ -293,7 +388,7 @@ describe("evaluateFilePolicy — ask modes", () => {
       n1: { ask: "off", allowReadPaths: ["/var/log/**"] },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED", askable: false });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
   });
 
   it("invalid ask values normalize to off", () => {
@@ -301,7 +396,7 @@ describe("evaluateFilePolicy — ask modes", () => {
       n1: { ask: "sometimes", allowReadPaths: ["/var/log/**"] },
     });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expect(r).toMatchObject({ ok: false, askable: false });
+    expectResultFields(r, { ok: false, askable: false });
   });
 });
 
@@ -310,28 +405,30 @@ describe("evaluateFilePolicy — node-id resolution", () => {
     withConfig({
       "Lobster MacBook": { allowReadPaths: ["/tmp/**"] },
     });
-    expect(
+    expectResultFields(
       evaluateFilePolicy({
         nodeId: "node-abc-123",
         nodeDisplayName: "Lobster MacBook",
         kind: "read",
         path: "/tmp/x",
       }),
-    ).toMatchObject({ ok: true });
+      { ok: true },
+    );
   });
 
   it("falls back to '*' wildcard when neither id nor displayName matches", () => {
     withConfig({
       "*": { allowReadPaths: ["/tmp/**"] },
     });
-    expect(
+    expectResultFields(
       evaluateFilePolicy({
         nodeId: "n1",
         nodeDisplayName: "anything",
         kind: "read",
         path: "/tmp/x",
       }),
-    ).toMatchObject({ ok: true });
+      { ok: true },
+    );
   });
 });
 
@@ -366,9 +463,11 @@ describe("persistAllowAlways", () => {
         };
       };
     };
-    expect(root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths).toContain(
-      "/srv/added.png",
+    const node = expectDefined(
+      root.plugins.entries["file-transfer"].config.nodes.n1,
+      "n1 file-transfer node",
     );
+    expect(node.allowReadPaths).toContain("/srv/added.png");
   });
 
   it("creates a new node entry keyed by displayName when no entry exists", async () => {
@@ -397,9 +496,11 @@ describe("persistAllowAlways", () => {
         };
       };
     };
-    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowWritePaths).toContain(
-      "/srv/out.txt",
+    const node = expectDefined(
+      root.plugins.entries["file-transfer"].config.nodes.Lobster,
+      "Lobster file-transfer node",
     );
+    expect(node.allowWritePaths).toContain("/srv/out.txt");
   });
 
   it("never persists under the '*' wildcard even when '*' is the matching key", async () => {
@@ -437,11 +538,12 @@ describe("persistAllowAlways", () => {
       };
     };
     // The "*" entry must not have been mutated.
-    expect(root.plugins.entries["file-transfer"].config.nodes["*"].allowReadPaths).toEqual([
+    const nodes = root.plugins.entries["file-transfer"].config.nodes;
+    expect(expectDefined(nodes["*"], "wildcard file-transfer node").allowReadPaths).toEqual([
       "/var/log/**",
     ]);
     // A new entry keyed by displayName (not "*") must hold the new path.
-    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowReadPaths).toEqual([
+    expect(expectDefined(nodes.Lobster, "Lobster file-transfer node").allowReadPaths).toEqual([
       "/srv/added.png",
     ]);
   });
@@ -500,7 +602,10 @@ describe("persistAllowAlways", () => {
         };
       };
     };
-    const list = root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths;
-    expect(list.filter((p) => p === "/tmp/x").length).toBe(1);
+    const list = expectDefined(
+      root.plugins.entries["file-transfer"].config.nodes.n1,
+      "n1 file-transfer node",
+    ).allowReadPaths;
+    expect(list.reduce((count, p) => count + (p === "/tmp/x" ? 1 : 0), 0)).toBe(1);
   });
 });

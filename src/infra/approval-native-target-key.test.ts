@@ -1,3 +1,4 @@
+// Tests native approval target key generation.
 import { describe, expect, it } from "vitest";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 

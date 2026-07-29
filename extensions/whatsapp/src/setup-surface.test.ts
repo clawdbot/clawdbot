@@ -1,3 +1,4 @@
+// Whatsapp tests cover setup surface plugin behavior.
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,
@@ -29,6 +30,8 @@ const hoisted = vi.hoisted(() => ({
   detectWhatsAppLinked: vi.fn<(cfg: OpenClawConfig, accountId: string) => Promise<boolean>>(
     async () => false,
   ),
+  hasWebCredsSync: vi.fn(() => false),
+  loginModuleState: { loaded: false },
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
   readWebAuthState: vi.fn<(authDir: string) => Promise<"linked" | "not-linked" | "unstable">>(
@@ -41,15 +44,24 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./login.js", () => ({
-  loginWeb: hoisted.loginWeb,
-}));
+vi.mock("./login.js", () => {
+  hoisted.loginModuleState.loaded = true;
+  return { loginWeb: hoisted.loginWeb };
+});
 
 vi.mock("./setup-finalize.js", async () => {
   const actual = await vi.importActual<typeof import("./setup-finalize.js")>("./setup-finalize.js");
   return {
     ...actual,
     detectWhatsAppLinked: hoisted.detectWhatsAppLinked,
+  };
+});
+
+vi.mock("./creds-files.js", async () => {
+  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
+  return {
+    ...actual,
+    hasWebCredsSync: hoisted.hasWebCredsSync,
   };
 });
 
@@ -96,6 +108,7 @@ async function runFinalizeWithHarness(params: {
   runtime?: RuntimeEnv;
   forceAllowFrom?: boolean;
   accountId?: string;
+  options?: Parameters<NonNullable<typeof whatsappSetupWizard.finalize>>[0]["options"];
 }) {
   return await runSetupWizardFinalize({
     finalize: whatsappSetupWizard.finalize,
@@ -103,6 +116,7 @@ async function runFinalizeWithHarness(params: {
     accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
     runtime: params.runtime ?? createRuntime(),
     prompter: params.harness.prompter,
+    options: params.options,
     forceAllowFrom: params.forceAllowFrom ?? false,
   });
 }
@@ -118,7 +132,6 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
 function expectFinalizeResult(result: Awaited<ReturnType<typeof runFinalizeWithHarness>>): {
   cfg: OpenClawConfig;
 } {
-  expect(result).toBeDefined();
   if (!result || typeof result !== "object" || !("cfg" in result) || !result.cfg) {
     throw new Error("Expected WhatsApp finalize result with cfg");
   }
@@ -143,7 +156,14 @@ describe("whatsapp setup wizard", () => {
   beforeEach(() => {
     hoisted.detectWhatsAppLinked.mockReset();
     hoisted.detectWhatsAppLinked.mockResolvedValue(false);
-    hoisted.loginWeb.mockReset();
+    hoisted.hasWebCredsSync.mockReset();
+    hoisted.hasWebCredsSync.mockReturnValue(false);
+    hoisted.loginWeb.mockReset().mockImplementation(async (...args: unknown[]) => {
+      const loginOptions = args[4] as
+        | { beforeCredentialPersistence?: () => Promise<void> }
+        | undefined;
+      await loginOptions?.beforeCredentialPersistence?.();
+    });
     hoisted.pathExists.mockReset();
     hoisted.pathExists.mockResolvedValue(false);
     hoisted.readWebAuthState.mockReset();
@@ -329,17 +349,79 @@ describe("whatsapp setup wizard", () => {
     hoisted.pathExists.mockResolvedValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
     const runtime = createRuntime();
+    expect(hoisted.loginModuleState.loaded).toBe(false);
+    const beforePersistentEffect = vi.fn(async () => {
+      expect(hoisted.loginModuleState.loaded).toBe(true);
+    });
 
     await runFinalizeWithHarness({
       harness,
       runtime,
+      options: { beforePersistentEffect },
     });
 
-    expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID, {
+      beforeCredentialPersistence: expect.any(Function),
+    });
+  });
+
+  it("propagates the persistent-effect guard before WhatsApp login persists state", async () => {
+    hoisted.pathExists.mockResolvedValue(false);
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+    const runtime = createRuntime();
+    const guardError = new Error("verified inference changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+
+    await expect(
+      runFinalizeWithHarness({
+        harness,
+        runtime,
+        options: { beforePersistentEffect },
+      }),
+    ).rejects.toBe(guardError);
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(hoisted.loginWeb).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects delayed credential persistence when the inference route changes during login", async () => {
+    hoisted.pathExists.mockResolvedValue(false);
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+    const runtime = createRuntime();
+    const guardError = new Error("verified inference route changed");
+    let routeOwner = "original";
+    const beforePersistentEffect = vi.fn(async () => {
+      if (routeOwner !== "original") {
+        throw guardError;
+      }
+    });
+    hoisted.loginWeb.mockImplementationOnce(async (...args: unknown[]) => {
+      const loginOptions = args[4] as
+        | { beforeCredentialPersistence?: () => Promise<void> }
+        | undefined;
+      routeOwner = "replacement";
+      await loginOptions?.beforeCredentialPersistence?.();
+    });
+
+    await expect(
+      runFinalizeWithHarness({
+        harness,
+        runtime,
+        options: { beforePersistentEffect },
+      }),
+    ).rejects.toBe(guardError);
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(hoisted.loginWeb).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });

@@ -1,8 +1,10 @@
+// Warning log capture helpers collect warning output during tests.
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../logger.js";
 import { createDiagnosticLogRecordCapture } from "./diagnostic-log-capture.js";
 
+/** Captures warn-level diagnostic log records under an isolated temporary log path. */
 export function createWarnLogCapture(prefix: string) {
   const capture = createDiagnosticLogRecordCapture();
   setLoggerOverride({

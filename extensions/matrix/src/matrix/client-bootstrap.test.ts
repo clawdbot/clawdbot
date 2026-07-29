@@ -1,3 +1,4 @@
+// Matrix tests cover client bootstrap plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
@@ -53,7 +54,7 @@ describe("client bootstrap", () => {
 
   it("releases leased shared clients when readiness setup fails", async () => {
     const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.prepareForOneOff).mockRejectedValue(new Error("prepare failed"));
+    vi.mocked(sharedClient["prepareForOneOff"]).mockRejectedValue(new Error("prepare failed"));
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
     await expect(
@@ -69,7 +70,7 @@ describe("client bootstrap", () => {
 
   it("releases leased shared clients when the wrapped action throws during readiness", async () => {
     const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.start).mockRejectedValue(new Error("start failed"));
+    vi.mocked(sharedClient["start"]).mockRejectedValue(new Error("start failed"));
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
     await expect(

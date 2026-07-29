@@ -1,7 +1,13 @@
+/**
+ * Sandbox configuration resolver.
+ *
+ * Merges global and agent settings into normalized Docker, SSH, browser, prune, scope, and tool-policy config.
+ */
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxSshSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -39,6 +45,10 @@ const DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT = "/tmp/openclaw-sandboxes";
 
 type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
 type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
+
+function resolveSandboxBrowserAutoStartTimeoutMs(value: number | undefined): number {
+  return resolveTimerTimeoutMs(value, DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS);
+}
 
 function resolveDangerousSandboxDockerBooleans(
   agentDocker?: Partial<SandboxDockerConfig>,
@@ -151,13 +161,12 @@ export function resolveSandboxBrowserConfig(params: {
     noVncPort:
       agentBrowser?.noVncPort ?? globalBrowser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
     headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
-    enableNoVnc: agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
+    noVncEnabled: agentBrowser?.noVncEnabled ?? globalBrowser?.noVncEnabled ?? true,
     allowHostControl: agentBrowser?.allowHostControl ?? globalBrowser?.allowHostControl ?? false,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
-    autoStartTimeoutMs:
-      agentBrowser?.autoStartTimeoutMs ??
-      globalBrowser?.autoStartTimeoutMs ??
-      DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
+    autoStartTimeoutMs: resolveSandboxBrowserAutoStartTimeoutMs(
+      agentBrowser?.autoStartTimeoutMs ?? globalBrowser?.autoStartTimeoutMs,
+    ),
     binds: bindsConfigured ? binds : undefined,
   };
 }

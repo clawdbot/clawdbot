@@ -1,9 +1,16 @@
+// Gateway status probe helper used by `gateway status` service diagnostics.
 import type { OpenClawConfig } from "../../config/types.js";
+import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
+type GatewayStatusRequireRpcProbeResult = {
+  ok: true;
+  authProbe: GatewayProbeResult | null;
+};
+type GatewayStatusProbeResult = GatewayProbeResult | GatewayStatusRequireRpcProbeResult;
 
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
 
@@ -24,6 +31,21 @@ function resolveProbeFailureMessage(result: {
   return result.error ?? closeHint ?? "gateway probe failed";
 }
 
+function resolveGatewayStatusProbeDetails(result: GatewayStatusProbeResult) {
+  return "authProbe" in result ? result.authProbe : result;
+}
+
+function readRuntimeVersionFromStatusPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const runtimeVersion = (payload as { runtimeVersion?: unknown }).runtimeVersion;
+  return typeof runtimeVersion === "string" && runtimeVersion.trim().length > 0
+    ? runtimeVersion.trim()
+    : null;
+}
+
+/** Probe Gateway connectivity or read-capability status with optional RPC verification. */
 export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
@@ -34,11 +56,13 @@ export async function probeGatewayStatus(opts: {
   preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
+  allowRpcConfigCredentials?: boolean;
   configPath?: string;
 }) {
   const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
-    const result = await withProgress(
+    let statusRuntimeVersion: string | null = null;
+    const result = await withProgress<GatewayStatusProbeResult>(
       {
         label: "Checking gateway status...",
         indeterminate: true,
@@ -60,24 +84,35 @@ export async function probeGatewayStatus(opts: {
           includeDetails: false,
         };
         if (opts.requireRpc) {
+          const allowRpcConfigCredentials = opts.allowRpcConfigCredentials !== false;
+          if (!allowRpcConfigCredentials && !opts.token && !opts.password) {
+            throw new Error(
+              "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
+            );
+          }
           const { callGateway } = await import("../../gateway/call.js");
-          await callGateway({
+          const statusPayload = await callGateway({
             url: opts.url,
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
-            ...(opts.config ? { config: opts.config } : {}),
+            ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
+          statusRuntimeVersion = readRuntimeVersionFromStatusPayload(statusPayload);
           const authProbe = await probeGateway(probeOpts).catch(() => null);
           return { ok: true as const, authProbe };
         }
         return await probeGateway(probeOpts);
       },
     );
-    const auth = "auth" in result ? result.auth : result.authProbe?.auth;
+    const probeDetails = resolveGatewayStatusProbeDetails(result);
+    const auth = probeDetails?.auth;
+    const server = probeDetails?.server;
+    const serverSummary = server ? { server } : {};
+    const version = server?.version ?? ("authProbe" in result ? statusRuntimeVersion : null);
     if (result.ok) {
       return {
         ok: true,
@@ -89,6 +124,8 @@ export async function probeGatewayStatus(opts: {
               : "read_only"
             : auth?.capability,
         auth,
+        ...serverSummary,
+        ...(version != null ? { version } : {}),
       } as const;
     }
     return {
@@ -96,6 +133,8 @@ export async function probeGatewayStatus(opts: {
       kind,
       capability: auth?.capability,
       auth,
+      ...serverSummary,
+      ...(version != null ? { version } : {}),
       error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {

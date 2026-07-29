@@ -1,10 +1,8 @@
+// Covers copying bundled plugin metadata for package output.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  copyBundledPluginMetadata,
-  rewritePackageExtensions,
-} from "../../scripts/copy-bundled-plugin-metadata.mjs";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mjs";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -83,15 +81,6 @@ function createTlonSkillPlugin(repoRoot: string, skillPath = "node_modules/@tlon
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
-});
-
-describe("rewritePackageExtensions", () => {
-  it("rewrites TypeScript extension entries to built JS paths", () => {
-    expect(rewritePackageExtensions(["./index.ts", "./nested/entry.mts"])).toEqual([
-      "./index.js",
-      "./nested/entry.js",
-    ]);
-  });
 });
 
 describe("copyBundledPluginMetadata", () => {
@@ -414,7 +403,7 @@ describe("copyBundledPluginMetadata", () => {
       expectedExists: false,
     },
     {
-      name: "still bundles previously released optional plugins without the opt-in env",
+      name: "removes externalized optional plugin metadata from the core dist",
       pluginId: "whatsapp",
       packageName: "@openclaw/whatsapp",
       packageOpenClaw: {
@@ -422,7 +411,7 @@ describe("copyBundledPluginMetadata", () => {
         install: { npmSpec: "@openclaw/whatsapp" },
       },
       env: {},
-      expectedExists: true,
+      expectedExists: false,
     },
   ] as const)("$name", ({ pluginId, packageName, packageOpenClaw, env, expectedExists }) => {
     const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
@@ -435,6 +424,25 @@ describe("copyBundledPluginMetadata", () => {
     copyBundledPluginMetadataWithEnv({ repoRoot, env });
 
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
+  });
+
+  it("removes build-excluded bundled plugin metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
+    createPlugin(repoRoot, {
+      id: "qqbot",
+      packageName: "@openclaw/qqbot",
+      packageOpenClaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+      },
+    });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qqbot");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
@@ -479,8 +487,10 @@ describe("copyBundledPluginMetadata", () => {
           "utf8",
         ),
       ),
-    ).toMatchObject({
+    ).toEqual({
       name: "@openclaw/image-generation-core",
+      version: "0.0.1",
+      private: true,
       type: "module",
     });
   });

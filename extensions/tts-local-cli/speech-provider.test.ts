@@ -1,21 +1,28 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Tts Local Cli tests cover speech provider plugin behavior.
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SpeechProviderConfig, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type SpeechSynthesisTarget = SpeechSynthesisRequest["target"];
 
 const runFfmpegMock = vi.hoisted(() => vi.fn<(args: string[]) => Promise<string | void>>());
+const debugLogMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   runFfmpeg: runFfmpegMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({ debug: debugLogMock }),
+}));
+
 import { buildCliSpeechProvider } from "./speech-provider.js";
 
 const TEST_CFG = {} as OpenClawConfig;
+const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 
 function createCliFixture(): { dir: string; script: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-test-"));
@@ -73,6 +80,28 @@ async function synthesize(params: {
   });
 }
 
+function parseAudioPayload(result: { audioBuffer: Buffer }) {
+  return JSON.parse(result.audioBuffer.toString("utf8")) as {
+    stdin?: string;
+    textArg?: string;
+  };
+}
+
+function requireFfmpegArgs(index = 0) {
+  const args = runFfmpegMock.mock.calls[index]?.[0];
+  if (!args) {
+    throw new Error(`runFfmpeg call ${index} missing`);
+  }
+  return args;
+}
+
+function expectArgsContainSequence(args: string[], sequence: string[]) {
+  const startIndex = args.findIndex((arg, index) =>
+    sequence.every((expected, offset) => args[index + offset] === expected),
+  );
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+}
+
 describe("buildCliSpeechProvider", () => {
   beforeEach(() => {
     runFfmpegMock.mockImplementation(async (args) => {
@@ -80,7 +109,21 @@ describe("buildCliSpeechProvider", () => {
       if (typeof outputPath !== "string") {
         throw new Error("missing ffmpeg output path");
       }
-      writeFileSync(outputPath, Buffer.from(`converted:${path.extname(outputPath)}`));
+      const stagedTarget = outputPath.endsWith(".part")
+        ? outputPath.slice(0, -".part".length)
+        : outputPath;
+      const forcedFormatIndex = args.lastIndexOf("-f");
+      const forcedFormat =
+        forcedFormatIndex >= 0 && typeof args[forcedFormatIndex + 1] === "string"
+          ? args[forcedFormatIndex + 1]
+          : undefined;
+      const extension =
+        forcedFormat === "s16le"
+          ? ".pcm"
+          : forcedFormat
+            ? `.${forcedFormat}`
+            : path.extname(stagedTarget);
+      writeFileSync(outputPath, Buffer.from(`converted:${extension}`));
     });
   });
 
@@ -116,15 +159,12 @@ describe("buildCliSpeechProvider", () => {
         text: "hello 😀 world",
       });
 
-      expect(result).toMatchObject({
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      });
-      expect(JSON.parse(result.audioBuffer.toString("utf8"))).toMatchObject({
-        stdin: "hello world",
-        textArg: "",
-      });
+      expect(result.outputFormat).toBe("mp3");
+      expect(result.fileExtension).toBe(".mp3");
+      expect(result.voiceCompatible).toBe(false);
+      const audioPayload = parseAudioPayload(result);
+      expect(audioPayload.stdin).toBe("hello world");
+      expect(audioPayload.textArg).toBe("");
       expect(runFfmpegMock).not.toHaveBeenCalled();
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
@@ -142,15 +182,12 @@ describe("buildCliSpeechProvider", () => {
         text: "spoken words",
       });
 
-      expect(result).toMatchObject({
-        outputFormat: "wav",
-        fileExtension: ".wav",
-        voiceCompatible: false,
-      });
-      expect(JSON.parse(result.audioBuffer.toString("utf8"))).toMatchObject({
-        stdin: "",
-        textArg: "spoken words",
-      });
+      expect(result.outputFormat).toBe("wav");
+      expect(result.fileExtension).toBe(".wav");
+      expect(result.voiceCompatible).toBe(false);
+      const audioPayload = parseAudioPayload(result);
+      expect(audioPayload.stdin).toBe("");
+      expect(audioPayload.textArg).toBe("spoken words");
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -173,9 +210,7 @@ describe("buildCliSpeechProvider", () => {
         fileExtension: ".ogg",
         voiceCompatible: true,
       });
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libopus", "-b:a", "64k"]),
-      );
+      expectArgsContainSequence(requireFfmpegArgs(), ["-c:a", "libopus", "-b:a", "64k"]);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -197,9 +232,7 @@ describe("buildCliSpeechProvider", () => {
         fileExtension: ".mp3",
         voiceCompatible: false,
       });
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libmp3lame", "-b:a", "128k"]),
-      );
+      expectArgsContainSequence(requireFfmpegArgs(), ["-c:a", "libmp3lame", "-b:a", "128k"]);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -223,13 +256,119 @@ describe("buildCliSpeechProvider", () => {
         outputFormat: "pcm",
         sampleRate: 16000,
       });
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-ar", "16000", "-ac", "1", "-f", "s16le"]),
-      );
+      expectArgsContainSequence(requireFfmpegArgs(), ["-ar", "16000", "-ac", "1", "-f", "s16le"]);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it("rejects oversized CLI output files before reading them", async () => {
+    const fixture = createCliFixture();
+    try {
+      writeFileSync(
+        fixture.script,
+        `
+import { truncateSync, writeFileSync } from "node:fs";
+const outIndex = process.argv.indexOf("--out");
+const outputPath = process.argv[outIndex + 1];
+writeFileSync(outputPath, "");
+truncateSync(outputPath, ${MAX_AUDIO_OUTPUT_BYTES + 1});
+`,
+      );
+
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--out", "{{OutputPath}}"],
+            outputFormat: "wav",
+          }),
+        }),
+      ).rejects.toThrow(`File exceeds ${MAX_AUDIO_OUTPUT_BYTES} bytes`);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-file CLI output artifacts", async () => {
+    const fixture = createCliFixture();
+    try {
+      writeFileSync(
+        fixture.script,
+        `
+import { mkdirSync } from "node:fs";
+const outIndex = process.argv.indexOf("--out");
+mkdirSync(process.argv[outIndex + 1]);
+`,
+      );
+
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--out", "{{OutputPath}}"],
+            outputFormat: "wav",
+          }),
+        }),
+      ).rejects.toThrow("path must be a regular file");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["voice-note", "telephony"] as const)(
+    "rejects oversized ffmpeg output for %s synthesis",
+    async (mode) => {
+      const fixture = createCliFixture();
+      runFfmpegMock.mockImplementation(async (args) => {
+        const outputPath = args.at(-1);
+        if (typeof outputPath !== "string") {
+          throw new Error("missing ffmpeg output path");
+        }
+        writeFileSync(outputPath, "");
+        truncateSync(outputPath, MAX_AUDIO_OUTPUT_BYTES + 1);
+      });
+      try {
+        const providerConfig = baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--out", "{{OutputPath}}"],
+          outputFormat: "wav",
+        });
+        const run =
+          mode === "voice-note"
+            ? synthesize({ providerConfig, target: "voice-note" })
+            : buildCliSpeechProvider().synthesizeTelephony?.({
+                text: "phone reply",
+                cfg: TEST_CFG,
+                providerConfig,
+                providerOverrides: {},
+                timeoutMs: 1000,
+              });
+
+        await expect(run).rejects.toThrow(`File exceeds ${MAX_AUDIO_OUTPUT_BYTES} bytes`);
+      } finally {
+        rmSync(fixture.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["synthesize", "synthesizeTelephony"] as const)(
+    "keeps %s debug previews free of lone surrogates",
+    async (method) => {
+      const text = `${"a".repeat(49)}😀tail`;
+      const providerConfig = { command: "missing-openclaw-tts-test-command" };
+      const run =
+        method === "synthesize"
+          ? synthesize({ providerConfig, text })
+          : buildCliSpeechProvider().synthesizeTelephony?.({
+              text,
+              cfg: TEST_CFG,
+              providerConfig,
+              timeoutMs: 1000,
+            });
+      await expect(run).rejects.toThrow();
+
+      const preview = String(debugLogMock.mock.calls[0]?.[0]);
+      expect(Buffer.from(preview).toString()).toBe(preview);
+    },
+  );
 
   it("can synthesize through a real local CLI fixture and ffmpeg", async () => {
     if (process.env.OPENCLAW_LIVE_TEST !== "1") {

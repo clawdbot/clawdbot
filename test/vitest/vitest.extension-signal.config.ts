@@ -1,3 +1,4 @@
+// Vitest extension signal config wires the extension signal test shard.
 import { createSingleChannelExtensionVitestConfig } from "./vitest.extension-channel-single-config.ts";
 
 export function createExtensionSignalVitestConfig(

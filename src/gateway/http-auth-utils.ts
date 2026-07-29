@@ -1,19 +1,31 @@
+// Gateway HTTP auth helpers.
+// Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
+import {
+  resolveControlUiPluginAuthCookieGrants,
+  setControlUiPluginAuthCookie,
+} from "./control-ui-plugin-auth-cookie.js";
+import {
+  listControlUiPluginTabAuthGrants,
+  type ControlUiPluginTabAuthGrant,
+} from "./control-ui-plugin-tabs.js";
+import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { resolveBrowserOriginPolicy } from "./origin-check.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
@@ -27,6 +39,8 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {
+  // Bearer parsing is intentionally minimal: callers pass the extracted token
+  // into the shared gateway auth verifier for constant-time comparison.
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
     return undefined;
@@ -38,6 +52,8 @@ type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
+  controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
+  controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
 
 export type GatewayHttpRequestAuthCheckResult =
@@ -54,13 +70,7 @@ export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
 ): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
-  return {
-    requestHost: getHeader(req, "host"),
-    origin: getHeader(req, "origin"),
-    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
-    allowHostHeaderOriginFallback:
-      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-  };
+  return resolveBrowserOriginPolicy({ req, cfg });
 }
 
 function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
@@ -98,6 +108,93 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     return null;
   }
   return result.requestAuth;
+}
+
+export function setControlUiPluginAuthCookieForRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  authMethod: GatewayAuthResult["method"],
+  trustDeclaredOperatorScopes: boolean,
+  authGeneration: string | undefined,
+  authenticatedScopes?: readonly string[],
+): ControlUiPluginTabAuthGrant[] {
+  const scopes = usesSharedSecretGatewayMethod(authMethod)
+    ? [...CLI_DEFAULT_OPERATOR_SCOPES]
+    : authMethod === "trusted-proxy" || authMethod === "tailscale"
+      ? resolveTrustedHttpOperatorScopes(req, {
+          trustDeclaredOperatorScopes,
+        })
+      : authMethod === "device-token"
+        ? (authenticatedScopes ?? [])
+        : [];
+  const grants = listControlUiPluginTabAuthGrants(scopes);
+  if (grants.length > 0) {
+    return setControlUiPluginAuthCookie(res, grants, { generation: authGeneration });
+  }
+  return [];
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined },
+): {
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null {
+  // WebSocket upgrades bypass this HTTP-only handoff and use
+  // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return null;
+  }
+  // Native plugins and the UI they serve share the Gateway's trusted in-process
+  // boundary. Cross-site sandbox descendants need an ambient cookie, so this
+  // handoff is read-only; mutations stay on explicit Gateway auth surfaces.
+  const grants = resolveControlUiPluginAuthCookieGrants(req, {
+    requestPath: params.requestPath,
+    generation: params.authGeneration,
+  });
+  if (grants.length === 0) {
+    return null;
+  }
+  return {
+    requestAuth: {
+      trustDeclaredOperatorScopes: false,
+      controlUiPluginGrants: grants,
+    },
+    // Route dispatch selects the candidate that owns the first matched gateway
+    // route. Do not union scopes before that owner boundary is known.
+    operatorScopes: [],
+  };
+}
+
+export async function authorizePluginGatewayHttpRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  requestPath: string;
+  resolveOperatorScopes: (
+    req: IncomingMessage,
+    requestAuth: AuthorizedGatewayHttpRequest,
+  ) => string[];
+}): Promise<{
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null> {
+  const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
+  const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
+    requestPath: params.requestPath,
+    authGeneration,
+  });
+  if (cookieAuth) {
+    return cookieAuth;
+  }
+  const requestAuth = await authorizeGatewayHttpRequestOrReply(params);
+  return requestAuth
+    ? { requestAuth, operatorScopes: params.resolveOperatorScopes(params.req, requestAuth) }
+    : null;
 }
 
 export async function checkGatewayHttpRequestAuth(params: {
@@ -150,7 +247,11 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
     req: IncomingMessage,
     requestAuth: AuthorizedGatewayHttpRequest,
   ) => string[];
-}): Promise<{ cfg: OpenClawConfig; requestAuth: AuthorizedGatewayHttpRequest } | null> {
+}): Promise<{
+  cfg: OpenClawConfig;
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null> {
   const cfg = getRuntimeConfig();
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req: params.req,
@@ -164,20 +265,14 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
     return null;
   }
 
-  const requestedScopes = params.resolveOperatorScopes(params.req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, requestedScopes);
+  const operatorScopes = params.resolveOperatorScopes(params.req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, operatorScopes);
   if (!scopeAuth.allowed) {
-    sendJson(params.res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
     return null;
   }
 
-  return { cfg, requestAuth };
+  return { cfg, requestAuth, operatorScopes };
 }
 
 export function isGatewayBearerHttpRequest(
@@ -219,9 +314,16 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
 ): string[] {
+  return resolveSharedSecretHttpOperatorScopes(req, requestAuth);
+}
+
+export function resolveSharedSecretHttpOperatorScopes(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): string[] {
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
     // Shared-secret HTTP bearer auth is a documented trusted-operator surface
-    // for the compat APIs and direct /tools/invoke. This is designed-as-is:
+    // for direct HTTP surfaces that opt into it. This is designed-as-is:
     // token/password auth proves possession of the gateway operator secret, not
     // a narrower per-request scope identity, so restore the normal defaults.
     return [...CLI_DEFAULT_OPERATOR_SCOPES];
@@ -245,9 +347,20 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
     // Shared-secret HTTP bearer auth also carries owner semantics on the compat
     // APIs and direct /tools/invoke. This is intentional: there is no separate
-    // per-request owner primitive on that shared-secret path, so owner-only
-    // tool policy follows the documented trusted-operator contract.
+    // per-request owner primitive on that shared-secret path, so managed
+    // attachment ownership follows the documented trusted-operator contract.
     return true;
   }
   return resolveHttpSenderIsOwner(req, requestAuth);
+}
+
+export function authorizeOpenAiCompatibleHttpModelOverride(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): { allowed: true } | { allowed: false; missingScope: typeof ADMIN_SCOPE } {
+  const requestedModelOverride = normalizeOptionalString(getHeader(req, "x-openclaw-model"));
+  if (!requestedModelOverride || resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
+    return { allowed: true };
+  }
+  return { allowed: false, missingScope: ADMIN_SCOPE };
 }

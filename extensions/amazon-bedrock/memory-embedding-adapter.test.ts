@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Amazon Bedrock tests cover memory embedding adapter plugin behavior.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAwsCredentialsMock = vi.hoisted(() => vi.fn());
 const createBedrockEmbeddingProviderMock = vi.hoisted(() => vi.fn());
@@ -42,6 +43,11 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./embedding-provider.js");
+    vi.resetModules();
   });
 
   it("registers the expected adapter metadata", () => {

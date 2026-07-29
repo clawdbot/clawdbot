@@ -1,5 +1,7 @@
+// Memory Core plugin module implements rem evidence behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -612,8 +614,13 @@ function splitSubjectLeadClaim(text: string): string[] {
   if (!match?.groups) {
     return [text];
   }
-  const subject = normalizeWhitespace(match.groups.subject);
-  const rest = normalizeWhitespace(match.groups.rest);
+  const rawSubject = match.groups.subject;
+  const rawRest = match.groups.rest;
+  if (rawSubject === undefined || rawRest === undefined) {
+    return [text];
+  }
+  const subject = normalizeWhitespace(rawSubject);
+  const rest = normalizeWhitespace(rawRest);
   if (!subject || !rest) {
     return [text];
   }
@@ -638,7 +645,7 @@ function atomizeClaimText(text: string): string[] {
     .flatMap((part) => splitSubjectLeadClaim(part))
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean);
-  return Array.from(new Set(atomic)).slice(0, 3);
+  return uniqueStrings(atomic).slice(0, 3);
 }
 
 function classifyCandidateLeanFromText(text: string, title: string): GroundedRemCandidate["lean"] {
@@ -1091,3 +1098,4 @@ export async function previewGroundedRemMarkdown(params: {
     files: previews,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

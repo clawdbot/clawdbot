@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Checks deprecated JSDoc blocks for required migration details.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";

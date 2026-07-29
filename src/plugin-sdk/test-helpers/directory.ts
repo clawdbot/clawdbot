@@ -1,3 +1,6 @@
+/**
+ * Shared directory adapter fixtures for channel contract tests.
+ */
 import type { ChannelDirectoryAdapter } from "../channel-contract.js";
 
 type DirectorySurface = {

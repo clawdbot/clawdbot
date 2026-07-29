@@ -1,10 +1,15 @@
-import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+// Discord plugin module implements native command model picker apply behavior.
+import { randomUUID } from "node:crypto";
+import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  applyModelOverrideToSessionEntry,
+  ModelSelectionLockedError,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
 import {
   recordDiscordModelPickerRecentModel,
@@ -34,26 +39,45 @@ async function persistDiscordModelPickerOverride(params: {
   provider: string;
   model: string;
   isDefault: boolean;
+  runtime?: string;
 }): Promise<boolean> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
   let persisted = false;
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[params.route.sessionKey];
-    if (!entry) {
-      return;
-    }
-    persisted =
-      applyModelOverrideToSessionEntry({
-        entry,
-        selection: {
-          provider: params.provider,
-          model: params.model,
-          isDefault: params.isDefault,
-        },
-        markLiveSwitchPending: true,
-      }).updated || persisted;
+  await patchSessionEntry({
+    storePath,
+    sessionKey: params.route.sessionKey,
+    fallbackEntry: {
+      sessionId: randomUUID(),
+      updatedAt: Date.now(),
+    },
+    replaceEntry: true,
+    update: (entry) => {
+      persisted =
+        applyModelOverrideToSessionEntry({
+          entry,
+          selection: {
+            provider: params.provider,
+            model: params.model,
+            isDefault: params.isDefault,
+          },
+          markLiveSwitchPending: true,
+        }).updated || persisted;
+      const runtime = params.runtime?.trim();
+      if (runtime && runtime !== "auto" && runtime !== "default") {
+        if (entry.agentRuntimeOverride !== runtime) {
+          entry.agentRuntimeOverride = runtime;
+          delete entry.agentHarnessId;
+          persisted = true;
+        }
+      } else if (runtime && entry.agentRuntimeOverride) {
+        delete entry.agentRuntimeOverride;
+        delete entry.agentHarnessId;
+        persisted = true;
+      }
+      return entry;
+    },
   });
   return persisted;
 }
@@ -71,6 +95,7 @@ export async function applyDiscordModelPickerSelection(params: {
   resolvedModelRef: string;
   selectedProvider: string;
   selectedModel: string;
+  selectedRuntime?: string;
   defaultProvider: string;
   defaultModel: string;
   preferenceScope: DiscordModelPickerPreferenceScope;
@@ -103,11 +128,30 @@ export async function applyDiscordModelPickerSelection(params: {
 
     const fallbackRoute = dispatchResult.effectiveRoute ?? params.route;
     if (params.settleMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, params.settleMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, params.settleMs);
+      });
     }
 
     let effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
     let persisted = effectiveModelRef === params.resolvedModelRef;
+    if (params.selectedRuntime?.trim()) {
+      await persistDiscordModelPickerOverride({
+        cfg: params.cfg,
+        route: fallbackRoute,
+        provider: params.selectedProvider,
+        model: params.selectedModel,
+        isDefault:
+          params.selectedProvider === params.defaultProvider &&
+          params.selectedModel === params.defaultModel,
+        runtime: params.selectedRuntime,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
+      persisted = effectiveModelRef === params.resolvedModelRef;
+    }
 
     if (!persisted) {
       logVerbose(
@@ -122,8 +166,11 @@ export async function applyDiscordModelPickerSelection(params: {
           isDefault:
             params.selectedProvider === params.defaultProvider &&
             params.selectedModel === params.defaultModel,
+          runtime: params.selectedRuntime,
         });
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
         effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
         persisted = effectiveModelRef === params.resolvedModelRef;
         if (!persisted) {
@@ -136,6 +183,12 @@ export async function applyDiscordModelPickerSelection(params: {
           );
         }
       } catch (error) {
+        if (error instanceof ModelSelectionLockedError) {
+          return {
+            status: "rejected",
+            noticeMessage: `❌ ${error.message}`,
+          };
+        }
         const message = error instanceof Error ? error.message : String(error);
         logVerbose(
           `discord: direct session override persist threw for session key ${fallbackRoute.sessionKey}: ${message}`,
@@ -163,6 +216,12 @@ export async function applyDiscordModelPickerSelection(params: {
           noticeMessage: `⚠️ Tried to set ${params.resolvedModelRef}, but current model is ${effectiveModelRef}.`,
         };
   } catch (error) {
+    if (error instanceof ModelSelectionLockedError) {
+      return {
+        status: "rejected",
+        noticeMessage: `❌ ${error.message}`,
+      };
+    }
     if (error instanceof Error && error.message === "timeout") {
       return {
         status: "timeout",

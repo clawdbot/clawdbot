@@ -1,4 +1,8 @@
+// Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 
 const log = createSubsystemLogger("fetch-timeout");
 const LOG_URL_MAX_CHARS = 500;
@@ -30,25 +34,31 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     return undefined;
   }
   try {
+    // Strip credentials, query, and fragment before logging; timeout URLs often
+    // include provider tokens or signed request parameters.
     const parsed = new URL(trimmed);
     parsed.username = "";
     parsed.password = "";
     parsed.search = "";
     parsed.hash = "";
-    const value = parsed.toString();
-    return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
+    const value = redactSensitiveUrlLikeString(parsed.toString());
+    return value.length > LOG_URL_MAX_CHARS
+      ? `${truncateUtf16Safe(value, LOG_URL_MAX_CHARS)}...`
+      : value;
   } catch {
     const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
-    const cleaned = withoutQueryOrHash
-      .replace(/[\r\n\u2028\u2029]+/g, " ")
-      .replace(/\p{Cc}+/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const cleaned = redactSensitiveUrlLikeString(
+      withoutQueryOrHash
+        .replace(/[\r\n\u2028\u2029]+/g, " ")
+        .replace(/\p{Cc}+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
     if (!cleaned) {
       return undefined;
     }
     return cleaned.length > LOG_URL_MAX_CHARS
-      ? `${cleaned.slice(0, LOG_URL_MAX_CHARS)}...`
+      ? `${truncateUtf16Safe(cleaned, LOG_URL_MAX_CHARS)}...`
       : cleaned;
   }
 }
@@ -59,13 +69,16 @@ function abortDueToTimeout(
   startedAtMs: number,
   operation?: string,
   url?: string,
+  combinedSignal?: AbortSignal,
 ) {
-  if (controller.signal.aborted) {
+  if (combinedSignal?.aborted ?? controller.signal.aborted) {
     return;
   }
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
   const elapsedMs = Math.max(0, Date.now() - startedAtMs);
   const delayMs = Math.max(0, elapsedMs - timeoutMs);
+  // A large elapsed/timeout gap means the timer callback itself was starved,
+  // which is more useful for operators than another plain timeout message.
   const eventLoopDelayHint =
     delayMs >= Math.max(1000, timeoutMs * 0.5)
       ? `timer delayed ${delayMs}ms, likely event-loop starvation`
@@ -92,21 +105,28 @@ function abortDueToTimeout(
   controller.abort(error);
 }
 
+/**
+ * Builds an abort signal that combines an optional parent signal with a timeout.
+ * Callers must run `cleanup`; `refresh` restarts only the internal timeout timer.
+ */
 export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   signal?: AbortSignal;
   cleanup: () => void;
   refresh: () => void;
 } {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
+  const { timeoutMs, signal: parentSignal } = params;
+  if (!timeoutMs && !parentSignal) {
     return { signal: undefined, cleanup: () => {}, refresh: () => {} };
   }
   if (!timeoutMs) {
-    return { signal, cleanup: () => {}, refresh: () => {} };
+    return { signal: parentSignal, cleanup: () => {}, refresh: () => {} };
   }
 
   const controller = new AbortController();
-  const normalizedTimeoutMs = Math.max(1, Math.floor(timeoutMs));
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
+  const normalizedTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   let active = true;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const scheduleTimeout = () => {
@@ -118,22 +138,15 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       Date.now(),
       params.operation,
       params.url,
+      signal,
     );
   };
   scheduleTimeout();
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
 
   return {
-    signal: controller.signal,
+    signal,
     refresh: () => {
-      if (!active || controller.signal.aborted) {
+      if (!active || signal.aborted) {
         return;
       }
       if (timeoutId) {
@@ -145,9 +158,6 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       active = false;
       if (timeoutId) {
         clearTimeout(timeoutId);
-      }
-      if (signal) {
-        signal.removeEventListener("abort", onAbort);
       }
     },
   };
@@ -169,11 +179,18 @@ export async function fetchWithTimeout(
   timeoutMs: number,
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
-  const { signal, cleanup } = buildTimeoutAbortSignal({
+  const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, timeoutMs),
     operation: "fetchWithTimeout",
     url,
   });
+  const callerSignal = init.signal ?? undefined;
+  // The wrapper timeout ends once fetch returns headers, but the response body
+  // must keep following caller cancellation (and its reason) after that point.
+  const signal =
+    callerSignal && timeoutSignal
+      ? AbortSignal.any([callerSignal, timeoutSignal])
+      : (callerSignal ?? timeoutSignal);
   try {
     return await fetchFn(url, { ...init, signal });
   } finally {

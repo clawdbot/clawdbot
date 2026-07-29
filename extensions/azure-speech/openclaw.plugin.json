@@ -6,20 +6,16 @@
   "enabledByDefault": true,
   "name": "Azure Speech",
   "description": "Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).",
-  "providerAuthEnvVars": {
-    "azure-speech": [
-      "AZURE_SPEECH_KEY",
-      "AZURE_SPEECH_API_KEY",
-      "SPEECH_KEY",
-      "AZURE_SPEECH_REGION",
-      "SPEECH_REGION"
-    ],
-    "azure": [
-      "AZURE_SPEECH_KEY",
-      "AZURE_SPEECH_API_KEY",
-      "SPEECH_KEY",
-      "AZURE_SPEECH_REGION",
-      "SPEECH_REGION"
+  "setup": {
+    "providers": [
+      {
+        "id": "azure-speech",
+        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY", "AZURE_SPEECH_REGION", "SPEECH_REGION"]
+      },
+      {
+        "id": "azure",
+        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY", "AZURE_SPEECH_REGION", "SPEECH_REGION"]
+      }
     ]
   },
   "contracts": {

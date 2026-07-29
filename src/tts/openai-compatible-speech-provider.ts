@@ -1,12 +1,14 @@
+// OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { asFiniteNumber, asObject, trimToUndefined } from "../agents/provider-http-errors.js";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderBinaryResponse,
   resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { asFiniteNumber, asObject, trimToUndefined } from "../agents/provider-http-errors.js";
+} from "../plugin-sdk/provider-http.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
@@ -22,14 +24,17 @@ type OpenAiCompatibleSpeechProviderBaseConfig = {
   responseFormat?: string;
 };
 
+/** Normalized config shape for OpenAI-compatible speech HTTP providers. */
 export type OpenAiCompatibleSpeechProviderConfig<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 > = OpenAiCompatibleSpeechProviderBaseConfig & ExtraConfig;
 
+/** Base URL normalization policy for providers that share OpenAI-style endpoints. */
 export type OpenAiCompatibleSpeechProviderBaseUrlPolicy =
   | { kind: "trim-trailing-slash" }
   | { kind: "canonical"; aliases?: readonly string[]; allowCustom?: boolean };
 
+/** Extra config field to forward into the JSON body under an optional request key. */
 export type OpenAiCompatibleSpeechProviderExtraJsonBodyField<
   ExtraConfig extends Record<string, unknown>,
 > = {
@@ -37,6 +42,7 @@ export type OpenAiCompatibleSpeechProviderExtraJsonBodyField<
   requestKey?: string;
 };
 
+/** Factory options for a speech provider backed by /audio/speech-compatible HTTP APIs. */
 export type OpenAiCompatibleSpeechProviderOptions<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 > = {
@@ -100,6 +106,9 @@ function normalizeBaseUrl(params: {
     return normalized;
   }
   const canonical = trimTrailingBaseUrl(params.fallback, params.fallback);
+  // Some hosted providers publish multiple equivalent URLs. Canonicalizing
+  // aliases keeps SSRF policy and status output stable while still allowing
+  // explicit custom URLs when the provider opts in.
   const aliases = new Set(
     [canonical, ...(params.policy.aliases ?? [])].map((entry) =>
       trimTrailingBaseUrl(entry, canonical),
@@ -184,6 +193,7 @@ function buildExtraJsonBodyFields<ExtraConfig extends Record<string, unknown>>(
   return body;
 }
 
+/** Build a complete SpeechProviderPlugin for OpenAI-compatible speech endpoints. */
 export function createOpenAiCompatibleSpeechProvider<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 >(options: OpenAiCompatibleSpeechProviderOptions<ExtraConfig>): SpeechProviderPlugin {
@@ -199,7 +209,7 @@ export function createOpenAiCompatibleSpeechProvider<
     return {
       apiKey: normalizeResolvedSecretInputString({
         value: raw?.apiKey,
-        path: `messages.tts.providers.${providerConfigKey}.apiKey`,
+        path: `tts.providers.${providerConfigKey}.apiKey`,
       }),
       baseUrl:
         trimToUndefined(raw?.baseUrl) == null
@@ -279,6 +289,7 @@ export function createOpenAiCompatibleSpeechProvider<
     id: options.id,
     label: options.label,
     autoSelectOrder: options.autoSelectOrder,
+    defaultModel: options.defaultModel,
     models: [...options.models],
     voices: [...options.voices],
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
@@ -359,6 +370,8 @@ export function createOpenAiCompatibleSpeechProvider<
         transport: "http",
       });
 
+      // Keep request construction here so provider implementations only supply
+      // static metadata and extra body fields, not duplicated HTTP behavior.
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/audio/speech`,
         headers,
@@ -382,7 +395,13 @@ export function createOpenAiCompatibleSpeechProvider<
           options.apiErrorLabel ?? `${options.label} TTS API error`,
         );
         return {
-          audioBuffer: Buffer.from(await response.arrayBuffer()),
+          audioBuffer: Buffer.from(
+            await readProviderBinaryResponse(
+              response,
+              options.apiErrorLabel ?? `${options.label} TTS API error`,
+              "audio",
+            ),
+          ),
           outputFormat: responseFormat,
           fileExtension: responseFormatToFileExtension(responseFormat),
           voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),

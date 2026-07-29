@@ -1,3 +1,4 @@
+// Ollama tests cover provider base url plugin behavior.
 import { describe, expect, it } from "vitest";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 

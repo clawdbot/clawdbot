@@ -1,47 +1,36 @@
-export * from "../../packages/memory-host-sdk/src/runtime-core.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
+// Memory core host runtime exports bridge memory host runtime-core APIs into the SDK.
+export { SILENT_REPLY_TOKEN } from "../../packages/memory-host-sdk/src/runtime-core.js";
+export { resolveRememberAcrossConversations } from "../../packages/memory-host-sdk/src/host/config-utils.js";
+export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/agent-settings.js";
 export {
   asToolParamsRecord,
   jsonResult,
-  readNumberParam,
+  readFiniteNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
-  type AnyAgentTool,
 } from "../agents/tools/common.js";
+export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
-export {
-  resolveDefaultAgentId,
-  resolveSessionAgentId,
-  resolveSessionAgentIds,
-} from "../agents/agent-scope.js";
+export { resolveDefaultAgentId, resolveSessionAgentIds } from "../agents/agent-scope.js";
 export { resolveMemorySearchConfig } from "../agents/memory-search.js";
+export { resolveMemoryDreamingPluginConfig } from "../memory-host-sdk/dreaming.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
-export { getRuntimeConfig, loadConfig } from "../config/config.js";
+export { getRuntimeConfig } from "../config/config.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+
 export type {
-  MemoryCorpusGetResult,
   MemoryCorpusSearchResult,
-  MemoryCorpusSupplement,
-  MemoryCorpusSupplementRegistration,
   MemoryFlushPlan,
-  MemoryFlushPlanResolver,
-  MemoryPluginCapability,
-  MemoryPluginPublicArtifact,
-  MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export {
-  buildMemoryPromptSection as buildActiveMemoryPromptSection,
   clearMemoryPluginState,
-  getMemoryCapabilityRegistration,
-  listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   registerMemoryCapability,
-  registerMemoryCorpusSupplement,
 } from "../plugins/memory-state.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
+
 export { parseAgentSessionKey } from "../routing/session-key.js";

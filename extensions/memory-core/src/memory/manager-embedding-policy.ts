@@ -1,4 +1,6 @@
+// Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 
 type MemoryEmbeddingTextPart = {
   type: "text";
@@ -80,15 +82,27 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
-export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day|fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|read ECONN|timed out)/i.test(
-    message,
-  );
+const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
+  /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
+
+const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
+  /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
+
+const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
+
+function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
+  return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
 
-export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {
-  return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-    message,
+export function isSplittableMemoryEmbeddingTransportError(message: string): boolean {
+  return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+}
+
+export function isRetryableMemoryEmbeddingError(message: string): boolean {
+  return (
+    RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
+    isRetryableMemoryEmbeddingTransportError(message)
   );
 }
 
@@ -106,21 +120,55 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  /** Caller-owned cancellation; an aborted caller stops the retry loop. */
+  signal?: AbortSignal;
 }): Promise<T> {
-  let attempt = 0;
-  let delayMs = params.baseDelayMs;
-  while (true) {
-    try {
-      return await params.run();
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
-        throw err;
-      }
-      await params.waitForRetry(delayMs);
-      delayMs *= 2;
-      attempt += 1;
+  return await retryAsync(params.run, {
+    attempts: params.maxAttempts,
+    minDelayMs: params.baseDelayMs,
+    maxDelayMs: Number.MAX_SAFE_INTEGER,
+    // Caller cancellation wins even when its timeout resembles a retryable
+    // provider error; otherwise abandoned searches start another request.
+    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(formatErrorMessage(err)),
+    sleep: params.waitForRetry,
+  });
+}
+
+export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
+  items: TInput[];
+  run: (items: TInput[]) => Promise<TOutput[]>;
+  isRetryable: (message: string) => boolean;
+  isSplittable: (message: string) => boolean;
+  waitForRetry: (delayMs: number) => Promise<void>;
+  maxAttempts: number;
+  baseDelayMs: number;
+  onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
+}): Promise<TOutput[]> {
+  try {
+    return await runMemoryEmbeddingRetryLoop({
+      run: async () => await params.run(params.items),
+      isRetryable: params.isRetryable,
+      waitForRetry: params.waitForRetry,
+      maxAttempts: params.maxAttempts,
+      baseDelayMs: params.baseDelayMs,
+    });
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    if (params.items.length <= 1 || !params.isSplittable(message)) {
+      throw err;
     }
+
+    const splitAt = Math.ceil(params.items.length / 2);
+    params.onSplit?.({ itemCount: params.items.length, splitAt, message });
+    const left = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(0, splitAt),
+    });
+    const right = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(splitAt),
+    });
+    return [...left, ...right];
   }
 }
 

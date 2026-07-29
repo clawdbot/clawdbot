@@ -1,71 +1,88 @@
+// Assertions for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
+import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 
-function assertPatchBehavior() {
-  return import("../../../../dist/extensions/openai/native-web-search.js").then(
-    ({ patchOpenAINativeWebSearchPayload }) => {
-      const injectedPayload = {
-        reasoning: { effort: "minimal", summary: "auto" },
-      };
-      const injectedResult = patchOpenAINativeWebSearchPayload(injectedPayload);
-      if (injectedResult !== "injected") {
-        throw new Error(`expected native web_search injection, got ${injectedResult}`);
-      }
-      if (injectedPayload.reasoning.effort !== "low") {
-        throw new Error(
-          `expected injected native web_search to raise minimal reasoning to low, got ${JSON.stringify(injectedPayload.reasoning)}`,
-        );
-      }
-      if (!injectedPayload.tools?.some((tool) => tool?.type === "web_search")) {
-        throw new Error(`native web_search was not injected: ${JSON.stringify(injectedPayload)}`);
-      }
+const ERROR_DETAIL_TAIL_BYTES = 64 * 1024;
+const REQUEST_LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const RESPONSE_PREVIEW_BYTES = 8 * 1024;
+const RESPONSE_PREVIEW_COUNT = 5;
 
-      const existingNativePayload = {
-        tools: [{ type: "web_search" }],
-        reasoning: { effort: "minimal" },
-      };
-      const existingResult = patchOpenAINativeWebSearchPayload(existingNativePayload);
-      if (existingResult !== "native_tool_already_present") {
-        throw new Error(`expected existing native web_search, got ${existingResult}`);
+function scanTextFileLines(file, onLine) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(REQUEST_LOG_SCAN_CHUNK_BYTES);
+    let carry = "";
+    let lineNumber = 1;
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
       }
-      if (existingNativePayload.reasoning.effort !== "low") {
-        throw new Error(
-          `expected existing native web_search to raise minimal reasoning to low, got ${JSON.stringify(existingNativePayload.reasoning)}`,
-        );
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      const lines = text.split(/\r?\n/u);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        onLine(line, lineNumber);
+        lineNumber += 1;
       }
-    },
-  );
+    }
+    if (carry.length > 0) {
+      onLine(carry, lineNumber);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function scanSuccessRequest(logPath) {
+  let responseCount = 0;
+  let success;
+  const recentResponses = [];
+  scanTextFileLines(logPath, (line, lineNumber) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    const entry = JSON.parse(trimmed);
+    if (entry.method !== "POST" || entry.path !== "/v1/responses") {
+      return;
+    }
+    responseCount += 1;
+    const bodyText = JSON.stringify(entry.body);
+    if (recentResponses.length >= RESPONSE_PREVIEW_COUNT) {
+      recentResponses.shift();
+    }
+    recentResponses.push({
+      line: lineNumber,
+      bodyTail: tailText(bodyText, RESPONSE_PREVIEW_BYTES),
+    });
+    if (!success && bodyText.includes("OPENCLAW_SCHEMA_E2E_OK")) {
+      success = entry;
+    }
+  });
+  return { responseCount, success, recentResponses };
 }
 
 function assertSuccessRequest() {
   const logPath = process.argv[3];
-  const entries = fs
-    .readFileSync(logPath, "utf8")
-    .trim()
-    .split(/\n+/u)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const responseEntries = entries.filter((entry) => entry.path === "/v1/responses");
-  if (responseEntries.length < 1) {
-    throw new Error(`mock OpenAI /v1/responses was not used. Requests: ${JSON.stringify(entries)}`);
+  const { responseCount, success, recentResponses } = scanSuccessRequest(logPath);
+  if (responseCount < 1) {
+    throw new Error(
+      `mock OpenAI /v1/responses was not used. Request log tail: ${readTextFileTail(logPath, ERROR_DETAIL_TAIL_BYTES)}`,
+    );
   }
-  const success = responseEntries.find((entry) =>
-    JSON.stringify(entry.body).includes("OPENCLAW_SCHEMA_E2E_OK"),
-  );
   if (!success) {
-    throw new Error(`missing success request. Requests: ${JSON.stringify(responseEntries)}`);
+    throw new Error(
+      `missing success request. Recent /v1/responses: ${JSON.stringify(recentResponses)}`,
+    );
   }
   const tools = Array.isArray(success.body.tools) ? success.body.tools : [];
-  const hasWebSearch = tools.some(
-    (tool) =>
-      tool?.type === "web_search" ||
-      (tool?.type === "function" &&
-        (tool?.name === "web_search" || tool?.function?.name === "web_search")),
-  );
-  if (!hasWebSearch) {
+  const hasNativeWebSearch = tools.some((tool) => tool?.type === "web_search");
+  if (!hasNativeWebSearch) {
     throw new Error(
-      `success request did not include web_search. Body: ${JSON.stringify(success.body)}`,
+      `success request did not include native web_search. Body: ${JSON.stringify(success.body)}`,
     );
   }
   if (success.body.reasoning?.effort === "minimal") {
@@ -76,7 +93,6 @@ function assertSuccessRequest() {
 }
 
 const commands = {
-  "assert-patch-behavior": assertPatchBehavior,
   "assert-success-request": assertSuccessRequest,
 };
 

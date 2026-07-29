@@ -1,3 +1,4 @@
+// Slack plugin module implements actions behavior.
 export {
   deleteSlackMessage,
   downloadSlackFile,
@@ -11,6 +12,7 @@ export {
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
+  resolveSlackConversationName,
   sendSlackMessage,
   unpinSlackMessage,
 } from "./actions.js";

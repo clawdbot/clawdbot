@@ -1,7 +1,12 @@
+// Inspects installed package metadata for update/install verification.
 import fsSync from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "./boundary-file-read.js";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+// Package update utilities inspect installed package metadata without trusting
+// paths outside the provided package root.
+/** Return expected integrity only for concrete semver package specs. */
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,
@@ -24,23 +29,45 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: dir,
+export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+  const result = readRootJsonObjectSync({
+    rootDir: dir,
+    relativePath: "package.json",
     boundaryLabel: "installed package directory",
   });
-  if (!opened.ok) {
-    return undefined;
+  return result.ok ? result.value : undefined;
+}
+
+/** Read the installed package version from a package root. */
+export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  const manifest = readInstalledPackageManifest(dir);
+  return typeof manifest?.version === "string" ? manifest.version : undefined;
+}
+
+/** Read string-valued peer dependencies from an installed package. */
+export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
+  const manifest = readInstalledPackageManifest(dir);
+  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
+  return Object.fromEntries(
+    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
+      const [, value] = entry;
+      return typeof value === "string";
+    }),
+  );
+}
+
+/** Return true when an installed package needs an openclaw peer link repair. */
+export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
+  const peerDependencies = readInstalledPackagePeerDependencies(dir);
+  if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    return false;
   }
+
   try {
-    const raw = fsSync.readFileSync(opened.fd, "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    fsSync.closeSync(opened.fd);
+    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
   }
 }

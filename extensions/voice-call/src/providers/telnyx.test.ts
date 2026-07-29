@@ -1,3 +1,4 @@
+// Voice Call tests cover telnyx plugin behavior.
 import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
@@ -24,6 +25,26 @@ function createCtx(params?: Partial<WebhookContext>): WebhookContext {
     query: {},
     remoteAddress: "127.0.0.1",
     ...params,
+  };
+}
+
+function requireFetchRequest() {
+  const [call] = apiMocks.fetchWithSsrFGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
+  }
+  return request as {
+    url?: string;
+    auditContext?: string;
+    policy?: unknown;
+    init?: {
+      method?: string;
+      body?: unknown;
+    };
   };
 }
 
@@ -222,14 +243,36 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toEqual(
-      expect.objectContaining({
-        type: "call.initiated",
-        direction: "inbound",
-        from: "+15551111111",
-        to: "+15550000000",
+    const event = result.events[0];
+    expect(event?.type).toBe("call.initiated");
+    expect(event?.direction).toBe("inbound");
+    expect(event?.from).toBe("+15551111111");
+    expect(event?.to).toBe("+15550000000");
+  });
+
+  it("uses raw client_state fallback when client_state is malformed base64", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-client-state",
+            event_type: "call.initiated",
+            payload: {
+              call_control_id: "call-fallback",
+              client_state: "call-1@@@",
+            },
+          },
+        }),
       }),
     );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.callId).toBe("call-1@@@");
   });
 
   it("reads transcription text from Telnyx transcription_data payloads", () => {
@@ -258,14 +301,14 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toEqual(
-      expect.objectContaining({
-        type: "call.speech",
-        transcript: "hello this is a test speech",
-        isFinal: false,
-        confidence: 0.977219,
-      }),
-    );
+    const event = result.events[0];
+    expect(event?.type).toBe("call.speech");
+    if (event?.type !== "call.speech") {
+      throw new Error("expected Telnyx transcription callback to produce a speech event");
+    }
+    expect(event?.transcript).toBe("hello this is a test speech");
+    expect(event?.isFinal).toBe(false);
+    expect(event?.confidence).toBe(0.977219);
   });
 });
 
@@ -287,18 +330,129 @@ describe("TelnyxProvider answer control", () => {
       providerCallId: "call-control-1",
     });
 
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/answer",
-        auditContext: "voice-call.telnyx.api",
-        policy: { allowedHostnames: ["api.telnyx.com"] },
-        init: expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ command_id: "openclaw-answer-call-1" }),
-        }),
-      }),
-    );
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFetchRequest();
+    expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/answer");
+    expect(request.auditContext).toBe("voice-call.telnyx.api");
+    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
+    expect(request.init?.method).toBe("POST");
+    expect(request.init?.body).toBe(JSON.stringify({ command_id: "openclaw-answer-call-1" }));
     expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TelnyxProvider Media Streaming (PCMU)", () => {
+  it("embeds streaming fields in the dial payload when streamUrl is provided", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
+        status: 200,
+      }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.test/voice/webhook",
+      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
+      streamAuthToken: "token-xyz",
+    });
+
+    const request = requireFetchRequest();
+    const body = JSON.parse(request.init?.body as string) as Record<string, unknown>;
+    expect(body.stream_url).toBe("wss://example.test/voice/stream/realtime/token-xyz");
+    expect(body.stream_track).toBe("inbound_track");
+    expect(body.stream_codec).toBe("PCMU");
+    expect(body.stream_bidirectional_mode).toBe("rtp");
+    expect(body.stream_bidirectional_codec).toBe("PCMU");
+    expect(body.stream_bidirectional_sampling_rate).toBe(8000);
+    expect(body.stream_bidirectional_target_legs).toBe("self");
+    expect(body.stream_auth_token).toBe("token-xyz");
+  });
+
+  it("omits streaming fields from the dial payload when streamUrl is absent", async () => {
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
+        status: 200,
+      }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.test/voice/webhook",
+    });
+
+    const body = JSON.parse(requireFetchRequest().init?.body as string) as Record<string, unknown>;
+    expect(body.stream_url).toBeUndefined();
+    expect(body.stream_codec).toBeUndefined();
+    expect(body.stream_bidirectional_codec).toBeUndefined();
+    expect(body.stream_auth_token).toBeUndefined();
+  });
+
+  it("embeds streaming fields in the answer action when streamUrl is provided", async () => {
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.answerCall({
+      callId: "call-1",
+      providerCallId: "call-control-1",
+      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
+      streamAuthToken: "token-xyz",
+    });
+
+    const body = JSON.parse(requireFetchRequest().init?.body as string) as Record<string, unknown>;
+    expect(body.command_id).toBe("openclaw-answer-call-1");
+    expect(body.stream_url).toBe("wss://example.test/voice/stream/realtime/token-xyz");
+    expect(body.stream_codec).toBe("PCMU");
+    expect(body.stream_bidirectional_target_legs).toBe("self");
+    expect(body.stream_auth_token).toBe("token-xyz");
+  });
+
+  it("silently acknowledges streaming.started and streaming.stopped webhooks", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
+      { skipVerification: true },
+    );
+    // Telnyx documents stream lifecycle webhooks as `streaming.started` and
+    // `streaming.stopped` (no `call.` prefix). The bridge tracks its own
+    // lifecycle on the WebSocket; we ack the carrier webhook with 200 and
+    // emit nothing to avoid duplicate signal at the manager.
+    for (const eventType of ["streaming.started", "streaming.stopped"]) {
+      const rawBody = JSON.stringify({
+        data: {
+          event_type: eventType,
+          id: `evt-${eventType}`,
+          payload: { call_control_id: "call-control-1" },
+        },
+      });
+      const result = provider.parseWebhookEvent(createCtx({ rawBody }), {
+        verifiedRequestKey: "key-1",
+      });
+      expect(result.events).toHaveLength(0);
+      expect(result.statusCode).toBe(200);
+    }
   });
 });
 
@@ -322,19 +476,15 @@ describe("TelnyxProvider speak control", () => {
       voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
     });
 
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/speak",
-        auditContext: "voice-call.telnyx.api",
-        policy: { allowedHostnames: ["api.telnyx.com"] },
-        init: expect.objectContaining({
-          method: "POST",
-          body: expect.stringContaining(
-            '"voice":"Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc"',
-          ),
-        }),
-      }),
-    );
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFetchRequest();
+    expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/speak");
+    expect(request.auditContext).toBe("voice-call.telnyx.api");
+    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
+    expect(request.init?.method).toBe("POST");
+    expect(typeof request.init?.body).toBe("string");
+    const body = JSON.parse(request.init?.body as string) as { voice?: string };
+    expect(body.voice).toBe("Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

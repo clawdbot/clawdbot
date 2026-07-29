@@ -1,3 +1,4 @@
+// Status-all format tests cover dashboard URLs, gateway summaries, overview rows, and JSON payload shapes.
 import { describe, expect, it } from "vitest";
 import {
   baseStatusExpectedUpdateChannelInfo,
@@ -241,6 +242,38 @@ describe("status-all format", () => {
       gatewayServiceValue: "LaunchAgent installed · loaded · running",
       nodeServiceValue: "node loaded · running (pid 42)",
     });
+  });
+
+  it("prefers advertised Control UI links for dashboard values", () => {
+    expect(
+      buildStatusGatewaySurfaceValues({
+        cfg: { gateway: { bind: "lan" } },
+        advertisedControlUiLinks: {
+          httpUrl: "http://10.211.55.3:18789/",
+          wsUrl: "ws://10.211.55.3:18789",
+        },
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+        gatewayConnection: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+        },
+        gatewayReachable: true,
+        gatewayProbe: { connectLatencyMs: 12, error: null },
+        gatewayProbeAuth: { token: "tok" },
+        gatewaySelf: null,
+        gatewayService: {
+          label: "LaunchAgent",
+          installed: true,
+          loadedText: "loaded",
+        },
+        nodeService: {
+          label: "node",
+          installed: true,
+          loadedText: "loaded",
+        },
+      }).dashboardUrl,
+    ).toBe("http://10.211.55.3:18789/");
   });
 
   it("prefers node-only gateway values when present", () => {

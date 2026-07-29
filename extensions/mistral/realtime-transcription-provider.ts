@@ -1,3 +1,4 @@
+// Mistral provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -6,8 +7,15 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+  parseFiniteNumber as readFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MistralRealtimeTranscriptionEncoding =
   | "pcm_s16le"
@@ -55,26 +63,10 @@ const MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const MISTRAL_REALTIME_RECONNECT_DELAY_MS = 1000;
 const MISTRAL_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readNestedMistralConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
   const providers = readRecord(raw?.providers);
   return readRecord(providers?.mistral ?? raw?.mistral ?? raw) ?? {};
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  const next =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number.parseFloat(value)
-        : undefined;
-  return Number.isFinite(next) ? next : undefined;
 }
 
 function normalizeMistralEncoding(
@@ -136,10 +128,7 @@ function normalizeProviderConfig(
 ): MistralRealtimeTranscriptionProviderConfig {
   const raw = readNestedMistralConfig(config);
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw.apiKey,
-      path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
-    }),
+    apiKey: normalizeMistralApiKey(raw.apiKey),
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model ?? raw.sttModel),
     sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
@@ -148,6 +137,14 @@ function normalizeProviderConfig(
       raw.targetStreamingDelayMs ?? raw.target_streaming_delay_ms ?? raw.delayMs,
     ),
   };
+}
+
+function normalizeMistralApiKey(value: unknown): string | undefined {
+  const resolved = normalizeResolvedSecretInputString({
+    value,
+    path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
+  });
+  return normalizeSecretInput(resolved) || undefined;
 }
 
 function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
@@ -212,9 +209,8 @@ function createMistralRealtimeTranscriptionSession(
         return;
       case "error":
         config.onError?.(new Error(readErrorDetail(event)));
-        return;
+
       default:
-        return;
     }
   };
 
@@ -253,10 +249,13 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.MISTRAL_API_KEY),
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
+      ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.MISTRAL_API_KEY;
+      const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
       if (!apiKey) {
         throw new Error("Mistral API key missing");
       }
@@ -272,8 +271,3 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     },
   };
 }
-
-export const __testing = {
-  normalizeProviderConfig,
-  toMistralRealtimeWsUrl,
-};

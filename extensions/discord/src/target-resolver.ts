@@ -1,11 +1,12 @@
+// Discord plugin module implements target resolver behavior.
+import { buildMessagingTarget, type MessagingTarget } from "openclaw/plugin-sdk/channel-targets";
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
-import { buildMessagingTarget, type MessagingTarget } from "openclaw/plugin-sdk/messaging-targets";
 import { resolveDiscordAccount, resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 import { allowFromContainsDiscordUserId } from "./normalize.js";
 import { parseDiscordSendTarget } from "./send-target-parsing.js";
-import { type DiscordTargetParseOptions } from "./target-parsing.js";
+import type { DiscordTargetParseOptions } from "./target-parsing.js";
 
 /**
  * Resolve a Discord username to user ID using the directory lookup.

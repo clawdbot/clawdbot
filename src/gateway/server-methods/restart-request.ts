@@ -1,5 +1,7 @@
+// Restart request parsing keeps restart sentinel payloads limited to resumable
+// session, delivery, thread, and delay fields.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type RestartDeliveryContext = {
   channel?: string;
@@ -34,6 +36,9 @@ function parseRestartDeliveryContext(params: unknown): {
   return { deliveryContext: normalizedContext, threadId };
 }
 
+// Restart sentinels can resume a channel turn after the gateway comes back.
+// Keep only routable delivery fields plus a normalized thread id so malformed
+// UI/tool payloads do not leak arbitrary data into the sentinel file.
 export function parseRestartRequestParams(params: unknown): {
   sessionKey: string | undefined;
   deliveryContext: RestartDeliveryContext | undefined;

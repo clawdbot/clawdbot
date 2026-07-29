@@ -1,3 +1,4 @@
+// Reports which unit tests qualify for the unit-fast routing lane.
 import {
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,

@@ -1,9 +1,25 @@
+// Litellm tests cover index plugin behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+
+const LITELLM_DEFAULT_MODEL = {
+  id: "claude-opus-4-6",
+  name: "Claude Opus 4.6",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  contextWindow: 1_000_000,
+  maxTokens: 128_000,
+};
 
 function registerProvider() {
   const captured = capturePluginRegistration(plugin);
@@ -43,29 +59,48 @@ describe("litellm plugin", () => {
         toApiKeyCredential,
       } as never);
 
-      expect(result?.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
-      expect(result?.models?.providers?.litellm?.api).toBe("openai-completions");
-      expect(result?.auth?.profiles?.["litellm:default"]).toEqual({
+      expect(result).toStrictEqual({
+        auth: {
+          profiles: {
+            "litellm:default": {
+              provider: "litellm",
+              mode: "api_key",
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "litellm/claude-opus-4-6": {
+                alias: "LiteLLM",
+              },
+            },
+            model: {
+              primary: "litellm/claude-opus-4-6",
+            },
+          },
+        },
+        models: {
+          mode: "merge",
+          providers: {
+            litellm: {
+              baseUrl: "https://litellm.example/v1",
+              api: "openai-completions",
+              models: [LITELLM_DEFAULT_MODEL],
+            },
+          },
+        },
+      });
+      expect(resolveApiKey).toHaveBeenCalledWith({
         provider: "litellm",
-        mode: "api_key",
+        flagValue: "litellm-test-key",
+        flagName: "--litellm-api-key",
+        envVar: "LITELLM_API_KEY",
       });
-      expect(result?.agents?.defaults?.model).toMatchObject({
-        primary: "litellm/claude-opus-4-6",
+      expect(toApiKeyCredential).toHaveBeenCalledWith({
+        provider: "litellm",
+        resolved: { key: "litellm-test-key", source: "flag" },
       });
-      expect(resolveApiKey).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "litellm",
-          flagValue: "litellm-test-key",
-          flagName: "--litellm-api-key",
-          envVar: "LITELLM_API_KEY",
-        }),
-      );
-      expect(toApiKeyCredential).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "litellm",
-          resolved: { key: "litellm-test-key", source: "flag" },
-        }),
-      );
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }

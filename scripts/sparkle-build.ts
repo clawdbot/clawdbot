@@ -1,59 +1,123 @@
 #!/usr/bin/env -S node --import tsx
+// Sparkle Build script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 
 export type SparkleBuildFloors = {
-  dateKey: number;
+  releaseKey: number;
   legacyFloor: number;
   laneFloor: number;
   lane: number;
 };
 
-const CALVER_REGEX = /^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$/;
+const RELEASE_VERSION_REGEX = /^([0-9]{4})\.([0-9]{1,2})\.([1-9][0-9]*)([.-].*)?$/;
+const MONTHLY_PATCH_SPARKLE_BUILD_ADOPTION = {
+  year: 2026,
+  month: 6,
+  patch: 5,
+};
+
+function compareReleaseParts(
+  left: { year: number; month: number; patch: number },
+  right: { year: number; month: number; patch: number },
+): number {
+  if (left.year !== right.year) {
+    return Math.sign(left.year - right.year);
+  }
+  if (left.month !== right.month) {
+    return Math.sign(left.month - right.month);
+  }
+  return Math.sign(left.patch - right.patch);
+}
+
+function usesMonthlyPatchSparkleBuild(version: {
+  year: number;
+  month: number;
+  patch: number;
+}): boolean {
+  return compareReleaseParts(version, MONTHLY_PATCH_SPARKLE_BUILD_ADOPTION) >= 0;
+}
+
+function legacyDateReleaseKey(year: number, month: number, patch: number): number {
+  return Number(`${year}${String(month).padStart(2, "0")}${String(patch).padStart(2, "0")}`);
+}
+
+function monthlyPatchReleaseKey(year: number, month: number, patch: number): number {
+  return (year - 2000) * 100_000_000 + month * 1_000_000 + patch * 100;
+}
 
 export function sparkleBuildFloorsFromShortVersion(
   shortVersion: string,
 ): SparkleBuildFloors | null {
-  const match = CALVER_REGEX.exec(shortVersion.trim());
+  const match = RELEASE_VERSION_REGEX.exec(shortVersion.trim());
   if (!match) {
     return null;
   }
 
-  const year = Number.parseInt(match[1], 10);
-  const month = Number.parseInt(match[2], 10);
-  const day = Number.parseInt(match[3], 10);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const patch = Number(match[3]);
   if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
+    !Number.isSafeInteger(year) ||
+    !Number.isSafeInteger(month) ||
+    !Number.isSafeInteger(patch) ||
     month < 1 ||
     month > 12 ||
-    day < 1 ||
-    day > 31
+    patch < 1
   ) {
     return null;
   }
-
-  const dateKey = Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`);
-  const legacyFloor = Number(`${dateKey}0`);
 
   let lane = 90;
   const suffix = match[4] ?? "";
   if (suffix.length > 0) {
     const numericSuffix = /([0-9]+)$/.exec(suffix)?.[1];
     if (numericSuffix) {
-      lane = Math.min(Number.parseInt(numericSuffix, 10), 89);
+      const parsedLane = Number(numericSuffix);
+      if (!Number.isSafeInteger(parsedLane) || parsedLane < 1) {
+        return null;
+      }
+      lane = Math.min(parsedLane, 89);
     } else {
       lane = 1;
     }
   }
 
-  const laneFloor = Number(`${dateKey}${String(lane).padStart(2, "0")}`);
-  return { dateKey, legacyFloor, laneFloor, lane };
+  if (usesMonthlyPatchSparkleBuild({ year, month, patch })) {
+    // Keep old appcast entries byte-stable, then switch to YYMMPPPPLL so
+    // monthly patches beyond 31 stay monotonic without pretending to be dates.
+    const releaseKey = monthlyPatchReleaseKey(year, month, patch);
+    const laneFloor = releaseKey + lane;
+    if (!isSafeSparkleFloor(releaseKey) || !isSafeSparkleFloor(laneFloor)) {
+      return null;
+    }
+    return {
+      releaseKey,
+      legacyFloor: releaseKey,
+      laneFloor,
+      lane,
+    };
+  }
+
+  const releaseKey = legacyDateReleaseKey(year, month, patch);
+  const legacyFloor = Number(`${releaseKey}0`);
+  const laneFloor = Number(`${releaseKey}${String(lane).padStart(2, "0")}`);
+  if (
+    !isSafeSparkleFloor(releaseKey) ||
+    !isSafeSparkleFloor(legacyFloor) ||
+    !isSafeSparkleFloor(laneFloor)
+  ) {
+    return null;
+  }
+  return { releaseKey, legacyFloor, laneFloor, lane };
 }
 
 export function canonicalSparkleBuildFromVersion(shortVersion: string): number | null {
   return sparkleBuildFloorsFromShortVersion(shortVersion)?.laneFloor ?? null;
+}
+
+function isSafeSparkleFloor(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 function runCli(args: string[]): number {

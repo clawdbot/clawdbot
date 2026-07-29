@@ -1,15 +1,41 @@
-import { describe, expect, it, vi } from "vitest";
+// Discord tests cover proxy request client plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAbortableFetchMock,
   createJsonResponse,
 } from "./internal/test-builders.test-support.js";
 import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 
+async function expectAbortError(promise: Promise<unknown>) {
+  let abortError: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    abortError = error;
+  }
+  expect(abortError).toBeInstanceOf(DOMException);
+  if (!(abortError instanceof DOMException)) {
+    throw new Error("expected Discord request abort error");
+  }
+  expect(abortError.name).toBe("AbortError");
+  expect(abortError.message).toBe("The operation was aborted.");
+}
+
 describe("createDiscordRequestClient", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("preserves the REST client's abort signal for proxied fetch calls", async () => {
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      expect(init?.signal).toBeDefined();
-      expect(init!.signal!.aborted).toBe(false);
+      if (!(init?.signal instanceof AbortSignal)) {
+        throw new Error("Expected proxied fetch init to include an AbortSignal");
+      }
+      expect(init.signal.aborted).toBe(false);
       return createJsonResponse([]);
     });
 
@@ -24,6 +50,7 @@ describe("createDiscordRequestClient", () => {
 
   it("lets the REST client abort hanging proxied requests after its timeout", async () => {
     const { fetch: fetchSpy } = createAbortableFetchMock();
+    vi.useFakeTimers();
 
     const client = createDiscordRequestClient("Bot test-token", {
       fetch: fetchSpy as never,
@@ -31,7 +58,12 @@ describe("createDiscordRequestClient", () => {
       timeout: 20,
     });
 
-    await expect(client.get("/channels/123/messages")).rejects.toThrow();
+    const request = client.get("/channels/123/messages");
+    const abortExpectation = expectAbortError(request);
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(20);
+    await abortExpectation;
   }, 1_000);
 
   it("lets abortAllRequests cancel active proxied fetches", async () => {
@@ -48,7 +80,29 @@ describe("createDiscordRequestClient", () => {
 
     client.abortAllRequests();
 
-    await expect(request).rejects.toThrow();
+    await expectAbortError(request);
+    if (!abortable.receivedSignal) {
+      throw new Error("Expected proxied fetch abort signal");
+    }
+    expect(abortable.receivedSignal.aborted).toBe(true);
+  });
+
+  it("lets a caller signal cancel active proxied fetches", async () => {
+    const abortable = createAbortableFetchMock();
+    const controller = new AbortController();
+    const client = createDiscordRequestClient("Bot test-token", {
+      fetch: abortable.fetch as never,
+      queueRequests: false,
+      signal: controller.signal,
+      timeout: 5_000,
+    });
+
+    const request = client.get("/channels/123/messages");
+    await vi.waitFor(() => expect(abortable.fetch).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+
+    await expectAbortError(request);
     expect(abortable.receivedSignal?.aborted).toBe(true);
   });
 
@@ -67,8 +121,10 @@ describe("createDiscordRequestClient", () => {
 
     await client.get("/channels/123/messages");
 
-    expect(receivedSignal).toBeDefined();
-    expect(receivedSignal!.aborted).toBe(false);
+    if (!receivedSignal) {
+      throw new Error("Expected proxied fetch to receive the REST timeout signal");
+    }
+    expect(receivedSignal.aborted).toBe(false);
   });
 
   it("exports a reasonable timeout constant", () => {

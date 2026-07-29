@@ -1,10 +1,16 @@
 {
   "id": "perplexity",
+  "icon": "https://cdn.simpleicons.org/perplexity",
   "activation": {
     "onStartup": false
   },
-  "providerAuthEnvVars": {
-    "perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "perplexity",
+        "envVars": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -24,9 +30,6 @@
   },
   "contracts": {
     "webSearchProviders": ["perplexity"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

@@ -1,3 +1,4 @@
+// Qqbot plugin module implements register logs behavior.
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import { buildBotLogsResult } from "./log-helpers.js";
 

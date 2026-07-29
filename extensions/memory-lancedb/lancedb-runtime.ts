@@ -1,6 +1,7 @@
+// Memory Lancedb plugin module implements lancedb runtime behavior.
 type LanceDbModule = typeof import("@lancedb/lancedb");
 
-export type LanceDbRuntimeLogger = {
+type LanceDbRuntimeLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -37,8 +38,8 @@ function buildUnsupportedNativePlatformMessage(params: {
   ].join(" ");
 }
 
-export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoaderDeps> = {}): {
-  load: (_logger?: LanceDbRuntimeLogger) => Promise<LanceDbModule>;
+function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoaderDeps> = {}): {
+  load: (loggerInstance?: LanceDbRuntimeLogger) => Promise<LanceDbModule>;
 } {
   const deps: LanceDbRuntimeLoaderDeps = {
     platform: overrides.platform ?? process.platform,
@@ -51,7 +52,7 @@ export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoad
   return {
     async load(_logger?: LanceDbRuntimeLogger): Promise<LanceDbModule> {
       if (!loadPromise) {
-        loadPromise = deps.importBundled().catch((error) => {
+        loadPromise = deps.importBundled().catch((error: unknown) => {
           loadPromise = null;
           if (isUnsupportedNativePlatform({ platform: deps.platform, arch: deps.arch })) {
             throw new Error(
@@ -68,6 +69,12 @@ export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoad
       return await loadPromise;
     },
   };
+}
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.memoryLanceDbRuntimeTestApi"), {
+    createRuntimeLoader: createLanceDbRuntimeLoader,
+  });
 }
 
 const defaultLoader = createLanceDbRuntimeLoader();

@@ -1,6 +1,7 @@
+/** Tests runtime cache touch semantics and idle-candidate collection. */
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it } from "vitest";
-import type { AcpRuntime } from "../runtime/types.js";
-import type { AcpRuntimeHandle } from "../runtime/types.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
 import { RuntimeCache } from "./runtime-cache.js";
 
@@ -29,6 +30,7 @@ function mockState(sessionKey: string): CachedRuntimeState {
     backend: "acpx",
     agent: "codex",
     mode: "persistent",
+    configSignature: "config:test",
   };
 }
 

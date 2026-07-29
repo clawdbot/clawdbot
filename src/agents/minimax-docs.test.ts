@@ -1,3 +1,5 @@
+// MiniMax docs sync tests keep provider docs and live-test guidance aligned
+// with the shared MiniMax model constants.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,7 +15,6 @@ const minimaxDoc = fs.readFileSync(path.join(repoRoot, "docs/providers/minimax.m
 
 describe("MiniMax docs sync", () => {
   it("keeps the live-testing guide on the current MiniMax default", () => {
-    expect(testingLiveDoc).toContain("MiniMax M2.7");
     expect(testingLiveDoc).toContain(MINIMAX_DEFAULT_MODEL_REF);
   });
 

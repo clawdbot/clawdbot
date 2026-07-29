@@ -1,154 +1,169 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayModelChoice } from "./server-model-catalog.js";
 import {
-  __resetModelCatalogCacheForTest,
   loadGatewayModelCatalog,
-  markGatewayModelCatalogStaleForReload,
+  loadGatewayModelCatalogSnapshot,
+  type GatewayModelCatalogSnapshot,
 } from "./server-model-catalog.js";
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
+const snapshot: ModelCatalogSnapshot = {
+  entries: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
+  routeVariants: [],
 };
-type LoadModelCatalogForTest = NonNullable<
-  NonNullable<Parameters<typeof loadGatewayModelCatalog>[0]>["loadModelCatalog"]
->;
 
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConfig {
+  return {
+    ...extra,
+    agents: {
+      ...extra.agents,
+      list: [
+        {
+          id: agentId,
+          default: true,
+          agentDir: "/tmp/gateway-agent",
+          workspace: "/tmp/gateway-workspace",
+        },
+      ],
+    },
+  };
 }
 
-function model(id: string): GatewayModelChoice {
-  return { id, name: id, provider: "openai" } as GatewayModelChoice;
+function ownerSnapshot(
+  config: OpenClawConfig,
+  modelCatalog: ModelCatalogSnapshot = snapshot,
+  agentId?: string,
+) {
+  return {
+    ...(agentId ? { agentId } : {}),
+    agentDir: "/tmp/gateway-agent",
+    config,
+    modelCatalog,
+  };
 }
 
-const getConfig = () => ({}) as OpenClawConfig;
+describe("gateway prepared model catalog", () => {
+  it("reads the published read-only generation directly", async () => {
+    const config = ownerConfig();
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
 
-describe("loadGatewayModelCatalog", () => {
-  beforeEach(async () => {
-    await __resetModelCatalogCacheForTest();
-  });
-
-  it("caches the first successful catalog until reload marks it stale", async () => {
-    const catalog = [model("gpt-5.4")];
-    const loadModelCatalog = vi.fn(async () => catalog);
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(catalog);
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(catalog);
-
-    expect(loadModelCatalog).toHaveBeenCalledTimes(1);
-    expect(loadModelCatalog).toHaveBeenCalledWith({ config: getConfig(), readOnly: true });
-  });
-
-  it("keeps read-only and full catalog caches separate", async () => {
-    const readOnlyCatalog = [model("configured-only")];
-    const fullCatalog = [model("configured-only"), model("browse-only")];
-    const loadModelCatalog = vi.fn<LoadModelCatalogForTest>(async (params) =>
-      params.readOnly === false ? fullCatalog : readOnlyCatalog,
-    );
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      readOnlyCatalog,
-    );
     await expect(
-      loadGatewayModelCatalog({ getConfig, loadModelCatalog, readOnly: false }),
-    ).resolves.toBe(fullCatalog);
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      readOnlyCatalog,
-    );
-
-    expect(loadModelCatalog).toHaveBeenCalledTimes(2);
-    expect(loadModelCatalog).toHaveBeenNthCalledWith(1, {
-      config: getConfig(),
+      loadGatewayModelCatalog({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.toBe(snapshot.entries);
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config,
       readOnly: true,
     });
-    expect(loadModelCatalog).toHaveBeenNthCalledWith(2, {
-      config: getConfig(),
+  });
+
+  it("forwards the requested agent lifecycle owner", async () => {
+    const config = ownerConfig("worker");
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ({
+      ...ownerSnapshot(config, snapshot, "worker"),
+      workspaceDir: "/tmp/gateway-workspace",
+    }));
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        agentId: "worker",
+        agentDir: "/tmp/gateway-agent",
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+        workspaceDir: "/tmp/gateway-workspace",
+      }),
+    ).resolves.toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/gateway-agent",
+      config,
+      workspaceDir: "/tmp/gateway-workspace",
+    } satisfies Partial<GatewayModelCatalogSnapshot>);
+
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      agentId: "worker",
+      agentDir: "/tmp/gateway-agent",
+      config,
+      readOnly: true,
+      workspaceDir: "/tmp/gateway-workspace",
+    });
+  });
+
+  it("rejects an ambiguous owner without an authoritative agent identity", async () => {
+    const config = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: "/tmp/gateway-agent",
+            workspace: "/tmp/main-workspace",
+          },
+          {
+            id: "worker",
+            agentDir: "/tmp/gateway-agent",
+            workspace: "/tmp/worker-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        agentId: "worker",
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).rejects.toThrow("did not identify one configured agent");
+  });
+
+  it("returns an equivalent replacement owner without repeating discovery", async () => {
+    const initialConfig = ownerConfig("main", { logging: { level: "info" as const } });
+    const latestConfig = ownerConfig("main", { logging: { level: "info" as const } });
+    const latestSnapshot: ModelCatalogSnapshot = {
+      entries: [{ provider: "openai", id: "latest", name: "Latest" }],
+      routeVariants: [],
+    };
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
+      ownerSnapshot(latestConfig, latestSnapshot),
+    );
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => initialConfig,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.toMatchObject({ config: latestConfig, entries: latestSnapshot.entries });
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("selects the full prepared owner when requested", async () => {
+    const config = ownerConfig();
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+        readOnly: false,
+      }),
+    ).resolves.toMatchObject(snapshot);
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config,
       readOnly: false,
     });
   });
 
-  it("does not cache an empty catalog so the next request retries", async () => {
-    const emptyCatalog: GatewayModelChoice[] = [];
-    const freshCatalog = [model("gpt-5.5")];
-    const loadModelCatalog = vi
-      .fn<LoadModelCatalogForTest>()
-      .mockResolvedValueOnce(emptyCatalog)
-      .mockResolvedValueOnce(freshCatalog);
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      emptyCatalog,
-    );
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      freshCatalog,
-    );
-
-    expect(loadModelCatalog).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns the last catalog while a stale reload refresh is still pending", async () => {
-    const staleCatalog = [model("gpt-5.4")];
-    const freshCatalog = [model("gpt-5.5")];
-    const refresh = createDeferred<GatewayModelChoice[]>();
-    const loadModelCatalog = vi
-      .fn<LoadModelCatalogForTest>()
-      .mockResolvedValueOnce(staleCatalog)
-      .mockReturnValueOnce(refresh.promise);
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      staleCatalog,
-    );
-
-    markGatewayModelCatalogStaleForReload();
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      staleCatalog,
-    );
-    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledTimes(2));
-
-    refresh.resolve(freshCatalog);
-    await vi.waitFor(async () => {
-      await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-        freshCatalog,
-      );
+  it("does not hide lifecycle publication failures behind stale data", async () => {
+    const error = new Error("generation failed");
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => {
+      throw error;
     });
-  });
 
-  it("keeps serving the last catalog when a stale background refresh fails", async () => {
-    const staleCatalog = [model("gpt-5.4")];
-    const freshCatalog = [model("gpt-5.5")];
-    const loadModelCatalog = vi
-      .fn<LoadModelCatalogForTest>()
-      .mockResolvedValueOnce(staleCatalog)
-      .mockRejectedValueOnce(new Error("provider offline"))
-      .mockResolvedValueOnce(freshCatalog);
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      staleCatalog,
-    );
-
-    markGatewayModelCatalogStaleForReload();
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      staleCatalog,
-    );
-    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledTimes(2));
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-      staleCatalog,
-    );
-    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledTimes(3));
-
-    await vi.waitFor(async () => {
-      await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
-        freshCatalog,
-      );
-    });
+    await expect(
+      loadGatewayModelCatalogSnapshot({ loadPublishedPreparedModelCatalogOwnerSnapshot }),
+    ).rejects.toBe(error);
   });
 });

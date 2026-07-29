@@ -1,9 +1,12 @@
+// Resolves commitment runtime configuration from agent and user settings.
 import { resolveUserTimezone } from "../agents/date-time.js";
 import type { OpenClawConfig } from "../config/config.js";
 
+// Configuration defaults for hidden follow-up commitment extraction and
+// heartbeat delivery limits.
 const DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS = 15_000;
 const DEFAULT_COMMITMENT_BATCH_MAX_ITEMS = 8;
-export const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
+const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 const DEFAULT_COMMITMENT_CONFIDENCE_THRESHOLD = 0.72;
 const DEFAULT_COMMITMENT_CARE_CONFIDENCE_THRESHOLD = 0.86;
 const DEFAULT_COMMITMENT_EXTRACTION_TIMEOUT_SECONDS = 45;
@@ -24,17 +27,11 @@ type ResolvedCommitmentsConfig = {
   };
 };
 
-function positiveInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-}
-
-export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
-  const raw = cfg?.commitments;
+/** Resolves commitment extraction config with conservative defaults. */
+export function resolveCommitmentsConfig(_cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
   return {
-    enabled: raw?.enabled === true,
-    maxPerDay: positiveInt(raw?.maxPerDay, DEFAULT_COMMITMENT_MAX_PER_DAY),
+    enabled: false,
+    maxPerDay: DEFAULT_COMMITMENT_MAX_PER_DAY,
     extraction: {
       debounceMs: DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS,
       batchMaxItems: DEFAULT_COMMITMENT_BATCH_MAX_ITEMS,
@@ -46,6 +43,7 @@ export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitme
   };
 }
 
+/** Resolves the timezone used when interpreting inferred commitment dates. */
 export function resolveCommitmentTimezone(cfg?: OpenClawConfig): string {
   return resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
 }

@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/**
+ * Parses exec approval tool output and formats denial messages for users.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ExecApprovalResult =
   | {
@@ -23,9 +26,74 @@ type ExecApprovalResult =
       raw: string;
     };
 
-const EXEC_DENIED_RE = /^exec denied \(([^)]*)\):(?:\s*([\s\S]*))?$/i;
-const EXEC_FINISHED_RE = /^exec finished \(([^)]*)\)(?:\n([\s\S]*))?$/i;
 const EXEC_COMPLETED_RE = /^exec completed:\s*([\s\S]*)$/i;
+
+// Approval-system-generated wrappers always start with either `gateway id=` or
+// `node=` inside the parenthesized metadata (see bash-tools.exec-host-gateway.ts,
+// bash-tools.exec-host-node.ts, and gateway/server-node-events.ts). Untrusted
+// command stdout that happens to start with "Exec denied (...)" or
+// "Exec finished (...)" should be rejected by the parser to prevent CWE-841
+// spoofed approval events from arbitrary tool output.
+const APPROVAL_METADATA_SOURCE_RE = /^(?:gateway\s+id=|node=)/i;
+
+function parseExecApprovalResultWithMetadata(
+  raw: string,
+  prefix: string,
+  bodySeparator: ":" | "\n",
+): { metadata: string; body: string } | null {
+  const normalizedRaw = normalizeLowercaseStringOrEmpty(raw);
+  const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
+  if (!normalizedRaw.startsWith(normalizedPrefix)) {
+    return null;
+  }
+
+  const metadataStart = prefix.length;
+  let depth = 1;
+  let metadataEnd = -1;
+  for (let index = metadataStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        metadataEnd = index;
+        break;
+      }
+    }
+  }
+
+  if (metadataEnd < 0) {
+    return null;
+  }
+
+  const metadata = raw.slice(metadataStart, metadataEnd).trim();
+  if (!APPROVAL_METADATA_SOURCE_RE.test(metadata)) {
+    return null;
+  }
+
+  const remainder = raw.slice(metadataEnd + 1);
+  if (bodySeparator === ":") {
+    if (!remainder.startsWith(":")) {
+      return null;
+    }
+    return {
+      metadata,
+      body: remainder.slice(1).trim(),
+    };
+  }
+
+  if (remainder && !remainder.startsWith("\n")) {
+    return null;
+  }
+
+  return {
+    metadata,
+    body: remainder.startsWith("\n") ? remainder.slice(1).trim() : "",
+  };
+}
 
 export function parseExecApprovalResultText(resultText: string): ExecApprovalResult {
   const raw = resultText.trim();
@@ -33,23 +101,23 @@ export function parseExecApprovalResultText(resultText: string): ExecApprovalRes
     return { kind: "other", raw };
   }
 
-  const deniedMatch = EXEC_DENIED_RE.exec(raw);
-  if (deniedMatch) {
+  const deniedResult = parseExecApprovalResultWithMetadata(raw, "Exec denied (", ":");
+  if (deniedResult) {
     return {
       kind: "denied",
       raw,
-      metadata: deniedMatch[1]?.trim() ?? "",
-      body: deniedMatch[2]?.trim() ?? "",
+      metadata: deniedResult.metadata,
+      body: deniedResult.body,
     };
   }
 
-  const finishedMatch = EXEC_FINISHED_RE.exec(raw);
-  if (finishedMatch) {
+  const finishedResult = parseExecApprovalResultWithMetadata(raw, "Exec finished (", "\n");
+  if (finishedResult) {
     return {
       kind: "finished",
       raw,
-      metadata: finishedMatch[1]?.trim() ?? "",
-      body: finishedMatch[2]?.trim() ?? "",
+      metadata: finishedResult.metadata,
+      body: finishedResult.body,
     };
   }
 

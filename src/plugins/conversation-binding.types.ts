@@ -1,13 +1,17 @@
+/** Types for plugin-requested bindings to external channel conversations. */
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
+/** Plugin-supplied context for requesting a channel conversation binding. */
 export type PluginConversationBindingRequestParams = {
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
 };
 
+/** Maintainer/user decision recorded for a plugin conversation binding request. */
 export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
 
+/** Stored binding between a plugin and an external channel conversation. */
 export type PluginConversationBinding = {
   bindingId: string;
   pluginId: string;
@@ -24,6 +28,7 @@ export type PluginConversationBinding = {
   data?: Record<string, unknown>;
 };
 
+/** Result returned when a plugin asks to bind to a conversation. */
 export type PluginConversationBindingRequestResult =
   | {
       status: "bound";
@@ -39,6 +44,7 @@ export type PluginConversationBindingRequestResult =
       message: string;
     };
 
+/** Event emitted after a pending conversation binding request is resolved. */
 export type PluginConversationBindingResolvedEvent = {
   status: "approved" | "denied";
   binding?: PluginConversationBinding;

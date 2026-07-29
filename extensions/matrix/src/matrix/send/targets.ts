@@ -1,3 +1,4 @@
+// Matrix plugin module implements targets behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,

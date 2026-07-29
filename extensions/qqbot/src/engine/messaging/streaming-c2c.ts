@@ -15,6 +15,7 @@
  *    it is treated as a new message.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getNextMsgSeq } from "../api/routes.js";
 import type { GatewayAccount } from "../types.js";
 import {
@@ -24,6 +25,8 @@ import {
   type MessageResponse,
 } from "../types.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
+import { claimMessageReply } from "./outbound-reply.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import type { MediaTargetContext } from "./outbound.js";
 import { getMessageApi } from "./sender.js";
 import {
@@ -79,7 +82,7 @@ class FlushController {
   private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastUpdateTime = 0;
   private isCompleted = false;
-  private _ready = false;
+  private isReady = false;
 
   constructor(doFlush: () => Promise<void>) {
     this.doFlush = doFlush;
@@ -103,7 +106,9 @@ class FlushController {
     if (!this.flushInProgress) {
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => this.flushResolvers.push(resolve));
+    return new Promise<void>((resolve) => {
+      this.flushResolvers.push(resolve);
+    });
   }
 
   /** 取消所有 pending timer + 等待正在执行的 flush 完成，确保 flush 活动彻底停止 */
@@ -118,14 +123,14 @@ class FlushController {
 
   /** 标记流式会话就绪（首次 API 调用成功后） */
   setReady(ready: boolean): void {
-    this._ready = ready;
+    this.isReady = ready;
     if (ready) {
       this.lastUpdateTime = Date.now();
     }
   }
 
   get ready(): boolean {
-    return this._ready;
+    return this.isReady;
   }
 
   /** 重置为初始状态（用于流式会话恢复） */
@@ -137,12 +142,12 @@ class FlushController {
     this.needsReflush = false;
     this.lastUpdateTime = 0;
     this.isCompleted = false;
-    this._ready = false;
+    this.isReady = false;
   }
 
   /** 执行一次 flush（互斥锁 + 冲突时 reflush） */
   async flush(): Promise<void> {
-    if (!this._ready || this.flushInProgress || this.isCompleted) {
+    if (!this.isReady || this.flushInProgress || this.isCompleted) {
       if (this.flushInProgress && !this.isCompleted) {
         this.needsReflush = true;
       }
@@ -177,7 +182,7 @@ class FlushController {
 
   /** 节流入口：根据 throttleMs 控制 flush 频率 */
   async throttledUpdate(throttleMs: number): Promise<void> {
-    if (!this._ready) {
+    if (!this.isReady) {
       return;
     }
 
@@ -273,7 +278,7 @@ export class StreamingController {
    * 后续回调传入的 text 都会自动加上此前缀来还原完整文本。
    * 为 null 表示当前没有发生过边界拼接。
    */
-  private _boundaryPrefix: string | null = null;
+  private boundaryPrefix: string | null = null;
   /**
    * 在 lastNormalizedFull 中已经"消费"到的位置。
    * "消费"包括：已通过流式发送并终结的文本段、已处理的媒体标签。
@@ -292,7 +297,7 @@ export class StreamingController {
 
   // ---- 串行队列：确保 onPartialReply / onIdle 严格按序执行 ----
   /** Promise 链，回调的实际逻辑都挂到链尾，保证串行 */
-  private _callbackChain: Promise<void> = Promise.resolve();
+  private callbackChain: Promise<void> = Promise.resolve();
 
   // ---- 互斥：首个到达的回调锁定控制权 ----
   /**
@@ -476,19 +481,19 @@ export class StreamingController {
     }
 
     // 将实际逻辑挂到 Promise 链尾部，保证串行执行
-    this._callbackChain = this._callbackChain.then(
-      () => this._doPartialReply(payload),
-      (err) => {
+    this.callbackChain = this.callbackChain.then(
+      () => this.handlePartialReply(payload),
+      (err: unknown) => {
         // 上一次如果异常，不阻塞后续调用
         this.logError(`onPartialReply chain error: ${formatStreamErr(err)}`);
-        return this._doPartialReply(payload);
+        return this.handlePartialReply(payload);
       },
     );
-    return this._callbackChain;
+    return this.callbackChain;
   }
 
-  /** onPartialReply 的实际逻辑（由 _callbackChain 保证串行调用） */
-  private async _doPartialReply(payload: { text?: string }): Promise<void> {
+  /** onPartialReply 的实际逻辑（由 callbackChain 保证串行调用） */
+  private async handlePartialReply(payload: { text?: string }): Promise<void> {
     this.logDebug(
       `onPartialReply: rawLen=${payload.text?.length ?? 0}, phase=${this.phase}, streamMsgId=${this.streamMsgId}, sentIndex=${this.sentIndex}, firstCB=${this.firstCallbackSource}`,
     );
@@ -504,7 +509,7 @@ export class StreamingController {
     }
 
     // ★ 如果之前已发生过边界拼接，将前缀加上还原完整文本
-    const fullText = this._boundaryPrefix !== null ? this._boundaryPrefix + text : text;
+    const fullText = this.boundaryPrefix !== null ? this.boundaryPrefix + text : text;
 
     // ★ 回复边界检测：用原始文本做前缀比较，避免 normalizeMediaTags 对未闭合标签
     //   的不稳定处理导致误判（normalize 后的文本在 partial reply 的不同阶段可能产生
@@ -516,8 +521,8 @@ export class StreamingController {
       );
 
       // 记住拼接前缀：之前的全部内容 + "\n\n"，后续回调的 text 都会自动加上此前缀
-      this._boundaryPrefix = this.lastRawFull + "\n\n";
-      const merged = this._boundaryPrefix + text;
+      this.boundaryPrefix = this.lastRawFull + "\n\n";
+      const merged = this.boundaryPrefix + text;
       this.lastRawFull = merged;
       this.lastNormalizedFull = normalizeMediaTags(merged);
 
@@ -540,7 +545,7 @@ export class StreamingController {
    */
   async onDeliver(payload: { text?: string }): Promise<void> {
     const rawLen = payload.text?.length ?? 0;
-    const preview = (payload.text ?? "").slice(0, 60).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(payload.text ?? "", 60).replace(/\n/g, "\\n");
     this.logDebug(
       `onDeliver: rawLen=${rawLen}, phase=${this.phase}, streamMsgId=${this.streamMsgId}, sentIndex=${this.sentIndex}, sentChunks=${this.sentStreamChunkCount}, firstCB=${this.firstCallbackSource}, preview="${preview}"`,
     );
@@ -567,7 +572,7 @@ export class StreamingController {
   /**
    * 处理 onIdle 回调（分发完成时调用）
    *
-   * ★ 挂到 _callbackChain 上，保证在所有 onPartialReply 执行完之后才执行。
+   * ★ 挂到 callbackChain 上，保证在所有 onPartialReply 执行完之后才执行。
    *
    * onIdle 会传入最终的全量文本。如果该文本**包含**之前存储的 lastNormalizedFull，
    * 说明一致，继续处理剩余内容；否则忽略（防止 onIdle 修改文本导致的不一致）。
@@ -582,18 +587,18 @@ export class StreamingController {
     }
 
     // 挂到串行队列尾部，等所有 onPartialReply 执行完再处理
-    this._callbackChain = this._callbackChain.then(
-      () => this._doIdle(payload),
-      (err) => {
+    this.callbackChain = this.callbackChain.then(
+      () => this.handleIdle(payload),
+      (err: unknown) => {
         this.logError(`onIdle chain error: ${formatStreamErr(err)}`);
-        return this._doIdle(payload);
+        return this.handleIdle(payload);
       },
     );
-    return this._callbackChain;
+    return this.callbackChain;
   }
 
-  /** onIdle 的实际逻辑（由 _callbackChain 保证在 onPartialReply 之后执行） */
-  private async _doIdle(payload?: { text?: string }): Promise<void> {
+  /** onIdle 的实际逻辑（由 callbackChain 保证在 onPartialReply 之后执行） */
+  private async handleIdle(payload?: { text?: string }): Promise<void> {
     this.logDebug(
       `onIdle: dispatchFullyComplete=${this.dispatchFullyComplete}, phase=${this.phase}, streamChunks=${this.sentStreamChunkCount}, mediaCount=${this.sentMediaCount}, sentIndex=${this.sentIndex}`,
     );
@@ -787,7 +792,7 @@ export class StreamingController {
         }
 
         this.logInfo(
-          `processMediaTags: found <${found.tagName}> at offset ${this.sentIndex}, textBefore="${found.textBefore.slice(0, 40)}"`,
+          `processMediaTags: found <${found.tagName}> at offset ${this.sentIndex}, textBefore="${truncateUtf16Safe(found.textBefore, 40)}"`,
         );
 
         // ---- 1.1 终结当前流式会话（如果有的话） ----
@@ -810,7 +815,7 @@ export class StreamingController {
         if (found.mediaPath && this.deps.mediaContext) {
           const item: SendQueueItem = { type: found.itemType, content: found.mediaPath };
           this.logDebug(
-            `processMediaTags: sending ${found.itemType}: ${found.mediaPath.slice(0, 80)}`,
+            `processMediaTags: sending ${found.itemType}: ${truncateUtf16Safe(found.mediaPath, 80)}`,
           );
           await sendMediaQueue([item], this.deps.mediaContext);
           this.sentMediaCount++;
@@ -906,10 +911,10 @@ export class StreamingController {
       }
     } else if (safeText && safeText.trim()) {
       // 没有活跃流式会话，但有非空白文本未发送 → 启动流式 → 立即终结
-      // 先临时存储到 _pendingSessionText 以便 doStartStreaming 使用
-      this._pendingSessionText = safeText;
+      // 先临时存储到 pendingSessionText 以便 doStartStreaming 使用
+      this.pendingSessionText = safeText;
       await this.ensureStreamingStarted(textEndInFull);
-      this._pendingSessionText = null;
+      this.pendingSessionText = null;
       if (this.isTerminalPhase) {
         return;
       }
@@ -929,7 +934,7 @@ export class StreamingController {
   }
 
   /** 临时存储 endCurrentStreamIfNeeded 需要立即发送的文本（用于 doStartStreaming） */
-  private _pendingSessionText: string | null = null;
+  private pendingSessionText: string | null = null;
 
   /**
    * 重置流式会话状态（用于媒体中断后恢复）
@@ -983,10 +988,10 @@ export class StreamingController {
   private async doStartStreaming(textEndInFull: number): Promise<void> {
     try {
       // 计算当前会话要发送的文本
-      // 优先使用 _pendingSessionText（endCurrentStreamIfNeeded 需要立即发送的文本）
+      // 优先使用 pendingSessionText（endCurrentStreamIfNeeded 需要立即发送的文本）
       // 否则使用调用处预先确定的 sentIndex → textEndInFull 范围
       const sessionText =
-        this._pendingSessionText ?? this.lastNormalizedFull.slice(this.sentIndex, textEndInFull);
+        this.pendingSessionText ?? this.lastNormalizedFull.slice(this.sentIndex, textEndInFull);
       const [safeText] = stripIncompleteMediaTag(sessionText);
 
       // 全空白文本 → 不开启流式，退回 idle
@@ -996,6 +1001,14 @@ export class StreamingController {
         return;
       }
       const firstText = safeText;
+      // A stream session is one passive reply: claim once before its first
+      // POST, then reuse the same msg_seq for all later chunks in the session.
+      const passive = claimMessageReply(this.deps.replyToMsgId);
+      if (!passive.allowed) {
+        this.logWarn(`stream budget unavailable; falling back to static delivery`);
+        this.transition("aborted", "doStartStreaming", "passive_budget_exhausted");
+        return;
+      }
       const resp = await this.sendStreamChunk(
         firstText,
         StreamInputState.GENERATING,
@@ -1105,7 +1118,7 @@ export class StreamingController {
 // ============ 流式媒体发送 ============
 
 /** 流式媒体发送上下文（由 gateway 注入到 StreamingController） */
-interface StreamingMediaContext {
+interface StreamingMediaContext extends OutboundMediaAccessContext {
   /** 账户信息 */
   account: GatewayAccount;
   /** 事件信息 */
@@ -1129,6 +1142,11 @@ interface StreamingMediaContext {
  */
 function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
   const { account, event, log } = ctx;
+  const mediaAccessContext: OutboundMediaAccessContext = {
+    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+    ...(ctx.mediaLocalRoots ? { mediaLocalRoots: ctx.mediaLocalRoots } : {}),
+    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+  };
 
   const mediaTarget: MediaTargetContext = {
     targetType: event.type,
@@ -1141,6 +1159,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     logPrefix: `[qqbot:${account.accountId}]`,
+    ...mediaAccessContext,
   };
 
   const qualifiedTarget =
@@ -1152,6 +1171,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     log,
+    ...mediaAccessContext,
   };
 }
 
@@ -1171,8 +1191,8 @@ async function sendMediaQueue(queue: SendQueueItem[], ctx: StreamingMediaContext
 
 /**
  * 是否对私聊走 QQ 官方 C2C `stream_messages` 流式 API。
- * - `streaming: true` 等效于 `mode: "partial"` 且 `c2cStreamApi: true`。
- * - 仍支持对象里显式设 `c2cStreamApi: true` 以兼容旧配置；仅 C2C 场景生效。
+ * - `streaming.nativeTransport: true` 启用；仅 C2C 场景生效。
+ * - 旧的 `streaming: true` 布尔与 `c2cStreamApi` 键由 `openclaw doctor --fix` 迁移。
  */
 export function shouldUseOfficialC2cStream(
   account: GatewayAccount,
@@ -1181,12 +1201,6 @@ export function shouldUseOfficialC2cStream(
   if (targetType !== "c2c") {
     return false;
   }
-  const s = account.config?.streaming;
-  if (s === true) {
-    return true;
-  }
-  if (s && typeof s === "object" && s.c2cStreamApi === true) {
-    return true;
-  }
-  return false;
+  return account.config?.streaming?.nativeTransport === true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

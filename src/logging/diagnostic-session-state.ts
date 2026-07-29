@@ -1,33 +1,44 @@
+// Process-local session-state tracker used by diagnostic stuck-session detection.
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
+/** Mutable diagnostic state for one session key or id. */
 export type SessionState = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
   lastActivity: number;
+  generation?: number;
   lastStuckWarnAgeMs?: number;
   lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
+  activeQueuedTurn?: boolean;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
 };
 
+/** Compact record of a recent tool call used for loop diagnostics. */
 export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
   toolCallId?: string;
   runId?: string;
+  outcomeKind?: "tool-loop-veto";
   resultHash?: string;
+  noProgress?: true;
   unknownToolName?: string;
   timestamp: number;
 };
 
+/** Partial session identity accepted by diagnostic helpers. */
 export type SessionRef = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
 };
 
+/** Shared in-memory diagnostic session state map. */
 export const diagnosticSessionStates = new Map<string, SessionState>();
 
 const SESSION_STATE_TTL_MS = 30 * 60 * 1000;
@@ -36,6 +47,7 @@ const SESSION_STATE_MAX_ENTRIES = 2000;
 
 let lastSessionPruneAt = 0;
 
+/** Prunes stale idle session states and caps the process-local state map. */
 export function pruneDiagnosticSessionStates(now = Date.now(), force = false): void {
   const shouldPruneForSize = diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
   if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
@@ -97,11 +109,17 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
     sessionStatePriority(source.state) > sessionStatePriority(target.state);
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
+  if (source.sessionFile && (sourceIsNewer || !target.sessionFile)) {
+    target.sessionFile = source.sessionFile;
+  }
   if (sourceIsNewer || sourceIsSameAgeAndMoreActive) {
     target.state = source.state;
   }
+  target.generation = Math.max(target.generation ?? 0, source.generation ?? 0);
   target.lastActivity = Math.max(target.lastActivity, source.lastActivity);
+  // Queue depth is additive when session id/key aliases collapse into one diagnostic entry.
   target.queueDepth += source.queueDepth;
+  target.activeQueuedTurn ||= source.activeQueuedTurn;
   target.lastStuckWarnAgeMs =
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
       ? undefined
@@ -130,6 +148,7 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
   }
 }
 
+/** Gets or creates diagnostic state, merging aliases that share a session id. */
 export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
@@ -138,6 +157,7 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   const existing = direct ?? sessionIdEntry?.[1];
   if (existing) {
     if (direct && sessionIdEntry && sessionIdEntry[1] !== direct) {
+      // A run may learn its stable session key after an id-only state exists; merge instead of losing counters.
       mergeSessionState(direct, sessionIdEntry[1]);
       diagnosticSessionStates.delete(sessionIdEntry[0]);
     } else if (!direct && ref.sessionKey && sessionIdEntry) {
@@ -150,12 +170,17 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
     if (ref.sessionKey) {
       existing.sessionKey = ref.sessionKey;
     }
+    if (ref.sessionFile) {
+      existing.sessionFile = ref.sessionFile;
+    }
     return existing;
   }
   const created: SessionState = {
     sessionId: ref.sessionId,
     sessionKey: ref.sessionKey,
+    sessionFile: ref.sessionFile,
     lastActivity: Date.now(),
+    generation: 0,
     state: "idle",
     queueDepth: 0,
   };
@@ -164,11 +189,42 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   return created;
 }
 
+/** Looks up diagnostic state without creating a new entry. */
+export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
+  const key = resolveSessionKey(ref);
+  return (
+    diagnosticSessionStates.get(key) ??
+    (ref.sessionId ? findStateEntryBySessionId(ref.sessionId)?.[1] : undefined)
+  );
+}
+
+/** Returns the current state count for pruning tests. */
 export function getDiagnosticSessionStateCountForTest(): number {
   return diagnosticSessionStates.size;
 }
 
+/** Clears all process-local diagnostic session state for tests. */
 export function resetDiagnosticSessionStateForTest(): void {
   diagnosticSessionStates.clear();
   lastSessionPruneAt = 0;
+}
+
+/** Checks whether a generation/state snapshot still matches current diagnostic state. */
+export function isDiagnosticSessionStateCurrent(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  generation?: number;
+  state?: SessionStateValue;
+}): boolean {
+  if (params.generation === undefined) {
+    return true;
+  }
+  const state = peekDiagnosticSessionState(params);
+  if (!state) {
+    return false;
+  }
+  return (
+    (state.generation ?? 0) === params.generation &&
+    (params.state === undefined || state.state === params.state)
+  );
 }

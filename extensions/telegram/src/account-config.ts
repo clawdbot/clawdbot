@@ -1,9 +1,10 @@
+// Telegram helper module supports account config behavior.
 import {
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveNormalizedAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 
 function normalizeAllowFromEntry(value: string | number): string {
   return String(value).trim();
@@ -49,7 +50,11 @@ export function resolveTelegramAccountConfig(
   accountId: string,
 ): TelegramAccountConfig | undefined {
   const normalized = normalizeAccountId(accountId);
-  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
+  return resolveNormalizedAccountEntry(
+    cfg.channels?.telegram?.accounts,
+    normalized,
+    normalizeAccountId,
+  );
 }
 
 export function mergeTelegramAccountConfig(
@@ -68,13 +73,27 @@ export function mergeTelegramAccountConfig(
   const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
 
   // Multi-account bots must not inherit channel-level groups unless explicitly set.
+  // Single-account bots fall back to root `channels.telegram.groups` when the
+  // account does not declare its own groups — including the empty-literal case
+  // `accounts.<id>.groups: {}`, which is almost always a config-migration
+  // artifact rather than an intentional "block all" declaration (use
+  // `groupPolicy: "disabled"` for that).
   const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
   const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
+  const hasAccountGroups = account.groups && Object.keys(account.groups).length > 0;
+  const groups = isMultiAccount
+    ? account.groups
+    : hasAccountGroups
+      ? account.groups
+      : channelGroups;
   const allowFrom = resolveMergedAllowFrom({
     baseAllowFrom: base.allowFrom,
     accountAllowFrom: account.allowFrom,
   });
+  const capabilities =
+    Array.isArray(account.capabilities) && account.capabilities.length === 0
+      ? base.capabilities
+      : (account.capabilities ?? base.capabilities);
 
-  return { ...base, ...account, allowFrom, groups };
+  return { ...base, ...account, allowFrom, capabilities, groups };
 }

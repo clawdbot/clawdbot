@@ -1,3 +1,4 @@
+// Backup create/verify tests cover archive creation, runtime output, and verification failure handling.
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { backupCreateCommand } from "./backup.js";
@@ -32,6 +33,14 @@ function createRuntime(): RuntimeEnv {
   } satisfies RuntimeEnv;
 }
 
+function requireBackupVerifyCall(): [RuntimeEnv, Record<string, unknown>] {
+  const call = backupVerifyCommandMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected backup verify command call");
+  }
+  return call as [RuntimeEnv, Record<string, unknown>];
+}
+
 describe("backupCreateCommand verify wrapper", () => {
   it("optionally verifies the archive after writing it", async () => {
     createBackupArchiveMock.mockResolvedValue({
@@ -56,9 +65,19 @@ describe("backupCreateCommand verify wrapper", () => {
     const result = await backupCreateCommand(runtime, { verify: true });
 
     expect(result.verified).toBe(true);
-    expect(backupVerifyCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ log: expect.any(Function) }),
-      expect.objectContaining({ archive: "/tmp/openclaw-backup.tar.gz", json: false }),
-    );
+    expect(backupVerifyCommandMock).toHaveBeenCalledOnce();
+    const [verifyRuntime, verifyOptions] = requireBackupVerifyCall();
+    expect(verifyOptions).toStrictEqual({
+      archive: "/tmp/openclaw-backup.tar.gz",
+      json: false,
+    });
+    const verifyLog = verifyRuntime?.log;
+    expect(verifyRuntime).toStrictEqual({
+      log: verifyLog,
+      error: runtime.error,
+      exit: runtime.exit,
+    });
+    expect(verifyLog).not.toBe(runtime.log);
+    expect(typeof verifyLog).toBe("function");
   });
 });

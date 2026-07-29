@@ -1,3 +1,4 @@
+// Daemon install integration tests cover service install paths with filesystem fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +21,12 @@ const serviceMock = vi.hoisted(() => ({
   readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
+
+vi.mock("../../config/paths.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
@@ -156,8 +163,7 @@ describe("runDaemonInstall integration", () => {
     const updated = await readJson(configPath);
     const gateway = (updated.gateway ?? {}) as { auth?: { token?: string } };
     const persistedToken = gateway.auth?.token;
-    expect(typeof persistedToken).toBe("string");
-    expect((persistedToken ?? "").length).toBeGreaterThan(0);
+    expect(persistedToken).toEqual(expect.stringMatching(/^[0-9a-f]{48}$/));
 
     const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
     expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();

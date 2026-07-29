@@ -1,9 +1,12 @@
+// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
-import JSON5 from "json5";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import JSON5 from "json5";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../infra/errors.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -42,6 +45,32 @@ export type ConfigSetBatchEntry = {
   ref?: unknown;
   provider?: unknown;
 };
+
+const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
+
+export function readConfigMutationFileSync(
+  filePath: string,
+  sourceLabel: "--batch-file" | "--file",
+): string {
+  // These explicit CLI file flags have historically followed user-provided
+  // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
+  const fd = fs.openSync(filePath, "r");
+  try {
+    try {
+      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new RangeError(
+          `${sourceLabel} exceeds the 8 MiB supported maximum (${CONFIG_MUTATION_FILE_MAX_BYTES} bytes): ${filePath}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
   return Boolean(
@@ -97,9 +126,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.prototype.hasOwnProperty.call(typed, "value");
-    const hasRef = Object.prototype.hasOwnProperty.call(typed, "ref");
-    const hasProvider = Object.prototype.hasOwnProperty.call(typed, "provider");
+    const hasValue = Object.hasOwn(typed, "value");
+    const hasRef = Object.hasOwn(typed, "ref");
+    const hasProvider = Object.hasOwn(typed, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(
@@ -117,6 +146,7 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
 }
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
+  // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
   const batchJson = normalizeOptionalString(opts.batchJson);
   const batchFile = normalizeOptionalString(opts.batchFile);
   const hasInline = Boolean(batchJson);
@@ -134,6 +164,14 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  const raw = fs.readFileSync(pathname, "utf8");
+  let raw: string;
+  try {
+    raw = readConfigMutationFileSync(pathname, "--batch-file");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      throw new Error(`--batch-file not found: ${pathname}`, { cause: err });
+    }
+    throw err;
+  }
   return parseBatchEntries(raw, "--batch-file");
 }

@@ -256,6 +256,17 @@ body {
   border-color: var(--borderAccent);
 }
 
+/* Export warnings */
+.export-warning {
+  background: var(--userMsgBg);
+  border: 1px solid var(--warning);
+  border-radius: 4px;
+  color: var(--warning);
+  font-size: 12px;
+  margin-bottom: var(--line-height);
+  padding: var(--line-height);
+}
+
 /* Header */
 .header {
   background: var(--container-bg);

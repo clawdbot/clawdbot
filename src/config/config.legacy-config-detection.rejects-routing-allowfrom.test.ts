@@ -1,3 +1,4 @@
+// Regresses rejection of legacy routing allowFrom config.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
@@ -27,7 +28,7 @@ describe("legacy config detection", () => {
     },
   );
 
-  it("accepts per-agent tools.elevated overrides", async () => {
+  it("accepts per-agent tools.elevated overrides", () => {
     const res = validateConfigObject({
       tools: {
         elevated: {
@@ -35,9 +36,8 @@ describe("legacy config detection", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: {
               elevated: {
@@ -46,18 +46,18 @@ describe("legacy config detection", () => {
               },
             },
           },
-        ],
+        },
       },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config?.agents?.list?.[0]?.tools?.elevated).toEqual({
+      expect(res.config?.agents?.entries?.work?.tools?.elevated).toEqual({
         enabled: false,
         allowFrom: { whatsapp: ["+15555550123"] },
       });
     }
   });
-  it("rejects telegram.requireMention", async () => {
+  it("rejects telegram.requireMention", () => {
     const res = validateConfigObject({
       telegram: { requireMention: true },
     });
@@ -67,7 +67,7 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"telegram"');
     }
   });
-  it("rejects gateway.token", async () => {
+  it("rejects gateway.token", () => {
     const res = validateConfigObject({
       gateway: { token: "legacy-token" },
     });

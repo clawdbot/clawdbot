@@ -207,7 +207,7 @@ actor GatewayWizardClient {
             let frame = try decodeFrame(message)
             if case let .res(res) = frame, res.id == id {
                 if res.ok == false {
-                    let msg = (res.error?["message"]?.value as? String) ?? "gateway error"
+                    let msg = res.error?.message ?? "gateway error"
                     throw WizardCliError.gatewayError(msg)
                 }
                 return res
@@ -257,7 +257,7 @@ actor GatewayWizardClient {
         ]
 
         var params: [String: ProtoAnyCodable] = [
-            "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
+            "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "client": ProtoAnyCodable(client),
             "caps": ProtoAnyCodable([String]()),
@@ -272,19 +272,22 @@ actor GatewayWizardClient {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let connectNonce = try await self.waitForConnectChallenge()
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let payload = GatewayDeviceAuthPayload.buildV3(
-            deviceId: identity.deviceId,
-            clientId: clientId,
-            clientMode: clientMode,
-            role: role,
-            scopes: scopes,
-            signedAtMs: signedAtMs,
-            token: self.token,
-            nonce: connectNonce,
-            platform: platform,
-            deviceFamily: "Mac")
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
+            throw NSError(
+                domain: "OpenClawMacCLI",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
+        }
+        let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
+            fields: .init(
+                deviceId: identity.deviceId,
+                client: .init(id: clientId, mode: clientMode),
+                role: role,
+                scopes: scopes,
+                signedAtMs: signedAtMs,
+                token: self.token,
+                nonce: connectNonce))
         if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
             payload: payload,
             identity: identity,
@@ -308,7 +311,7 @@ actor GatewayWizardClient {
             let frameResponse = try decodeFrame(message)
             if case let .res(res) = frameResponse, res.id == reqId {
                 if res.ok == false {
-                    let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
+                    let msg = res.error?.message ?? "gateway connect failed"
                     throw WizardCliError.gatewayError(msg)
                 }
                 _ = try self.decodePayload(res, as: HelloOk.self)
@@ -374,8 +377,14 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                 print("Wizard complete.")
                 return
             }
+            if let error = nextResult.error, !opts.json {
+                fputs("wizard: \(error)\n", stderr)
+            }
 
-            if let step = decodeWizardStep(nextResult.step) {
+            // Gateway-executed steps (download/install progress) take no answer;
+            // echo the frame and poll, or the run stalls on input that can never
+            // advance the session.
+            if let step = nextResult.step, wizardStepExecutor(step) != "gateway" {
                 let answer = try promptAnswer(for: step)
                 var answerPayload: [String: ProtoAnyCodable] = [
                     "stepId": ProtoAnyCodable(step.id),
@@ -394,6 +403,9 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                     dumpResult(response)
                 }
             } else {
+                if let step = nextResult.step, !opts.json {
+                    printWizardStepHeader(step)
+                }
                 let response = try await client.request(
                     method: "wizard.next",
                     params: ["sessionId": ProtoAnyCodable(sessionId)])
@@ -423,14 +435,18 @@ private func dumpResult(_ response: ResponseFrame) {
     }
 }
 
-private func promptAnswer(for step: WizardStep) throws -> Any {
-    let type = wizardStepType(step)
+private func printWizardStepHeader(_ step: WizardStep) {
     if let title = step.title, !title.isEmpty {
         print("\n\(title)")
     }
     if let message = step.message, !message.isEmpty {
         print(message)
     }
+}
+
+private func promptAnswer(for step: WizardStep) throws -> Any {
+    let type = wizardStepType(step)
+    printWizardStepHeader(step)
 
     switch type {
     case "note":

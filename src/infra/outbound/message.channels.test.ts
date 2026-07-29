@@ -1,5 +1,7 @@
+// Covers channel-specific outbound adapter behavior for message sends,
+// structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -34,13 +36,27 @@ afterEach(() => {
   setRegistry(emptyRegistry);
 });
 
-const gatewayCall = () =>
-  callGatewayMock.mock.calls[0]?.[0] as {
+function gatewayCall(): {
+  url?: string;
+  token?: string;
+  timeoutMs?: number;
+  params?: Record<string, unknown>;
+} {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected gateway call input to be an object");
+  }
+  return arg as {
     url?: string;
     token?: string;
     timeoutMs?: number;
     params?: Record<string, unknown>;
   };
+}
 
 describe("sendMessage channel normalization", () => {
   it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
@@ -156,11 +172,11 @@ describe("sendMessage channel normalization", () => {
         },
       },
       assertDeps: (deps: { localchat?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.localchat).toHaveBeenCalledWith(
-          "someone@example.com",
-          "hi",
-          expect.any(Object),
-        );
+        expect(deps.localchat).toHaveBeenCalledTimes(1);
+        const [to, text, options] = deps.localchat?.mock.calls[0] ?? [];
+        expect(to).toBe("someone@example.com");
+        expect(text).toBe("hi");
+        expect(typeof options).toBe("object");
       },
       expectedChannel: "localchat",
     },
@@ -218,21 +234,25 @@ describe("sendMessage replyToId threading", () => {
   });
 });
 
+function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
+  setRegistry(
+    createTestRegistry([
+      {
+        pluginId: "demo-alias-channel",
+        source: "test",
+        plugin: createDemoAliasPlugin({
+          aliases: ["workspace-chat"],
+          outbound: createDemoAliasOutbound({ includePoll: true, ...outboundOptions }),
+        }),
+      },
+    ]),
+  );
+}
+
 describe("sendPoll channel normalization", () => {
-  it("normalizes plugin aliases for polls", async () => {
+  it("normalizes plugin aliases for gateway polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
-    setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "demo-alias-channel",
-          source: "test",
-          plugin: createDemoAliasPlugin({
-            aliases: ["workspace-chat"],
-            outbound: createDemoAliasOutbound({ includePoll: true }),
-          }),
-        },
-      ]),
-    );
+    setDemoPollRegistry({ deliveryMode: "gateway" });
 
     const result = await sendPoll({
       cfg: {},
@@ -244,6 +264,76 @@ describe("sendPoll channel normalization", () => {
 
     expect(gatewayCall()?.params?.channel).toBe("demo-alias-channel");
     expect(result.channel).toBe("demo-alias-channel");
+    expect(result.via).toBe("gateway");
+  });
+
+  it("uses direct poll fallback for direct channel plugins", async () => {
+    const cfg = { channels: {} };
+    const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
+    setDemoPollRegistry({ supportsAnonymousPolls: true, sendPoll: sendPollMock });
+
+    const result = await sendPoll({
+      cfg,
+      to: "conversation:demo-target",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      channel: "Workspace-Chat",
+      accountId: "acct-1",
+      threadId: "thread-1",
+      silent: true,
+      isAnonymous: false,
+    });
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      channel: "demo-alias-channel",
+      to: "conversation:demo-target",
+      via: "direct",
+      result: { messageId: "p1" },
+    });
+    expect(sendPollMock).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:demo-target",
+      poll: {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+      },
+      accountId: "acct-1",
+      threadId: "thread-1",
+      silent: true,
+      isAnonymous: false,
+    });
+  });
+
+  it.each([
+    {
+      name: "durationSeconds",
+      params: { durationSeconds: 300 },
+      message: "durationSeconds is not supported for demo-alias-channel polls",
+    },
+    {
+      name: "isAnonymous",
+      params: { isAnonymous: false },
+      message: "isAnonymous is not supported for demo-alias-channel polls",
+    },
+  ])("rejects unsupported direct poll option $name", async ({ params, message }) => {
+    const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
+    setDemoPollRegistry({ sendPoll: sendPollMock });
+
+    await expect(
+      sendPoll({
+        cfg: {},
+        to: "conversation:demo-target",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        channel: "Workspace-Chat",
+        ...params,
+      }),
+    ).rejects.toThrow(message);
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(sendPollMock).not.toHaveBeenCalled();
   });
 });
 
@@ -321,8 +411,71 @@ describe("gateway url override hardening", () => {
         },
       },
     },
+    {
+      name: "forwards gateway delivery options in send params",
+      params: {
+        threadId: "topic456",
+        forceDocument: true,
+        silent: true,
+        parseMode: "HTML" as const,
+      },
+      expected: {
+        params: {
+          threadId: "topic456",
+          forceDocument: true,
+          silent: true,
+          parseMode: "HTML",
+        },
+      },
+    },
   ])("$name", async ({ params, expected }) => {
-    expect(await sendThreadChatGatewayMessage(params)).toMatchObject(expected);
+    const result = await sendThreadChatGatewayMessage(params);
+    for (const [key, value] of Object.entries(expected)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [nestedKey, nestedValue] of Object.entries(value)) {
+          expect(
+            ((result as Record<string, unknown>)[key] as Record<string, unknown>)[nestedKey],
+          ).toEqual(nestedValue);
+        }
+        continue;
+      }
+      expect((result as Record<string, unknown>)[key]).toEqual(value);
+    }
+  });
+
+  it("forwards buffer metadata for gateway delivery-mode sends", async () => {
+    const buffer = Buffer.from("gateway delivery bytes").toString("base64");
+    const result = await sendThreadChatGatewayMessage({
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer,
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    });
+
+    expect(result.params).toMatchObject({
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer,
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    });
+  });
+
+  it("drops unused buffer metadata when explicit gateway media is present", async () => {
+    const result = await sendThreadChatGatewayMessage({
+      mediaUrl: "https://example.com/photo.png",
+      buffer: Buffer.from("ignored bytes").toString("base64"),
+      filename: "ignored.txt",
+      contentType: "text/plain",
+    });
+
+    expect(result.params).toMatchObject({
+      mediaUrl: "https://example.com/photo.png",
+    });
+    expect(result.params?.buffer).toBeUndefined();
+    expect(result.params?.filename).toBeUndefined();
+    expect(result.params?.contentType).toBeUndefined();
   });
 });
 
@@ -378,8 +531,14 @@ const createLocalChatAliasPlugin = (): ChannelPlugin => ({
   },
 });
 
-const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
+const createDemoAliasOutbound = (opts?: {
+  deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
+  includePoll?: boolean;
+  supportsAnonymousPolls?: boolean;
+  supportsPollDurationSeconds?: boolean;
+  sendPoll?: NonNullable<ChannelOutboundAdapter["sendPoll"]>;
+}): ChannelOutboundAdapter => ({
+  deliveryMode: opts?.deliveryMode ?? "direct",
   sendText: async ({ deps, to, text }) => {
     const send = deps?.["demo-alias-channel"] as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
@@ -403,7 +562,9 @@ const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutbo
   ...(opts?.includePoll
     ? {
         pollMaxOptions: 12,
-        sendPoll: async () => ({ channel: "demo-alias-channel", messageId: "p1" }),
+        ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
+        ...(opts.supportsPollDurationSeconds ? { supportsPollDurationSeconds: true } : {}),
+        sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),
       }
     : {}),
 });

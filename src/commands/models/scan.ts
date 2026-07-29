@@ -1,16 +1,19 @@
+/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
-import { getEnvApiKey } from "@mariozechner/pi-ai";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../../terminal/prompt-style.js";
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../../infra/parse-finite-number.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { pad, truncate } from "./list.format.js";
 import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
@@ -19,13 +22,7 @@ const MODEL_PAD = 42;
 const CTX_PAD = 8;
 
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
-  clackMultiselect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  clackMultiselect(styleSelectParams(params));
 
 function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -152,6 +149,40 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
+function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed < 0) {
+    throw new Error(`${label} must be >= 0`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throw new Error(`${label} must be > 0`);
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -169,26 +200,14 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
-    throw new Error("--min-params must be >= 0");
-  }
-  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
-    throw new Error("--max-age-days must be >= 0");
-  }
-  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
-  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
-    throw new Error("--max-candidates must be > 0");
-  }
-  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
-  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-    throw new Error("--timeout must be > 0");
-  }
-  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
-    throw new Error("--concurrency must be > 0");
-  }
+  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
+  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
+  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const concurrency =
+    opts.concurrency === undefined
+      ? undefined
+      : parsePositiveIntegerOption(opts.concurrency, "--concurrency", 1);
 
   const requestedProbe = opts.probe ?? true;
   if (!requestedProbe && (opts.setDefault || opts.setImage)) {
@@ -218,6 +237,8 @@ export async function modelsScanCommand(
           "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
         );
       }
+      // Without a key, keep the command useful as catalog discovery only; writes
+      // stay blocked because metadata-only rows have not proven runtime support.
       probe = false;
     }
   }
@@ -266,7 +287,9 @@ export async function modelsScanCommand(
 
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
-    throw new Error("No tool-capable OpenRouter free models found.");
+    throw new Error(
+      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before probing.`,
+    );
   }
 
   const sorted = sortScanResults(results);
@@ -328,7 +351,7 @@ export async function modelsScanCommand(
     throw new Error("No image-capable models selected for image model.");
   }
 
-  const _updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
       if (!nextModels[entry]) {

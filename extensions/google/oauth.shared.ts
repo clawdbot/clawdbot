@@ -1,3 +1,4 @@
+// Google plugin module implements oauth.shared behavior.
 export const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 export const CLIENT_SECRET_KEYS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -41,4 +42,5 @@ export type GeminiCliOAuthContext = {
   note: (message: string, title?: string) => Promise<void>;
   prompt: (message: string) => Promise<string>;
   progress: { update: (msg: string) => void; stop: (msg?: string) => void };
+  signal?: AbortSignal;
 };

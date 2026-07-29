@@ -1,3 +1,4 @@
+// Qqbot tests cover envelope stage plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { GroupMessageGateResult } from "../../group/message-gating.js";
 import type { ProcessedAttachments } from "../inbound-attachments.js";
@@ -17,6 +18,7 @@ function makeGroupInfo(partial: Partial<InboundGroupInfo["display"]> = {}): Inbo
   return {
     gate: makeGate(),
     activation: "mention",
+    commandLevel: "safety",
     historyLimit: 50,
     isMerged: false,
     display: {

@@ -1,3 +1,5 @@
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+// Whatsapp plugin module implements identity behavior.
 import { jidToE164, normalizeE164 } from "./text-runtime.js";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
@@ -19,35 +21,47 @@ export type WhatsAppSelfIdentity = {
 export type WhatsAppReplyContext = {
   id?: string;
   body: string;
+  media?: MediaPlaceholderTextFact;
   sender?: WhatsAppIdentity | null;
 };
 
 type LegacySenderLike = {
-  sender?: WhatsAppIdentity;
-  senderJid?: string;
-  senderE164?: string;
-  senderName?: string;
+  platform: {
+    sender?: WhatsAppIdentity;
+    senderJid?: string;
+    senderE164?: string;
+    senderName?: string;
+  };
 };
 
 type LegacySelfLike = {
-  self?: WhatsAppSelfIdentity;
-  selfJid?: string | null;
-  selfLid?: string | null;
-  selfE164?: string | null;
+  platform: {
+    self?: WhatsAppSelfIdentity;
+    selfJid?: string | null;
+    selfLid?: string | null;
+    selfE164?: string | null;
+  };
 };
 
 type LegacyReplyLike = {
-  replyTo?: WhatsAppReplyContext;
-  replyToId?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToSenderJid?: string;
-  replyToSenderE164?: string;
+  quote?: {
+    context?: WhatsAppReplyContext;
+    id?: string;
+    body?: string;
+    sender?: {
+      displayName?: string;
+      jid?: string;
+      e164?: string;
+    };
+  };
 };
 
 type LegacyMentionsLike = {
-  mentions?: string[];
-  mentionedJids?: string[];
+  group?: {
+    mentions?: {
+      jids?: string[];
+    };
+  };
 };
 
 function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
@@ -101,10 +115,10 @@ export function identitiesOverlap(
 
 export function getSenderIdentity(msg: LegacySenderLike, authDir?: string): WhatsAppIdentity {
   return resolveComparableIdentity(
-    msg.sender ?? {
-      jid: msg.senderJid ?? null,
-      e164: msg.senderE164 ?? null,
-      name: msg.senderName ?? null,
+    msg.platform.sender ?? {
+      jid: msg.platform.senderJid ?? null,
+      e164: msg.platform.senderE164 ?? null,
+      name: msg.platform.senderName ?? null,
     },
     authDir,
   );
@@ -112,10 +126,10 @@ export function getSenderIdentity(msg: LegacySenderLike, authDir?: string): What
 
 export function getSelfIdentity(msg: LegacySelfLike, authDir?: string): WhatsAppSelfIdentity {
   return resolveComparableIdentity(
-    msg.self ?? {
-      jid: msg.selfJid ?? null,
-      lid: msg.selfLid ?? null,
-      e164: msg.selfE164 ?? null,
+    msg.platform.self ?? {
+      jid: msg.platform.selfJid ?? null,
+      lid: msg.platform.selfLid ?? null,
+      e164: msg.platform.selfE164 ?? null,
     },
     authDir,
   );
@@ -125,23 +139,23 @@ export function getReplyContext(
   msg: LegacyReplyLike,
   authDir?: string,
 ): WhatsAppReplyContext | null {
-  if (msg.replyTo) {
+  if (msg.quote?.context) {
     return {
-      ...msg.replyTo,
-      sender: resolveComparableIdentity(msg.replyTo.sender, authDir),
+      ...msg.quote.context,
+      sender: resolveComparableIdentity(msg.quote.context.sender, authDir),
     };
   }
-  if (!msg.replyToBody) {
+  if (!msg.quote?.body) {
     return null;
   }
   return {
-    id: msg.replyToId,
-    body: msg.replyToBody,
+    id: msg.quote.id,
+    body: msg.quote.body,
     sender: resolveComparableIdentity(
       {
-        jid: msg.replyToSenderJid ?? null,
-        e164: msg.replyToSenderE164 ?? null,
-        label: msg.replyToSender ?? null,
+        jid: msg.quote.sender?.jid ?? null,
+        e164: msg.quote.sender?.e164 ?? null,
+        label: msg.quote.sender?.displayName ?? null,
       },
       authDir,
     ),
@@ -149,7 +163,7 @@ export function getReplyContext(
 }
 
 function getMentionJids(msg: LegacyMentionsLike): string[] {
-  return msg.mentions ?? msg.mentionedJids ?? [];
+  return msg.group?.mentions?.jids ?? [];
 }
 
 export function getMentionIdentities(

@@ -1,3 +1,8 @@
+// Shared helpers for subagent command actions and target resolution.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
@@ -7,17 +12,12 @@ import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-  stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
 import { callGateway } from "../../../gateway/call.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
-import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
@@ -26,43 +26,17 @@ import {
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
 
-export { stripToolMessages };
-export { resolveCommandSurfaceChannel, resolveChannelAccountId };
 export type { ChatMessage } from "../commands-subagents-text.js";
 
-export const COMMAND = "/subagents";
-export const COMMAND_KILL = "/kill";
+const COMMAND = "/subagents";
 const COMMAND_FOCUS = "/focus";
 const COMMAND_UNFOCUS = "/unfocus";
 const COMMAND_AGENTS = "/agents";
-const ACTIONS = new Set([
-  "list",
-  "kill",
-  "log",
-  "send",
-  "steer",
-  "info",
-  "spawn",
-  "focus",
-  "unfocus",
-  "agents",
-  "help",
-]);
+const ACTIONS = new Set(["list", "log", "info", "help"]);
 
 export const RECENT_WINDOW_MINUTES = 30;
 
-type SubagentsAction =
-  | "list"
-  | "kill"
-  | "log"
-  | "send"
-  | "steer"
-  | "info"
-  | "spawn"
-  | "focus"
-  | "unfocus"
-  | "agents"
-  | "help";
+type SubagentsAction = "list" | "log" | "info" | "focus" | "unfocus" | "agents" | "help";
 
 type SubagentsCommandParams = Parameters<CommandHandler>[0];
 
@@ -91,6 +65,7 @@ function resolveSubagentTarget(
     token,
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
+    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: (entry) =>
       !entry.endedAt ||
       Math.max(
@@ -130,7 +105,7 @@ export function resolveRequesterSessionKey(
   const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
   const commandSession = normalizeOptionalString(params.sessionKey);
   const shouldPreferCommandTarget =
-    opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
+    opts?.preferCommandTarget ?? isNativeCommandTurn(resolveCommandTurnContext(params.ctx));
   const raw = shouldPreferCommandTarget
     ? commandTarget || commandSession
     : commandSession || commandTarget;
@@ -167,15 +142,13 @@ export function resolveCommandSubagentController(
 export function resolveHandledPrefix(normalized: string): string | null {
   return normalized.startsWith(COMMAND)
     ? COMMAND
-    : normalized.startsWith(COMMAND_KILL)
-      ? COMMAND_KILL
-      : normalized.startsWith(COMMAND_FOCUS)
-        ? COMMAND_FOCUS
-        : normalized.startsWith(COMMAND_UNFOCUS)
-          ? COMMAND_UNFOCUS
-          : normalized.startsWith(COMMAND_AGENTS)
-            ? COMMAND_AGENTS
-            : null;
+    : normalized.startsWith(COMMAND_FOCUS)
+      ? COMMAND_FOCUS
+      : normalized.startsWith(COMMAND_UNFOCUS)
+        ? COMMAND_UNFOCUS
+        : normalized.startsWith(COMMAND_AGENTS)
+          ? COMMAND_AGENTS
+          : null;
 }
 
 export function resolveSubagentsAction(params: {
@@ -190,9 +163,6 @@ export function resolveSubagentsAction(params: {
     }
     params.restTokens.splice(0, 1);
     return action;
-  }
-  if (params.handledPrefix === COMMAND_KILL) {
-    return "kill";
   }
   if (params.handledPrefix === COMMAND_FOCUS) {
     return "focus";
@@ -273,18 +243,13 @@ export function buildSubagentsHelp() {
     "Subagents",
     "Usage:",
     "- /subagents list",
-    "- /subagents kill <id|#|all>",
     "- /subagents log <id|#> [limit] [tools]",
     "- /subagents info <id|#>",
-    "- /subagents send <id|#> <message>",
-    "- /subagents steer <id|#> <message>",
-    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     "- /focus <subagent-label|session-key|session-id|session-label>",
     "- /unfocus",
     "- /agents",
     "- /session idle <duration|off>",
     "- /session max-age <duration|off>",
-    "- /kill <id|#|all>",
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");

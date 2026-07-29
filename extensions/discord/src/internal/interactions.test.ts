@@ -1,3 +1,4 @@
+// Discord tests cover interactions plugin behavior.
 import {
   ComponentType,
   type GuildMemberFlags,
@@ -7,12 +8,8 @@ import {
 } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./components.js";
-import {
-  BaseInteraction,
-  ModalInteraction,
-  createInteraction,
-  type RawInteraction,
-} from "./interactions.js";
+import { ModalInteraction, createInteraction, type RawInteraction } from "./interactions.js";
+import { Message } from "./structures.js";
 import {
   attachRestMock,
   createInternalComponentInteractionPayload,
@@ -27,7 +24,7 @@ describe("BaseInteraction", () => {
     const patch = vi.fn(async () => undefined);
     const client = createInternalTestClient();
     attachRestMock(client, { patch, post });
-    const interaction = new BaseInteraction(
+    const interaction = createInteraction(
       client,
       createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
     );
@@ -46,11 +43,29 @@ describe("BaseInteraction", () => {
     });
   });
 
+  it("deletes the original interaction response after defer", async () => {
+    const del = vi.fn(async () => undefined);
+    const post = vi.fn(async () => undefined);
+    const client = createInternalTestClient();
+    attachRestMock(client, { delete: del, post });
+    const interaction = createInteraction(
+      client,
+      createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
+    );
+
+    await interaction.defer();
+    expect(interaction.responseState).toBe("deferred");
+    await interaction.deleteReply();
+
+    expect(del).toHaveBeenCalledWith("/webhooks/app1/token1/messages/%40original");
+    expect(interaction.responseState).toBe("replied");
+  });
+
   it("uses with_components for Components V2 follow-ups", async () => {
     const post = vi.fn(async () => undefined);
     const client = createInternalTestClient();
     attachRestMock(client, { post });
-    const interaction = new BaseInteraction(
+    const interaction = createInteraction(
       client,
       createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
     );
@@ -83,7 +98,7 @@ describe("BaseInteraction", () => {
     const patch = vi.fn(async () => undefined);
     const client = createInternalTestClient();
     attachRestMock(client, { patch, post });
-    const interaction = new BaseInteraction(
+    const interaction = createInteraction(
       client,
       createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
     );
@@ -197,7 +212,7 @@ describe("BaseInteraction", () => {
     const post = vi.fn(async () => undefined);
     const client = createInternalTestClient();
     attachRestMock(client, { get, post });
-    const interaction = new BaseInteraction(
+    const interaction = createInteraction(
       client,
       createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
     );
@@ -237,12 +252,15 @@ describe("BaseInteraction", () => {
       }),
     );
 
-    await expect(wait).resolves.toEqual({
-      success: true,
-      customId: "button1",
-      message: expect.objectContaining({ id: "message1", channelId: "channel1" }),
-      values: undefined,
-    });
+    const result = await wait;
+    if (!result.success) {
+      throw new Error("expected component wait to succeed");
+    }
+    expect(result.customId).toBe("button1");
+    expect(result.message).toBeInstanceOf(Message);
+    expect(result.message?.id).toBe("message1");
+    expect(result.message?.channelId).toBe("channel1");
+    expect(result.values).toBeUndefined();
     expect(post).toHaveBeenNthCalledWith(
       2,
       "/interactions/component-interaction1/component-token1/callback",

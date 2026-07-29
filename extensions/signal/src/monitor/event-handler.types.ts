@@ -1,9 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { StatusReactionTiming } from "openclaw/plugin-sdk/channel-feedback";
+// Signal type declarations define plugin contracts.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
   GroupPolicy,
   SignalReactionNotificationMode,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -15,7 +17,10 @@ export type SignalEnvelope = {
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
-  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  editMessage?: {
+    targetSentTimestamp?: number | null;
+    dataMessage?: SignalDataMessage | null;
+  } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
 };
@@ -75,8 +80,21 @@ export type SignalReceivePayload = {
   exception?: { message?: string } | null;
 };
 
+export type SignalNativeReplyContext = {
+  replyToId?: string;
+  author?: string;
+  body?: string;
+  allowImplicitCurrentMessage?: boolean;
+  state?: {
+    hasReplied: boolean;
+  };
+};
+
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
+  statusReactionTiming?: Required<StatusReactionTiming>;
+  abortSignal?: AbortSignal;
+  runTrackedTask?: (task: () => Promise<void>) => void;
   cfg: OpenClawConfig;
   baseUrl: string;
   account?: string;
@@ -110,10 +128,13 @@ export type SignalEventHandlerDeps = {
     target: string;
     baseUrl: string;
     account?: string;
+    accountUuid?: string;
     accountId?: string;
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    replyContext?: SignalNativeReplyContext;
+    chatType?: "direct" | "group";
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

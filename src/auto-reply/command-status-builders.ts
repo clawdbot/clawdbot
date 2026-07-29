@@ -1,13 +1,14 @@
-import type { SkillCommandSpec } from "../agents/skills.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import { isCommandFlagEnabled } from "../config/commands.flags.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listPluginCommands } from "../plugins/commands.js";
+/** Formats /help and /commands output for text and native command-list surfaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { isCommandFlagEnabled } from "../config/commands.flags.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listPluginCommands } from "../plugins/commands.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import {
   listChatCommands,
   listChatCommandsForConfig,
@@ -51,6 +52,7 @@ function groupCommandsByCategory(
   return grouped;
 }
 
+/** Builds the compact slash-command help text shown by `/help`. */
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
   const lines = ["ℹ️ Help", ""];
 
@@ -59,9 +61,9 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   const optionParts = [
-    "/think <level>",
+    "/think <level|default>",
     "/model <id>",
-    "/fast status|on|off",
+    "/fast status|auto|on|off|default",
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
@@ -90,12 +92,14 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
 
 const COMMANDS_PER_PAGE = 8;
 
+/** Options for rendering `/commands` output for a specific channel surface. */
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
   forcePaginatedList?: boolean;
 };
 
+/** Rendered `/commands` text plus pagination metadata for channel-native lists. */
 export type CommandsMessageResult = {
   text: string;
   totalPages: number;
@@ -181,6 +185,7 @@ function formatCommandList(items: CommandsListItem[]): string {
   return lines.join("\n");
 }
 
+/** Builds `/commands` text, returning only the rendered message body. */
 export function buildCommandsMessage(
   cfg?: OpenClawConfig,
   skillCommands?: SkillCommandSpec[],
@@ -190,6 +195,7 @@ export function buildCommandsMessage(
   return result.text;
 }
 
+/** Builds `/commands` text and pagination metadata for surfaces with native list controls. */
 export function buildCommandsMessagePaginated(
   cfg?: OpenClawConfig,
   skillCommands?: SkillCommandSpec[],
@@ -197,6 +203,7 @@ export function buildCommandsMessagePaginated(
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
   const surface = normalizeOptionalLowercaseString(options?.surface);
+  // Surfaces with native command-list UI need page metadata; plain text surfaces get one full list.
   const prefersPaginatedList =
     options?.forcePaginatedList === true ||
     Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);

@@ -1,3 +1,4 @@
+// Program test mocks provide shared CLI command doubles and typed Vitest helpers.
 import { vi, type Mock } from "vitest";
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
@@ -29,7 +30,7 @@ const programMocks = vi.hoisted(() => {
     runChannelLogin: vi.fn(),
     runChannelLogout: vi.fn(),
     runTui: vi.fn(),
-    runCrestodian: vi.fn(),
+    runSystemAgentWithInference: vi.fn(),
     loadAndMaybeMigrateDoctorConfig: vi.fn(),
     ensureConfigReady: vi.fn(),
     ensurePluginRegistryLoaded: vi.fn(),
@@ -42,7 +43,7 @@ export const setupCommand = programMocks.setupCommand as AnyMock;
 export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
 export const callGateway = programMocks.callGateway as AnyMock;
 export const runTui = programMocks.runTui as AnyMock;
-export const runCrestodian = programMocks.runCrestodian as AnyMock;
+export const runSystemAgentWithInference = programMocks.runSystemAgentWithInference as AnyMock;
 export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
 
 export const runtime = programMocks.runtime as {
@@ -69,12 +70,12 @@ vi.mock("../commands/configure.js", () => ({
   ],
   configureCommand: programMocks.configureCommand,
   configureCommandWithSections: programMocks.configureCommandWithSections,
-  configureCommandFromSectionsArg: (sections: unknown, runtime: unknown) => {
+  configureCommandFromSectionsArg: (sections: unknown, runtimeLocal: unknown) => {
     const resolved = Array.isArray(sections) ? sections : [];
     if (resolved.length > 0) {
-      return programMocks.configureCommandWithSections(resolved, runtime);
+      return programMocks.configureCommandWithSections(resolved, runtimeLocal);
     }
-    return programMocks.configureCommand({}, runtime);
+    return programMocks.configureCommand({}, runtimeLocal);
   },
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand: programMocks.setupCommand }));
@@ -88,7 +89,9 @@ vi.mock("./channel-auth.js", () => ({
   runChannelLogout: programMocks.runChannelLogout,
 }));
 vi.mock("../tui/tui.js", () => ({ runTui: programMocks.runTui }));
-vi.mock("../crestodian/crestodian.js", () => ({ runCrestodian: programMocks.runCrestodian }));
+vi.mock("../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: programMocks.runSystemAgentWithInference,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,
   randomIdempotencyKey: () => "idem-test",
@@ -109,7 +112,3 @@ vi.mock("./program/config-guard.js", () => ({
   ensureConfigReady: programMocks.ensureConfigReady,
 }));
 vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
-
-export function installBaseProgramMocks() {}
-
-export function installSmokeProgramMocks() {}

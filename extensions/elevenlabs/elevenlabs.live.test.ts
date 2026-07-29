@@ -1,3 +1,4 @@
+// Elevenlabs tests cover elevenlabs plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -7,7 +8,7 @@ import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -73,6 +74,7 @@ describeLive("elevenlabs plugin live", () => {
       outputFormat: "ulaw_8000",
       timeoutMs: 30_000,
     });
+    expect(speech.byteLength).toBeGreaterThan(0);
 
     await runRealtimeSttLiveTest({
       provider,

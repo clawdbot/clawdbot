@@ -1,3 +1,6 @@
+/**
+ * Tests for nonce matching and retry heuristics used by live tool probes.
+ */
 import { describe, expect, it } from "vitest";
 import {
   hasExpectedSingleNonce,
@@ -5,7 +8,7 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 
 describe("live tool probe utils", () => {
   describe("nonce matching", () => {
@@ -50,6 +53,11 @@ describe("live tool probe utils", () => {
       {
         name: "detects tool authorization refusals",
         text: "Before proceeding, I must confirm: are you authorizing me to execute the read tool with the provided arguments?",
+        expected: true,
+      },
+      {
+        name: "detects unavailable read tool refusals",
+        text: "tool probe missing nonce: I can’t: there is no `read`/`Read` tool available in this session, and I won’t output those nonce values without actually reading the file.",
         expected: true,
       },
       {
@@ -100,6 +108,57 @@ describe("live tool probe utils", () => {
           nonceA: "nonce-a",
           nonceB: "nonce-b",
           provider: "mistral",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: false,
+      },
+      {
+        name: "retries a well-formed nonce mismatch when policy allows it",
+        params: {
+          text: "9b3a1178-3b42-430b-9146-27b08416824b",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "google",
+          attempt: 0,
+          maxAttempts: 3,
+          retryKnownNonceMismatch: true,
+        },
+        expected: true,
+      },
+      {
+        name: "does not retry a policy mismatch after attempts are exhausted",
+        params: {
+          text: "9b3a1178-3b42-430b-9146-27b08416824b",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "google",
+          attempt: 2,
+          maxAttempts: 3,
+          retryKnownNonceMismatch: true,
+        },
+        expected: false,
+      },
+      {
+        name: "prefers a valid nonce pair over mismatch retry policy",
+        params: {
+          text: "nonce-a nonce-b 9b3a1178-3b42-430b-9146-27b08416824b",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "google",
+          attempt: 0,
+          maxAttempts: 3,
+          retryKnownNonceMismatch: true,
+        },
+        expected: false,
+      },
+      {
+        name: "does not retry a well-formed mismatch without known-model policy",
+        params: {
+          text: "9b3a1178-3b42-430b-9146-27b08416824b",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "openai",
           attempt: 0,
           maxAttempts: 3,
         },
@@ -242,6 +301,53 @@ describe("live tool probe utils", () => {
         expected: false,
       },
       {
+        name: "retries a well-formed exec nonce mismatch when policy allows it",
+        params: {
+          text: "9b3a1178-3b42-430b-9146-27b08416824b",
+          nonce: "nonce-c",
+          provider: "google",
+          attempt: 0,
+          maxAttempts: 3,
+          retryKnownNonceMismatch: true,
+        },
+        expected: true,
+      },
+      {
+        name: "does not retry an exec policy mismatch after attempts are exhausted",
+        params: {
+          text: "9b3a1178-3b42-430b-9146-27b08416824b",
+          nonce: "nonce-c",
+          provider: "google",
+          attempt: 2,
+          maxAttempts: 3,
+          retryKnownNonceMismatch: true,
+        },
+        expected: false,
+      },
+      {
+        name: "prefers a valid exec nonce over mismatch retry policy",
+        params: {
+          text: "nonce-c 9b3a1178-3b42-430b-9146-27b08416824b",
+          nonce: "nonce-c",
+          provider: "google",
+          attempt: 0,
+          maxAttempts: 3,
+          retryKnownNonceMismatch: true,
+        },
+        expected: false,
+      },
+      {
+        name: "does not retry a well-formed exec mismatch without known-model policy",
+        params: {
+          text: "9b3a1178-3b42-430b-9146-27b08416824b",
+          nonce: "nonce-c",
+          provider: "openai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: false,
+      },
+      {
         name: "prefers a valid nonce even if the text still contains scaffolding words",
         params: {
           text: "tool output nonce-c function",
@@ -269,6 +375,17 @@ describe("live tool probe utils", () => {
           text: "Let me try reading the file again:",
           nonce: "nonce-c",
           provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries alternate exec readback retry wording",
+        params: {
+          text: "Let me try again with a slightly different approach:",
+          nonce: "nonce-c",
+          provider: "minimax-portal",
           attempt: 0,
           maxAttempts: 3,
         },

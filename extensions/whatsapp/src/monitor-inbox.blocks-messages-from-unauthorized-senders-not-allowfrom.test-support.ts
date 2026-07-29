@@ -1,5 +1,7 @@
+// Whatsapp plugin module implements monitor inbox.blocks messages from unauthorized senders not allowfrom support behavior.
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
+import type { WebInboundMessage } from "./inbound/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   expectPairingPromptSent,
@@ -9,6 +11,7 @@ import {
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -54,6 +57,7 @@ const createGroupMessage = (params: {
 
 async function startWebInboxMonitor(params: {
   config?: Record<string, unknown>;
+  loadConfig?: () => Record<string, unknown>;
   sendReadReceipts?: boolean;
 }) {
   const monitorWebInbox = getMonitorWebInbox();
@@ -63,6 +67,7 @@ async function startWebInboxMonitor(params: {
   const onMessage = vi.fn();
   const base = {
     cfg: (params.config ?? mockLoadConfig()) as never,
+    ...(params.loadConfig ? { loadConfig: params.loadConfig as never } : {}),
     verbose: false,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
@@ -79,10 +84,18 @@ async function startWebInboxMonitor(params: {
   return { onMessage, listener, sock: getSock() };
 }
 
+function firstInboundPayload(onMessage: ReturnType<typeof vi.fn>) {
+  const payload = onMessage.mock.calls[0]?.[0];
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected first inbound payload");
+  }
+  return payload as WebInboundMessage;
+}
+
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  it("blocks messages from unauthorized senders not in allowFrom", async () => {
+  it("delivery coordinator blocks unauthorized senders outside allowFrom", async () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
     const config = {
@@ -110,18 +123,63 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await vi.waitFor(() => expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999"));
 
     // Should NOT call onMessage for unauthorized senders
     expect(onMessage).not.toHaveBeenCalled();
     // Should NOT send read receipts for blocked senders (privacy + avoids Baileys Bad MAC churn).
     expect(sock.readMessages).not.toHaveBeenCalled();
-    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });
 
-  it("skips read receipts in self-chat mode", async () => {
+  it("delivery coordinator applies hot-reloaded dmPolicy to the active listener", async () => {
+    const startupConfig = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    };
+    const reloadedConfig = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+111"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    };
+    mockLoadConfig.mockReturnValue(startupConfig);
+
+    const { onMessage, listener, sock } = await startWebInboxMonitor({
+      config: startupConfig,
+      loadConfig: () => mockLoadConfig() as Record<string, unknown>,
+    });
+    mockLoadConfig.mockReturnValue(reloadedConfig);
+
+    sock.ev.emit(
+      "messages.upsert",
+      createNotifyUpsert(
+        createDmMessage({
+          id: "hot-reload-block",
+          remoteJid: "999@s.whatsapp.net",
+          conversation: "should be blocked after reload",
+        }),
+      ),
+    );
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+    expect(sock.readMessages).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("delivery coordinator skips read receipts in self-chat mode", async () => {
     const config = {
       channels: {
         whatsapp: {
@@ -146,15 +204,25 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: "+123",
-        to: "+123",
-        body: "self ping",
-        accessControlPassed: true,
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+123",
+          }),
+          ingress: expect.objectContaining({
+            decision: "allow",
+          }),
+        }),
+        payload: expect.objectContaining({
+          body: "self ping",
+        }),
+        platform: expect.objectContaining({
+          recipientJid: "+123",
+        }),
       }),
     );
     expect(sock.readMessages).not.toHaveBeenCalled();
@@ -162,7 +230,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("skips read receipts when disabled", async () => {
+  it("delivery coordinator skips read receipts when disabled", async () => {
     const { onMessage, listener, sock } = await startWebInboxMonitor({
       sendReadReceipts: false,
     });
@@ -176,7 +244,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(sock.readMessages).not.toHaveBeenCalled();
@@ -204,9 +272,9 @@ describe("web monitor inbox", () => {
     await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = onMessage.mock.calls[0][0];
-    expect(payload.chatType).toBe("group");
-    expect(payload.senderE164).toBe("+999");
+    const payload = firstInboundPayload(onMessage);
+    expect(payload.admission?.conversation.kind).toBe("group");
+    expect(payload.platform.senderE164).toBe("+999");
 
     await listener.close();
   });
@@ -292,9 +360,9 @@ describe("web monitor inbox", () => {
 
     // Should call onMessage because sender is in groupAllowFrom
     expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = onMessage.mock.calls[0][0];
-    expect(payload.chatType).toBe("group");
-    expect(payload.senderE164).toBe("+15551234567");
+    const payload = firstInboundPayload(onMessage);
+    expect(payload.admission?.conversation.kind).toBe("group");
+    expect(payload.platform.senderE164).toBe("+15551234567");
 
     await listener.close();
   });
@@ -326,8 +394,8 @@ describe("web monitor inbox", () => {
 
     // Should call onMessage because wildcard allows all senders
     expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = onMessage.mock.calls[0][0];
-    expect(payload.chatType).toBe("group");
+    const payload = firstInboundPayload(onMessage);
+    expect(payload.admission?.conversation.kind).toBe("group");
 
     await listener.close();
   });

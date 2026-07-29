@@ -1,3 +1,5 @@
+// Shared-auth websocket test helpers.
+// Opens authenticated gateway sockets and reads config snapshots in tests.
 import { expect } from "vitest";
 import { WebSocket } from "ws";
 import { connectOk, rpcReq, trackConnectChallengeNonce } from "./test-helpers.js";
@@ -42,6 +44,7 @@ export async function openAuthenticatedGatewayWs(
   return ws;
 }
 
+/** Waits for a gateway websocket to close and returns the close details. */
 export async function waitForGatewayWsClose(
   ws: WebSocket,
   timeoutMs = 10_000,
@@ -62,6 +65,7 @@ export async function waitForGatewayWsClose(
   });
 }
 
+/** Loads the current config through the gateway RPC API for mutation tests. */
 export async function loadGatewayConfig(ws: WebSocket): Promise<{
   hash: string;
   config: Record<string, unknown>;

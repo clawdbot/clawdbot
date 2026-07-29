@@ -1,3 +1,4 @@
+// Google tests cover oauth token shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   formatGoogleOauthApiKey,

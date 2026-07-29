@@ -1,3 +1,4 @@
+/** Unwraps nested default exports produced by mixed ESM/CJS plugin bundles. */
 export function unwrapDefaultModuleExport(moduleExport: unknown): unknown {
   let resolved = moduleExport;
   const seen = new Set<unknown>();

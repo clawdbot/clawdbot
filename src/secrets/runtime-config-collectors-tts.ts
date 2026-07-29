@@ -1,5 +1,6 @@
+/** Collects text-to-speech secret refs from runtime config. */
 import {
-  collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -11,10 +12,11 @@ function collectProviderApiKeyAssignment(params: {
   pathPrefix: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  contract: Record<string, unknown>;
   active?: boolean;
   inactiveReason?: string;
 }): void {
-  collectSecretInputAssignment({
+  collectRuntimeSecretInputAssignment({
     value: params.providerConfig.apiKey,
     path: `${params.pathPrefix}.providers.${params.providerId}.apiKey`,
     expected: "string",
@@ -22,12 +24,20 @@ function collectProviderApiKeyAssignment(params: {
     context: params.context,
     active: params.active,
     inactiveReason: params.inactiveReason,
+    owner: {
+      ownerKind: "capability",
+      ownerId: "tts",
+      requiredForGateway: false,
+      disposition: "isolate",
+      contract: params.contract,
+    },
     apply: (value) => {
       params.providerConfig.apiKey = value;
     },
   });
 }
 
+/** Collects provider API key SecretRefs from a TTS config block. */
 export function collectTtsApiKeyAssignments(params: {
   tts: Record<string, unknown>;
   pathPrefix: string;
@@ -48,10 +58,10 @@ export function collectTtsApiKeyAssignments(params: {
         pathPrefix: params.pathPrefix,
         defaults: params.defaults,
         context: params.context,
+        contract: params.tts,
         active: params.active,
         inactiveReason: params.inactiveReason,
       });
     }
-    return;
   }
 }

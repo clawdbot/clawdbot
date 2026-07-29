@@ -1,8 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Msteams tests cover channel plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
+import { msteamsSetupPlugin } from "./channel.setup.js";
 
 function createConfiguredMSTeamsCfg(): OpenClawConfig {
   return {
@@ -17,6 +19,58 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 }
 
 describe("msteamsPlugin", () => {
+  it("shares account and metadata contracts with the lightweight setup plugin", () => {
+    expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
+
+    for (const key of [
+      "listAccountIds",
+      "resolveAccount",
+      "defaultAccountId",
+      "setAccountEnabled",
+      "deleteAccount",
+      "resolveAllowFrom",
+      "formatAllowFrom",
+      "resolveDefaultTo",
+    ] as const) {
+      expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
+    }
+  });
+
+  it("preserves the default account and allowlist across runtime and setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          allowFrom: ["OWNER", "  Team.Member  "],
+          defaultTo: "19:team@thread.tacv2",
+        },
+      },
+    };
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      expect(plugin.config.defaultAccountId?.(cfg)).toBe("default");
+      expect(plugin.config.resolveAccount(cfg, "ignored")).toEqual({
+        accountId: "default",
+        enabled: true,
+        configured: true,
+      });
+      expect(plugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+        "OWNER",
+        "  Team.Member  ",
+      ]);
+      expect(
+        plugin.config.formatAllowFrom?.({
+          cfg,
+          accountId: "default",
+          allowFrom: ["OWNER", "  Team.Member  "],
+        }),
+      ).toEqual(["owner", "team.member"]);
+      expect(plugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+        "19:team@thread.tacv2",
+      );
+    }
+  });
+
   it("exposes approval auth through approvalCapability", () => {
     expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
   });
@@ -26,17 +80,25 @@ describe("msteamsPlugin", () => {
       cfg: createConfiguredMSTeamsCfg(),
     })?.actions;
 
-    expect(actions).toEqual(
-      expect.arrayContaining([
-        "upload-file",
-        "member-info",
-        "channel-list",
-        "channel-info",
-        "addParticipant",
-        "removeParticipant",
-        "renameGroup",
-      ]),
-    );
+    expect(actions).toEqual([
+      "upload-file",
+      "poll",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "read",
+      "react",
+      "reactions",
+      "search",
+      "member-info",
+      "channel-list",
+      "channel-info",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+    ]);
   });
 
   it("reuses the shared Teams target-id matcher for explicit targets", () => {
@@ -45,6 +107,26 @@ describe("msteamsPlugin", () => {
     expect(looksLikeId?.("29:1a2b3c4d5e6f")).toBe(true);
     expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
     expect(looksLikeId?.("user:Jane Doe")).toBe(false);
+  });
+
+  it("recognizes provider-prefixed explicit targets without claiming display names", () => {
+    const messaging = msteamsPlugin.messaging;
+    const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
+
+    expect(
+      ["teams", "msteams"].map((provider) => {
+        const target = `${provider}:user:${aadUserId}`;
+        return {
+          explicit: messaging?.targetResolver?.looksLikeId?.(target),
+          normalized: messaging?.normalizeTarget?.(target),
+        };
+      }),
+    ).toEqual([
+      { explicit: true, normalized: `user:${aadUserId}` },
+      { explicit: true, normalized: `user:${aadUserId}` },
+    ]);
+    expect(messaging?.targetResolver?.looksLikeId?.("teams:user:Jane Doe")).toBe(false);
+    expect(messaging?.targetResolver?.looksLikeId?.("msteams:user:Jane Doe")).toBe(false);
   });
 });
 
@@ -67,6 +149,15 @@ describe("msteams config schema", () => {
     }
   });
 
+  it("accepts the opt-in Graph media fallback", () => {
+    const res = MSTeamsConfigSchema.safeParse({ graphMediaFallback: true });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.graphMediaFallback).toBe(true);
+    }
+  });
+
   it("accepts replyStyle at global/team/channel levels", () => {
     const res = MSTeamsConfigSchema.safeParse({
       replyStyle: "top-level",
@@ -86,6 +177,70 @@ describe("msteams config schema", () => {
       expect(res.data.teams?.team123?.replyStyle).toBe("thread");
       expect(res.data.teams?.team123?.channels?.chan456?.replyStyle).toBe("top-level");
     }
+  });
+
+  it("accepts Teams SDK cloud and serviceUrl configuration", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "USGovDoD",
+      serviceUrl: "https://smba.infra.dod.teams.microsoft.us/teams",
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cloud).toBe("USGovDoD");
+      expect(res.data.serviceUrl).toBe("https://smba.infra.dod.teams.microsoft.us/teams");
+    }
+  });
+
+  it("rejects unsupported Teams serviceUrl hosts", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "USGovDoD",
+      serviceUrl: "https://dod.example.mil/teams",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("accepts China cloud without a configured global serviceUrl", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "China",
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts Azure China Bot Framework serviceUrl hosts", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "China",
+      serviceUrl: "https://msteams.botframework.azure.cn/teams",
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects non-China serviceUrl hosts when China cloud is configured", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "China",
+      serviceUrl: "https://smba.trafficmanager.net/teams",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects Azure China Bot Framework serviceUrl hosts without China cloud", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      serviceUrl: "https://msteams.botframework.azure.cn/teams",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("requires serviceUrl with non-public Teams clouds", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "USGov",
+    });
+
+    expect(res.success).toBe(false);
   });
 
   it("rejects invalid replyStyle", () => {

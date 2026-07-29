@@ -1,3 +1,4 @@
+// Verifies bundled package channel metadata stays aligned with catalogs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,10 +6,12 @@ import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/hel
 
 vi.mock("./bundled-dir.js", () => ({
   resolveBundledPluginsDir: vi.fn(),
+  resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { findBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -26,6 +29,7 @@ afterEach(() => {
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
   }
   cleanupTempDirs(tempDirs);
+  clearPluginMetadataLifecycleCaches();
   vi.restoreAllMocks();
   vi.mocked(resolveBundledPluginsDir).mockReset();
 });
@@ -78,7 +82,7 @@ describe("bundled package channel metadata", () => {
     });
   });
 
-  it("reflects package channel metadata edits on the next read", () => {
+  it("reflects package channel metadata edits after the metadata lifecycle is cleared", () => {
     const root = makeTempRepoRoot(tempDirs, "bpcm-fresh-");
     const extensionsRoot = path.join(root, "dist", "extensions");
     const packagePath = path.join(extensionsRoot, "matrix", "package.json");
@@ -115,6 +119,7 @@ describe("bundled package channel metadata", () => {
       },
     });
 
+    clearPluginMetadataLifecycleCaches();
     expect(findBundledPackageChannelMetadata("matrix")?.label).toBe("After");
   });
 });

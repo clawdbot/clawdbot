@@ -1,8 +1,10 @@
+// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -10,20 +12,20 @@ export type SignalRpcOptions = {
   maxResponseBytes?: number;
 };
 
-export type SignalRpcError = {
+type SignalRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type SignalRpcResponse<T> = {
+type SignalRpcResponse<T> = {
   jsonrpc?: string;
   result?: T;
   error?: SignalRpcError;
   id?: string | number | null;
 };
 
-export type SignalSseEvent = {
+type SignalSseEvent = {
   event?: string;
   data?: string;
   id?: string;
@@ -66,7 +68,12 @@ function parseSignalBaseUrl(url: string): URL {
 }
 
 function resolveSignalEndpointUrl(baseUrl: string, pathname: string): URL {
-  return new URL(pathname, parseSignalBaseUrl(baseUrl));
+  const parsed = parseSignalBaseUrl(baseUrl);
+  const basePath = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+  parsed.pathname = `${basePath}${pathname.replace(/^\/+/, "")}`;
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed;
 }
 
 function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {
@@ -106,7 +113,7 @@ function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
   }
-  return timeoutMs;
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
 }
 
 function requestSignalHttpText(
@@ -120,13 +127,13 @@ function requestSignalHttpText(
   },
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     let settled = false;
-    let request: ClientRequest | undefined;
     const deadline = setTimeout(() => {
-      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${options.timeoutMs}ms`));
-    }, options.timeoutMs);
+      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
+    }, timeoutMs);
     deadline.unref?.();
     const cleanup = () => {
       clearTimeout(deadline);
@@ -138,7 +145,7 @@ function requestSignalHttpText(
       }
       settled = true;
       cleanup();
-      reject(error);
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
     const resolveOnce = (response: SignalHttpResponse) => {
       if (settled) {
@@ -149,7 +156,7 @@ function requestSignalHttpText(
       resolve(response);
     };
     const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
-    request = client.request(
+    const request: ClientRequest | undefined = client.request(
       url,
       {
         method: options.method,
@@ -180,8 +187,8 @@ function requestSignalHttpText(
         });
       },
     );
-    request.setTimeout(options.timeoutMs, () => {
-      request?.destroy(new Error(`Signal HTTP timed out after ${options.timeoutMs}ms`));
+    request.setTimeout(timeoutMs, () => {
+      request?.destroy(new Error(`Signal HTTP timed out after ${timeoutMs}ms`));
     });
     request.on("error", rejectOnce);
     if (options.body !== undefined) {
@@ -265,7 +272,6 @@ function openSignalEventStream(
     let settled = false;
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
-    let request: ClientRequest;
     const effectiveTimeoutMs = normalizeSignalSseTimeoutMs(timeoutMs);
     const headerDeadline =
       effectiveTimeoutMs === null
@@ -291,9 +297,9 @@ function openSignalEventStream(
       }
       settled = true;
       cleanup();
-      reject(error);
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
-    request = client.request(
+    const request: ClientRequest = client.request(
       url,
       {
         method: "GET",
@@ -336,7 +342,7 @@ export async function streamSignalEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: SignalSseEvent) => void;
+  onEvent: (event: SignalSseEvent) => unknown;
 }): Promise<void> {
   const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
   if (params.account) {
@@ -354,11 +360,11 @@ export async function streamSignalEvents(params: {
   let currentEvent: SignalSseEvent = {};
   let currentEventDataBytes = 0;
 
-  const flushEvent = () => {
+  const flushEvent = async () => {
     if (!currentEvent.data && !currentEvent.event && !currentEvent.id) {
       return;
     }
-    params.onEvent({
+    await params.onEvent({
       event: currentEvent.event,
       data: currentEvent.data,
       id: currentEvent.id,
@@ -367,15 +373,18 @@ export async function streamSignalEvents(params: {
     currentEventDataBytes = 0;
   };
 
-  const processLine = (line: string) => {
+  const processLine = async (line: string) => {
     if (line === "") {
-      flushEvent();
+      await flushEvent();
       return;
     }
     if (line.startsWith(":")) {
       return;
     }
     const [rawField, ...rest] = line.split(":");
+    if (rawField === undefined) {
+      return;
+    }
     const field = rawField.trim();
     const rawValue = rest.join(":");
     const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
@@ -393,7 +402,7 @@ export async function streamSignalEvents(params: {
     }
   };
 
-  const drainCompleteLines = () => {
+  const drainCompleteLines = async () => {
     let lineEnd = buffer.indexOf("\n");
     while (lineEnd !== -1) {
       let line = buffer.slice(0, lineEnd);
@@ -401,7 +410,7 @@ export async function streamSignalEvents(params: {
       if (line.endsWith("\r")) {
         line = line.slice(0, -1);
       }
-      processLine(line);
+      await processLine(line);
       lineEnd = buffer.indexOf("\n");
     }
     bufferedBytes = Buffer.byteLength(buffer, "utf8");
@@ -415,7 +424,7 @@ export async function streamSignalEvents(params: {
         throw new Error("Signal SSE buffer exceeded size limit");
       }
       buffer += decoder.decode(value, { stream: true });
-      drainCompleteLines();
+      await drainCompleteLines();
     }
     const tail = decoder.decode();
     if (tail) {
@@ -425,10 +434,10 @@ export async function streamSignalEvents(params: {
     if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) {
       throw new Error("Signal SSE buffer exceeded size limit");
     }
-    drainCompleteLines();
+    await drainCompleteLines();
   } finally {
     cleanup();
   }
 
-  flushEvent();
+  await flushEvent();
 }

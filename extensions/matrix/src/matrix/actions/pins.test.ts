@@ -1,3 +1,4 @@
+// Matrix tests cover pins plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { listMatrixPins, pinMatrixMessage, unpinMatrixMessage } from "./pins.js";
@@ -65,10 +66,15 @@ describe("matrix pins actions", () => {
 
     expect(result.pinned).toEqual(["$a", "$missing"]);
     expect(result.events).toEqual([
-      expect.objectContaining({
-        eventId: "$a",
+      {
+        attachment: undefined,
         body: "hello",
-      }),
+        eventId: "$a",
+        msgtype: "m.text",
+        relatesTo: undefined,
+        sender: "@alice:example.org",
+        timestamp: 123,
+      },
     ]);
   });
 });

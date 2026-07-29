@@ -1,15 +1,17 @@
+// Discord plugin module implements rest errors behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
+import { parseDiscordRetryAfterBodySeconds } from "../retry-after.js";
+
+const DISCORD_UNKNOWN_VOICE_STATE = 10065;
+
 export function readDiscordCode(body: unknown): number | undefined {
   const value =
     body && typeof body === "object" && "code" in body
       ? (body as { code?: unknown }).code
       : undefined;
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    return Number(value);
-  }
-  return undefined;
+  return parseStrictNonNegativeInteger(value);
 }
 
 export function readDiscordMessage(body: unknown, fallback: string): string {
@@ -20,24 +22,15 @@ export function readDiscordMessage(body: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
-function readRetryAfterHeader(value: string | null, now = Date.now()): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) {
-    return seconds;
-  }
-  const retryAt = Date.parse(value);
-  return Number.isFinite(retryAt) ? (retryAt - now) / 1000 : undefined;
-}
-
-function coerceRetryAfterSeconds(value: unknown): number | undefined {
-  if (typeof value !== "number" && typeof value !== "string") {
-    return undefined;
-  }
-  const seconds = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(0, seconds) : undefined;
+export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
+  const discordCode =
+    err && typeof err === "object" && "discordCode" in err
+      ? parseStrictNonNegativeInteger(err.discordCode)
+      : undefined;
+  return (
+    discordCode === DISCORD_UNKNOWN_VOICE_STATE ||
+    /unknown voice state/i.test(formatErrorMessage(err))
+  );
 }
 
 export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {
@@ -46,8 +39,8 @@ export function readRetryAfter(body: unknown, response: Response, fallbackSecond
       ? (body as { retry_after?: unknown }).retry_after
       : undefined;
   return (
-    coerceRetryAfterSeconds(bodyValue) ??
-    coerceRetryAfterSeconds(readRetryAfterHeader(response.headers.get("Retry-After"))) ??
+    parseDiscordRetryAfterBodySeconds(bodyValue) ??
+    parseRetryAfterHeaderSeconds(response.headers.get("Retry-After")) ??
     fallbackSeconds
   );
 }

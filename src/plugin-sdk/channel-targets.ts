@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for channel target parsing, matching, and allowlist helpers.
+ */
 export {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,

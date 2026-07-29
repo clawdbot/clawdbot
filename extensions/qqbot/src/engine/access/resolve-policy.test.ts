@@ -1,3 +1,4 @@
+// Qqbot tests cover resolve policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveQQBotEffectivePolicies } from "./resolve-policy.js";
 
@@ -36,9 +37,10 @@ describe("resolveQQBotEffectivePolicies", () => {
 
   describe("explicit policy precedence", () => {
     it("honours explicit dmPolicy over inference", () => {
-      expect(
-        resolveQQBotEffectivePolicies({ allowFrom: ["USER1"], dmPolicy: "open" }),
-      ).toMatchObject({ dmPolicy: "open" });
+      expect(resolveQQBotEffectivePolicies({ allowFrom: ["USER1"], dmPolicy: "open" })).toEqual({
+        dmPolicy: "open",
+        groupPolicy: "allowlist",
+      });
     });
 
     it("honours explicit groupPolicy over inference", () => {
@@ -47,12 +49,13 @@ describe("resolveQQBotEffectivePolicies", () => {
           allowFrom: ["USER1"],
           groupPolicy: "disabled",
         }),
-      ).toMatchObject({ groupPolicy: "disabled" });
+      ).toEqual({ dmPolicy: "allowlist", groupPolicy: "disabled" });
     });
 
     it("allows dmPolicy=disabled to cut off DM entirely", () => {
-      expect(resolveQQBotEffectivePolicies({ dmPolicy: "disabled" })).toMatchObject({
+      expect(resolveQQBotEffectivePolicies({ dmPolicy: "disabled" })).toEqual({
         dmPolicy: "disabled",
+        groupPolicy: "open",
       });
     });
   });

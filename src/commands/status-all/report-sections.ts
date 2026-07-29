@@ -1,4 +1,7 @@
-import type { RenderTableOptions, TableColumn } from "../../terminal/table.js";
+// Converts status data into reusable report sections.
+// Section builders keep table column definitions close to the rows they format.
+
+import type { RenderTableOptions, TableColumn } from "../../../packages/terminal-core/src/table.js";
 import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import {
   buildStatusAgentTableRows,
@@ -10,6 +13,7 @@ import type { StatusReportSection } from "./text-report.js";
 
 type TableRenderer = (input: RenderTableOptions) => string;
 
+/** Builds the top-level status overview table section. */
 export function buildStatusOverviewSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -25,6 +29,7 @@ export function buildStatusOverviewSection(params: {
   };
 }
 
+/** Builds the channel summary section with gateway issue overlays. */
 export function buildStatusChannelsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -51,6 +56,7 @@ export function buildStatusChannelsSection(params: {
     width: params.width,
     renderTable: params.renderTable,
     columns: statusChannelsTableColumns.map((column) =>
+      // The status-all report has more horizontal space than compact status output.
       column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
     ),
     rows: buildStatusChannelsTableRows({
@@ -65,6 +71,7 @@ export function buildStatusChannelsSection(params: {
   } as StatusReportSection;
 }
 
+/** Wraps preformatted channel rows into a status report section. */
 export function buildStatusChannelsTableSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -81,6 +88,7 @@ export function buildStatusChannelsTableSection(params: {
   };
 }
 
+/** Builds one account-detail section per configured channel. */
 export function buildStatusChannelDetailsSections(params: {
   details: Array<{
     title: string;
@@ -101,6 +109,7 @@ export function buildStatusChannelDetailsSections(params: {
   });
 }
 
+/** Builds the agent sessions/bootstrap summary table section. */
 export function buildStatusAgentsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -131,6 +140,7 @@ export function buildStatusAgentsSection(params: {
   };
 }
 
+/** Builds the session table section used by status variants that include recent sessions. */
 export function buildStatusSessionsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -147,6 +157,7 @@ export function buildStatusSessionsSection(params: {
   };
 }
 
+/** Builds the optional system-events section, skipped when no rows are present. */
 export function buildStatusSystemEventsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -165,6 +176,7 @@ export function buildStatusSystemEventsSection(params: {
   };
 }
 
+/** Builds the optional health table section. */
 export function buildStatusHealthSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -182,6 +194,7 @@ export function buildStatusHealthSection(params: {
   };
 }
 
+/** Builds the optional usage text section. */
 export function buildStatusUsageSection(params: { usageLines?: string[] }): StatusReportSection {
   return {
     kind: "lines",

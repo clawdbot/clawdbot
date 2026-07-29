@@ -2,8 +2,8 @@
  * String normalization and record-coercion helpers.
  *
  * These are self-contained re-implementations of the functions that
- * the plugin previously imported from `openclaw/plugin-sdk/text-runtime`
- * and `openclaw/plugin-sdk/text-runtime` (via record-coerce / string-coerce).
+ * the plugin previously imported from broad SDK text barrels
+ * and shared record/string coercion helpers.
  *
  * core/ modules use these instead of importing plugin-sdk, keeping the
  * shared layer portable between the built-in and standalone versions.
@@ -29,7 +29,7 @@ export function normalizeOptionalString(value: unknown): string | undefined {
  * Stringify then normalize.  Accepts `string | number | boolean | bigint`.
  * Returns `undefined` for objects, arrays, null, and undefined.
  */
-export function normalizeStringifiedOptionalString(value: unknown): string | undefined {
+function normalizeStringifiedOptionalString(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -37,6 +37,12 @@ export function normalizeStringifiedOptionalString(value: unknown): string | und
     return normalizeOptionalString(String(value));
   }
   return undefined;
+}
+
+export function normalizeStringifiedEntries(values?: ReadonlyArray<unknown>): string[] {
+  return (values ?? [])
+    .map((entry) => normalizeStringifiedOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 /** Return the trimmed lowercase string or `undefined`. */

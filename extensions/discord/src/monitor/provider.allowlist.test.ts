@@ -1,3 +1,5 @@
+// Discord tests cover provider.allowlist plugin behavior.
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as resolveChannelsModule from "../resolve-channels.js";
@@ -44,6 +46,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
       runtime,
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
     });
 
     expect(result.allowFrom).toEqual(["111", "*"]);
@@ -76,6 +79,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
       runtime,
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
     });
 
     const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
@@ -84,7 +88,8 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).toContain(
       "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
     );
-    expect(logs).toContain("discord users resolved: 387→Peter (id:387)");
+    expect(logs).toContain("discord users resolved: 387→Peter");
+    expect(logs).not.toContain("(id:387)");
   });
 
   it("groups resolved discord channel aliases under one target line", async () => {
@@ -135,6 +140,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
       runtime,
+      discordConfig: {} as DiscordAccountConfig,
     });
 
     const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
@@ -145,5 +151,69 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).toContain(
       "1456350064065904867/1456744319972282449 (guild:Friends of the Crustacean 🦞🤝; channel:maintainers)",
     );
+  });
+
+  it("keeps user allowlist names unresolved unless name matching is enabled", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const result = await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: ["Alice", "111", "*"],
+      guildEntries: {
+        "*": {
+          users: ["Bob", "999"],
+          channels: {
+            "*": {
+              users: ["Carol", "888"],
+            },
+          },
+        },
+      },
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+      discordConfig: {} as DiscordAccountConfig,
+    });
+
+    expect(result.allowFrom).toEqual(["Alice", "111", "*"]);
+    expect(result.guildEntries?.["*"]?.users).toEqual(["Bob", "999"]);
+    expect(result.guildEntries?.["*"]?.channels?.["*"]?.users).toEqual(["Carol", "888"]);
+    expect(resolveUsersModule.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
+  });
+
+  it("still resolves guild and channel ids when name matching is disabled", async () => {
+    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
+      {
+        input: "ops/general",
+        resolved: true,
+        guildId: "145",
+        guildName: "Ops",
+        channelId: "246",
+        channelName: "general",
+      },
+    ]);
+    const runtime = createNonExitingRuntimeEnv();
+
+    const result = await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: ["Alice"],
+      guildEntries: {
+        ops: {
+          users: ["Bob"],
+          channels: {
+            general: {
+              users: ["Carol"],
+            },
+          },
+        },
+      },
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+      discordConfig: {} as DiscordAccountConfig,
+    });
+
+    expect(result.allowFrom).toEqual(["Alice"]);
+    expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
+    expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
+    expect(resolveChannelsModule.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
+    expect(resolveUsersModule.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
   });
 });

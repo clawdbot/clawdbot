@@ -1,20 +1,35 @@
+// Verifies OpenClaw plugin tools are resolved with browser/runtime context.
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
 }));
+const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
 
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
 }));
 
+function firstResolvePluginToolsParams(): Record<string, unknown> {
+  // Captures the plugin runtime contract passed from OpenClaw tool resolution.
+  const call = hoisted.resolvePluginTools.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected plugin tool resolution");
+  }
+  return call[0] as Record<string, unknown>;
+}
+
 describe("createOpenClawTools browser plugin integration", () => {
   afterEach(() => {
     hoisted.resolvePluginTools.mockReset();
+    vi.unstubAllEnvs();
     clearSecretsRuntimeSnapshot();
     resetConfigRuntimeState();
   });
@@ -112,8 +127,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     const browserTool = tools.find((tool) => tool.name === "browser");
-    expect(browserTool).toBeDefined();
-    if (!browserTool) {
+    if (browserTool === undefined) {
       throw new Error("expected browser tool");
     }
 
@@ -135,11 +149,175 @@ describe("createOpenClawTools browser plugin integration", () => {
       resolvedConfig: config,
     });
 
-    expect(hoisted.resolvePluginTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
+    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
+    expect(firstResolvePluginToolsParams().allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("forwards auth profile helpers to plugin resolution and context", async () => {
+    let capturedParams:
+      | {
+          hasAuthForProvider?: (providerId: string) => boolean;
+          context?: {
+            hasAuthForProvider?: (providerId: string) => boolean;
+            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+          };
+        }
+      | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      capturedParams = params as typeof capturedParams;
+      return [];
+    });
+    const config = {
+      auth: {
+        order: {
+          xai: ["xai-profile"],
+        },
+      },
+      plugins: {
+        allow: ["xai"],
+      },
+    } as OpenClawConfig;
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        agentDir: TEST_AGENT_DIR,
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "xai-excluded": {
+              type: "api_key",
+              provider: "xai",
+              key: "xai-excluded-key", // pragma: allowlist secret
+            },
+            "xai-profile": {
+              type: "api_key",
+              provider: "xai",
+              key: "xai-profile-key", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+      resolvedConfig: config,
+    });
+
+    expect(capturedParams?.hasAuthForProvider?.("xai")).toBe(true);
+    expect(capturedParams?.context?.hasAuthForProvider?.("xai")).toBe(true);
+    await expect(capturedParams?.context?.resolveApiKeyForProvider?.("xai")).resolves.toBe(
+      "xai-profile-key",
     );
+  });
+
+  it("keeps provider availability and credential resolution aligned for env-only auth", async () => {
+    const envName = "OPENCLAW_PLUGIN_TOOL_AUTH_TEST_KEY";
+    vi.stubEnv(envName, "env-only-key");
+    let capturedParams:
+      | {
+          hasAuthForProvider?: (providerId: string) => boolean;
+          context?: {
+            hasAuthForProvider?: (providerId: string) => boolean;
+            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+          };
+        }
+      | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      capturedParams = params as typeof capturedParams;
+      return [];
+    });
+    const config = {
+      models: {
+        providers: {
+          acme: {
+            baseUrl: "https://example.com/v1",
+            apiKey: `\${${envName}}`,
+            models: [],
+          },
+        },
+      },
+      plugins: { allow: ["xai"] },
+    } as OpenClawConfig;
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        agentDir: TEST_AGENT_DIR,
+        workspaceDir: "/workspace",
+        authProfileStore: { version: 1, profiles: {} },
+      },
+      resolvedConfig: config,
+    });
+
+    expect(capturedParams?.hasAuthForProvider?.("acme")).toBe(true);
+    expect(capturedParams?.context?.hasAuthForProvider?.("acme")).toBe(true);
+    await expect(capturedParams?.context?.resolveApiKeyForProvider?.("acme")).resolves.toBe(
+      "env-only-key",
+    );
+  });
+
+  it("keeps ordered profile precedence when runtime auth is also available", async () => {
+    vi.stubEnv("ACME_API_KEY", "env-key");
+    let resolveApiKeyForProvider: ((providerId: string) => Promise<string | undefined>) | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      resolveApiKeyForProvider = (
+        params as {
+          context?: {
+            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+          };
+        }
+      ).context?.resolveApiKeyForProvider;
+      return [];
+    });
+    const config = {
+      auth: { order: { acme: ["acme:profile"] } },
+      models: {
+        providers: {
+          acme: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "${ACME_API_KEY}",
+            models: [],
+          },
+        },
+      },
+      plugins: { allow: ["xai"] },
+    } as OpenClawConfig;
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        agentDir: TEST_AGENT_DIR,
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "acme:profile": {
+              type: "api_key",
+              provider: "acme",
+              key: "profile-key", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+      resolvedConfig: config,
+    });
+
+    await expect(resolveApiKeyForProvider?.("acme")).resolves.toBe("profile-key");
+  });
+
+  it("preserves ungated plugin resolution when no authoritative auth store is supplied", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const config = { plugins: { allow: ["browser"] } } as OpenClawConfig;
+
+    resolveOpenClawPluginToolsForOptions({
+      options: { config, agentDir: "/unread-auth-store" },
+      resolvedConfig: config,
+    });
+
+    const params = firstResolvePluginToolsParams() as {
+      hasAuthForProvider?: unknown;
+      context?: { hasAuthForProvider?: unknown; resolveApiKeyForProvider?: unknown };
+    };
+    expect(params.hasAuthForProvider).toBeUndefined();
+    expect(params.context?.hasAuthForProvider).toBeUndefined();
+    expect(params.context?.resolveApiKeyForProvider).toBeUndefined();
   });
 
   it("forwards plugin tool deny policy to plugin resolution", () => {
@@ -159,15 +337,14 @@ describe("createOpenClawTools browser plugin integration", () => {
       resolvedConfig: config,
     });
 
-    expect(hoisted.resolvePluginTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolAllowlist: ["*"],
-        toolDenylist: ["browser"],
-      }),
-    );
+    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
+    const params = firstResolvePluginToolsParams();
+    expect(params.toolAllowlist).toEqual(["*"]);
+    expect(params.toolDenylist).toEqual(["browser"]);
   });
 
   it("does not pass a stale active snapshot as plugin runtime config for a resolved run config", () => {
+    // Resolved run config must win over any process-global runtime snapshot.
     const staleSourceConfig = {
       plugins: {
         allow: ["old-plugin"],
@@ -183,9 +360,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         allow: ["browser"],
       },
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     } as OpenClawConfig;
     let capturedRuntimeConfig: OpenClawConfig | undefined;
@@ -198,6 +373,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       sourceConfig: staleSourceConfig,
       config: staleRuntimeConfig,
       authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -231,9 +407,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         allow: ["browser"],
       },
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     } as OpenClawConfig;
     let capturedRuntimeConfig: OpenClawConfig | undefined;

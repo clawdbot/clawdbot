@@ -1,8 +1,22 @@
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+/**
+ * Shared candidate and attempt types for model fallback execution.
+ */
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 
+// Shared model fallback record types used by selection, observation, and retry
+// reporting.
 export type ModelCandidate = {
   provider: string;
   model: string;
+};
+
+export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";
+export type ModelFallbackRouteResolution = "raw" | "resolved";
+
+/** A runnable route plus the selection edge and resolution state it arrived with. */
+export type ModelFallbackCandidate = ModelCandidate & {
+  routeOrigin: ModelFallbackRouteOrigin;
+  routeResolution: ModelFallbackRouteResolution;
 };
 
 export type FallbackAttempt = {
@@ -10,6 +24,7 @@ export type FallbackAttempt = {
   model: string;
   error: string;
   reason?: FailoverReason;
+  authMode?: string;
   status?: number;
   code?: string;
 };

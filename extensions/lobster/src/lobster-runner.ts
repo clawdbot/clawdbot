@@ -1,10 +1,7 @@
-import { readFileSync } from "node:fs";
+// Lobster plugin module implements lobster runner behavior.
 import { stat } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { pathToFileURL } from "node:url";
-import { installLobsterAjvCompileCache } from "./lobster-ajv-cache.js";
 
 export type LobsterEnvelope =
   | {
@@ -97,44 +94,7 @@ type EmbeddedToolRuntime = {
 
 type LoadEmbeddedToolRuntime = () => Promise<EmbeddedToolRuntime>;
 
-type LoadEmbeddedToolRuntimeFromPackageOptions = {
-  importModule?: (specifier: string) => Promise<Partial<EmbeddedToolRuntime>>;
-  resolvePackageEntry?: (specifier: string) => string;
-};
-
-const lobsterRequire = createRequire(import.meta.url);
-
-function toEmbeddedToolRuntime(
-  moduleExports: Partial<EmbeddedToolRuntime>,
-  source: string,
-): EmbeddedToolRuntime {
-  const { runToolRequest, resumeToolRequest } = moduleExports;
-  if (typeof runToolRequest === "function" && typeof resumeToolRequest === "function") {
-    return { runToolRequest, resumeToolRequest };
-  }
-  throw new Error(`${source} does not export Lobster embedded runtime functions`);
-}
-
-function findLobsterPackageRoot(resolvedEntryPath: string): string {
-  let dir = path.dirname(resolvedEntryPath);
-  while (true) {
-    const packageJsonPath = path.join(dir, "package.json");
-    try {
-      const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { name?: string };
-      if (parsed.name === "@clawdbot/lobster") {
-        return dir;
-      }
-    } catch {
-      // Keep walking until the installed package root is found.
-    }
-
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      throw new Error(`Could not locate @clawdbot/lobster package root from ${resolvedEntryPath}`);
-    }
-    dir = parent;
-  }
-}
+const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
 function normalizeForCwdSandbox(p: string): string {
   const normalized = path.normalize(p);
@@ -229,21 +189,40 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
     throw new Error("Workflow path is not a file");
   }
   const ext = path.extname(resolved).toLowerCase();
-  if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
+  if (!workflowExts.has(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }
   return resolved;
 }
 
+function isMissingPathError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function hasWorkflowFileExtension(candidate: string) {
+  return workflowExts.has(path.extname(candidate).toLowerCase());
+}
+
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
-  if (!trimmed || trimmed.includes("|")) {
+  if (!trimmed || trimmed.includes("|") || !hasWorkflowFileExtension(trimmed)) {
     return null;
+  }
+  if (!/\s/.test(trimmed)) {
+    return await resolveWorkflowFile(trimmed, cwd);
   }
   try {
     return await resolveWorkflowFile(trimmed, cwd);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -286,49 +265,20 @@ async function withTimeout<T>(
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
 }
 
-export async function loadEmbeddedToolRuntimeFromPackage(
-  options: LoadEmbeddedToolRuntimeFromPackageOptions = {},
-): Promise<EmbeddedToolRuntime> {
-  installLobsterAjvCompileCache();
-
-  const importModule =
-    options.importModule ??
-    (async (specifier: string) => (await import(specifier)) as Partial<EmbeddedToolRuntime>);
-  const resolvePackageEntry =
-    options.resolvePackageEntry ?? ((specifier: string) => lobsterRequire.resolve(specifier));
-
-  let coreLoadError: unknown;
-  try {
-    const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
-    return toEmbeddedToolRuntime(await importModule(coreSpecifier), "@clawdbot/lobster/core");
-  } catch (error) {
-    coreLoadError = error;
-  }
-
-  let fallbackLoadError: unknown;
-  try {
-    const packageEntryPath = resolvePackageEntry("@clawdbot/lobster");
-    const packageRoot = findLobsterPackageRoot(packageEntryPath);
-    const coreRuntimeUrl = pathToFileURL(path.join(packageRoot, "dist/src/core/index.js")).href;
-    return toEmbeddedToolRuntime(await importModule(coreRuntimeUrl), coreRuntimeUrl);
-  } catch (error) {
-    fallbackLoadError = error;
-  }
-
-  throw new Error("Failed to load the Lobster embedded runtime", {
-    cause: new AggregateError(
-      [coreLoadError, fallbackLoadError],
-      "Both Lobster embedded runtime load paths failed",
-    ),
-  });
+async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
+  // Joined specifier keeps bundlers from statically resolving
+  // @clawdbot/lobster/core; the plugin's declared @clawdbot/lobster dependency
+  // provides it at runtime, so it is a used direct dependency.
+  const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
+  return (await import(coreSpecifier)) as EmbeddedToolRuntime;
 }
 
 export function createEmbeddedLobsterRunner(options?: {
@@ -392,4 +342,18 @@ export function createEmbeddedLobsterRunner(options?: {
       });
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

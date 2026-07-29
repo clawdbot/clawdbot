@@ -1,6 +1,18 @@
+// Qqbot plugin module implements outbound types behavior.
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { GatewayAccount } from "../types.js";
 
-export interface OutboundContext {
+export type OutboundMediaAccessContext = {
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    workspaceDir?: string;
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+};
+
+export interface OutboundContext extends OutboundMediaAccessContext {
   to: string;
   text: string;
   accountId?: string | null;
@@ -28,6 +40,7 @@ export const DEFAULT_MEDIA_SEND_ERROR = "发送失败，请稍后重试。";
 export interface OutboundResult {
   channel: string;
   messageId?: string;
+  receipt?: MessageReceipt;
   timestamp?: string | number;
   error?: string;
   errorCode?: OutboundErrorCode;
@@ -36,7 +49,7 @@ export interface OutboundResult {
 }
 
 /** Normalized target information for media sends. */
-export interface MediaTargetContext {
+export interface MediaTargetContext extends OutboundMediaAccessContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;

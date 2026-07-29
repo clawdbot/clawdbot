@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Duckduckgo helper module supports config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_DDG_SAFE_SEARCH = "moderate";
+const DEFAULT_DDG_SAFE_SEARCH = "moderate";
 
 export type DdgSafeSearch = "strict" | "moderate" | "off";
 

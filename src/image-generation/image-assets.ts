@@ -1,12 +1,20 @@
+/** Converts image provider base64/data-url payloads into generated or source image assets. */
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js";
 
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 const DEFAULT_IMAGE_FILE_PREFIX = "image";
+const INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES = 1024 * 1024;
 
+// Image asset helpers for provider responses and source uploads. They normalize
+// base64/data-url inputs into in-memory assets with predictable filenames.
+/** Result of conservative image MIME sniffing for provider responses. */
 export type ImageMimeTypeDetection = {
   mimeType: string;
   extension: string;
@@ -19,9 +27,30 @@ export type OpenAiCompatibleImageResponseEntry = {
 };
 
 export type OpenAiCompatibleImageResponsePayload = {
-  data?: OpenAiCompatibleImageResponseEntry[];
+  data?: unknown;
 };
 
+export function resolveInlineImageJsonResponseMaxBytes(
+  maxImages: number,
+  maxImageBytes: number,
+): number {
+  const imageCount = Number.isFinite(maxImages) ? Math.max(1, Math.trunc(maxImages)) : 1;
+  const imageBytes =
+    Number.isFinite(maxImageBytes) && maxImageBytes > 0
+      ? Math.max(1, Math.trunc(maxImageBytes))
+      : MAX_IMAGE_BYTES;
+  const maxBase64Bytes = Math.ceil((imageBytes * imageCount * 4) / 3);
+  return maxBase64Bytes + INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES;
+}
+
+function throwMalformedImageResponse(message: string | undefined): never | undefined {
+  if (message) {
+    throw new Error(message);
+  }
+  return undefined;
+}
+
+/** Maps an image MIME type to a stable filename extension. */
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
   fallback = "png",
@@ -40,6 +69,8 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
+// Lightweight magic-byte sniffing for providers that omit mime_type. Keep this
+// conservative so unknown formats still use the configured default mime type.
 export function sniffImageMimeType(
   buffer: Buffer,
   fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
@@ -93,9 +124,15 @@ export function parseImageDataUrl(
   if (!mimeType || !base64) {
     return undefined;
   }
-  return { mimeType, base64 };
+  const canonicalBase64 = canonicalizeBase64(base64);
+  if (!canonicalBase64) {
+    return undefined;
+  }
+  return { mimeType, base64: canonicalBase64 };
 }
 
+// Public conversion path for OpenAI-compatible base64 payloads. Invalid or
+// empty base64 returns undefined so callers can choose strict/lenient handling.
 export function generatedImageAssetFromBase64(params: {
   base64: string | undefined;
   index: number;
@@ -106,10 +143,11 @@ export function generatedImageAssetFromBase64(params: {
   sniffMimeType?: boolean;
 }): GeneratedImageAsset | undefined {
   const base64 = normalizeOptionalString(params.base64);
-  if (!base64) {
+  const canonicalBase64 = base64 ? canonicalizeBase64(base64) : undefined;
+  if (!canonicalBase64) {
     return undefined;
   }
-  const buffer = Buffer.from(base64, "base64");
+  const buffer = Buffer.from(canonicalBase64, "base64");
   const explicitMimeType = normalizeOptionalString(params.mimeType);
   const defaultMimeType =
     normalizeOptionalString(params.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
@@ -169,18 +207,45 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
 }
 
 export function parseOpenAiCompatibleImageResponse(
-  payload: OpenAiCompatibleImageResponsePayload,
+  payload: unknown,
   options: {
     defaultMimeType?: string;
     fileNamePrefix?: string;
+    malformedResponseError?: string;
     sniffMimeType?: boolean;
   } = {},
 ): GeneratedImageAsset[] {
-  return (payload.data ?? [])
-    .map((entry, index) => generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options))
-    .filter((entry): entry is GeneratedImageAsset => entry !== undefined);
+  if (!isRecord(payload)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+  const data = payload.data;
+  if (data === undefined || data === null) {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+
+  const images: GeneratedImageAsset[] = [];
+  for (const [index, entry] of data.entries()) {
+    if (!isRecord(entry)) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
+    if (!image) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return images;
 }
 
+// Upload filename contract for edit/reference images. User-provided filenames
+// win; generated names follow the same prefix/index/mime logic as outputs.
 export function imageSourceUploadFileName(params: {
   image: ImageGenerationSourceImage;
   index: number;

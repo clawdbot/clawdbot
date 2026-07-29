@@ -1,3 +1,4 @@
+// Shared gateway CLI helpers for supervised-service stop guidance.
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -31,8 +32,9 @@ function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): st
 }
 
 export async function maybeExplainGatewayServiceStop() {
+  // Direct `gateway run` should not race a managed service on the same port.
   const service = resolveGatewayService();
-  let loaded: boolean | null = null;
+  let loaded: boolean | null;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {

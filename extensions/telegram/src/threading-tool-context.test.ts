@@ -1,9 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Telegram tests cover threading tool context plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 
 describe("buildTelegramThreadingToolContext", () => {
   it("keeps topic thread state in plugin-owned tool context", () => {
+    const hasRepliedRef = { value: false };
     expect(
       buildTelegramThreadingToolContext({
         cfg: {} as OpenClawConfig,
@@ -13,11 +15,12 @@ describe("buildTelegramThreadingToolContext", () => {
           MessageThreadId: 77,
           CurrentMessageId: "msg-1",
         },
-        hasRepliedRef: { value: false },
+        hasRepliedRef,
       }),
-    ).toMatchObject({
+    ).toEqual({
       currentChannelId: "telegram:-1001:topic:77",
       currentThreadTs: "77",
+      hasRepliedRef,
     });
   });
 
@@ -31,9 +34,10 @@ describe("buildTelegramThreadingToolContext", () => {
           CurrentMessageId: "msg-1",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       currentChannelId: "telegram:-1001:topic:77",
       currentThreadTs: "77",
+      hasRepliedRef: undefined,
     });
   });
 });

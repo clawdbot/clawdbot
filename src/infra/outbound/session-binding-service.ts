@@ -1,6 +1,9 @@
+// Session binding service multiplexes channel adapters and the generic current
+// conversation store behind one bind/list/resolve/touch/unbind API.
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
-  __testing as genericCurrentConversationBindingTesting,
+  testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
@@ -23,18 +26,15 @@ import type {
 } from "./session-binding.types.js";
 
 export type {
-  BindingStatus,
   BindingTargetKind,
   ConversationRef,
   SessionBindingBindInput,
-  SessionBindingCapabilities,
-  SessionBindingErrorCode,
   SessionBindingPlacement,
   SessionBindingRecord,
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-export class SessionBindingError extends Error {
+class SessionBindingError extends Error {
   constructor(
     public readonly code: SessionBindingErrorCode,
     message: string,
@@ -62,7 +62,7 @@ export type SessionBindingService = {
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
-export type SessionBindingAdapterCapabilities = {
+type SessionBindingAdapterCapabilities = {
   placements?: SessionBindingPlacement[];
   bindSupported?: boolean;
   unbindSupported?: boolean;
@@ -97,7 +97,7 @@ function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindin
     Boolean(value),
   );
   if (placements && placements.length > 0) {
-    return [...new Set(placements)];
+    return uniqueValues(placements);
   }
   return ["current", "child"];
 }
@@ -153,6 +153,8 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
   });
   const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
   const registrations = existing ? [...existing] : [];
+  // Registrations are stacked so duplicate module graphs can temporarily
+  // coexist and unregister without tearing down the active replacement.
   registrations.push({
     adapter,
     normalizedAdapter,
@@ -394,7 +396,7 @@ export function getSessionBindingService(): SessionBindingService {
   return DEFAULT_SESSION_BINDING_SERVICE;
 }
 
-export const __testing = {
+export const testing = {
   resetSessionBindingAdaptersForTests() {
     ADAPTERS_BY_CHANNEL_ACCOUNT.clear();
     genericCurrentConversationBindingTesting.resetCurrentConversationBindingsForTests({

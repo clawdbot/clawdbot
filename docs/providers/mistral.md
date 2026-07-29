@@ -7,13 +7,21 @@ read_when:
 title: "Mistral"
 ---
 
-OpenClaw supports Mistral for both text/image model routing (`mistral/...`) and
-audio transcription via Voxtral in media understanding.
-Mistral can also be used for memory embeddings (`memorySearch.provider = "mistral"`).
+The bundled `mistral` plugin registers four contracts: chat completions, media understanding (Voxtral batch transcription), realtime STT for Voice Call (Voxtral Realtime), and memory embeddings (`mistral-embed`).
 
-- Provider: `mistral`
-- Auth: `MISTRAL_API_KEY`
-- API: Mistral Chat Completions (`https://api.mistral.ai/v1`)
+| Property         | Value                                       |
+| ---------------- | ------------------------------------------- |
+| Provider id      | `mistral`                                   |
+| Plugin           | bundled, enabled by default                 |
+| Auth env var     | `MISTRAL_API_KEY`                           |
+| Onboarding flag  | `--auth-choice mistral-api-key`             |
+| Direct CLI flag  | `--mistral-api-key <key>`                   |
+| API              | OpenAI-compatible (`openai-completions`)    |
+| Base URL         | `https://api.mistral.ai/v1`                 |
+| Default model    | `mistral/mistral-large-latest`              |
+| Embedding model  | `mistral-embed`                             |
+| Voxtral batch    | `voxtral-mini-latest` (audio transcription) |
+| Voxtral realtime | `voxtral-mini-transcribe-realtime-2602`     |
 
 ## Getting started
 
@@ -50,22 +58,34 @@ Mistral can also be used for memory embeddings (`memorySearch.provider = "mistra
 
 ## Built-in LLM catalog
 
-OpenClaw currently ships this bundled Mistral catalog:
+| Model ref                        | Input       | Context | Max output | Notes                                                 |
+| -------------------------------- | ----------- | ------- | ---------- | ----------------------------------------------------- |
+| `mistral/mistral-large-latest`   | text, image | 262,144 | 16,384     | Default model                                         |
+| `mistral/mistral-medium-3-5`     | text, image | 262,144 | 8,192      | Mistral Medium 3.5; adjustable reasoning              |
+| `mistral/mistral-small-latest`   | text, image | 262,144 | 16,384     | Mistral Small 4 latest; adjustable `reasoning_effort` |
+| `mistral/mistral-small-2603`     | text, image | 262,144 | 16,384     | Mistral Small 4 pinned; adjustable `reasoning_effort` |
+| `mistral/codestral-latest`       | text        | 128,000 | 4,096      | Coding                                                |
+| `mistral/mistral-medium-2508`    | text, image | 128,000 | 8,192      | Deprecated; hidden; use Mistral Medium 3.5            |
+| `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Deprecated; hidden; use Mistral Medium 3.5            |
 
-| Model ref                        | Input       | Context | Max output | Notes                                                            |
-| -------------------------------- | ----------- | ------- | ---------- | ---------------------------------------------------------------- |
-| `mistral/mistral-large-latest`   | text, image | 262,144 | 16,384     | Default model                                                    |
-| `mistral/mistral-medium-2508`    | text, image | 262,144 | 8,192      | Mistral Medium 3.1                                               |
-| `mistral/mistral-small-latest`   | text, image | 128,000 | 16,384     | Mistral Small 4; adjustable reasoning via API `reasoning_effort` |
-| `mistral/pixtral-large-latest`   | text, image | 128,000 | 32,768     | Pixtral                                                          |
-| `mistral/codestral-latest`       | text        | 256,000 | 4,096      | Coding                                                           |
-| `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Devstral 2                                                       |
-| `mistral/magistral-small`        | text        | 128,000 | 40,000     | Reasoning-enabled                                                |
+Browse the bundled catalog row before changing config:
+
+```bash
+openclaw models list --all --provider mistral --plain
+```
+
+Smoke-test a model without starting the Gateway:
+
+```bash
+openclaw infer model run --local \
+  --model mistral/mistral-medium-3-5 \
+  --prompt "Reply with exactly: mistral-ok" \
+  --json
+```
 
 ## Audio transcription (Voxtral)
 
-Use Voxtral for batch audio transcription through the media understanding
-pipeline.
+Use Voxtral for batch audio transcription through the media understanding pipeline:
 
 ```json5
 {
@@ -86,8 +106,7 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
 
 ## Voice Call streaming STT
 
-The bundled `mistral` plugin registers Voxtral Realtime as a Voice Call
-streaming STT provider.
+The bundled `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT provider.
 
 | Setting      | Config path                                                            | Default                                 |
 | ------------ | ---------------------------------------------------------------------- | --------------------------------------- |
@@ -121,46 +140,67 @@ streaming STT provider.
 ```
 
 <Note>
-OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call
-can forward Twilio media frames directly. Use `encoding: "pcm_s16le"` and a
-matching `sampleRate` only if your upstream stream is already raw PCM.
+OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can forward Twilio media frames directly. Use `encoding: "pcm_s16le"` and a matching `sampleRate` only if your upstream stream is already raw PCM.
 </Note>
 
 ## Advanced configuration
 
 <AccordionGroup>
-  <Accordion title="Adjustable reasoning (mistral-small-latest)">
-    `mistral/mistral-small-latest` maps to Mistral Small 4 and supports [adjustable reasoning](https://docs.mistral.ai/capabilities/reasoning/adjustable) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
+  <Accordion title="Adjustable reasoning">
+    `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
     OpenClaw maps the session **thinking** level to Mistral's API:
 
-    | OpenClaw thinking level                          | Mistral `reasoning_effort` |
-    | ------------------------------------------------ | -------------------------- |
-    | **off** / **minimal**                            | `none`                     |
-    | **low** / **medium** / **high** / **xhigh** / **adaptive** / **max** | `high`     |
+    | OpenClaw thinking level                                              | Mistral `reasoning_effort` |
+    | ----------------------------------------------------------------------- | --------------------------- |
+    | **off** / **minimal**                                                 | `none`                      |
+    | **low** / **medium** / **high** / **xhigh** / **adaptive** / **max** | `high`                       |
+
+    <Warning>
+    Avoid combining Medium 3.5 reasoning mode with `temperature: 0`; the Mistral HTTP API has been reported to reject `reasoning_effort="high"` plus `temperature: 0` with a 400 response. Leave temperature unset, or turn thinking off/minimal so OpenClaw sends `reasoning_effort: "none"` before you set a low temperature.
+    </Warning>
+
+    Example model-scoped config for Medium 3.5 reasoning:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "mistral/mistral-medium-3-5" },
+          models: {
+            "mistral/mistral-medium-3-5": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    }
+    ```
 
     <Note>
-    Other bundled Mistral catalog models do not use this parameter. Keep using `magistral-*` models when you want Mistral's native reasoning-first behavior.
+    Other bundled Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated; use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
     </Note>
 
   </Accordion>
 
   <Accordion title="Memory embeddings">
-    Mistral can serve memory embeddings via `/v1/embeddings` (default model: `mistral-embed`).
+    Mistral can serve memory embeddings via `/v1/embeddings` (default model: `mistral-embed`):
 
     ```json5
     {
-      memorySearch: { provider: "mistral" },
+      memory: {
+        search: { provider: "mistral" },
+      },
     }
     ```
 
   </Accordion>
 
   <Accordion title="Auth and base URL">
-    - Mistral auth uses `MISTRAL_API_KEY`.
-    - Provider base URL defaults to `https://api.mistral.ai/v1`.
+    - Mistral auth uses `MISTRAL_API_KEY` (Bearer header).
+    - Provider base URL defaults to `https://api.mistral.ai/v1` and accepts the standard OpenAI-compatible chat-completions request shape.
     - Onboarding default model is `mistral/mistral-large-latest`.
-    - Z.AI uses Bearer auth with your API key.
+    - Override the base URL under `models.providers.mistral.baseUrl` only when Mistral explicitly publishes a regional endpoint you need.
 
   </Accordion>
 </AccordionGroup>

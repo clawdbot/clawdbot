@@ -1,7 +1,7 @@
+// Lazy Commander placeholder registration used to keep CLI startup imports small.
 import type { Command } from "commander";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { reparseProgramFromActionCommand } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
-import { resolveCommandOptionArgs } from "./helpers.js";
 
 type RegisterLazyCommandParams = {
   program: Command;
@@ -11,10 +11,11 @@ type RegisterLazyCommandParams = {
     flags: string;
     description: string;
   }[];
-  removeNames?: string[];
+  removeNames?: readonly string[];
   register: () => Promise<void> | void;
 };
 
+/** Register a placeholder that loads the real command and reparses the original invocation. */
 export function registerLazyCommand({
   program,
   name,
@@ -27,20 +28,13 @@ export function registerLazyCommand({
   for (const option of options ?? []) {
     placeholder.option(option.flags, option.description);
   }
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
+  placeholder.allowUnknownOption(true).allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
-    const actionCommand = actionArgs.at(-1) as (Command & { args?: string[] }) | undefined;
-    if (actionCommand) {
-      actionCommand.args = [
-        ...resolveCommandOptionArgs(actionCommand),
-        ...(actionCommand.args ?? []),
-      ];
-    }
+    const actionCommand = actionArgs.at(-1) as Command;
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);
     }
     await register();
-    await reparseProgramFromActionArgs(program, actionArgs);
+    await reparseProgramFromActionCommand(program, actionCommand);
   });
 }

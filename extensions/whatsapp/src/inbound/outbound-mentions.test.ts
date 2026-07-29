@@ -1,3 +1,4 @@
+// Whatsapp tests cover outbound mentions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 

@@ -1,5 +1,11 @@
+// Imported CLI history merge helpers.
+// Deduplicates external history messages against local OpenClaw transcripts.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -39,15 +45,11 @@ function extractComparableText(message: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function resolveComparableTimestamp(message: unknown): number | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  return resolveFiniteNumber((message as { timestamp?: unknown }).timestamp);
+  return asFiniteNumber((message as { timestamp?: unknown }).timestamp);
 }
 
 function resolveComparableRole(message: unknown): string | undefined {
@@ -57,23 +59,52 @@ function resolveComparableRole(message: unknown): string | undefined {
   return readStringValue((message as { role?: unknown }).role);
 }
 
-function resolveImportedExternalId(message: unknown): string | undefined {
+// External identity survives text edits, so it is the strongest match signal
+// for imported messages from Claude CLI or similar external histories.
+type ImportedExternalIdentity = {
+  externalId: string;
+  importedFrom?: string;
+  cliSessionId?: string;
+};
+
+function resolveImportedExternalIdentity(message: unknown): ImportedExternalIdentity | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const meta =
     "__openclaw" in message &&
-    (message as { __openclaw?: unknown }).__openclaw &&
-    typeof (message as { __openclaw?: unknown }).__openclaw === "object"
-      ? ((message as { __openclaw?: Record<string, unknown> }).__openclaw ?? {})
+    (message as { __openclaw?: unknown })["__openclaw"] &&
+    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object"
+      ? ((message as { __openclaw?: Record<string, unknown> })["__openclaw"] ?? {})
       : undefined;
-  return normalizeOptionalString(meta?.externalId);
+  const externalId = normalizeOptionalString(meta?.externalId);
+  return externalId
+    ? {
+        externalId,
+        importedFrom: normalizeOptionalString(meta?.importedFrom),
+        cliSessionId: normalizeOptionalString(meta?.cliSessionId),
+      }
+    : undefined;
+}
+
+function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean | undefined {
+  const importedIdentity = resolveImportedExternalIdentity(imported);
+  const existingIdentity = resolveImportedExternalIdentity(existing);
+  if (!importedIdentity || !existingIdentity) {
+    return undefined;
+  }
+  return (
+    importedIdentity.externalId === existingIdentity.externalId &&
+    importedIdentity.importedFrom === existingIdentity.importedFrom &&
+    importedIdentity.cliSessionId === existingIdentity.cliSessionId
+  );
 }
 
 function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
-  const importedExternalId = resolveImportedExternalId(imported);
-  if (importedExternalId && resolveImportedExternalId(existing) === importedExternalId) {
-    return true;
+  // Text is a fallback only when either message lacks authoritative source identity.
+  const sameExternalIdentity = hasSameExternalIdentity(existing, imported);
+  if (sameExternalIdentity !== undefined) {
+    return sameExternalIdentity;
   }
 
   const existingRole = resolveComparableRole(existing);
@@ -106,15 +137,10 @@ function compareHistoryMessages(
   if (aTimestamp !== undefined && bTimestamp !== undefined && aTimestamp !== bTimestamp) {
     return aTimestamp - bTimestamp;
   }
-  if (aTimestamp !== undefined && bTimestamp === undefined) {
-    return -1;
-  }
-  if (aTimestamp === undefined && bTimestamp !== undefined) {
-    return 1;
-  }
   return a.order - b.order;
 }
 
+/** Merges imported CLI transcript messages into local history without duplicating overlaps. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];

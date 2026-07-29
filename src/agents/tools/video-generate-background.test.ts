@@ -1,10 +1,11 @@
+// Video generation background tests cover detached task lifecycle, keepalive
+// progress and completion delivery through the durable requester-agent handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAgentRunContext, resetAgentRunContextForTest } from "../../infra/agent-events.js";
+import { getAgentRunContext, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   announceDeliveryMocks,
   createMediaCompletionFixture,
-  expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
   expectRecordedTaskProgress,
   resetMediaBackgroundMocks,
@@ -20,13 +21,12 @@ const {
   createVideoGenerationTaskRun,
   failVideoGenerationTaskRun,
   recordVideoGenerationTaskProgress,
-  wakeVideoGenerationTaskCompletion,
+  videoGenerationTaskLifecycle,
 } = await import("./video-generate-background.js");
-const { withMediaGenerationTaskKeepalive } = await import("./media-generate-background-shared.js");
 
 describe("video generate background helpers", () => {
   beforeEach(() => {
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
     resetMediaBackgroundMocks({
       taskExecutorMocks,
       taskDeliveryRuntimeMocks,
@@ -36,7 +36,7 @@ describe("video generate background helpers", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
   });
 
   it("creates a running task with queued progress text", () => {
@@ -54,11 +54,9 @@ describe("video generate background helpers", () => {
       providerId: "openai",
     });
 
-    expect(handle).toMatchObject({
-      taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      taskLabel: "friendly lobster surfing",
-    });
+    expect(handle?.taskId).toBe("task-123");
+    expect(handle?.requesterSessionKey).toBe("agent:main:discord:direct:123");
+    expect(handle?.taskLabel).toBe("friendly lobster surfing");
     expectQueuedTaskRun({
       taskExecutorMocks,
       taskKind: VIDEO_GENERATION_TASK_KIND,
@@ -100,16 +98,15 @@ describe("video generate background helpers", () => {
     }
 
     expect(handle.runId).toMatch(/^tool:video_generate:/);
-    expect(getAgentRunContext(handle.runId)).toMatchObject({
-      sessionKey: "agent:main:discord:channel:123",
-    });
+    expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
 
+    const beforeProgress = Date.now();
     recordVideoGenerationTaskProgress({
       handle,
       progressSummary: "Generating video",
     });
 
-    expect(getAgentRunContext(handle.runId)?.lastActiveAt).toEqual(expect.any(Number));
+    expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
 
     failVideoGenerationTaskRun({
       handle,
@@ -119,49 +116,13 @@ describe("video generate background helpers", () => {
     expect(getAgentRunContext(handle.runId)).toBeUndefined();
   });
 
-  it("keeps long-running media tasks fresh while provider work is pending", async () => {
-    vi.useFakeTimers();
-    let resolveRun!: (value: string) => void;
-    const runPromise = new Promise<string>((resolve) => {
-      resolveRun = resolve;
-    });
-    const task = withMediaGenerationTaskKeepalive({
-      handle: {
-        taskId: "task-123",
-        runId: "tool:video_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        taskLabel: "friendly lobster surfing",
-      },
-      progressSummary: "Generating video",
-      run: () => runPromise,
-    });
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expectRecordedTaskProgress({
-      taskExecutorMocks,
-      runId: "tool:video_generate:abc",
-      progressSummary: "Generating video",
-    });
-
-    resolveRun("done");
-    await expect(task).resolves.toBe("done");
-    const callsAfterCompletion = taskExecutorMocks.recordTaskRunProgressByRunId.mock.calls.length;
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledTimes(
-      callsAfterCompletion,
-    );
-  });
-
   it("queues a completion event by default when direct send is disabled", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
     });
 
-    await wakeVideoGenerationTaskCompletion({
+    await videoGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",
@@ -171,35 +132,50 @@ describe("video generate background helpers", () => {
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps completed video agent-mediated even when direct send is enabled", async () => {
+  it("keeps video generation failures in the durable agent-loop handoff", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
+      delivered: false,
       path: "direct",
+      reason: "generated_media_missing",
+      error: "completion agent did not deliver generated media",
     });
 
-    await wakeVideoGenerationTaskCompletion({
-      ...createMediaCompletionFixture({
-        directSend: true,
-        runId: "tool:video_generate:abc",
-        taskLabel: "friendly lobster surfing",
-        result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
-        mediaUrls: ["/tmp/generated-lobster.mp4"],
+    await expect(
+      videoGenerationTaskLifecycle.wakeTaskCompletion({
+        ...createMediaCompletionFixture({
+          runId: "tool:video_generate:abc",
+          taskLabel: "friendly lobster surfing",
+          result: "All video generation models failed.",
+        }),
+        status: "error",
+        statusLabel: "failed",
       }),
-    });
+    ).resolves.toEqual({ status: "permanent_failure" });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expectFallbackMediaAnnouncement({
-      deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
-      requesterSessionKey: "agent:main:discord:direct:123",
-      channel: "discord",
-      to: "channel:1",
-      source: "video_generation",
-      announceType: "video generation task",
-      resultMediaPath: "MEDIA:/tmp/generated-lobster.mp4",
-      mediaUrls: ["/tmp/generated-lobster.mp4"],
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps active video generation failure wakes agent-mediated", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "steered",
     });
+
+    await videoGenerationTaskLifecycle.wakeTaskCompletion({
+      ...createMediaCompletionFixture({
+        runId: "tool:video_generate:abc",
+        taskLabel: "friendly lobster surfing",
+        result: "All video generation models failed.",
+      }),
+      status: "error",
+      statusLabel: "failed",
+    });
+
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
   });
 });

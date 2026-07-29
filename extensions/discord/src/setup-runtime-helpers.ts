@@ -1,10 +1,12 @@
+// Discord helper module supports setup runtime helpers behavior.
 export {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
-  createLegacyCompatChannelDmPolicy,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
-  promptLegacyChannelAllowFromForAccount,
+  promptResolvedAllowFrom,
   resolveEntriesWithOptionalToken,
+  resolveSetupAccountId,
   setSetupChannelEnabled,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup-runtime";

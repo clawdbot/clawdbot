@@ -1,3 +1,4 @@
+// Public reconciliation facade for task lookup/status surfaces.
 export {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,

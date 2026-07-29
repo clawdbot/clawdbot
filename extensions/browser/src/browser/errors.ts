@@ -1,6 +1,38 @@
-export const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
-export const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
+/**
+ * Browser domain errors.
+ *
+ * Provides HTTP-mappable error classes and stable blocked-policy messages used
+ * by route handlers, clients, and Gateway proxy code.
+ */
+/** Stable message for blocked CDP endpoint configuration. */
+const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
+/** Stable message for blocked page navigation targets. */
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
+/** Stable machine-readable browser error reasons. */
+export const BROWSER_ERROR_REASONS = {
+  noDisplayForHeadedProfile: "no_display_for_headed_profile",
+} as const;
+
+const NO_DISPLAY_HEADLESS_SOURCES = ["request", "env", "profile", "config", "default"] as const;
+
+export type BrowserNoDisplayErrorDetails = {
+  profile: string;
+  requestedHeadless: false;
+  headlessSource: (typeof NO_DISPLAY_HEADLESS_SOURCES)[number];
+  displayPresent: false;
+};
+
+export type BrowserNoDisplayErrorMetadata = {
+  reason: typeof BROWSER_ERROR_REASONS.noDisplayForHeadedProfile;
+  details: BrowserNoDisplayErrorDetails;
+};
+
+type WithNoDisplayMetadata<T> = T | (T & BrowserNoDisplayErrorMetadata);
+export type BrowserErrorResponse = WithNoDisplayMetadata<{ status: number; message: string }>;
+type BrowserErrorPayload = WithNoDisplayMetadata<{ error: string }>;
+
+/** Base browser error carrying an HTTP status code. */
 export class BrowserError extends Error {
   status: number;
 
@@ -23,18 +55,21 @@ export class BrowserCdpEndpointBlockedError extends BrowserError {
   }
 }
 
+/** Validation failure for browser route or config input. */
 export class BrowserValidationError extends BrowserError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, 400, options);
   }
 }
 
+/** Raised when one tab reference matches multiple tabs. */
 export class BrowserTargetAmbiguousError extends BrowserError {
-  constructor(message = "ambiguous target id prefix", options?: ErrorOptions) {
+  constructor(message = "ambiguous browser tab reference", options?: ErrorOptions) {
     super(message, 409, options);
   }
 }
 
+/** Raised when a requested browser tab cannot be resolved. */
 export class BrowserTabNotFoundError extends BrowserError {
   constructor(inputOrMessage?: string | { input?: string }, options?: ErrorOptions) {
     const input =
@@ -48,40 +83,56 @@ export class BrowserTabNotFoundError extends BrowserError {
   }
 }
 
+/** Raised when a requested browser profile does not exist. */
 export class BrowserProfileNotFoundError extends BrowserError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, 404, options);
   }
 }
 
+/** Raised when a browser config mutation conflicts with existing state. */
 export class BrowserConflictError extends BrowserError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, 409, options);
   }
 }
 
+/** Raised when a browser profile cannot be reset by the current driver. */
 export class BrowserResetUnsupportedError extends BrowserError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, 400, options);
   }
 }
 
+/** Raised when a profile is configured but not currently reachable. */
 export class BrowserProfileUnavailableError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly metadata?: BrowserNoDisplayErrorMetadata;
+
+  constructor(
+    message: string,
+    options?: ErrorOptions & { metadata?: BrowserNoDisplayErrorMetadata },
+  ) {
     super(message, 409, options);
+    this.metadata = options?.metadata;
   }
 }
 
+/** Raised when browser resource allocation, such as CDP ports, is exhausted. */
 export class BrowserResourceExhaustedError extends BrowserError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, 507, options);
   }
 }
 
-export function toBrowserErrorResponse(err: unknown): {
-  status: number;
-  message: string;
-} | null {
+/** Map browser-domain errors to HTTP response details. */
+export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | null {
+  if (err instanceof BrowserProfileUnavailableError && err.metadata) {
+    return {
+      status: err.status,
+      message: err.message,
+      ...err.metadata,
+    };
+  }
   if (err instanceof BrowserError) {
     return { status: err.status, message: err.message };
   }
@@ -100,4 +151,46 @@ export function toBrowserErrorResponse(err: unknown): {
     return { status: 400, message: err.message };
   }
   return null;
+}
+
+function parseNoDisplayDetails(value: unknown): BrowserNoDisplayErrorDetails | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const details = value as Record<string, unknown>;
+  if (
+    typeof details.profile !== "string" ||
+    details.profile.length === 0 ||
+    details.requestedHeadless !== false ||
+    !NO_DISPLAY_HEADLESS_SOURCES.includes(
+      details.headlessSource as BrowserNoDisplayErrorDetails["headlessSource"],
+    ) ||
+    details.displayPresent !== false
+  ) {
+    return null;
+  }
+  return {
+    profile: details.profile,
+    requestedHeadless: false,
+    headlessSource: details.headlessSource as BrowserNoDisplayErrorDetails["headlessSource"],
+    displayPresent: false,
+  };
+}
+
+/** Parse only the closed browser error metadata contract from a route payload. */
+export function parseBrowserErrorPayload(value: unknown): BrowserErrorPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const body = value as Record<string, unknown>;
+  if (typeof body.error !== "string" || body.error.length === 0) {
+    return null;
+  }
+  if (body.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile) {
+    const details = parseNoDisplayDetails(body.details);
+    if (details) {
+      return { error: body.error, reason: body.reason, details };
+    }
+  }
+  return { error: body.error };
 }

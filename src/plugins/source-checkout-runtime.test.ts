@@ -1,37 +1,30 @@
-import fs from "node:fs";
+/** Verifies source-checkout plugin runtime resolution and dependency diagnostics. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadOpenClawPlugins } from "./loader.js";
 
 describe("source checkout bundled plugin runtime", () => {
-  it("loads enabled bundled plugins from built dist or source checkout", () => {
+  it("loads enabled bundled plugins from source checkout", () => {
     const registry = loadOpenClawPlugins({
       cache: false,
-      onlyPluginIds: ["twitch"],
+      onlyPluginIds: ["tokenjuice"],
       config: {
         plugins: {
           entries: {
-            twitch: { enabled: true },
+            tokenjuice: { enabled: true },
           },
         },
       },
     });
 
-    const twitch = registry.plugins.find((plugin) => plugin.id === "twitch");
-    expect(twitch).toMatchObject({
-      status: "loaded",
-      origin: "bundled",
-    });
+    const tokenjuice = registry.plugins.find((plugin) => plugin.id === "tokenjuice");
+    expect(tokenjuice?.status).toBe("loaded");
+    expect(tokenjuice?.origin).toBe("bundled");
 
-    const builtRuntime = path.join(process.cwd(), "dist", "extensions", "twitch", "index.js");
-    const expectedRuntime = fs.existsSync(builtRuntime)
-      ? `${path.sep}dist${path.sep}extensions${path.sep}twitch${path.sep}index.js`
-      : `${path.sep}extensions${path.sep}twitch${path.sep}index.ts`;
-    const expectedRoot = fs.existsSync(builtRuntime)
-      ? `${path.sep}dist${path.sep}extensions${path.sep}twitch`
-      : `${path.sep}extensions${path.sep}twitch`;
+    const expectedRuntime = `${path.sep}extensions${path.sep}tokenjuice${path.sep}index.ts`;
+    const expectedRoot = `${path.sep}extensions${path.sep}tokenjuice`;
 
-    expect(twitch?.source).toContain(expectedRuntime);
-    expect(twitch?.rootDir).toContain(expectedRoot);
+    expect(tokenjuice?.source).toContain(expectedRuntime);
+    expect(tokenjuice?.rootDir).toContain(expectedRoot);
   });
 });

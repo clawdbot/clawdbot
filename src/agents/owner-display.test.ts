@@ -1,9 +1,10 @@
+// Verifies owner display hashing uses a dedicated secret and raw mode disables it.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureOwnerDisplaySecret, resolveOwnerDisplaySetting } from "./owner-display.js";
 
 describe("resolveOwnerDisplaySetting", () => {
-  it("returns keyed hash settings when hash mode has an explicit secret", () => {
+  it("always uses raw owner ids after hash configuration retirement", () => {
     const cfg = {
       commands: {
         ownerDisplay: "hash",
@@ -12,24 +13,7 @@ describe("resolveOwnerDisplaySetting", () => {
     } as OpenClawConfig;
 
     expect(resolveOwnerDisplaySetting(cfg)).toEqual({
-      ownerDisplay: "hash",
-      ownerDisplaySecret: "owner-secret", // pragma: allowlist secret
-    });
-  });
-
-  it("does not fall back to gateway tokens when hash secret is missing", () => {
-    const cfg = {
-      commands: {
-        ownerDisplay: "hash",
-      },
-      gateway: {
-        auth: { token: "gateway-auth-token" },
-        remote: { token: "gateway-remote-token" },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveOwnerDisplaySetting(cfg)).toEqual({
-      ownerDisplay: "hash",
+      ownerDisplay: "raw",
       ownerDisplaySecret: undefined,
     });
   });
@@ -50,7 +34,7 @@ describe("resolveOwnerDisplaySetting", () => {
 });
 
 describe("ensureOwnerDisplaySecret", () => {
-  it("generates a dedicated secret when hash mode is enabled without one", () => {
+  it("leaves retired hash configuration untouched without generating a secret", () => {
     const cfg = {
       commands: {
         ownerDisplay: "hash",
@@ -58,8 +42,8 @@ describe("ensureOwnerDisplaySecret", () => {
     } as OpenClawConfig;
 
     const result = ensureOwnerDisplaySecret(cfg, () => "generated-owner-secret");
-    expect(result.generatedSecret).toBe("generated-owner-secret");
-    expect(result.config.commands?.ownerDisplaySecret).toBe("generated-owner-secret");
+    expect(result.generatedSecret).toBeUndefined();
+    expect(result.config.commands?.ownerDisplaySecret).toBeUndefined();
     expect(result.config.commands?.ownerDisplay).toBe("hash");
   });
 

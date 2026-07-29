@@ -1,3 +1,4 @@
+// Discord plugin module implements outbound adapter harness behavior.
 import { expect, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;

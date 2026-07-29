@@ -1,4 +1,6 @@
+/** Formats daemon runtime state into compact status lines for CLI output. */
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { getSystemdCgroupHygieneSummary } from "./service-runtime.js";
 
 type ServiceRuntimeLike = {
   status?: string;
@@ -10,8 +12,10 @@ type ServiceRuntimeLike = {
   lastRunResult?: string;
   lastRunTime?: string;
   detail?: string;
+  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
 };
 
+// Windows and systemd expose signal exits as numeric status codes.
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
   [129, "SIGHUP"],
   [130, "SIGINT"],
@@ -22,6 +26,7 @@ const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
 ]);
 
 function formatLastExitStatus(status: number): string {
+  // Service managers usually report signal exits as 128 + signal number.
   const signalName = SIGNAL_NAMES_BY_STATUS.get(status);
   return signalName ? `last exit ${status} (${signalName})` : `last exit ${status}`;
 }
@@ -45,6 +50,10 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
   }
   if (runtime.lastRunTime) {
     details.push(`last run time ${runtime.lastRunTime}`);
+  }
+  const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
+  if (cgroupSummary) {
+    details.push(cgroupSummary);
   }
   if (runtime.detail) {
     details.push(runtime.detail);

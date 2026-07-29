@@ -1,10 +1,14 @@
+// Compaction notifier hook sends notifications when session compaction occurs.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { HookHandler } from "../../hooks.js";
 
+/** Read optional numeric compaction metadata without trusting hook context shape. */
 function readOptionalNumber(context: Record<string, unknown>, key: string): number | undefined {
   const value = context[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
+/** Session compaction hook that emits short user-visible progress messages. */
 const handler: HookHandler = async (event) => {
   try {
     const context = event.context;

@@ -1,11 +1,15 @@
+// Google tests cover google plugin behavior.
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
@@ -24,8 +28,16 @@ async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    process.env.GEMINI_API_KEY = geminiApiKey;
-    process.env.GOOGLE_API_KEY = googleApiKey;
+    if (geminiApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = geminiApiKey;
+    }
+    if (googleApiKey === undefined) {
+      delete process.env.GOOGLE_API_KEY;
+    } else {
+      process.env.GOOGLE_API_KEY = googleApiKey;
+    }
   }
 }
 
@@ -40,6 +52,20 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   return message.includes("timeout") || message.includes("aborted");
 }
 
+function hasTrustedFfmpegForLiveVoiceNote(): boolean {
+  try {
+    resolveFfmpegBin();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("ffmpeg not found in trusted system directories")) {
+      console.warn("[google:live] skip voice-note transcode: ffmpeg unavailable");
+      return false;
+    }
+    throw error;
+  }
+}
+
 const registerGooglePlugin = () =>
   registerProviderPlugin({
     plugin,
@@ -48,6 +74,43 @@ const registerGooglePlugin = () =>
   });
 
 describeLive("google plugin live", () => {
+  it.each(["gemini-3.6-flash", "gemini-3.5-flash-lite"])(
+    "discovers and completes through %s",
+    async (modelId) => {
+      const provider = await buildGoogleLiveCatalogProvider({
+        apiKey: "GEMINI_API_KEY",
+        discoveryApiKey: GOOGLE_API_KEY,
+      });
+      const definition = provider.models.find((model) => model.id === modelId);
+      expect(definition, `${modelId} missing from Google models.list`).toBeDefined();
+
+      const response = await completeSimple(
+        {
+          ...definition!,
+          provider: "google",
+          baseUrl: provider.baseUrl,
+          api: "google-generative-ai",
+        } as Model<"google-generative-ai">,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "Reply with exactly: OpenClaw live catalog OK",
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: GOOGLE_API_KEY, maxTokens: 64 },
+      );
+
+      expect(response.stopReason).not.toBe("error");
+      expect(response.content.some((block) => block.type === "text" && block.text.trim())).toBe(
+        true,
+      );
+    },
+    90_000,
+  );
+
   it("synthesizes speech through the registered provider", async () => {
     const { speechProviders } = await registerGooglePlugin();
     const provider = requireRegisteredProvider(speechProviders, "google");
@@ -66,6 +129,10 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
+    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+      return;
+    }
+
     const { speechProviders } = await registerGooglePlugin();
     const provider = requireRegisteredProvider(speechProviders, "google");
 
@@ -132,12 +199,12 @@ describeLive("google plugin live", () => {
       }
     }
     if (lastError) {
-      throw lastError;
+      throw toLintErrorObject(lastError, "Non-Error thrown");
     }
 
     expect(result?.provider).toBe("gemini");
     expect(typeof result?.content).toBe("string");
-    expect((result?.content as string).length).toBeGreaterThan(20);
+    expect((result!.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
   }, 120_000);
 
@@ -163,9 +230,23 @@ describeLive("google plugin live", () => {
       expect(process.env.GOOGLE_API_KEY).toBeUndefined();
       expect(result?.provider).toBe("gemini");
       expect(typeof result?.content).toBe("string");
-      expect((result?.content as string).length).toBeGreaterThan(20);
+      expect((result!.content as string).length).toBeGreaterThan(20);
       expect(Array.isArray(result?.citations)).toBe(true);
-      expect((result?.citations as unknown[]).length).toBeGreaterThan(0);
+      expect((result!.citations as unknown[]).length).toBeGreaterThan(0);
     });
   }, 120_000);
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

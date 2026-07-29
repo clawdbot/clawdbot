@@ -1,11 +1,27 @@
-import { spawn, type SpawnOptions } from "node:child_process";
+// Qa Lab plugin module implements desktop browser smoke behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import {
+  type CommandRunner,
+  type CrabboxInspect,
+  defaultCommandRunner,
+  inspectCrabbox,
+  resolveCrabboxBin,
+  runCommand,
+  shellQuote,
+  sshCommand,
+  stopCrabbox,
+  warmupCrabbox,
+} from "./crabbox-runtime.js";
 
 export type MantisDesktopBrowserSmokeOptions = {
+  browserProfileArchiveEnv?: string;
+  browserProfileDir?: string;
   browserUrl?: string;
   commandRunner?: CommandRunner;
   crabboxBin?: string;
@@ -20,37 +36,16 @@ export type MantisDesktopBrowserSmokeOptions = {
   provider?: string;
   repoRoot?: string;
   ttl?: string;
+  videoDurationSeconds?: number;
 };
 
-export type MantisDesktopBrowserSmokeResult = {
+type MantisDesktopBrowserSmokeResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;
   status: "pass" | "fail";
   summaryPath: string;
-};
-
-type CommandResult = {
-  stderr: string;
-  stdout: string;
-};
-
-type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<CommandResult>;
-
-type CrabboxInspect = {
-  host?: string;
-  id?: string;
-  provider?: string;
-  ready?: boolean;
-  slug?: string;
-  sshKey?: string;
-  sshPort?: string;
-  sshUser?: string;
-  state?: string;
+  videoPath?: string;
 };
 
 type MantisDesktopBrowserSmokeSummary = {
@@ -58,6 +53,7 @@ type MantisDesktopBrowserSmokeSummary = {
     reportPath: string;
     screenshotPath?: string;
     summaryPath: string;
+    videoPath?: string;
   };
   browserUrl: string;
   htmlFile?: string;
@@ -90,91 +86,28 @@ const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
 const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
 const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
+const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
+const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
+const DEFAULT_VIDEO_DURATION_SECONDS = 10;
 
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `desktop-browser-${stamp}`);
 }
 
-async function defaultCommandRunner(
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-): Promise<CommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      ...options,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stdout += text;
-      if (options.stdio === "inherit") {
-        process.stdout.write(text);
-      }
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stderr += text;
-      if (options.stdio === "inherit") {
-        process.stderr.write(text);
-      }
-    });
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
-    });
-  });
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
+function assertSafeEnvName(value: string, label: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) {
+    throw new Error(`${label} must be an environment variable name.`);
   }
 }
 
-async function resolveCrabboxBin(params: {
-  env: NodeJS.ProcessEnv;
-  explicit?: string;
-  repoRoot: string;
-}) {
-  const configured = trimToValue(params.explicit) ?? trimToValue(params.env[CRABBOX_BIN_ENV]);
-  if (configured) {
-    return configured;
+function assertSafeRemoteProfileDir(value: string, label: string) {
+  if (!value.startsWith("/") && !value.startsWith("$HOME/") && !value.startsWith("~/")) {
+    throw new Error(`${label} must be an absolute path, ~/ path, or $HOME path.`);
   }
-  const sibling = path.resolve(params.repoRoot, "../crabbox/bin/crabbox");
-  if (await pathExists(sibling)) {
-    return sibling;
+  if (value.includes("\n") || value.includes("\r") || value.includes("\0")) {
+    throw new Error(`${label} must not contain control characters.`);
   }
-  return "crabbox";
-}
-
-function extractLeaseId(output: string) {
-  return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function resolveRepoBoundFile(repoRoot: string, filePath: string, label: string) {
@@ -188,13 +121,22 @@ function resolveRepoBoundFile(repoRoot: string, filePath: string, label: string)
 
 function renderRemoteScript(params: {
   browserUrl: string;
+  browserProfileArchiveEnv: string;
+  browserProfileDir?: string;
   htmlBase64?: string;
   remoteOutputDir: string;
+  videoDurationSeconds: number;
 }) {
   const shellUrl = shellQuote(params.browserUrl);
   const shellUrlJson = shellQuote(JSON.stringify(params.browserUrl));
   const htmlBase64 = shellQuote(params.htmlBase64 ?? "");
   const shellOutputDir = shellQuote(params.remoteOutputDir);
+  const videoDurationSeconds = Math.max(1, Math.floor(params.videoDurationSeconds));
+  const profileArchiveEnv = params.browserProfileArchiveEnv;
+  const profileDir = shellQuote(
+    params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`,
+  );
+  const temporaryProfile = params.browserProfileDir ? "false" : "true";
   const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
   const openedUrlJson = shellQuote(
     JSON.stringify(
@@ -219,8 +161,18 @@ if ! command -v scrot >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/apt.log" 2>&1
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y scrot >>"$out/apt.log" 2>&1
 fi
-profile="$out/chrome-profile"
+profile=${profileDir}
+temporary_profile=${temporaryProfile}
 mkdir -p "$profile"
+profile_restored=false
+profile_archive_b64="\${${profileArchiveEnv}:-}"
+if [ -n "$profile_archive_b64" ]; then
+  profile_archive="$profile/openclaw-mantis-browser-profile.tgz"
+  printf '%s' "$profile_archive_b64" | base64 -d >"$profile_archive"
+  tar -xzf "$profile_archive" -C "$profile"
+  rm -f "$profile_archive"
+  profile_restored=true
+fi
 browser_bin=""
 for candidate in "\${BROWSER:-}" "\${CHROME_BIN:-}" google-chrome chromium chromium-browser; do
   if [ -n "$candidate" ] && command -v "$candidate" >/dev/null 2>&1; then
@@ -231,6 +183,24 @@ done
 if [ -z "$browser_bin" ]; then
   echo "No browser binary found. Checked BROWSER, CHROME_BIN, google-chrome, chromium, chromium-browser." >&2
   exit 127
+fi
+video_pid=""
+if command -v ffmpeg >/dev/null 2>&1; then
+  :
+else
+  sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>"$out/apt.log" 2>&1 || true
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  display_input="$DISPLAY"
+  case "$display_input" in
+    *.*) ;;
+    *) display_input="$display_input.0" ;;
+  esac
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t ${videoDurationSeconds} -pix_fmt yuv420p "$out/desktop-browser-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
+  video_pid=$!
+else
+  echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
 fi
 "$browser_bin" \
   --user-data-dir="$profile" \
@@ -248,16 +218,25 @@ cleanup() {
 trap cleanup EXIT
 sleep 8
 scrot "$out/desktop-browser-smoke.png"
+if [ -n "$video_pid" ]; then
+  wait "$video_pid" || true
+fi
 cleanup
 trap - EXIT
 sleep 1
-rm -rf "$profile" || true
+if [ "$temporary_profile" = "true" ]; then
+  rm -rf "$profile" || true
+fi
 cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
 {
   "browserUrl": $url_json,
   "browserBinary": "$browser_bin",
   "display": "$DISPLAY",
   "chromePid": $chrome_pid,
+  "browserProfileArchiveEnv": "${profileArchiveEnv}",
+  "browserProfileDir": "$profile",
+  "browserProfileRestored": $profile_restored,
+  "temporaryBrowserProfile": $temporary_profile,
   "inputMode": $input_mode_json,
   "openedUrl": $opened_url_json,
   "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -291,82 +270,16 @@ function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
     summary.artifacts.screenshotPath
       ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
       : "- Screenshot: missing",
+    summary.artifacts.videoPath
+      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
+      : "- Video: missing",
     "- Remote metadata: `remote-metadata.json`",
+    "- FFmpeg log: `ffmpeg.log`",
     "- Chrome log: `chrome.log`",
     summary.error ? `- Error: ${summary.error}` : undefined,
     "",
   ].filter((line) => line !== undefined);
   return `${lines.join("\n")}\n`;
-}
-
-async function runCommand(params: {
-  args: readonly string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  runner: CommandRunner;
-  stdio?: "inherit" | "pipe";
-}) {
-  return params.runner(params.command, params.args, {
-    cwd: params.cwd,
-    env: params.env,
-    stdio: params.stdio ?? "pipe",
-  });
-}
-
-async function warmupCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  idleTimeout: string;
-  machineClass: string;
-  provider: string;
-  runner: CommandRunner;
-  ttl: string;
-}) {
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: [
-      "warmup",
-      "--provider",
-      params.provider,
-      "--desktop",
-      "--browser",
-      "--class",
-      params.machineClass,
-      "--idle-timeout",
-      params.idleTimeout,
-      "--ttl",
-      params.ttl,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
-  const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
-  if (!leaseId) {
-    throw new Error("Crabbox warmup did not print a lease id.");
-  }
-  return leaseId;
-}
-
-async function inspectCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: ["inspect", "--provider", params.provider, "--id", params.leaseId, "--json"],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-  return JSON.parse(result.stdout) as CrabboxInspect;
 }
 
 async function copyRemoteArtifacts(params: {
@@ -377,56 +290,21 @@ async function copyRemoteArtifacts(params: {
   remoteOutputDir: string;
   runner: CommandRunner;
 }) {
-  const { host, sshKey, sshPort, sshUser } = params.inspect;
-  if (!host || !sshKey || !sshUser) {
-    throw new Error("Crabbox inspect output is missing SSH copy details.");
-  }
+  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
   await runCommand({
     command: "rsync",
     args: [
       "-az",
       "-e",
-      [
-        "ssh",
-        "-i",
-        shellQuote(sshKey),
-        "-p",
-        sshPort ?? "22",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-      ].join(" "),
-      `${sshUser}@${host}:${params.remoteOutputDir}/desktop-browser-smoke.png`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/remote-metadata.json`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/chrome.log`,
+      sshArgs,
+      "--exclude",
+      "chrome-profile/**",
+      `${sshUser}@${host}:${params.remoteOutputDir}/`,
       `${params.outputDir}/`,
     ],
     cwd: params.cwd,
     env: params.env,
     runner: params.runner,
-  });
-}
-
-async function stopCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  await runCommand({
-    command: params.crabboxBin,
-    args: ["stop", "--provider", params.provider, params.leaseId],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
   });
 }
 
@@ -444,7 +322,12 @@ export async function runMantisDesktopBrowserSmoke(
   );
   const summaryPath = path.join(outputDir, "mantis-desktop-browser-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
-  const crabboxBin = await resolveCrabboxBin({ env, explicit: opts.crabboxBin, repoRoot });
+  const crabboxBin = await resolveCrabboxBin({
+    env,
+    envName: CRABBOX_BIN_ENV,
+    explicit: opts.crabboxBin,
+    repoRoot,
+  });
   const provider =
     trimToValue(opts.provider) ?? trimToValue(env[CRABBOX_PROVIDER_ENV]) ?? DEFAULT_PROVIDER;
   const machineClass =
@@ -464,6 +347,20 @@ export async function runMantisDesktopBrowserSmoke(
   const browserUrl = htmlFile
     ? pathToFileURL(htmlFile).toString()
     : (trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL);
+  const browserProfileArchiveEnv =
+    trimToValue(opts.browserProfileArchiveEnv) ??
+    trimToValue(env.OPENCLAW_MANTIS_BROWSER_PROFILE_ARCHIVE_ENV) ??
+    BROWSER_PROFILE_ARCHIVE_ENV;
+  assertSafeEnvName(browserProfileArchiveEnv, "Mantis browser profile archive env");
+  const browserProfileDir =
+    trimToValue(opts.browserProfileDir) ?? trimToValue(env[BROWSER_PROFILE_DIR_ENV]);
+  if (browserProfileDir) {
+    assertSafeRemoteProfileDir(browserProfileDir, "Mantis browser profile dir");
+  }
+  const videoDurationSeconds = Math.max(
+    1,
+    Math.floor(opts.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS),
+  );
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? isTruthyOptIn(env[CRABBOX_KEEP_ENV]);
@@ -508,7 +405,14 @@ export async function runMantisDesktopBrowserSmoke(
         "--no-sync",
         "--shell",
         "--",
-        renderRemoteScript({ browserUrl, htmlBase64, remoteOutputDir }),
+        renderRemoteScript({
+          browserProfileArchiveEnv,
+          browserProfileDir,
+          browserUrl,
+          htmlBase64,
+          remoteOutputDir,
+          videoDurationSeconds,
+        }),
       ],
       cwd: repoRoot,
       env,
@@ -524,14 +428,17 @@ export async function runMantisDesktopBrowserSmoke(
       runner,
     });
     const screenshotPath = path.join(outputDir, "desktop-browser-smoke.png");
+    const videoPath = path.join(outputDir, "desktop-browser-smoke.mp4");
     if (!(await pathExists(screenshotPath))) {
       throw new Error("Desktop browser screenshot was not copied back from Crabbox.");
     }
+    const copiedVideoPath = (await pathExists(videoPath)) ? videoPath : undefined;
     summary = {
       artifacts: {
         reportPath,
         screenshotPath,
         summaryPath,
+        videoPath: copiedVideoPath,
       },
       browserUrl,
       htmlFile,
@@ -556,6 +463,7 @@ export async function runMantisDesktopBrowserSmoke(
       screenshotPath,
       status: "pass",
       summaryPath,
+      videoPath: copiedVideoPath,
     };
   } catch (error) {
     summary = {

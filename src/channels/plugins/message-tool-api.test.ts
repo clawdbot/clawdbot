@@ -1,3 +1,4 @@
+// Message tool API tests cover channel message tool descriptors and runtime calls.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
@@ -29,10 +30,7 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
 }));
 
-import {
-  describeBundledChannelMessageTool,
-  resolveBundledChannelMessageToolDiscoveryAdapter,
-} from "./message-tool-api.js";
+import { resolveBundledChannelMessageToolDiscoveryAdapter } from "./message-tool-api.js";
 
 describe("bundled channel message tool fast path", () => {
   beforeEach(() => {
@@ -41,9 +39,10 @@ describe("bundled channel message tool fast path", () => {
 
   it("loads message tool discovery from the narrow artifact", () => {
     const adapter = resolveBundledChannelMessageToolDiscoveryAdapter("slack");
-    expect(adapter?.describeMessageTool?.({ cfg: {} })).toMatchObject({
+    expect(adapter?.describeMessageTool?.({ cfg: {} })).toStrictEqual({
       actions: ["send", "upload-file"],
       capabilities: ["presentation"],
+      schema: null,
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "slack",
@@ -51,26 +50,8 @@ describe("bundled channel message tool fast path", () => {
     });
   });
 
-  it("describes message tools through the same artifact", () => {
-    expect(
-      describeBundledChannelMessageTool({
-        channelId: "slack",
-        context: { cfg: {} },
-      }),
-    ).toMatchObject({
-      actions: ["send", "upload-file"],
-      capabilities: ["presentation"],
-    });
-  });
-
   it("treats missing artifacts as absent discovery", () => {
     expect(resolveBundledChannelMessageToolDiscoveryAdapter("discord")).toBeUndefined();
-    expect(
-      describeBundledChannelMessageTool({
-        channelId: "discord",
-        context: { cfg: {} },
-      }),
-    ).toBeUndefined();
   });
 
   it("ignores present artifacts without discovery", () => {

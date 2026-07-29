@@ -1,11 +1,10 @@
+// Shares plugin config normalization helpers across control-plane paths.
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
+/** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
   enabled: boolean;
   allow: string[];
@@ -30,13 +29,21 @@ export type NormalizedPluginsConfig = {
         allowedModels?: string[];
         hasAllowedModelsConfig?: boolean;
       };
+      llm?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+        allowAgentIdOverride?: boolean;
+      };
       config?: unknown;
     }
   >;
 };
 
+/** Plugin id normalizer used while loading aliases or raw config. */
 export type NormalizePluginId = (id: string) => string;
 
+/** Default plugin id normalizer for already-canonical ids. */
 export const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
 
 function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): string[] {
@@ -46,17 +53,6 @@ function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): st
   return value
     .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
     .filter(Boolean);
-}
-
-function normalizeSlotValue(value: unknown): string | null | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (normalizeOptionalLowercaseString(trimmed) === "none") {
-    return null;
-  }
-  return trimmed;
 }
 
 function normalizeHookTimeoutMs(value: unknown): number | undefined {
@@ -143,9 +139,9 @@ function normalizePluginEntries(
               (subagentRaw as { allowedModels?: unknown }).allowedModels,
             ),
             allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
-              ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
-                  .map((model) => normalizeOptionalString(model))
-                  .filter((model): model is string => Boolean(model))
+              ? normalizeArrayBackedTrimmedStringList(
+                  (subagentRaw as { allowedModels?: unknown }).allowedModels,
+                )
               : undefined,
           }
         : undefined;
@@ -164,30 +160,68 @@ function normalizePluginEntries(
               : {}),
           }
         : undefined;
+    const llmRaw = entry.llm;
+    const llm =
+      llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw)
+        ? {
+            allowModelOverride: (llmRaw as { allowModelOverride?: unknown }).allowModelOverride,
+            hasAllowedModelsConfig: Array.isArray(
+              (llmRaw as { allowedModels?: unknown }).allowedModels,
+            ),
+            allowedModels: Array.isArray((llmRaw as { allowedModels?: unknown }).allowedModels)
+              ? normalizeArrayBackedTrimmedStringList(
+                  (llmRaw as { allowedModels?: unknown }).allowedModels,
+                )
+              : undefined,
+            allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
+              .allowAgentIdOverride,
+          }
+        : undefined;
+    const normalizedLlm =
+      llm &&
+      (typeof llm.allowModelOverride === "boolean" ||
+        llm.hasAllowedModelsConfig ||
+        (Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0) ||
+        typeof llm.allowAgentIdOverride === "boolean")
+        ? {
+            ...(typeof llm.allowModelOverride === "boolean"
+              ? { allowModelOverride: llm.allowModelOverride }
+              : {}),
+            ...(llm.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0
+              ? { allowedModels: llm.allowedModels }
+              : {}),
+            ...(typeof llm.allowAgentIdOverride === "boolean"
+              ? { allowAgentIdOverride: llm.allowAgentIdOverride }
+              : {}),
+          }
+        : undefined;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
+      llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
   return normalized;
 }
 
+/** Normalizes plugin config while allowing callers to resolve aliases first. */
 export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
-  const memorySlot = normalizeSlotValue(config?.slots?.memory);
+  const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow, normalizePluginId),
     deny: normalizeList(config?.deny, normalizePluginId),
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
-      memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
+      memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),

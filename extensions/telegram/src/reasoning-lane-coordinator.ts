@@ -1,23 +1,41 @@
+// Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  stripReasoningTagsFromText,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 
-const REASONING_MESSAGE_PREFIX = "Reasoning:\n";
+// A durable reasoning message already marked channel-side: 🧠 + italic body
+// (see markReasoningMessage). Detect it so a re-split passes it through
+// unchanged instead of re-marking.
+const REASONING_MESSAGE_RE = /^🧠\s+_/u;
+// Core's formatReasoningMessage prefixes the italic body with a literal
+// "Thinking" header. Telegram renders durable thoughts with the 🧠 marker
+// (Discord parity), so this header must be rewritten channel-side.
+const CORE_THINKING_HEADER_RE = /^Thinking\.{0,3}\s*\n+/u;
+const LEGACY_REASONING_MESSAGE_PREFIX = "Reasoning:\n";
+
+// Rewrite core's "Thinking\n\n_body_" into "🧠 _body_": strip the header word
+// and prefix the first italic line with 🧠. Keeps the italic body intact so
+// Telegram HTML renders it as before.
+function markReasoningMessage(formatted: string): string {
+  const withoutHeader = formatted.replace(CORE_THINKING_HEADER_RE, "");
+  return withoutHeader.replace(/^_/u, "🧠 _");
+}
 const REASONING_TAG_PREFIXES = [
   "<think",
   "<thinking",
   "<thought",
   "<antthinking",
+  "<mm:think",
   "</think",
   "</thinking",
   "</thought",
   "</antthinking",
+  "</mm:think",
 ];
-const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE =
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   if (!text) {
@@ -62,18 +80,33 @@ type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
+  }
+
+  if (isReasoning !== true) {
+    return { answerText: text };
   }
 
   const trimmed = text.trim();
   if (isPartialReasoningTagPrefix(trimmed)) {
     return {};
   }
+  if (REASONING_MESSAGE_RE.test(trimmed)) {
+    return { reasoningText: trimmed };
+  }
+  // Durable reasoning payloads arrive pre-formatted by core with the "Thinking"
+  // header; rewrite that to the 🧠 marker rather than passing it through.
+  if (CORE_THINKING_HEADER_RE.test(trimmed)) {
+    return { reasoningText: markReasoningMessage(trimmed) };
+  }
   if (
-    trimmed.startsWith(REASONING_MESSAGE_PREFIX) &&
-    trimmed.length > REASONING_MESSAGE_PREFIX.length
+    trimmed.startsWith(LEGACY_REASONING_MESSAGE_PREFIX) &&
+    trimmed.length > LEGACY_REASONING_MESSAGE_PREFIX.length
   ) {
     return { reasoningText: trimmed };
   }
@@ -81,13 +114,11 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
-  if (!taggedReasoning && strippedAnswer === text) {
-    return { answerText: text };
-  }
-
-  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
-  const answerText = strippedAnswer || undefined;
-  return { reasoningText, answerText };
+  return {
+    reasoningText: markReasoningMessage(
+      formatReasoningMessage(taggedReasoning || strippedAnswer || text),
+    ),
+  };
 }
 
 type BufferedFinalAnswer = {

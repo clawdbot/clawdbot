@@ -1,4 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Resolves CLI command path policy from the declarative command catalog.
 import { isGatewayConfigBypassCommandPath } from "../gateway/explicit-connection-policy.js";
+import { resolveCliStartupCommandPath } from "./argv-invocation.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import {
   cliCommandCatalog,
@@ -13,13 +16,15 @@ const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   routeConfigGuard: "never",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
+  ownsProtocolStdout: false,
   hideBanner: false,
   ensureCliPath: true,
   networkProxy: "default",
 };
 
 export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPathPolicy {
-  let resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
+  // Later catalog entries can refine broader root policies with exact subcommand overrides.
+  const resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
   for (const entry of cliCommandCatalog) {
     if (!entry.policy) {
       continue;
@@ -39,9 +44,12 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
   return pattern.every((segment, index) => commandPath[index] === segment);
 }
 
-export function resolveCliCatalogCommandPath(argv: string[]): string[] {
+function resolveCliCatalogCommandPath(argv: string[]): string[] {
+  // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
+  const startupPath = resolveCliStartupCommandPath(argv);
   const tokens =
-    resolveGatewayCatalogCommandPath(argv) ?? getCommandPathWithRootOptions(argv, argv.length);
+    resolveGatewayCatalogCommandPath(argv) ??
+    (startupPath[0] === "agent" ? startupPath : getCommandPathWithRootOptions(argv, argv.length));
   if (tokens.length === 0) {
     return [];
   }
@@ -54,7 +62,7 @@ export function resolveCliCatalogCommandPath(argv: string[]): string[] {
       bestMatch = entry.commandPath;
     }
   }
-  return bestMatch ? [...bestMatch] : [tokens[0]];
+  return bestMatch ? [...bestMatch] : [expectDefined(tokens[0], "tokens entry at 0")];
 }
 
 export function resolveCliNetworkProxyPolicy(argv: string[]): CliNetworkProxyPolicy {

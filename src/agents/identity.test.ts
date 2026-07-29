@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for identity-driven acknowledgement reactions.
+ * Confirms account, channel, global, identity, and explicit-empty precedence.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAckReaction } from "./identity.js";

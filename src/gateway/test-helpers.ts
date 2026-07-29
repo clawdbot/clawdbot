@@ -1,3 +1,6 @@
+/**
+ * Public barrel for gateway integration test helpers.
+ */
 export {
   agentCommand,
   cronIsolatedRun,
@@ -5,9 +8,8 @@ export {
   embeddedRunMock,
   getReplyFromConfig,
   mockGetReplyFromConfigOnce,
-  piSdkMock,
+  agentDiscoveryMock,
   testState,
-  testTailnetIPv4,
   testTailscaleWhois,
 } from "./test-helpers.runtime-state.js";
 export { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";

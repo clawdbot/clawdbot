@@ -1,3 +1,4 @@
+// Deprecation compatibility tests cover doctor warnings and repairs for deprecated config.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,8 +12,13 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 
 const requiredDoctorCompatCodes = [
   "doctor-agent-runtime-embedded-harness",
+  "doctor-agent-embedded-pi-config",
   "doctor-plugin-install-config-ledger",
   "doctor-bundled-plugin-load-paths",
+  "doctor-bundled-provider-discovery-allowlist",
+  "doctor-cli-backends-plugin-registration",
+  "doctor-codex-supervisor-plugin-config",
+  "doctor-message-queue-steering-modes",
   "doctor-web-search-plugin-config",
   "doctor-web-fetch-plugin-config",
   "doctor-x-search-plugin-config",
@@ -64,9 +70,9 @@ describe("doctor deprecation compatibility inventory", () => {
   it("keeps every record actionable", () => {
     for (const record of listDoctorDeprecationCompatRecords()) {
       expect(record.introduced, record.code).toMatch(datePattern);
-      expect(record.source, record.code).toBeTruthy();
-      expect(record.migration, record.code).toBeTruthy();
-      expect(record.replacement, record.code).toBeTruthy();
+      expect(record.source, record.code).not.toBe("");
+      expect(record.migration, record.code).not.toBe("");
+      expect(record.replacement, record.code).not.toBe("");
       expect(record.docsPath, record.code).toMatch(/^\//u);
       expect(fs.existsSync(record.migration), `${record.code}: ${record.migration}`).toBe(true);
       expect(record.tests.length, record.code).toBeGreaterThan(0);

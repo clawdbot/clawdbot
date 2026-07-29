@@ -1,3 +1,6 @@
+/**
+ * Gateway auth compatibility baseline tests.
+ */
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -8,6 +11,8 @@ import {
   ConnectErrorDetailCodes,
   createSignedDevice,
   getFreePort,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   readConnectChallengeNonce,
   openWs,
   originForPort,
@@ -16,9 +21,16 @@ import {
   startGatewayServer,
   testState,
   installGatewayTestHooks,
-} from "./server.auth.shared.js";
+} from "./server.auth.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+const CLI_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.CLI,
+  version: "1.0.0",
+  platform: "test",
+  mode: GATEWAY_CLIENT_MODES.CLI,
+};
 
 function expectAuthErrorDetails(params: {
   details: unknown;
@@ -65,7 +77,7 @@ async function expectSharedOperatorScopesCleared(
 
 async function expectLocalBackendGatewayClientScopesPreserved(
   port: number,
-  auth: { token?: string; password?: string },
+  auth: { token?: string; password?: string; skipDefaultAuth?: boolean },
 ) {
   const ws = await openWs(port);
   try {
@@ -75,7 +87,37 @@ async function expectLocalBackendGatewayClientScopesPreserved(
       scopes: ["operator.admin"],
       device: null,
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+
+    const helloOk = res.payload as
+      | {
+          auth?: {
+            scopes?: unknown;
+          };
+        }
+      | undefined;
+    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+
+    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(adminRes.ok).toBe(true);
+  } finally {
+    ws.close();
+  }
+}
+
+async function expectLocalCliSharedAuthScopesPreserved(
+  port: number,
+  auth: { token?: string; password?: string },
+) {
+  const ws = await openWs(port);
+  try {
+    const res = await connectReq(ws, {
+      ...auth,
+      client: { ...CLI_CLIENT },
+      scopes: ["operator.admin"],
+      device: null,
+    });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
 
     const helloOk = res.payload as
       | {
@@ -128,6 +170,10 @@ describe("gateway auth compatibility baseline", () => {
 
     test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
       await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
+    });
+
+    test("preserves scopes for direct-local CLI shared-token connects without device identity", async () => {
+      await expectLocalCliSharedAuthScopesPreserved(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -190,14 +236,14 @@ describe("gateway auth compatibility baseline", () => {
     test("keeps local backend device-token reconnects out of pairing", async () => {
       const identityPath = path.join(
         os.tmpdir(),
-        `openclaw-backend-device-${process.pid}-${port}.json`,
+        `openclaw-backend-device-${process.pid}-${port}.sqlite`,
       );
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../infra/device-identity.js");
       const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
         await import("../infra/device-pairing.js");
 
-      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
       const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -217,7 +263,8 @@ describe("gateway auth compatibility baseline", () => {
       });
       expect(rotated.ok).toBe(true);
       const rotatedToken = rotated.ok ? rotated.entry.token : "";
-      expect(rotatedToken).toBeTruthy();
+      expect(rotatedToken).toBeTypeOf("string");
+      expect(rotatedToken.length).toBeGreaterThan(0);
 
       const ws = await openWs(port);
       try {
@@ -302,6 +349,10 @@ describe("gateway auth compatibility baseline", () => {
     test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
       await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
     });
+
+    test("preserves scopes for direct-local CLI shared-password connects without device identity", async () => {
+      await expectLocalCliSharedAuthScopesPreserved(port, { password: "secret" });
+    });
   });
 
   describe("none mode", () => {
@@ -332,12 +383,35 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
+    test("allows auth-none local backend connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesPreserved(port, { skipDefaultAuth: true });
+    });
+
+    test("rejects auth-none browser-origin backend connects without device identity", async () => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          scopes: ["operator.admin"],
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("device identity required");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
     test("keeps auth-none control ui first-connect token absence unchanged", async () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       try {
         const deviceIdentityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.sqlite`,
         );
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
@@ -369,11 +443,11 @@ describe("gateway auth compatibility baseline", () => {
         const nonce = await readConnectChallengeNonce(ws);
         const identityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-${process.pid}-${port}.sqlite`,
         );
         const staleIdentityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.sqlite`,
         );
         const { identity, device } = await createSignedDevice({
           token: null,
@@ -383,7 +457,7 @@ describe("gateway auth compatibility baseline", () => {
           identityPath,
           nonce,
         });
-        const staleIdentity = loadOrCreateDeviceIdentity(staleIdentityPath);
+        const staleIdentity = loadOrCreateDeviceIdentity({ path: staleIdentityPath });
         const pending = await requestDevicePairing({
           deviceId: identity.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(staleIdentity.publicKeyPem),

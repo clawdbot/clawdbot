@@ -1,23 +1,27 @@
+/** Shared ACP manager normalization, resolution, and error helpers. */
+import { ACP_ERROR_CODES, AcpRuntimeError } from "@openclaw/acp-core/runtime/errors";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionResolution } from "./manager.types.js";
 
+/** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? fallback);
 }
 
+/** Builds the stale-session error shown when ACP metadata is missing. */
 export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   return new AcpRuntimeError(
     "ACP_SESSION_INIT_FAILED",
@@ -25,6 +29,7 @@ export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   );
 }
 
+/** Converts a session resolution union into the runtime error callers should throw. */
 export function resolveAcpSessionResolutionError(
   resolution: AcpSessionResolution,
 ): AcpRuntimeError | null {
@@ -40,17 +45,19 @@ export function resolveAcpSessionResolutionError(
   );
 }
 
+/** Returns ready ACP metadata or throws the matching resolution error. */
 export function requireReadySessionMeta(resolution: AcpSessionResolution): SessionAcpMeta {
   if (resolution.kind === "ready") {
     return resolution.meta;
   }
-  throw resolveAcpSessionResolutionError(resolution);
+  throw toErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
 }
 
 function normalizeSessionKey(sessionKey: string): string {
   return sessionKey.trim();
 }
 
+/** Canonicalizes aliases and main-session keys before ACP metadata lookup. */
 export function canonicalizeAcpSessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -78,10 +85,12 @@ export function canonicalizeAcpSessionKey(params: {
   return lowered;
 }
 
+/** Normalizes session keys for process-local actor maps. */
 export function normalizeActorKey(sessionKey: string): string {
   return normalizeLowercaseStringOrEmpty(sessionKey);
 }
 
+/** Restricts runtime-provided error codes to the ACP error-code enum. */
 export function normalizeAcpErrorCode(code: string | undefined): AcpRuntimeError["code"] {
   if (!code) {
     return "ACP_TURN_FAILED";
@@ -105,13 +114,7 @@ export function createUnsupportedControlError(params: {
   );
 }
 
-export function resolveRuntimeIdleTtlMs(cfg: OpenClawConfig): number {
-  const ttlMinutes = cfg.acp?.runtime?.ttlMinutes;
-  if (typeof ttlMinutes !== "number" || !Number.isFinite(ttlMinutes) || ttlMinutes <= 0) {
-    return 0;
-  }
-  return Math.round(ttlMinutes * 60 * 1000);
-}
+export const DEFAULT_ACP_RUNTIME_IDLE_TTL_MS = 0;
 
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
   const raw = meta as Record<string, unknown>;

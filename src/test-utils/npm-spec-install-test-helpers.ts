@@ -1,3 +1,4 @@
+// Helpers for package install tests that inspect npm spec output.
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
@@ -25,6 +26,7 @@ type NpmViewMetadata = {
   shasum?: string;
 };
 
+// Keep spawn doubles shaped like the real process helper so install tests stay narrow.
 function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   return {
     code: 0,
@@ -36,6 +38,7 @@ function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   };
 }
 
+/** Mocks npm view JSON metadata for package install validation tests. */
 export function mockNpmViewMetadataResult(
   run: {
     mockImplementation: (

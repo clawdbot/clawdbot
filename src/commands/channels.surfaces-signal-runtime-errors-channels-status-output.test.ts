@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// Channels status error-surface tests cover Signal runtime errors in channel status output.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+
+const now = 1_700_000_000_000;
 
 const signalPlugin = {
   ...createChannelTestPluginBase({ id: "signal" }),
@@ -22,12 +25,15 @@ const imessagePlugin = {
 
 describe("channels command", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
     );
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setActivePluginRegistry(createTestRegistry([]));
   });
 
@@ -101,5 +107,27 @@ describe("channels command", () => {
 
     expect(lines.join("\n")).toMatch(/Gateway event loop degraded/);
     expect(lines.join("\n")).toMatch(/eventLoopDelayMaxMs=62000/);
+  });
+
+  it("surfaces transport liveness timestamps in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        signal: "Signal",
+      },
+      channelAccounts: {
+        signal: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: true,
+            connected: true,
+            lastTransportActivityAt: now - 2 * 60_000,
+          },
+        ],
+      },
+    });
+
+    expect(lines.join("\n")).toContain("transport:");
   });
 });

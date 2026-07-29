@@ -1,3 +1,5 @@
+// Detects dangerous config names used by validation and warnings.
+import { asBoolean } from "../utils/boolean.js";
 import type { OpenClawConfig } from "./config.js";
 
 type DangerousNameMatchingConfig = {
@@ -23,16 +25,14 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function asOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
+/** Returns true only for the explicit dangerous name-matching opt-in flag. */
 export function isDangerousNameMatchingEnabled(
   config: DangerousNameMatchingConfig | null | undefined,
 ): boolean {
   return config?.dangerouslyAllowNameMatching === true;
 }
 
+/** Resolves account-level dangerous name matching, inheriting the provider flag when unset. */
 export function resolveDangerousNameMatchingEnabled(
   input: DangerousNameMatchingResolverInput,
 ): boolean {
@@ -42,6 +42,7 @@ export function resolveDangerousNameMatchingEnabled(
   return isDangerousNameMatchingEnabled(input.providerConfig);
 }
 
+/** Collects provider/account scopes that policy and doctor surfaces can audit. */
 export function collectProviderDangerousNameMatchingScopes(
   cfg: OpenClawConfig,
   provider: string,
@@ -80,11 +81,12 @@ export function collectProviderDangerousNameMatchingScopes(
     }
 
     const accountPrefix = `${providerPrefix}.accounts.${key}`;
-    const accountDangerousNameMatching = asOptionalBoolean(account.dangerouslyAllowNameMatching);
+    const accountDangerousNameMatching = asBoolean(account.dangerouslyAllowNameMatching);
 
     scopes.push({
       prefix: accountPrefix,
       account,
+      // Account config can override the provider opt-in; nullish means inherit provider state.
       dangerousNameMatchingEnabled:
         accountDangerousNameMatching ?? providerDangerousNameMatchingEnabled,
       dangerousFlagPath:

@@ -1,7 +1,21 @@
+// Covers direct-message policy audit findings for channels.
 import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
+
+type ChannelSecurityFinding = Awaited<ReturnType<typeof collectChannelSecurityFindings>>[number];
+
+function requireFinding(
+  findings: ChannelSecurityFinding[],
+  checkId: string,
+): ChannelSecurityFinding {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected finding ${checkId}`);
+  }
+  return finding;
+}
 
 describe("security audit channel dm policy", () => {
   it("warns when multiple DM senders share the main session", async () => {
@@ -44,14 +58,13 @@ describe("security audit channel dm policy", () => {
       plugins,
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.whatsapp.dm.scope_main_multiuser",
-          severity: "warn",
-          remediation: expect.stringContaining('config set session.dmScope "per-channel-peer"'),
-        }),
-      ]),
+    const sharedScopeFinding = requireFinding(
+      findings,
+      "channels.whatsapp.dm.scope_main_multiuser",
+    );
+    expect(sharedScopeFinding.severity).toBe("warn");
+    expect(sharedScopeFinding.remediation).toContain(
+      'config set session.dmScope "per-channel-peer"',
     );
   });
 
@@ -95,17 +108,13 @@ describe("security audit channel dm policy", () => {
       plugins,
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.telegram.dm.open",
-          severity: "critical",
-        }),
-        expect.objectContaining({
-          checkId: "channels.telegram.dm.scope_main_multiuser",
-          severity: "warn",
-        }),
-      ]),
+    const openDmFinding = requireFinding(findings, "channels.telegram.dm.open");
+    expect(openDmFinding.severity).toBe("critical");
+
+    const sharedScopeFinding = requireFinding(
+      findings,
+      "channels.telegram.dm.scope_main_multiuser",
     );
+    expect(sharedScopeFinding.severity).toBe("warn");
   });
 });

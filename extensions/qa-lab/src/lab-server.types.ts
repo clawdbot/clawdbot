@@ -1,3 +1,4 @@
+// Qa Lab type declarations define plugin contracts.
 import type { QaBusState } from "./bus-state.js";
 import type { QaSelfCheckResult } from "./self-check.js";
 
@@ -49,12 +50,13 @@ export type QaLabServerStartParams = {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
+  controlUiProxyToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
+  selfCheckWaitTimeoutMs?: number;
 };
 
 export type QaLabServerHandle = {
@@ -63,7 +65,7 @@ export type QaLabServerHandle = {
   state: QaBusState;
   setControlUi: (next: {
     controlUiUrl?: string | null;
-    controlUiToken?: string | null;
+    controlUiProxyToken?: string | null;
     controlUiProxyTarget?: string | null;
   }) => void;
   setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;

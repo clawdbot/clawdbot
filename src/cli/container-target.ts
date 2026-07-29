@@ -1,10 +1,13 @@
+// CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
+import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 type CliContainerParseResult =
   | { ok: true; container: string | null; argv: string[] }
@@ -28,6 +31,7 @@ type ContainerRuntimeExec = {
 };
 
 const CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV = "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL";
+const CONTAINER_RUNTIME_PROBE_TIMEOUT_MS = 10_000;
 
 export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
   let container: string | null = null;
@@ -72,8 +76,17 @@ function isContainerRunning(params: {
     params.exec.command,
     [...params.exec.argsPrefix, "inspect", "--format", "{{.State.Running}}", params.containerName],
     params.exec.command === "sudo"
-      ? { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
-      : { encoding: "utf8" },
+      ? {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          stdio: ["inherit", "pipe", "inherit"],
+          timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
+        }
+      : {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
+        },
   );
   return result.status === 0 && result.stdout.trim() === "true";
 }
@@ -123,7 +136,7 @@ function resolveRunningContainer(params: {
       `Container "${params.containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
     );
   }
-  return matches[0];
+  return expectDefined(matches[0], "matches capture group 0");
 }
 
 function buildContainerExecArgs(params: {
@@ -134,6 +147,7 @@ function buildContainerExecArgs(params: {
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
 }): string[] {
+  // Preserve proxy env only after loopback validation; localhost would point inside the container.
   const envFlag = params.exec.runtime === "docker" ? "-e" : "--env";
   const proxyUrl = normalizeOptionalString(params.env.OPENCLAW_PROXY_URL);
   if (proxyUrl) {
@@ -181,7 +195,7 @@ function isLoopbackProxyHostname(hostname: string): boolean {
     return true;
   }
   if (isIP(normalizedHostname) === 4) {
-    return normalizedHostname.split(".", 1)[0] === "127";
+    return normalizedHostname.startsWith("127.");
   }
   const ipv6Hostname = normalizedHostname.replace(/^\[|\]$/g, "");
   if (isIP(ipv6Hostname) !== 6) {
@@ -194,7 +208,7 @@ function isLoopbackProxyHostname(hostname: string): boolean {
   if (!mapped) {
     return false;
   }
-  const high = Number.parseInt(mapped[1], 16);
+  const high = Number.parseInt(expectDefined(mapped[1], "mapped capture group 1"), 16);
   return Number.isInteger(high) && high >= 0x7f00 && high <= 0x7fff;
 }
 
@@ -308,6 +322,6 @@ export function maybeRunCliInContainer(
   );
   return {
     handled: true,
-    exitCode: typeof result.status === "number" ? result.status : 1,
+    exitCode: resolveSubprocessExitCode(result.status, result.signal),
   };
 }

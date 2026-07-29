@@ -1,5 +1,6 @@
+// Covers wired plugin hooks around LLM request handling.
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 const hookCtx = {
   agentId: "main",
@@ -9,10 +10,10 @@ const hookCtx = {
 async function expectLlmHookCall(params: {
   hookName: "model_call_started" | "model_call_ended" | "llm_input" | "llm_output";
   event: Record<string, unknown>;
-  expectedEvent: Record<string, unknown>;
 }) {
   const handler = vi.fn();
   const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
+  let expectedEvent: Record<string, unknown> = params.event;
 
   if (params.hookName === "model_call_started") {
     await runner.runModelCallStarted(
@@ -32,6 +33,10 @@ async function expectLlmHookCall(params: {
       } as Parameters<typeof runner.runLlmInput>[0],
       hookCtx,
     );
+    expectedEvent = {
+      ...params.event,
+      historyMessages: [...((params.event.historyMessages as unknown[] | undefined) ?? [])],
+    };
   } else {
     await runner.runLlmOutput(
       {
@@ -40,12 +45,13 @@ async function expectLlmHookCall(params: {
       } as Parameters<typeof runner.runLlmOutput>[0],
       hookCtx,
     );
+    expectedEvent = {
+      ...params.event,
+      assistantTexts: [...((params.event.assistantTexts as string[] | undefined) ?? [])],
+    };
   }
 
-  expect(handler).toHaveBeenCalledWith(
-    expect.objectContaining(params.expectedEvent),
-    expect.objectContaining({ sessionId: "session-1" }),
-  );
+  expect(handler).toHaveBeenCalledWith(expectedEvent, hookCtx);
 }
 
 describe("llm hook runner methods", () => {
@@ -63,7 +69,6 @@ describe("llm hook runner methods", () => {
         api: "openai-responses",
         transport: "http",
       },
-      expectedEvent: { runId: "run-1", callId: "call-1", provider: "openai" },
     },
     {
       name: "runModelCallEnded invokes registered model_call_ended hooks",
@@ -80,7 +85,6 @@ describe("llm hook runner methods", () => {
         errorCategory: "TimeoutError",
         upstreamRequestIdHash: "sha256:abcdef123456",
       },
-      expectedEvent: { runId: "run-1", callId: "call-1", outcome: "error" },
     },
     {
       name: "runLlmInput invokes registered llm_input hooks",
@@ -95,8 +99,8 @@ describe("llm hook runner methods", () => {
         prompt: "hello",
         historyMessages: [],
         imagesCount: 0,
+        tools: [],
       },
-      expectedEvent: { runId: "run-1", prompt: "hello" },
     },
     {
       name: "runLlmOutput invokes registered llm_output hooks",
@@ -115,10 +119,9 @@ describe("llm hook runner methods", () => {
           total: 30,
         },
       },
-      expectedEvent: { runId: "run-1", assistantTexts: ["hi"] },
     },
-  ] as const)("$name", async ({ hookName, expectedEvent, event }) => {
-    await expectLlmHookCall({ hookName, event, expectedEvent });
+  ] as const)("$name", async ({ hookName, event }) => {
+    await expectLlmHookCall({ hookName, event });
   });
 
   it("hasHooks returns true for registered llm hooks", () => {

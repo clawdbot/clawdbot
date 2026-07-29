@@ -1,5 +1,10 @@
+// Feishu plugin module implements monitor.state behavior.
 import * as http from "node:http";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import {
+  resolveFeishuWebhookAnomalyDefaults,
+  resolveFeishuWebhookRateLimitDefaults,
+} from "./monitor-defaults.js";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
@@ -12,83 +17,23 @@ export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
 export const botNames = new Map<string, string>();
+// HTTP close is awaited, so a replacement monitor can write identity before
+// registering its replacement server. Revisions keep stale close cleanup from
+// erasing that newer identity.
+const botIdentityRevisions = new Map<string, number>();
 
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
+const FEISHU_HTTP_SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
-type WebhookRateLimitDefaults = {
-  windowMs: number;
-  maxRequests: number;
-  maxTrackedKeys: number;
+type BotIdentitySnapshot = {
+  revision: number;
 };
 
-type WebhookAnomalyDefaults = {
-  maxTrackedKeys: number;
-  ttlMs: number;
-  logEvery: number;
-};
-
-const FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS: WebhookRateLimitDefaults = {
-  windowMs: 60_000,
-  maxRequests: 120,
-  maxTrackedKeys: 4_096,
-};
-
-const FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS: WebhookAnomalyDefaults = {
-  maxTrackedKeys: 4_096,
-  ttlMs: 6 * 60 * 60_000,
-  logEvery: 25,
-};
-
-function coercePositiveInt(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
-
-export function resolveFeishuWebhookRateLimitDefaultsForTest(
-  defaults: unknown,
-): WebhookRateLimitDefaults {
-  const resolved = defaults as Partial<WebhookRateLimitDefaults> | null | undefined;
-  return {
-    windowMs: coercePositiveInt(
-      resolved?.windowMs,
-      FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS.windowMs,
-    ),
-    maxRequests: coercePositiveInt(
-      resolved?.maxRequests,
-      FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS.maxRequests,
-    ),
-    maxTrackedKeys: coercePositiveInt(
-      resolved?.maxTrackedKeys,
-      FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS.maxTrackedKeys,
-    ),
-  };
-}
-
-export function resolveFeishuWebhookAnomalyDefaultsForTest(
-  defaults: unknown,
-): WebhookAnomalyDefaults {
-  const resolved = defaults as Partial<WebhookAnomalyDefaults> | null | undefined;
-  return {
-    maxTrackedKeys: coercePositiveInt(
-      resolved?.maxTrackedKeys,
-      FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.maxTrackedKeys,
-    ),
-    ttlMs: coercePositiveInt(resolved?.ttlMs, FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.ttlMs),
-    logEvery: coercePositiveInt(
-      resolved?.logEvery,
-      FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.logEvery,
-    ),
-  };
-}
-
-const feishuWebhookRateLimitDefaults = resolveFeishuWebhookRateLimitDefaultsForTest(
+const feishuWebhookRateLimitDefaults = resolveFeishuWebhookRateLimitDefaults(
   WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
 );
-const feishuWebhookAnomalyDefaults = resolveFeishuWebhookAnomalyDefaultsForTest(
+const feishuWebhookAnomalyDefaults = resolveFeishuWebhookAnomalyDefaults(
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
 );
 
@@ -104,28 +49,100 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
   logEvery: feishuWebhookAnomalyDefaults.logEvery,
 });
 
-function closeWsClient(client: Lark.WSClient | undefined): void {
-  if (!client) {
+function readBotIdentityRevision(accountId: string): number {
+  return botIdentityRevisions.get(accountId) ?? 0;
+}
+
+function bumpBotIdentityRevision(accountId: string): void {
+  botIdentityRevisions.set(accountId, readBotIdentityRevision(accountId) + 1);
+}
+
+function captureBotIdentitySnapshot(accountId: string): BotIdentitySnapshot {
+  return { revision: readBotIdentityRevision(accountId) };
+}
+
+function clearFeishuBotIdentityStateIfUnchanged(
+  accountId: string,
+  snapshot: BotIdentitySnapshot,
+): void {
+  if (readBotIdentityRevision(accountId) !== snapshot.revision) {
     return;
   }
-  try {
-    client.close();
-  } catch {
-    /* Best-effort cleanup */
+  botOpenIds.delete(accountId);
+  botNames.delete(accountId);
+  bumpBotIdentityRevision(accountId);
+}
+
+export function setFeishuBotIdentityState(
+  accountId: string,
+  identity: { botOpenId: string; botName: string | undefined },
+): void {
+  botOpenIds.set(accountId, identity.botOpenId);
+  if (identity.botName) {
+    botNames.set(accountId, identity.botName);
+  } else {
+    botNames.delete(accountId);
   }
+  bumpBotIdentityRevision(accountId);
 }
 
-export function clearFeishuWebhookRateLimitStateForTest(): void {
-  feishuWebhookRateLimiter.clear();
-  feishuWebhookAnomalyTracker.clear();
+export function clearFeishuBotIdentityState(accountId: string): void {
+  botOpenIds.delete(accountId);
+  botNames.delete(accountId);
+  bumpBotIdentityRevision(accountId);
 }
 
-export function getFeishuWebhookRateLimitStateSizeForTest(): number {
-  return feishuWebhookRateLimiter.size();
+function isServerNotRunningError(error: Error): boolean {
+  return (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING";
 }
 
-export function isWebhookRateLimitedForTest(key: string, nowMs: number): boolean {
-  return feishuWebhookRateLimiter.isRateLimited(key, nowMs);
+async function closeFeishuHttpServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const settle = (err?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(fallbackTimer);
+      if (!err || isServerNotRunningError(err)) {
+        resolve();
+        return;
+      }
+      reject(err);
+    };
+    const fallbackTimer = setTimeout(() => {
+      try {
+        server.closeAllConnections();
+        settle();
+      } catch (err) {
+        settle(err instanceof Error ? err : new Error(String(err)));
+      }
+    }, FEISHU_HTTP_SERVER_CLOSE_TIMEOUT_MS);
+
+    try {
+      server.close((err) => {
+        settle(err);
+      });
+    } catch (err) {
+      settle(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+}
+
+export async function closeTrackedFeishuHttpServer(
+  accountId: string,
+  server: http.Server,
+): Promise<void> {
+  const identitySnapshot = captureBotIdentitySnapshot(accountId);
+  try {
+    await closeFeishuHttpServer(server);
+  } finally {
+    if (httpServers.get(accountId) === server) {
+      httpServers.delete(accountId);
+      clearFeishuBotIdentityStateIfUnchanged(accountId, identitySnapshot);
+    }
+  }
 }
 
 export function recordWebhookStatus(
@@ -141,30 +158,4 @@ export function recordWebhookStatus(
     message: (count) =>
       `feishu[${accountId}]: webhook anomaly path=${path} status=${statusCode} count=${count}`,
   });
-}
-
-export function stopFeishuMonitorState(accountId?: string): void {
-  if (accountId) {
-    closeWsClient(wsClients.get(accountId));
-    wsClients.delete(accountId);
-    const server = httpServers.get(accountId);
-    if (server) {
-      server.close();
-      httpServers.delete(accountId);
-    }
-    botOpenIds.delete(accountId);
-    botNames.delete(accountId);
-    return;
-  }
-
-  for (const client of wsClients.values()) {
-    closeWsClient(client);
-  }
-  wsClients.clear();
-  for (const server of httpServers.values()) {
-    server.close();
-  }
-  httpServers.clear();
-  botOpenIds.clear();
-  botNames.clear();
 }

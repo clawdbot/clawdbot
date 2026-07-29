@@ -1,3 +1,4 @@
+// Feishu tests cover tools config plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
@@ -17,5 +18,21 @@ describe("feishu tools config", () => {
     });
 
     expect(parsed.tools?.chat).toBe(false);
+  });
+
+  it("enables bitable tool by default", () => {
+    const resolved = resolveToolsConfig(undefined);
+    expect(resolved.bitable).toBe(true);
+  });
+
+  it("accepts tools.bitable in config schema", () => {
+    const parsed = FeishuConfigSchema.parse({
+      enabled: true,
+      tools: {
+        bitable: false,
+      },
+    });
+
+    expect(parsed.tools?.bitable).toBe(false);
   });
 });

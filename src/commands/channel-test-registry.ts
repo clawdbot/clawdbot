@@ -1,3 +1,4 @@
+// Test helper for installing bundled channel plugins into the active plugin registry.
 import {
   getBundledChannelPlugin,
   listBundledChannelPluginIds,
@@ -42,6 +43,7 @@ function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): vo
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
+/** Reset the active plugin registry to bundled channel plugins for command tests. */
 export function setDefaultChannelPluginRegistryForTests(): void {
   setChannelPluginRegistryForTests();
 }

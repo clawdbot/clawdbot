@@ -1,3 +1,4 @@
+// Covers best-effort cleanup error swallowing.
 import { describe, expect, it, vi } from "vitest";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
 

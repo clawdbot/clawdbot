@@ -1,7 +1,9 @@
+// Discord API module exposes the plugin public contract.
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { createChannelWebhook, getChannel } from "../internal/discord.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
@@ -84,13 +86,7 @@ export function summarizeDiscordError(err: unknown): string {
 }
 
 function extractNumericDiscordErrorValue(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return Number(value);
-  }
-  return undefined;
+  return parseStrictNonNegativeInteger(value);
 }
 
 function extractDiscordErrorStatus(err: unknown): number | undefined {
@@ -291,7 +287,6 @@ export async function createThreadForBinding(params: {
       params.channelId,
       {
         name: params.threadName,
-        autoArchiveMinutes: 60,
       },
       {
         cfg: params.cfg,

@@ -1,9 +1,12 @@
+// Resolves platform-specific commands for best-effort browser opening.
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
+// Browser opening is best-effort and platform-specific; callers get a resolved
+// command first so UI can explain why open-in-browser is unavailable.
 type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
@@ -40,6 +43,7 @@ function normalizeBrowserOpenUrl(raw: string): string | null {
   }
 }
 
+/** Resolve the platform command used to open an HTTP(S) URL in a browser. */
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
   const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -48,7 +52,7 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     Boolean(process.env.SSH_TTY) ||
     Boolean(process.env.SSH_CONNECTION);
 
-  if (isSsh && !hasDisplay && platform !== "win32") {
+  if (isSsh && !hasDisplay && platform !== "win32" && platform !== "darwin") {
     return { argv: null, reason: "ssh-no-display" };
   }
 
@@ -88,6 +92,7 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   return { argv: null, reason: "unsupported-platform" };
 }
 
+/** Report whether browser opening is currently available. */
 export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
@@ -96,6 +101,7 @@ export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
   return { ok: true, command: resolved.command };
 }
 
+/** Open a safe HTTP(S) URL in the user's browser when the platform supports it. */
 export async function openUrl(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;

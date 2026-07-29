@@ -21,6 +21,7 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
+/** Collect Synology Chat security findings through the lazy bundled-plugin facade. */
 export const collectSynologyChatSecurityAuditFindings: FacadeModule["collectSynologyChatSecurityAuditFindings"] =
   ((...args) =>
     loadFacadeModule().collectSynologyChatSecurityAuditFindings(

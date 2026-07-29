@@ -1,5 +1,5 @@
 ---
-summary: "Adds the LINE channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw LINE channel plugin for LINE Bot API chats."
 read_when:
   - You are installing, configuring, or auditing the line plugin
 title: "LINE plugin"
@@ -7,7 +7,7 @@ title: "LINE plugin"
 
 # LINE plugin
 
-Adds the LINE channel surface for sending and receiving OpenClaw messages.
+OpenClaw LINE channel plugin for LINE Bot API chats.
 
 ## Distribution
 
@@ -16,8 +16,8 @@ Adds the LINE channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: line
+channels: `line`
 
 ## Related docs
 
-- [line](/channels/line)
+- [LINE](/channels/line)

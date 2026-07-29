@@ -1,8 +1,10 @@
+// Imessage helper module supports normalize behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeBareIMessageChatIdentifier } from "./target-identifiers.js";
 
 const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
@@ -52,6 +54,10 @@ function normalizeIMessageHandle(raw: string): string {
   if (trimmed.includes("@")) {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
+  const bareChatIdentifier = normalizeBareIMessageChatIdentifier(trimmed);
+  if (bareChatIdentifier) {
+    return `chat_identifier:${bareChatIdentifier}`;
+  }
   const normalized = normalizeE164(trimmed);
   if (normalized) {
     return normalized;
@@ -90,6 +96,9 @@ export function looksLikeIMessageTargetId(raw: string): boolean {
     return false;
   }
   if (CHAT_TARGET_PREFIX_RE.test(trimmed)) {
+    return true;
+  }
+  if (normalizeBareIMessageChatIdentifier(trimmed)) {
     return true;
   }
   return looksLikeHandleOrPhoneTarget({

@@ -1,3 +1,4 @@
+// Openrouter provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
@@ -6,20 +7,23 @@ import type {
 import {
   generatedImageAssetFromBase64,
   generatedImageAssetFromDataUrl,
+  resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
@@ -38,60 +42,73 @@ const SUPPORTED_ASPECT_RATIOS = [
   "16:9",
   "21:9",
 ] as const;
+const OPENROUTER_IMAGE_MALFORMED_RESPONSE = "OpenRouter image generation response malformed";
 
-type OpenRouterImageEntry = {
-  image_url?: { url?: string };
-  imageUrl?: { url?: string };
-};
+function throwMalformedOpenRouterImageResponse(): never {
+  throw new Error(OPENROUTER_IMAGE_MALFORMED_RESPONSE);
+}
 
-type OpenRouterChatCompletionResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string | unknown[] | null;
-      images?: OpenRouterImageEntry[];
-    };
-  }>;
-};
+function requireOpenRouterImageRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throwMalformedOpenRouterImageResponse();
+  }
+  return value;
+}
 
-function pushDataUrlImage(images: GeneratedImageAsset[], dataUrl: string): void {
+function requireOpenRouterImageUrl(value: unknown): string {
+  const url = normalizeOptionalString(requireOpenRouterImageRecord(value).url);
+  if (!url) {
+    throwMalformedOpenRouterImageResponse();
+  }
+  return url;
+}
+
+function pushDataUrlImage(images: GeneratedImageAsset[], dataUrl: string, strict = true): void {
   const image = generatedImageAssetFromDataUrl({ dataUrl, index: images.length });
   if (!image) {
+    if (strict) {
+      throwMalformedOpenRouterImageResponse();
+    }
     return;
   }
   images.push(image);
 }
 
-function extractImagesFromPart(images: GeneratedImageAsset[], part: unknown): void {
-  if (!part || typeof part !== "object") {
+function extractImagesFromPart(images: GeneratedImageAsset[], value: unknown): void {
+  const part = requireOpenRouterImageRecord(value);
+  if (part.type === "text") {
     return;
   }
-  const value = part as Record<string, unknown>;
-  if (value.type === "image_url") {
-    const imageUrl = (value.image_url ?? value.imageUrl) as Record<string, unknown> | undefined;
-    const url = typeof imageUrl?.url === "string" ? imageUrl.url : undefined;
-    if (url) {
-      pushDataUrlImage(images, url);
-      return;
-    }
+  if (part.type === "image_url") {
+    pushDataUrlImage(images, requireOpenRouterImageUrl(part.image_url ?? part.imageUrl));
+    return;
   }
 
-  const rawBase64 = typeof value.b64_json === "string" ? value.b64_json : undefined;
+  const rawBase64 = normalizeOptionalString(part.b64_json);
   if (rawBase64) {
     const image = generatedImageAssetFromBase64({ base64: rawBase64, index: images.length });
     if (image) {
       images.push(image);
+      return;
     }
-    return;
+    throwMalformedOpenRouterImageResponse();
+  }
+  if ("b64_json" in part) {
+    throwMalformedOpenRouterImageResponse();
   }
 
-  const inlineData = (value.inlineData ?? value.inline_data) as Record<string, unknown> | undefined;
-  const data = typeof inlineData?.data === "string" ? inlineData.data.trim() : undefined;
-  if (!data) {
+  const inlineData = part.inlineData ?? part.inline_data;
+  if (inlineData === undefined || inlineData === null) {
     return;
   }
+  const inline = requireOpenRouterImageRecord(inlineData);
+  const data = normalizeOptionalString(inline.data);
+  if (!data) {
+    throwMalformedOpenRouterImageResponse();
+  }
   const mimeType =
-    (typeof inlineData?.mimeType === "string" ? inlineData.mimeType : undefined) ??
-    (typeof inlineData?.mime_type === "string" ? inlineData.mime_type : undefined) ??
+    normalizeOptionalString(inline.mimeType) ??
+    normalizeOptionalString(inline.mime_type) ??
     "image/png";
   const image = generatedImageAssetFromBase64({
     base64: data,
@@ -100,23 +117,38 @@ function extractImagesFromPart(images: GeneratedImageAsset[], part: unknown): vo
   });
   if (image) {
     images.push(image);
+    return;
   }
+  throwMalformedOpenRouterImageResponse();
 }
 
-export function extractOpenRouterImagesFromResponse(
-  body: OpenRouterChatCompletionResponse,
-): GeneratedImageAsset[] {
+function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset[] {
+  const payload = requireOpenRouterImageRecord(body);
+  const choices = payload.choices;
+  if (choices === undefined || choices === null) {
+    return [];
+  }
+  if (!Array.isArray(choices)) {
+    throwMalformedOpenRouterImageResponse();
+  }
+
   const images: GeneratedImageAsset[] = [];
-  for (const choice of body.choices ?? []) {
-    const message = choice.message;
-    if (!message) {
+  for (const choiceValue of choices) {
+    const choice = requireOpenRouterImageRecord(choiceValue);
+    const messageValue = choice.message;
+    if (messageValue === undefined || messageValue === null) {
       continue;
     }
+    const message = requireOpenRouterImageRecord(messageValue);
 
-    for (const entry of message.images ?? []) {
-      const url = entry.image_url?.url ?? entry.imageUrl?.url;
-      if (typeof url === "string") {
-        pushDataUrlImage(images, url);
+    const messageImages = message.images;
+    if (messageImages !== undefined && messageImages !== null) {
+      if (!Array.isArray(messageImages)) {
+        throwMalformedOpenRouterImageResponse();
+      }
+      for (const entryValue of messageImages) {
+        const entry = requireOpenRouterImageRecord(entryValue);
+        pushDataUrlImage(images, requireOpenRouterImageUrl(entry.image_url ?? entry.imageUrl));
       }
     }
 
@@ -124,12 +156,14 @@ export function extractOpenRouterImagesFromResponse(
     if (typeof content === "string" && content.length > 0) {
       const dataUrlPattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g;
       for (const match of content.matchAll(dataUrlPattern)) {
-        pushDataUrlImage(images, match[0]);
+        pushDataUrlImage(images, match[0], false);
       }
     } else if (Array.isArray(content)) {
       for (const part of content) {
         extractImagesFromPart(images, part);
       }
+    } else if (content !== undefined && content !== null) {
+      throwMalformedOpenRouterImageResponse();
     }
   }
   return images;
@@ -236,6 +270,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
           transport: "http",
         });
 
+      const count = resolveImageCount(req.count);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,
@@ -243,18 +278,24 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
           model,
           messages: [{ role: "user", content: buildMessageContent(req) }],
           modalities: ["image", "text"],
-          n: resolveImageCount(req.count),
+          n: count,
           ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
         },
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
 
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter image generation failed");
-        const payload = (await response.json()) as OpenRouterChatCompletionResponse;
+        const payload = await readProviderJsonResponse(response, "openrouter.image-generation", {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            count,
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          ),
+        });
         const images = extractOpenRouterImagesFromResponse(payload);
         if (images.length === 0) {
           throw new Error("OpenRouter image generation response missing image data");

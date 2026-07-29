@@ -1,18 +1,4 @@
-/**
- * Strip model control tokens leaked into assistant text output.
- *
- * Models like GLM-5 and DeepSeek sometimes emit internal delimiter tokens
- * (e.g. `<|assistant|>`, `<|tool_call_result_begin|>`, `<｜begin▁of▁sentence｜>`)
- * in their responses. These use the universal `<|...|>` convention (ASCII or
- * full-width pipe variants) and should never reach end users.
- *
- * Matches inside fenced code blocks or inline code spans are preserved so
- * that documentation / examples that reference these tokens are not corrupted.
- *
- * This is a provider bug — no upstream fix tracked yet.
- * Remove this function when upstream providers stop leaking tokens.
- * @see https://github.com/openclaw/openclaw/issues/40020
- */
+// Model special token helpers strip model control tokens outside code regions.
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
@@ -30,6 +16,12 @@ function shouldInsertSeparator(before: string | undefined, after: string | undef
   return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
 }
 
+/**
+ * Strips leaked model control tokens like `<|assistant|>` or full-width pipe variants.
+ * Code examples are preserved; remove this when providers stop emitting these tokens.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/40020
+ */
 export function stripModelSpecialTokens(text: string): string {
   if (!text) {
     return text;

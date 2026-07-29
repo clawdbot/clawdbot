@@ -1,3 +1,4 @@
+// Tests agent runner runtime config assembly from command and session state.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -74,5 +75,20 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     });
 
     expect(resolved.config).toBe(resolvedRunConfig);
+  });
+
+  it("carries out-of-band tool bindings into the embedded run", () => {
+    const run = makeRun({});
+    run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile: {},
+    });
+
+    expect(resolved.toolBindings).toEqual(run.toolBindings);
   });
 });

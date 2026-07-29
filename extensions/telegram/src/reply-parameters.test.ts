@@ -1,3 +1,4 @@
+// Telegram tests cover reply parameters plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramSendParams,

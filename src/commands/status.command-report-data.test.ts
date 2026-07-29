@@ -1,3 +1,5 @@
+// Status command report data tests cover report data assembly from shared status fixtures.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { createStatusCommandReportDataParams } from "./status.test-support.ts";
@@ -17,7 +19,10 @@ describe("buildStatusCommandReportData", () => {
             ...baseParams.summary.sessions,
             recent: [
               {
-                ...baseParams.summary.sessions.recent[0],
+                ...expectDefined(
+                  baseParams.summary.sessions.recent[0],
+                  "baseParams.summary.sessions.recent[0] test invariant",
+                ),
                 key: "session-key",
                 kind: "direct",
                 updatedAt: 1,
@@ -39,6 +44,7 @@ describe("buildStatusCommandReportData", () => {
     );
     expect(result.pluginCompatibilityLines).toEqual(["  warn(WARN) legacy"]);
     expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
+    expect(result.modelSelectionLines).toEqual([]);
     expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
     expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
     expect(result.healthRows?.[0]).toEqual({
@@ -60,5 +66,75 @@ describe("buildStatusCommandReportData", () => {
       "muted(Skipped in fast status. Full report: cmd:openclaw security audit)",
       "muted(Deep probe: cmd:openclaw status --deep)",
     ]);
+  });
+
+  it("surfaces retained lost task cleanup timing only for detailed reports", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const summary = {
+      ...baseParams.summary,
+      taskAuditRetainedLost: {
+        count: 1,
+        nextCleanupAfter: Date.parse("2026-03-30T01:00:00.000Z"),
+      },
+    };
+
+    const deepResult = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({ summary, opts: { deep: true } }),
+    );
+    const fastResult = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({ summary, opts: {} }),
+    );
+
+    expect(deepResult.retainedLostTaskLine).toBe(
+      "muted(1 lost task retained until 2026-03-30T01:00:00.000Z)",
+    );
+    expect(fastResult.retainedLostTaskLine).toBeNull();
+  });
+
+  it("falls back when retained lost task cleanup timing is Date-invalid", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        summary: {
+          ...baseParams.summary,
+          taskAuditRetainedLost: {
+            count: 2,
+            nextCleanupAfter: 8_700_000_000_000_000,
+          },
+        },
+        opts: { deep: true },
+      }),
+    );
+
+    expect(result.retainedLostTaskLine).toBe("muted(2 lost tasks retained until cleanupAfter)");
+  });
+
+  it("adds pinned-session model selection lines", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        summary: {
+          ...baseParams.summary,
+          sessions: {
+            ...baseParams.summary.sessions,
+            recent: [
+              {
+                ...expectDefined(
+                  baseParams.summary.sessions.recent[0],
+                  "baseParams.summary.sessions.recent[0] test invariant",
+                ),
+                configuredModel: "zhipu/glm-4.5-air",
+                selectedModel: "deepseek/deepseek-v4-flash",
+                modelSelectionReason: "session override",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.modelSelectionLines).toContain("  Configured default: zhipu/glm-4.5-air");
+    expect(result.modelSelectionLines).toContain("  Session selected: deepseek/deepseek-v4-flash");
+    expect(result.modelSelectionLines).toContain("  Reason: session override");
   });
 });

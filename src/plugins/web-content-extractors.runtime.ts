@@ -1,3 +1,4 @@
+// Runtime bridge for web content extractors supplied by plugins.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { loadBundledWebContentExtractorEntriesFromDir } from "./web-content-extractor-public-artifacts.js";
@@ -29,7 +30,6 @@ export function resolvePluginWebContentExtractors(params?: {
     onlyPluginIds: params?.onlyPluginIds,
     contract: "webContentExtractors",
     compatMode: {
-      allowlist: true,
       enablement: "always",
       vitest: true,
     },

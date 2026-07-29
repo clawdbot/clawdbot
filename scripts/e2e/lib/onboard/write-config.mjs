@@ -1,3 +1,4 @@
+// Config writer helper for onboard E2E scenarios.
 import fs from "node:fs";
 
 const [scenario, configPath] = process.argv.slice(2);

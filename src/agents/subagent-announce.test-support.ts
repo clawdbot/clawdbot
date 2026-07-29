@@ -1,6 +1,12 @@
+/**
+ * Test runtime factory for subagent announce delivery. It wires gateway,
+ * session-store, queue, and hook behavior to caller-provided mocks.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway } from "../gateway/call.js";
-import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
+import type { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
+import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
@@ -9,12 +15,12 @@ type DeliveryRuntimeMockOptions = {
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
   resolveMainSessionKey: (cfg: unknown) => string;
   resolveStorePath: (store: unknown, options: unknown) => string;
-  isEmbeddedPiRunActive: (sessionId: string) => boolean;
-  queueEmbeddedPiMessage: (
+  isEmbeddedAgentRunActive: (sessionId: string) => boolean;
+  queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
     text: string,
-    options?: EmbeddedPiQueueMessageOptions,
-  ) => boolean;
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => EmbeddedAgentQueueMessageOutcome;
   hasHooks?: () => boolean;
 };
 
@@ -44,25 +50,42 @@ function resolveQueueSettings(params: {
   channel?: string;
 }) {
   return {
-    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
+    mode:
+      (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "followup",
   };
 }
 
+/** Create a mocked announce delivery runtime for focused subagent tests. */
 export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRuntimeMockOptions) {
   return {
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
       (await options.callGateway(request)) as T) as typeof callGateway,
+    dispatchGatewayMethodInProcess: (async <T = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown>,
+      callOptions?: { expectFinal?: boolean; timeoutMs?: number },
+    ) =>
+      (await options.callGateway({
+        method,
+        params,
+        expectFinal: callOptions?.expectFinal,
+        timeoutMs: callOptions?.timeoutMs,
+      })) as T) as typeof dispatchGatewayMethodInProcess,
     getRuntimeConfig: options.getRuntimeConfig,
+    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
+      (options.loadSessionStore(scope.storePath ?? "") as Record<string, unknown>)[
+        scope.sessionKey
+      ],
     loadSessionStore: options.loadSessionStore,
     resolveAgentIdFromSessionKey: options.resolveAgentIdFromSessionKey,
     resolveMainSessionKey: options.resolveMainSessionKey,
     resolveStorePath: options.resolveStorePath,
-    isEmbeddedPiRunActive: options.isEmbeddedPiRunActive,
-    queueEmbeddedPiMessage: options.queueEmbeddedPiMessage,
-    isSteeringQueueMode: (mode: string) =>
-      mode === "steer" || mode === "queue" || mode === "steer-backlog",
-    resolvePiSteeringModeForQueueMode: (mode: string) =>
-      mode === "queue" ? "one-at-a-time" : "all",
+    isEmbeddedAgentRunActive: options.isEmbeddedAgentRunActive,
+    queueEmbeddedAgentMessageWithOutcome: options.queueEmbeddedAgentMessageWithOutcome,
+    formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
+      outcome.reason && outcome.sessionId
+        ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
+        : undefined,
     getGlobalHookRunner: () => ({ hasHooks: () => options.hasHooks?.() ?? false }),
     createBoundDeliveryRouter: () => ({
       resolveDestination: () => ({ mode: "none" }),

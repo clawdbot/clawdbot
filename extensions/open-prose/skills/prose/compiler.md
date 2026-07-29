@@ -339,21 +339,24 @@ Please provide final recommendations.
 
 ## Use Statements (Program Composition)
 
-Use statements import other OpenProse programs from the registry at `p.prose.md`, enabling modular workflows.
+Use statements import other OpenProse programs from registry paths or direct
+HTTP(S) URLs, enabling modular workflows.
 
 ### Syntax
 
 ```prose
 use "@handle/slug"
 use "@handle/slug" as alias
+use "https://example.com/program.prose" as alias
 ```
 
 ### Path Format
 
-Import paths follow the format `@handle/slug`:
+Import paths are either registry references or direct HTTP(S) URLs:
 
-- `@handle` identifies the program author/organization
-- `slug` is the program name
+- `@handle/slug` identifies a program author/organization and slug.
+- `handle/slug` resolves to the same registry host used by the runtime.
+- `https://example.com/program.prose` fetches that exact URL after approval.
 
 An optional alias (`as name`) allows referencing by a shorter name.
 
@@ -371,16 +374,20 @@ use "@bob/critique" as critic
 
 When the OpenProse VM encounters a `use` statement:
 
-1. Fetch the program from `https://p.prose.md/@handle/slug`
-2. Parse the program to extract its contract (inputs/outputs)
-3. Register the program in the Import Registry
+1. Resolve the import target.
+2. If the target is remote (`http://`, `https://`, or registry shorthand), pause
+   before fetching and require the operator to approve the full remote import
+   list with `approve remote prose imports` for this run.
+3. Fetch the program only after approval.
+4. Parse the program to extract its contract (inputs/outputs).
+5. Register the program in the Import Registry.
 
 ### Validation Rules
 
 | Check                 | Severity | Message                                |
 | --------------------- | -------- | -------------------------------------- |
 | Empty path            | Error    | Use path cannot be empty               |
-| Invalid path format   | Error    | Path must be @handle/slug format       |
+| Invalid path format   | Error    | Path must be registry path or URL      |
 | Duplicate import      | Error    | Program already imported               |
 | Missing alias for dup | Error    | Alias required when importing multiple |
 
@@ -388,9 +395,11 @@ When the OpenProse VM encounters a `use` statement:
 
 Use statements are processed before any agent definitions or sessions. The OpenProse VM:
 
-1. Fetches and validates all imported programs at the start of execution
-2. Extracts input/output contracts from each program
-3. Registers programs in the Import Registry for later invocation
+1. Resolves all imported program targets at the start of execution.
+2. Requires operator approval before fetching any remote imports.
+3. Fetches and validates approved imported programs.
+4. Extracts input/output contracts from each program.
+5. Registers programs in the Import Registry for later invocation.
 
 ---
 

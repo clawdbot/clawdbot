@@ -1,3 +1,4 @@
+// Zalouser tests cover channel.setup plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,16 +16,13 @@ describe("zalouser setup plugin", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          zalouserSetupGetStatus({
-            cfg: {},
-            accountOverrides: {},
-          }),
-        ).resolves.toMatchObject({
-          channel: "zalouser",
-          configured: false,
-          statusLines: ["Zalo Personal: needs QR login"],
+        const status = await zalouserSetupGetStatus({
+          cfg: {},
+          accountOverrides: {},
         });
+        expect(status.channel).toBe("zalouser");
+        expect(status.configured).toBe(false);
+        expect(status.statusLines).toEqual(["Zalo Personal: needs QR login"]);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });

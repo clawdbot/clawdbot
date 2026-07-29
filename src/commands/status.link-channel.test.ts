@@ -1,3 +1,4 @@
+// Status link-channel tests cover channel link status summaries and redaction.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -11,7 +12,7 @@ vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: () => undefined,
 }));
 
-import { resolveLinkChannelContext } from "./status.link-channel.js";
+import { resolveLinkChannelContext } from "../status/link-channel.js";
 
 describe("resolveLinkChannelContext", () => {
   it("returns linked context from read-only inspected account state", async () => {

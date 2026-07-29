@@ -1,3 +1,4 @@
+// Isolated auth session flag tests cover auth isolation for scheduled agent sessions.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,
@@ -84,10 +85,9 @@ describe("isolated cron resolveSessionAuthProfileOverride isNewSession (#62783)"
     const openRouterCall = resolveSessionAuthProfileOverrideMock.mock.calls.find(
       (call) => call[0]?.provider === "openrouter",
     );
-    expect(
-      openRouterCall,
-      "resolveSessionAuthProfileOverride was not called with provider openrouter",
-    ).toBeDefined();
-    expect(openRouterCall?.[0]?.isNewSession).toBe(false);
+    if (!openRouterCall) {
+      throw new Error("resolveSessionAuthProfileOverride was not called with provider openrouter");
+    }
+    expect(openRouterCall[0]?.isNewSession).toBe(false);
   });
 });

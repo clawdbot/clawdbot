@@ -1,6 +1,7 @@
+// Discord plugin module implements components.builders behavior.
 import crypto from "node:crypto";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl } from "./component-custom-id.js";
 import { mapButtonStyle, normalizeModalFieldName } from "./components.parse.js";
 import type {
@@ -60,6 +61,7 @@ function createButtonComponent(params: {
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
       url = linkUrl;
+      override disabled = params.spec.disabled ?? false;
     }
     return { component: new DynamicLinkButton() };
   }
@@ -77,9 +79,9 @@ function createButtonComponent(params: {
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
-    style = style;
-    emoji = params.spec.emoji;
-    disabled = params.spec.disabled ?? false;
+    override style = style;
+    override emoji = params.spec.emoji;
+    override disabled = params.spec.disabled ?? false;
   }
   if (internalCustomId) {
     return {
@@ -92,9 +94,13 @@ function createButtonComponent(params: {
       id: componentId,
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
-      callbackData: params.spec.callbackData,
-      modalId: params.modalId,
-      allowedUsers: params.spec.allowedUsers,
+      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+      ...(params.spec.callbackDataKind !== undefined
+        ? { callbackDataKind: params.spec.callbackDataKind }
+        : {}),
+      ...(params.modalId !== undefined ? { modalId: params.modalId } : {}),
+      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
+      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
     },
   };
 }
@@ -124,10 +130,13 @@ function createSelectComponent(params: {
     id: componentId,
     kind: "select",
     label,
-    callbackData: params.spec.callbackData,
+    ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+    ...(params.spec.callbackDataKind !== undefined
+      ? { callbackDataKind: params.spec.callbackDataKind }
+      : {}),
     selectType,
     ...(options ? { options } : {}),
-    allowedUsers: params.spec.allowedUsers,
+    ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
   });
 
   if (type === "string") {
@@ -137,11 +146,11 @@ function createSelectComponent(params: {
     }
     class DynamicStringSelect extends StringSelectMenu {
       customId = customId;
-      options = options;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override options = options;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicStringSelect(),
@@ -155,10 +164,10 @@ function createSelectComponent(params: {
   if (type === "user") {
     class DynamicUserSelect extends UserSelectMenu {
       customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicUserSelect(),
@@ -168,10 +177,10 @@ function createSelectComponent(params: {
   if (type === "role") {
     class DynamicRoleSelect extends RoleSelectMenu {
       customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicRoleSelect(),
@@ -181,10 +190,10 @@ function createSelectComponent(params: {
   if (type === "mentionable") {
     class DynamicMentionableSelect extends MentionableSelectMenu {
       customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicMentionableSelect(),
@@ -193,10 +202,10 @@ function createSelectComponent(params: {
   }
   class DynamicChannelSelect extends ChannelSelectMenu {
     customId = customId;
-    minValues = params.spec.minValues;
-    maxValues = params.spec.maxValues;
-    placeholder = params.spec.placeholder;
-    disabled = false;
+    override minValues = params.spec.minValues;
+    override maxValues = params.spec.maxValues;
+    override placeholder = params.spec.placeholder;
+    override disabled = false;
   }
   return {
     component: new DynamicChannelSelect(),
@@ -250,12 +259,13 @@ export function buildDiscordComponentMessage(params: {
   > = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
+    const reusable = entry.reusable ?? params.spec.reusable;
     entries.push({
       ...entry,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      reusable: entry.reusable ?? params.spec.reusable,
+      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+      ...(reusable !== undefined ? { reusable } : {}),
       consumptionGroupId,
     });
   };
@@ -337,26 +347,30 @@ export function buildDiscordComponentMessage(params: {
       name: normalizeModalFieldName(field.name, index),
       label: field.label,
       type: field.type,
-      description: field.description,
-      placeholder: field.placeholder,
-      required: field.required,
-      options: field.options,
-      minValues: field.minValues,
-      maxValues: field.maxValues,
-      minLength: field.minLength,
-      maxLength: field.maxLength,
-      style: field.style,
+      ...(field.description !== undefined ? { description: field.description } : {}),
+      ...(field.placeholder !== undefined ? { placeholder: field.placeholder } : {}),
+      ...(field.required !== undefined ? { required: field.required } : {}),
+      ...(field.options !== undefined ? { options: field.options } : {}),
+      ...(field.minValues !== undefined ? { minValues: field.minValues } : {}),
+      ...(field.maxValues !== undefined ? { maxValues: field.maxValues } : {}),
+      ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
+      ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
+      ...(field.style !== undefined ? { style: field.style } : {}),
     }));
     modals.push({
       id: modalId,
       title: params.spec.modal.title,
-      callbackData: params.spec.modal.callbackData,
       fields,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      reusable: params.spec.reusable,
-      allowedUsers: params.spec.modal.allowedUsers,
+      ...(params.spec.modal.callbackData !== undefined
+        ? { callbackData: params.spec.modal.callbackData }
+        : {}),
+      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
+      ...(params.spec.modal.allowedUsers !== undefined
+        ? { allowedUsers: params.spec.modal.allowedUsers }
+        : {}),
     });
 
     const triggerSpec: DiscordComponentButtonSpec = {
@@ -377,7 +391,7 @@ export function buildDiscordComponentMessage(params: {
     const lastChild = containerChildren.at(-1);
     if (lastChild instanceof Row) {
       const row = lastChild;
-      const hasSelect = row.components.some((entry) => isSelectComponent(entry));
+      const hasSelect = row.components.some((entryLocal) => isSelectComponent(entryLocal));
       if (row.components.length < 5 && !hasSelect) {
         row.addComponent(component as Button);
       } else {

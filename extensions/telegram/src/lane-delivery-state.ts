@@ -1,3 +1,4 @@
+// Telegram plugin module implements lane delivery state behavior.
 type LaneDeliverySnapshot = {
   delivered: boolean;
   skippedNonSilent: number;

@@ -1,5 +1,8 @@
+// Feishu plugin module implements comment handler behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
@@ -11,13 +14,13 @@ import {
 import { buildFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import {
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
-import { resolveFeishuAllowlistMatch } from "./policy.js";
+import { resolveFeishuDmIngressAccess } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
-import type { DynamicAgentCreationConfig } from "./types.js";
 
 type HandleFeishuCommentEventParams = {
   cfg: ClawdbotConfig;
@@ -25,6 +28,8 @@ type HandleFeishuCommentEventParams = {
   runtime?: RuntimeEnv;
   event: FeishuDriveCommentNoticeEvent;
   botOpenId?: string;
+  abortSignal?: AbortSignal;
+  turnAdoptionLifecycle?: FeishuIngressLifecycle;
 };
 
 function buildCommentSessionKey(params: {
@@ -46,15 +51,13 @@ function buildCommentSessionKey(params: {
 }
 
 function parseTimestampMs(value: string | undefined): number {
-  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return parseStrictNonNegativeInteger(value) ?? Date.now();
 }
 
 export async function handleFeishuCommentEvent(
   params: HandleFeishuCommentEventParams,
 ): Promise<void> {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
   const core = getFeishuRuntime();
   const log = params.runtime?.log ?? console.log;
   const error = params.runtime?.error ?? console.error;
@@ -66,6 +69,7 @@ export async function handleFeishuCommentEvent(
     event: params.event,
     botOpenId: params.botOpenId,
     logger: log,
+    abortSignal: params.abortSignal,
   });
   if (!turn) {
     log(
@@ -80,38 +84,35 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
     commentId: turn.commentId,
   });
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
-  const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const pairing = createChannelPairingController({
     core,
     channel: "feishu",
     accountId: account.accountId,
   });
-  const storeAllowFrom =
-    dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await pairing.readAllowFromStore().catch(() => [])
-      : [];
-  const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
-  const senderAllowed = resolveFeishuAllowlistMatch({
-    allowFrom: effectiveDmAllowFrom,
-    senderId: turn.senderId,
-    senderIds: [turn.senderUserId],
-  }).allowed;
-  const dmAccessAllowed =
-    dmPolicy === "open"
-      ? resolveOpenDmAllowlistAccess({
-          effectiveAllowFrom: effectiveDmAllowFrom,
-          isSenderAllowed: (allowFrom) =>
-            resolveFeishuAllowlistMatch({
-              allowFrom,
-              senderId: turn.senderId,
-              senderIds: [turn.senderUserId],
-            }).allowed,
-        }).decision === "allow"
-      : senderAllowed;
-  if (!dmAccessAllowed) {
-    if (dmPolicy === "pairing") {
-      const client = createFeishuClient(account);
+  const resolveCommentAuthorization = async (candidateCfg: ClawdbotConfig, mayPair: boolean) => {
+    const candidateAccount = resolveFeishuRuntimeAccount({
+      cfg: candidateCfg,
+      accountId: account.accountId,
+    });
+    const candidateDmPolicy = candidateAccount.config.dmPolicy ?? "pairing";
+    const ingress = await resolveFeishuDmIngressAccess({
+      cfg: candidateCfg,
+      accountId: candidateAccount.accountId,
+      dmPolicy: candidateDmPolicy,
+      allowFrom: candidateAccount.config.allowFrom ?? [],
+      readAllowFromStore: pairing.readAllowFromStore,
+      senderOpenId: turn.senderId,
+      senderUserId: turn.senderUserId,
+      conversationId: turn.senderId,
+      mayPair,
+    });
+    return { account: candidateAccount, cfg: candidateCfg, dmPolicy: candidateDmPolicy, ingress };
+  };
+  const rejectCommentAuthorization = async (
+    authorization: Awaited<ReturnType<typeof resolveCommentAuthorization>>,
+  ) => {
+    if (authorization.ingress.ingress.admission === "pairing-required") {
+      const client = createFeishuClient(authorization.account);
       await pairing.issueChallenge({
         senderId: turn.senderId,
         senderIdLine: `Your Feishu user id: ${turn.senderId}`,
@@ -139,15 +140,28 @@ export async function handleFeishuCommentEvent(
     } else {
       log(
         `feishu[${account.accountId}]: blocked unauthorized comment sender ${turn.senderId} ` +
-          `(dmPolicy=${dmPolicy}, comment=${turn.commentId})`,
+          `(dmPolicy=${authorization.dmPolicy}, comment=${turn.commentId})`,
       );
     }
+  };
+  const commentAuthorization = await resolveCommentAuthorization(params.cfg, true);
+  if (commentAuthorization.ingress.ingress.admission !== "dispatch") {
+    await rejectCommentAuthorization(commentAuthorization);
     return;
   }
 
   let effectiveCfg = params.cfg;
+  const currentCfg = core.config.current() as ClawdbotConfig;
+  if (currentCfg !== effectiveCfg) {
+    const currentAuthorization = await resolveCommentAuthorization(currentCfg, true);
+    if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
+      await rejectCommentAuthorization(currentAuthorization);
+      return;
+    }
+    effectiveCfg = currentCfg;
+  }
   let route = core.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
+    cfg: effectiveCfg,
     channel: "feishu",
     accountId: account.accountId,
     peer: {
@@ -156,26 +170,40 @@ export async function handleFeishuCommentEvent(
     },
   });
   if (route.matchedBy === "default") {
-    const dynamicCfg = feishuCfg?.dynamicAgentCreation as DynamicAgentCreationConfig | undefined;
-    if (dynamicCfg?.enabled) {
-      const dynamicResult = await maybeCreateDynamicAgent({
-        cfg: params.cfg,
-        runtime: core,
-        senderOpenId: turn.senderId,
-        dynamicCfg,
-        log: (message) => log(message),
+    const dynamicResult = await maybeCreateDynamicAgent({
+      cfg: effectiveCfg,
+      runtime: core,
+      accountId: account.accountId,
+      senderOpenId: turn.senderId,
+      canCreateForConfig: async (candidateCfg) => {
+        const authorization = await resolveCommentAuthorization(candidateCfg, false);
+        return authorization.ingress.ingress.admission === "dispatch";
+      },
+      log: (message) => log(message),
+    });
+    if (dynamicResult.created || dynamicResult.updatedCfg !== effectiveCfg) {
+      const refreshedAuthorization = await resolveCommentAuthorization(
+        dynamicResult.updatedCfg,
+        false,
+      );
+      if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
+        log(
+          `feishu[${account.accountId}]: current policy rejected stale comment sender ${turn.senderId} ` +
+            `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy}, comment=${turn.commentId})`,
+        );
+        return;
+      }
+      effectiveCfg = dynamicResult.updatedCfg;
+      route = core.channel.routing.resolveAgentRoute({
+        cfg: dynamicResult.updatedCfg,
+        channel: "feishu",
+        accountId: account.accountId,
+        peer: {
+          kind: "direct",
+          id: turn.senderId,
+        },
       });
       if (dynamicResult.created) {
-        effectiveCfg = dynamicResult.updatedCfg;
-        route = core.channel.routing.resolveAgentRoute({
-          cfg: dynamicResult.updatedCfg,
-          channel: "feishu",
-          accountId: account.accountId,
-          peer: {
-            kind: "direct",
-            id: turn.senderId,
-          },
-        });
         log(
           `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,
         );
@@ -190,40 +218,41 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
   });
   const bodyForAgent = `[message_id: ${turn.messageId}]\n${turn.prompt}`;
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: bodyForAgent,
-    BodyForAgent: bodyForAgent,
-    RawBody: turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt,
-    CommandBody: turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt,
-    From: `feishu:${turn.senderId}`,
-    To: commentTarget,
-    SessionKey: commentSessionKey,
-    AccountId: route.accountId,
-    ChatType: "direct",
-    ConversationLabel: turn.documentTitle
-      ? `Feishu comment · ${turn.documentTitle}`
-      : "Feishu comment",
-    SenderName: turn.senderId,
-    SenderId: turn.senderId,
-    Provider: "feishu",
-    Surface: "feishu-comment",
-    MessageSid: turn.messageId,
-    // For Feishu comment turns, MessageThreadId carries the inbound reply_id so
-    // comment-aware tools can clean typing reaction before sending visible output.
-    MessageThreadId: turn.replyId,
-    Timestamp: parseTimestampMs(turn.timestamp),
-    WasMentioned: turn.isMentioned,
-    CommandAuthorized: false,
-    OriginatingChannel: "feishu",
-    OriginatingTo: commentTarget,
+  const rawBody = turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt;
+  const conversationLabel = turn.documentTitle
+    ? `Feishu comment · ${turn.documentTitle}`
+    : "Feishu comment";
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: "feishu",
+    accountId: route.accountId,
+    surface: "feishu-comment",
+    messageId: turn.messageId,
+    timestamp: parseTimestampMs(turn.timestamp),
+    from: `feishu:${turn.senderId}`,
+    sender: { id: turn.senderId, name: turn.senderId },
+    conversation: { kind: "direct", id: commentTarget, label: conversationLabel },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: commentSessionKey,
+      dispatchSessionKey: commentSessionKey,
+    },
+    reply: {
+      to: commentTarget,
+      originatingTo: commentTarget,
+      // Comment-aware tools use the inbound reply id as the native thread id.
+      messageThreadId: turn.replyId,
+    },
+    message: { body: bodyForAgent, bodyForAgent, rawBody, commandBody: rawBody },
+    access: {
+      commands: { authorized: false },
+      mentions: { canDetectMention: true, wasMentioned: turn.isMentioned ?? false },
+    },
   });
 
-  const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
-    agentId: route.agentId,
-  });
-
-  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete, cleanupTypingReaction } =
-    createFeishuCommentReplyDispatcher({
+  const { dispatcherOptions, delivery, cleanupTypingReaction } = createFeishuCommentReplyDispatcher(
+    {
       cfg: effectiveCfg,
       agentId: route.agentId,
       runtime,
@@ -233,15 +262,15 @@ export async function handleFeishuCommentEvent(
       commentId: turn.commentId,
       replyId: turn.replyId,
       isWholeComment: turn.isWholeComment,
-    });
+    },
+  );
 
-  let dispatchSettledBeforeStart = false;
   try {
     log(
       `feishu[${account.accountId}]: dispatching drive comment to agent ` +
         `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
     );
-    const turnResult = await core.channel.turn.run({
+    const turnResult = await core.channel.inbound.run({
       channel: "feishu",
       accountId: route.accountId,
       raw: turn,
@@ -255,12 +284,11 @@ export async function handleFeishuCommentEvent(
           raw: turn,
         }),
         resolveTurn: () => ({
+          cfg: effectiveCfg,
           channel: "feishu",
           accountId: route.accountId,
-          routeSessionKey: commentSessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey: commentSessionKey },
           ctxPayload,
-          recordInboundSession: core.channel.session.recordInboundSession,
           record: {
             onRecordError: (err) => {
               error(
@@ -268,27 +296,11 @@ export async function handleFeishuCommentEvent(
               );
             },
           },
-          onPreDispatchFailure: async () => {
-            dispatchSettledBeforeStart = true;
-            await core.channel.reply.settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => {
-                markRunComplete();
-                markDispatchIdle();
-              },
-            });
-          },
-          runDispatch: () =>
-            core.channel.reply.withReplyDispatcher({
-              dispatcher,
-              run: () =>
-                core.channel.reply.dispatchReplyFromConfig({
-                  ctx: ctxPayload,
-                  cfg: effectiveCfg,
-                  dispatcher,
-                  replyOptions,
-                }),
-            }),
+          dispatcherOptions,
+          delivery,
+          ...(params.turnAdoptionLifecycle
+            ? { replyOptions: bindIngressLifecycleToReplyOptions(params.turnAdoptionLifecycle) }
+            : {}),
         }),
       },
     });
@@ -300,10 +312,6 @@ export async function handleFeishuCommentEvent(
         `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
     );
   } finally {
-    if (!dispatchSettledBeforeStart) {
-      markRunComplete();
-      markDispatchIdle();
-    }
     void cleanupTypingReaction();
   }
 }

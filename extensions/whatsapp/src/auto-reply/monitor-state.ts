@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor state behavior.
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
@@ -16,6 +17,7 @@ function isTerminalHealthState(healthState: WebChannelHealthState | undefined): 
 }
 
 export function createWebChannelStatusController(statusSink?: (status: WebChannelStatus) => void) {
+  let lastDisconnectWasWatchdogRecovery = false;
   const status: WebChannelStatus = {
     running: true,
     connected: false,
@@ -26,6 +28,8 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     lastMessageAt: null,
     lastEventAt: null,
     lastError: null,
+    busy: false,
+    lastRunActivityAt: null,
     healthState: "starting",
   };
 
@@ -39,8 +43,14 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     noteConnected(at = Date.now()) {
       Object.assign(status, createConnectedChannelStatusPatch(at));
       Object.assign(status, createTransportActivityStatusPatch(at));
+      if (lastDisconnectWasWatchdogRecovery) {
+        status.lastDisconnect = null;
+        status.reconnectAttempts = 0;
+        lastDisconnectWasWatchdogRecovery = false;
+      }
       status.lastError = null;
       status.healthState = "healthy";
+      status.terminalDisconnect = undefined;
       emit();
     },
     noteInbound(at = Date.now()) {
@@ -58,6 +68,17 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
         return;
       }
       Object.assign(status, createTransportActivityStatusPatch(at));
+      emit();
+    },
+    noteBusy(busy: boolean, at = Date.now()) {
+      if (status.busy === busy && status.lastRunActivityAt === at) {
+        return;
+      }
+      status.busy = busy;
+      status.lastRunActivityAt = at;
+      if (status.connected && busy) {
+        status.healthState = "healthy";
+      }
       emit();
     },
     noteWatchdogStale(at = Date.now()) {
@@ -78,8 +99,10 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       error?: string;
       reconnectAttempts: number;
       healthState: WebChannelHealthState;
+      watchdogRecovery?: boolean;
     }) {
       const at = params.at ?? Date.now();
+      lastDisconnectWasWatchdogRecovery = params.watchdogRecovery === true;
       status.connected = false;
       status.lastEventAt = at;
       status.lastDisconnect = {
@@ -97,6 +120,8 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.running = false;
       status.connected = false;
       status.lastEventAt = at;
+      status.terminalDisconnect =
+        status.healthState === "logged-out" || status.healthState === "conflict";
       if (!isTerminalHealthState(status.healthState)) {
         status.healthState = "stopped";
       }

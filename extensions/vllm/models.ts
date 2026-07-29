@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Vllm plugin module implements models behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { discoverOpenAICompatibleLocalModels } from "openclaw/plugin-sdk/provider-setup";
 import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "./defaults.js";
 
@@ -14,6 +15,7 @@ export async function buildVllmProvider(params?: {
     baseUrl,
     apiKey: params?.apiKey,
     label: VLLM_PROVIDER_LABEL,
+    discoverRuntimeContext: false,
   });
   return {
     baseUrl,

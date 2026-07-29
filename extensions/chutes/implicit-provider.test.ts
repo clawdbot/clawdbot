@@ -1,3 +1,4 @@
+// Chutes tests cover implicit provider plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,22 @@ import plugin from "./index.js";
 import { CHUTES_BASE_URL } from "./models.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
+
+function restoreEnvVar(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
 
 async function runChutesCatalog(params: { apiKey?: string; discoveryApiKey?: string }) {
   const provider = await registerSingleProviderPlugin(plugin);
@@ -35,17 +52,16 @@ async function withRealChutesDiscovery<T>(
   delete process.env.VITEST;
   delete process.env.NODE_ENV;
 
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({ data: [{ id: "chutes/private-model" }] }),
-  });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(jsonResponse({ data: [{ id: "chutes/private-model" }] }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   try {
     return await run(fetchMock);
   } finally {
-    process.env.VITEST = originalVitest;
-    process.env.NODE_ENV = originalNodeEnv;
+    restoreEnvVar("VITEST", originalVitest);
+    restoreEnvVar("NODE_ENV", originalNodeEnv);
     globalThis.fetch = originalFetch;
   }
 }
@@ -92,8 +108,10 @@ describe("chutes implicit provider auth mode", () => {
 
       const chutesCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("chutes.ai"));
       expect(chutesCalls.length).toBeGreaterThan(0);
-      const request = chutesCalls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-      expect(request?.headers?.Authorization).toBe("Bearer my-chutes-access-token");
+      const request = chutesCalls[0]?.[1] as { headers?: HeadersInit } | undefined;
+      expect(new Headers(request?.headers).get("authorization")).toBe(
+        "Bearer my-chutes-access-token",
+      );
     });
   });
 });

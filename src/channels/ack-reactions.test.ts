@@ -1,3 +1,4 @@
+// Ack reaction tests cover acknowledgement reaction behavior for inbound channel events.
 import { describe, expect, it, vi } from "vitest";
 import {
   createAckReactionHandle,
@@ -50,6 +51,27 @@ describe("shouldAckReaction", () => {
         effectiveWasMentioned: true,
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    ["all", true],
+    ["direct", false],
+    ["group-all", false],
+    ["group-mentions", false],
+    ["off", false],
+  ] as const)("applies %s scope to ambient room events", (scope, expected) => {
+    expect(
+      shouldAckReaction({
+        scope,
+        inboundEventKind: "room_event",
+        isDirect: false,
+        isGroup: true,
+        isMentionableGroup: true,
+        requireMention: false,
+        canDetectMention: true,
+        effectiveWasMentioned: false,
+      }),
+    ).toBe(expected);
   });
 
   it("defaults to group-mentions gating", () => {
@@ -191,7 +213,11 @@ describe("createAckReactionHandle", () => {
       remove,
     });
 
-    expect(handle).toMatchObject({ ackReactionValue: "👀", remove });
+    expect(handle).toEqual({
+      ackReactionPromise: handle?.ackReactionPromise,
+      ackReactionValue: "👀",
+      remove,
+    });
     expect(send).toHaveBeenCalledTimes(1);
     await expect(handle?.ackReactionPromise).resolves.toBe(true);
   });

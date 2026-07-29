@@ -1,6 +1,8 @@
-export type JsonOpeningDelimiter = "{" | "[";
+/** JSON opening delimiters supported by the balanced-fragment scanner. */
+type JsonOpeningDelimiter = "{" | "[";
 
-export type BalancedJsonFragment = {
+/** One balanced JSON object/array fragment found inside arbitrary text. */
+type BalancedJsonFragment = {
   json: string;
   startIndex: number;
   endIndex: number;
@@ -18,6 +20,7 @@ function isJsonOpeningDelimiter(
   return char === "{" ? openers.includes("{") : char === "[" && openers.includes("[");
 }
 
+/** Extract the first balanced JSON object/array prefix found in text. */
 export function extractBalancedJsonPrefix(
   raw: string,
   opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
@@ -36,10 +39,9 @@ export function extractBalancedJsonPrefix(
   let escaped = false;
   for (let i = start; i < raw.length; i += 1) {
     const char = raw[i];
-    if (char === undefined) {
-      break;
-    }
     if (inString) {
+      // Delimiters inside strings are data, not structure. Track escapes so an
+      // escaped quote does not prematurely end string mode.
       if (escaped) {
         escaped = false;
       } else if (char === "\\") {
@@ -68,6 +70,7 @@ export function extractBalancedJsonPrefix(
   return null;
 }
 
+/** Extract every balanced JSON object/array fragment from arbitrary text. */
 export function extractBalancedJsonFragments(
   raw: string,
   opts: { openers?: readonly JsonOpeningDelimiter[] } = {},

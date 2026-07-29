@@ -1,6 +1,10 @@
+/**
+ * Cerebras model provider builder.
+ */
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildCerebrasCatalogModels, CEREBRAS_BASE_URL } from "./models.js";
 
+/** Builds the Cerebras OpenAI-compatible model provider config. */
 export function buildCerebrasProvider(): ModelProviderConfig {
   return {
     baseUrl: CEREBRAS_BASE_URL,

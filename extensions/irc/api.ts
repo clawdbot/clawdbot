@@ -1,3 +1,4 @@
+// Irc API module exposes the plugin public contract.
 export { ircPlugin } from "./src/channel.js";
 export { setIrcRuntime } from "./src/runtime.js";
 export {

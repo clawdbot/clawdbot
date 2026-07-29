@@ -1,6 +1,11 @@
+/**
+ * Fast generic tool stubs.
+ *
+ * Provides lightweight tool records and shared mocks for media/web/plugin tool imports.
+ */
 import { vi } from "vitest";
 
-export type StubTool = {
+type StubTool = {
   name: string;
   description: string;
   parameters: { type: "object"; properties: Record<string, unknown> };

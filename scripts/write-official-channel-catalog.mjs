@@ -1,3 +1,4 @@
+// Builds the generated official channel catalog from publishable channel plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -5,6 +6,10 @@ import officialExternalChannelCatalog from "./lib/official-external-channel-cata
 import { isRecord, trimString } from "./lib/record-shared.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
+/**
+ * Generated official channel catalog path in dist.
+ * @internal Directly tested script implementation detail.
+ */
 export const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
 
 function toCatalogInstall(value, packageName) {
@@ -61,6 +66,10 @@ function getCatalogChannelId(entry) {
   return trimString(entry?.openclaw?.channel?.id) || trimString(entry?.name);
 }
 
+/**
+ * Collects publishable channel catalog entries from bundled and external channels.
+ * @internal Directly tested script implementation detail.
+ */
 export function buildOfficialChannelCatalog(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const extensionsRoot = path.join(repoRoot, "extensions");

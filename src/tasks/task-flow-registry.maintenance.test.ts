@@ -1,25 +1,59 @@
+// Covers maintenance reconciliation for managed task-flow records.
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
-  createFlowRecord,
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import {
   getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { finalizeTaskRunByRunId } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  createFlowRecord as createFlowRecordOrNull,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createFlowRecord(params: Parameters<typeof createFlowRecordOrNull>[0]): TaskFlowRecord {
+  const flow = createFlowRecordOrNull(params);
+  if (!flow) {
+    throw new Error("expected TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
 
 async function withTaskFlowMaintenanceStateDir(
   run: (root: string) => Promise<void>,
@@ -46,11 +80,7 @@ async function withTaskFlowMaintenanceStateDir(
 
 describe("task-flow-registry maintenance", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
@@ -77,11 +107,13 @@ describe("task-flow-registry maintenance", () => {
         reconciled: 1,
         pruned: 0,
       });
-      expect(getTaskFlowById(flow.flowId)).toMatchObject({
-        flowId: flow.flowId,
-        status: "cancelled",
-        cancelRequestedAt: 100,
-      });
+      const storedFlow = getTaskFlowById(flow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected cancel-requested flow to remain registered");
+      }
+      expect(storedFlow.flowId).toBe(flow.flowId);
+      expect(storedFlow.status).toBe("cancelled");
+      expect(storedFlow.cancelRequestedAt).toBe(100);
     });
   });
 
@@ -133,10 +165,12 @@ describe("task-flow-registry maintenance", () => {
         reconciled: 1,
         pruned: 0,
       });
-      expect(getTaskFlowById(flow.flowId)).toMatchObject({
-        endedAt: 200,
-        updatedAt: 200,
-      });
+      const storedFlow = getTaskFlowById(flow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected repaired mirrored flow to remain registered");
+      }
+      expect(storedFlow.endedAt).toBe(200);
+      expect(storedFlow.updatedAt).toBe(200);
       expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(0);
     });
   });
@@ -164,20 +198,18 @@ describe("task-flow-registry maintenance", () => {
         lastEventAt: 100,
       });
 
-      expect(
-        requestFlowCancel({
-          flowId: flow.flowId,
-          expectedRevision: flow.revision,
-          cancelRequestedAt: 100,
-          updatedAt: 100,
-        }),
-      ).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: flow.flowId,
-          cancelRequestedAt: 100,
-        }),
+      const cancelResult = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        cancelRequestedAt: 100,
+        updatedAt: 100,
       });
+      expect(cancelResult.applied).toBe(true);
+      if (!cancelResult.applied) {
+        throw new Error("Expected flow cancel request to apply");
+      }
+      expect(cancelResult.flow.flowId).toBe(flow.flowId);
+      expect(cancelResult.flow.cancelRequestedAt).toBe(100);
 
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
@@ -188,12 +220,64 @@ describe("task-flow-registry maintenance", () => {
         reconciled: 0,
         pruned: 0,
       });
-      expect(getTaskFlowById(flow.flowId)).toMatchObject({
-        flowId: flow.flowId,
-        status: "running",
-        cancelRequestedAt: 100,
-      });
+      const storedFlow = getTaskFlowById(flow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected active child flow to remain registered");
+      }
+      expect(storedFlow.flowId).toBe(flow.flowId);
+      expect(storedFlow.status).toBe("running");
+      expect(storedFlow.cancelRequestedAt).toBe(100);
       expect(child.parentFlowId).toBe(flow.flowId);
+    });
+  });
+
+  it("does not finalize cancel-requested flows while a child kill is provisional", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait for child kill reconciliation",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 100,
+      });
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:provisional-kill",
+        runId: "run-provisional-kill",
+        task: "Finish while cancellation races",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+      finalizeTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        status: "cancelled",
+        endedAt: 110,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      const currentFlow = getTaskFlowById(flow.flowId);
+      if (!currentFlow) {
+        throw new Error("Expected provisional child flow to remain registered");
+      }
+      const cancelResult = requestFlowCancel({
+        flowId: currentFlow.flowId,
+        expectedRevision: currentFlow.revision,
+        cancelRequestedAt: 120,
+        updatedAt: 120,
+      });
+      expect(cancelResult.applied).toBe(true);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "running",
+        cancelRequestedAt: 120,
+      });
     });
   });
 

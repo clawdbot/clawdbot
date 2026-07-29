@@ -1,3 +1,4 @@
+// Verifies model reference validation in config surfaces.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -10,7 +11,7 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
         id: "openai",
         origin: "bundled",
         channels: [],
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         contracts: {},
         cliBackends: [],
         skills: [],
@@ -21,12 +22,40 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
         modelCatalog: {
           suppressions: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               model: "gpt-5.3-codex-spark",
               reason:
                 "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
             },
           ],
+        },
+      },
+    ],
+  };
+}
+
+function createModelNormalizationRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      {
+        id: "custom-provider-plugin",
+        channels: [],
+        providers: ["myproxy"],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        origin: "config",
+        rootDir: "/tmp/custom-provider-plugin",
+        source: "test",
+        manifestPath: "/tmp/custom-provider-plugin/openclaw.plugin.json",
+        modelIdNormalization: {
+          providers: {
+            myproxy: {
+              aliases: { latest: "modern-model" },
+              prefixWhenBare: "vendor",
+            },
+          },
         },
       },
     ],
@@ -40,7 +69,7 @@ describe("config model reference validation", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.3-codex-spark",
+              primary: "openai/gpt-5.3-codex-spark",
             },
           },
         },
@@ -56,20 +85,22 @@ describe("config model reference validation", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.primary",
-      message:
-        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-    });
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      },
+    ]);
   });
 
-  it("accepts supported openai-codex provider/model pairs", () => {
+  it("accepts supported openai provider/model pairs", () => {
     const res = validateConfigObjectWithPlugins(
       {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.4-mini",
+              primary: "openai/gpt-5.4-mini",
             },
           },
         },
@@ -83,4 +114,124 @@ describe("config model reference validation", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts available openai fallback model pairs", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4-mini",
+              fallbacks: ["openai/gpt-5.2-codex", "openai/gpt-5.3-codex"],
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("loads model normalization policies when plugin validation is skipped", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        models: {
+          providers: {
+            myproxy: {
+              baseUrl: "https://proxy.example/v1",
+              apiKey: "sk-test",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "latest",
+                  name: "Custom latest",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        pluginValidation: "skip",
+        loadPluginMetadataSnapshot: () => ({
+          manifestRegistry: createModelNormalizationRegistry(),
+        }),
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
+    }
+  });
+  it.each([
+    [
+      "default policy",
+      {
+        agents: {
+          defaults: {
+            modelPolicy: {
+              allow: [
+                " openai / gpt-5.5 ",
+                "clawrouter/ anthropic/claude-haiku-4-5",
+                " openai / * ",
+                " clawrouter / anthropic / * ",
+              ],
+            },
+          },
+        },
+      },
+    ],
+    [
+      "per-agent policy",
+      {
+        agents: {
+          list: [
+            {
+              id: "worker",
+              modelPolicy: {
+                allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "],
+              },
+            },
+          ],
+        },
+      },
+    ],
+  ])("accepts separator padding in the %s", (_label, config) => {
+    const res = validateConfigObjectWithPlugins(config, { pluginValidation: "skip" });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each(["clawrouter/anthropic /claude-haiku-4-5", "openai/gpt 5.5", "openai//gpt-5.5"])(
+    "still rejects malformed model policy ref %j",
+    (ref) => {
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: [ref] },
+            },
+          },
+        },
+        { pluginValidation: "skip" },
+      );
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
+        expect(res.issues[0]?.message).toContain("invalid model policy ref");
+      }
+    },
+  );
 });

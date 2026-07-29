@@ -4,8 +4,13 @@
     "onStartup": false
   },
   "skills": ["./skills"],
-  "providerAuthEnvVars": {
-    "tavily": ["TAVILY_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "tavily",
+        "envVars": ["TAVILY_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -22,9 +27,6 @@
   "contracts": {
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

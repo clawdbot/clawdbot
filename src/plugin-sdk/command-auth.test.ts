@@ -1,11 +1,14 @@
+/**
+ * Tests command authorization helpers and native command gating.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSenderCommandAuthorization } from "./command-auth.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  resolveSenderCommandAuthorization,
-} from "./command-auth.js";
+} from "./command-status.js";
 
 const baseCfg = {
   commands: { useAccessGroups: true },
@@ -36,16 +39,15 @@ async function resolveAuthorization(params: {
 }
 
 describe("plugin-sdk/command-auth", () => {
-  it("keeps deprecated command status builders available for compatibility", () => {
+  it("keeps command status builders on their focused subpath", () => {
     const cfg = { commands: { config: false, debug: false } } as unknown as OpenClawConfig;
 
     expect(buildHelpMessage(cfg)).toContain("/commands for full list");
     expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
     expect(buildCommandsMessage(cfg)).toContain("/models - List model providers/models.");
-    expect(buildCommandsMessagePaginated(cfg)).toMatchObject({
-      currentPage: 1,
-      totalPages: expect.any(Number),
-    });
+    const commandsPage = buildCommandsMessagePaginated(cfg);
+    expect(commandsPage.currentPage).toBe(1);
+    expect(typeof commandsPage.totalPages).toBe("number");
   });
 
   it("resolves command authorization across allowlist sources", async () => {
@@ -135,7 +137,7 @@ describe("plugin-sdk/command-auth", () => {
         useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
     });
 
-    expect(result.effectiveAllowFrom).toEqual([]);
+    expect(result.effectiveAllowFrom).toStrictEqual([]);
     expect(result.senderAllowedForCommands).toBe(false);
     expect(result.commandAuthorized).toBeUndefined();
   });

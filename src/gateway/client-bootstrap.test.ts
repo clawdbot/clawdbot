@@ -1,12 +1,17 @@
+// Gateway client bootstrap tests keep URL override provenance wired into shared
+// auth resolution so CLI and env callers authenticate against the intended target.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolveGatewayConnectionAuth } from "./connection-auth.js";
+
+type AuthResolutionParams = Parameters<typeof resolveGatewayConnectionAuth>[0];
 
 const mockState = vi.hoisted(() => ({
   buildGatewayConnectionDetails: vi.fn(),
   resolveGatewayConnectionAuth: vi.fn(),
 }));
 
-vi.mock("./call.js", () => ({
-  buildGatewayConnectionDetails: (...args: unknown[]) =>
+vi.mock("./connection-details.js", () => ({
+  buildGatewayConnectionDetailsWithResolvers: (...args: unknown[]) =>
     mockState.buildGatewayConnectionDetails(...args),
 }));
 
@@ -14,17 +19,21 @@ vi.mock("./connection-auth.js", () => ({
   resolveGatewayConnectionAuth: (...args: unknown[]) =>
     mockState.resolveGatewayConnectionAuth(...args),
 }));
+const { resolveGatewayClientBootstrap } = await import("./client-bootstrap.js");
 
-const { resolveGatewayClientBootstrap, resolveGatewayUrlOverrideSource } =
-  await import("./client-bootstrap.js");
-
-describe("resolveGatewayUrlOverrideSource", () => {
-  it("maps override url sources only", () => {
-    expect(resolveGatewayUrlOverrideSource("cli --url")).toBe("cli");
-    expect(resolveGatewayUrlOverrideSource("env OPENCLAW_GATEWAY_URL")).toBe("env");
-    expect(resolveGatewayUrlOverrideSource("config gateway.remote.url")).toBeUndefined();
-  });
-});
+function expectLastAuthResolutionParams(expected: {
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
+}) {
+  const [params] = mockState.resolveGatewayConnectionAuth.mock.calls.at(-1) ?? [];
+  if (params === undefined) {
+    throw new Error("Expected shared auth resolution to be called");
+  }
+  const authParams = params as AuthResolutionParams;
+  expect(authParams.env).toBe(process.env);
+  expect(authParams.urlOverride).toBe(expected.urlOverride);
+  expect(authParams.urlOverrideSource).toBe(expected.urlOverrideSource);
+}
 
 describe("resolveGatewayClientBootstrap", () => {
   beforeEach(() => {
@@ -37,7 +46,7 @@ describe("resolveGatewayClientBootstrap", () => {
   });
 
   it("passes cli override context into shared auth resolution", async () => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
+    mockState.buildGatewayConnectionDetails.mockReturnValueOnce({
       url: "wss://override.example/ws",
       urlSource: "cli --url",
     });
@@ -57,13 +66,10 @@ describe("resolveGatewayClientBootstrap", () => {
         password: undefined,
       },
     });
-    expect(mockState.resolveGatewayConnectionAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        urlOverride: "wss://override.example/ws",
-        urlOverrideSource: "cli",
-      }),
-    );
+    expectLastAuthResolutionParams({
+      urlOverride: "wss://override.example/ws",
+      urlOverrideSource: "cli",
+    });
   });
 
   it("does not mark config-derived urls as overrides", async () => {
@@ -77,26 +83,9 @@ describe("resolveGatewayClientBootstrap", () => {
       env: process.env,
     });
 
-    expect(mockState.resolveGatewayConnectionAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        urlOverride: undefined,
-        urlOverrideSource: undefined,
-      }),
-    );
-  });
-
-  it("carries configured preauth handshake timeout for GatewayClient callers", async () => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
+    expectLastAuthResolutionParams({
+      urlOverride: undefined,
+      urlOverrideSource: undefined,
     });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
-      env: process.env,
-    });
-
-    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 });

@@ -1,2 +1,7 @@
-export type { LogFn } from "../channels/logging.js";
-export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
+/** @deprecated Compatibility subpath. Use `channel-inbound` or `channel-outbound`. */
+export {
+  type LogFn,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+} from "../channels/logging.js";

@@ -1,9 +1,20 @@
+// Public session delivery queue facade: storage and recovery live in split
+// modules, callers import the stable aggregate API from here.
 export {
-  ackSessionDelivery,
+  advanceSessionDeliveryAgentRun,
+  deferSessionDelivery,
+  enqueueClaimedSessionDelivery,
   enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
-  resolveSessionDeliveryQueueDir,
+  loadPendingSessionDelivery,
+  markSessionDeliveryAttemptStarted,
+  markSessionDeliverySettlement,
+  releaseSessionDeliveryClaim,
+  SessionDeliveryDeadLetteredError,
+  SessionDeliveryDeferredError,
+  SessionDeliveryRetryChargedError,
+  SessionDeliverySafeRetryError,
 } from "./session-delivery-queue-storage.js";
 export type {
   QueuedSessionDelivery,
@@ -12,7 +23,10 @@ export type {
 } from "./session-delivery-queue-storage.js";
 export {
   drainPendingSessionDeliveries,
-  isSessionDeliveryEligibleForRetry,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue-recovery.js";
-export type { SessionDeliveryRecoveryLogger } from "./session-delivery-queue-recovery.js";
+export type {
+  DeliverSessionDeliveryFn,
+  SessionDeliveryRecoveryLogger,
+  SettleSessionDeliveryFn,
+} from "./session-delivery-queue-recovery.js";

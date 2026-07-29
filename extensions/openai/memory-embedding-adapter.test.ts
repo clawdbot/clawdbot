@@ -1,3 +1,4 @@
+// Openai tests cover memory embedding adapter plugin behavior.
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +38,7 @@ describe("OpenAI memory embedding adapter", () => {
         model: "text-embedding-3-small",
         inputType: "passage",
         documentInputType: "document",
+        outputDimensionality: 512,
       },
     });
   });
@@ -59,17 +61,54 @@ describe("OpenAI memory embedding adapter", () => {
       debug: () => {},
     });
 
-    expect(mocks.runOpenAiEmbeddingBatches).toHaveBeenCalledWith(
+    const batchCalls = mocks.runOpenAiEmbeddingBatches.mock.calls as unknown as Array<
+      [
+        {
+          requests: Array<{
+            body: Record<string, unknown>;
+          }>;
+        },
+      ]
+    >;
+    const [batchOptions] = batchCalls[0] ?? [];
+    expect(batchOptions?.requests).toHaveLength(1);
+    const request = batchOptions?.requests[0];
+    expect(request?.body).toEqual({
+      model: "text-embedding-3-small",
+      input: "doc one",
+      dimensions: 512,
+      input_type: "document",
+    });
+  });
+
+  it("preserves the caller provider id for custom OpenAI-compatible embedding providers", async () => {
+    const result = await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      provider: "bailian-embedding",
+      model: "text-embedding-v3",
+      fallback: "none",
+    });
+
+    expect(mocks.createOpenAiEmbeddingProvider).toHaveBeenCalledWith(
       expect.objectContaining({
-        requests: [
-          expect.objectContaining({
-            body: {
-              model: "text-embedding-3-small",
-              input: "doc one",
-              input_type: "document",
-            },
-          }),
-        ],
+        provider: "bailian-embedding",
+        fallback: "none",
+        model: "text-embedding-v3",
+      }),
+    );
+    expect(result.runtime?.cacheKeyData?.provider).toBe("bailian-embedding");
+  });
+
+  it("defaults provider id to openai when the caller leaves it unset", async () => {
+    await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(mocks.createOpenAiEmbeddingProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
       }),
     );
   });

@@ -1,8 +1,18 @@
+/**
+ * noVNC observer authentication helpers.
+ *
+ * Issues short-lived observer tokens and builds local noVNC URLs without exposing long-lived browser bridge state.
+ */
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD"; // pragma: allowlist secret
 const NOVNC_TOKEN_TTL_MS = 60 * 1000;
+const MAX_NOVNC_TOKEN_TTL_MS = NOVNC_TOKEN_TTL_MS;
 const NOVNC_PASSWORD_LENGTH = 8;
 const NOVNC_PASSWORD_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -12,7 +22,7 @@ type NoVncObserverTokenEntry = {
   expiresAt: number;
 };
 
-export type NoVncObserverTokenPayload = {
+type NoVncObserverTokenPayload = {
   noVncPort: number;
   password?: string;
 };
@@ -21,14 +31,27 @@ const NO_VNC_OBSERVER_TOKENS = new Map<string, NoVncObserverTokenEntry>();
 
 function pruneExpiredNoVncObserverTokens(now: number) {
   for (const [token, entry] of NO_VNC_OBSERVER_TOKENS) {
-    if (entry.expiresAt <= now) {
+    if (!isFutureDateTimestampMs(entry.expiresAt, { nowMs: now })) {
       NO_VNC_OBSERVER_TOKENS.delete(token);
     }
   }
 }
 
-export function isNoVncEnabled(params: { enableNoVnc: boolean; headless: boolean }) {
-  return params.enableNoVnc && !params.headless;
+function resolveNoVncObserverTokenExpiresAt(params: { ttlMs?: number; nowMs: number }) {
+  return (
+    resolveExpiresAtMsFromDurationMs(params.ttlMs, {
+      nowMs: params.nowMs,
+      minRemainingMs: 1,
+    }) ??
+    resolveExpiresAtMsFromDurationMs(NOVNC_TOKEN_TTL_MS, {
+      nowMs: params.nowMs,
+      minRemainingMs: 1,
+    })
+  );
+}
+
+export function isNoVncEnabled(params: { noVncEnabled: boolean; headless: boolean }) {
+  return params.noVncEnabled && !params.headless;
 }
 
 export function generateNoVncPassword() {
@@ -40,21 +63,6 @@ export function generateNoVncPassword() {
   return out;
 }
 
-export function buildNoVncDirectUrl(port: number) {
-  return `http://127.0.0.1:${port}/vnc.html`;
-}
-
-export function buildNoVncObserverTargetUrl(params: { port: number; password?: string }) {
-  const query = new URLSearchParams({
-    autoconnect: "1",
-    resize: "remote",
-  });
-  if (params.password?.trim()) {
-    query.set("password", params.password);
-  }
-  return `${buildNoVncDirectUrl(params.port)}#${query.toString()}`;
-}
-
 export function issueNoVncObserverToken(params: {
   noVncPort: number;
   password?: string;
@@ -64,10 +72,21 @@ export function issueNoVncObserverToken(params: {
   const now = params.nowMs ?? Date.now();
   pruneExpiredNoVncObserverTokens(now);
   const token = crypto.randomBytes(24).toString("hex");
+  const requestedTtlMs =
+    typeof params.ttlMs === "number" && params.ttlMs <= MAX_NOVNC_TOKEN_TTL_MS
+      ? params.ttlMs
+      : undefined;
+  const expiresAt = resolveNoVncObserverTokenExpiresAt({
+    ttlMs: requestedTtlMs,
+    nowMs: now,
+  });
+  if (expiresAt === undefined) {
+    return token;
+  }
   NO_VNC_OBSERVER_TOKENS.set(token, {
     noVncPort: params.noVncPort,
     password: normalizeOptionalString(params.password),
-    expiresAt: now + Math.max(1, params.ttlMs ?? NOVNC_TOKEN_TTL_MS),
+    expiresAt,
   });
   return token;
 }
@@ -87,7 +106,7 @@ export function consumeNoVncObserverToken(
     return null;
   }
   NO_VNC_OBSERVER_TOKENS.delete(normalized);
-  if (entry.expiresAt <= now) {
+  if (!isFutureDateTimestampMs(entry.expiresAt, { nowMs: now })) {
     return null;
   }
   return { noVncPort: entry.noVncPort, password: entry.password };
@@ -96,8 +115,4 @@ export function consumeNoVncObserverToken(
 export function buildNoVncObserverTokenUrl(baseUrl: string, token: string) {
   const query = new URLSearchParams({ token });
   return `${baseUrl}/sandbox/novnc?${query.toString()}`;
-}
-
-export function resetNoVncObserverTokensForTests() {
-  NO_VNC_OBSERVER_TOKENS.clear();
 }

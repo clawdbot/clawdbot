@@ -1,3 +1,8 @@
+/**
+ * Soonest cooldown expiry tests.
+ * Verifies timestamp selection across cooldown, blocked, disabled, invalid, and
+ * model-scoped usage-state combinations.
+ */
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { getSoonestCooldownExpiry } from "./auth-profiles/usage-state.js";
@@ -95,6 +100,26 @@ describe("getSoonestCooldownExpiry", () => {
     ).toBe(now + 30_000);
   });
 
+  it("uses the earliest matching timeout cooldown for the requested model", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:p1": {
+        cooldownUntil: now + 10_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gpt-5.4",
+      },
+      "openai:p2": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gpt-5.4",
+      },
+    });
+
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
+    ).toBe(now + 10_000);
+  });
+
   it("still counts profile-wide disables for other models", () => {
     const now = 1_700_000_000_000;
     const store = makeStore({
@@ -107,6 +132,28 @@ describe("getSoonestCooldownExpiry", () => {
       "openai:p2": {
         cooldownUntil: now + 30_000,
         cooldownReason: "rate_limit",
+        cooldownModel: "gpt-5.4",
+      },
+    });
+
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
+    ).toBe(now + 20_000);
+  });
+
+  it("still counts profile-wide blocked windows for other models", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:p1": {
+        blockedUntil: now + 20_000,
+        blockedReason: "subscription_limit",
+        cooldownUntil: now + 10_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gpt-5.4",
+      },
+      "openai:p2": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "timeout",
         cooldownModel: "gpt-5.4",
       },
     });

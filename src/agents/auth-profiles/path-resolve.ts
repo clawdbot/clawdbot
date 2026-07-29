@@ -1,45 +1,30 @@
-import { createHash } from "node:crypto";
+/**
+ * Auth profile path resolution.
+ * Centralizes canonical SQLite display paths and cross-agent OAuth refresh lock paths.
+ */
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import {
-  AUTH_PROFILE_FILENAME,
-  AUTH_STATE_FILENAME,
-  LEGACY_AUTH_FILENAME,
-} from "./path-constants.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
-export function resolveAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
-  return path.join(resolved, AUTH_PROFILE_FILENAME);
-}
-
-export function resolveLegacyAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
-  return path.join(resolved, LEGACY_AUTH_FILENAME);
-}
-
-export function resolveAuthStatePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
-  return path.join(resolved, AUTH_STATE_FILENAME);
-}
-
+/** Resolve the user-facing auth profile database path. */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStorePath(agentDir);
+  const pathname = resolveAuthProfileDatabasePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
+/** Resolve the user-facing auth state database path. */
 export function resolveAuthStatePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStatePath(agentDir);
+  const pathname = resolveAuthProfileDatabasePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
 /**
  * Resolve the path of the cross-agent, per-profile OAuth refresh coordination
- * lock. The filename hashes `provider\0profileId` so it is filesystem-safe
- * for arbitrary unicode/control-character inputs and always bounded in
- * length. The NUL separator makes it impossible to collide two distinct
- * `(provider, profileId)` pairs by string concatenation.
+ * lock. The filename digests a JSON tuple of `[provider, profileId]` so it is
+ * filesystem-safe for arbitrary unicode/control-character inputs and always
+ * bounded in length. Tuple encoding makes it impossible to collide two distinct
+ * `(provider, profileId)` pairs by separator-sensitive string concatenation.
  *
  * This lock is the serialization point that prevents the `refresh_token_reused`
  * storm when N agents share one OAuth profile (see issue #26322): every agent
@@ -52,10 +37,24 @@ export function resolveAuthStatePathForDisplay(agentDir?: string): string {
  * test fixture, etc.) do not needlessly serialize against each other.
  */
 export function resolveOAuthRefreshLockPath(provider: string, profileId: string): string {
-  const hash = createHash("sha256");
-  hash.update(provider, "utf8");
-  hash.update("\u0000", "utf8"); // NUL separator: unambiguous boundary.
-  hash.update(profileId, "utf8");
-  const safeId = `sha256-${hash.digest("hex")}`;
+  const lockKey = JSON.stringify([provider, profileId]);
+  const safeId = `lock-${oauthLockPathDigest(lockKey)}`;
   return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
+}
+
+function oauthLockPathDigest(value: string): string {
+  let left = 0xcbf29ce484222325n;
+  let right = 0x9ae16a3b2f90404fn;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+
+  // This is not a credential hash. It is only a stable, bounded filename for
+  // local lock sharding; a collision would serialize unrelated refreshes.
+  for (const byte of Buffer.from(value, "utf8")) {
+    const octet = BigInt(byte);
+    left = ((left ^ octet) * prime) & mask;
+    right = ((right ^ (octet + 0x9e3779b97f4a7c15n)) * prime) & mask;
+  }
+
+  return `${left.toString(16).padStart(16, "0")}${right.toString(16).padStart(16, "0")}`;
 }

@@ -1,14 +1,37 @@
+// Health gateway methods return cached or refreshed status summaries while
+// detecting stale channel runtime state against live gateway snapshots.
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
-import { getStatusSummary } from "../../commands/status.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import { getStatusSummary } from "../../status/summary.js";
+import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
+import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
+const requestRefreshStartedAt = new WeakMap<
+  GatewayRequestContext["refreshHealthSnapshot"],
+  number
+>();
+
+function shouldScheduleRequestRefresh(
+  refresh: GatewayRequestContext["refreshHealthSnapshot"],
+  now: number,
+): boolean {
+  const startedAt = requestRefreshStartedAt.get(refresh);
+  if (startedAt !== undefined && now - startedAt < HEALTH_REFRESH_INTERVAL_MS) {
+    return false;
+  }
+  // Scope the throttle to the Gateway refresh owner so independent servers do
+  // not suppress each other while request bursts share one cadence.
+  requestRefreshStartedAt.set(refresh, now);
+  return true;
+}
 
 function cachedAccountForRuntimeSnapshot(params: {
   cachedChannel: ChannelHealthSummary | undefined;
@@ -37,6 +60,7 @@ function cachedLifecycleDiffersFromRuntime(params: {
   return false;
 }
 
+/** Checks whether cached channel health is stale against the live runtime snapshot. */
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
@@ -82,6 +106,48 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+/** Merges cheap live runtime facts into a cached health summary before responding. */
+function mergeCachedHealthRuntimeState(params: {
+  cached: HealthSummary;
+  eventLoop?: HealthSummary["eventLoop"];
+  configReloadHotReloadStatus?: GatewayHotReloadStatus;
+}): HealthSummary {
+  const {
+    contextEngines: _cachedContextEngines,
+    deliveryQueues: _cachedDeliveryQueues,
+    ...cached
+  } = params.cached;
+  // Dead-letter counts are cheap SQLite reads; recompute them like context
+  // engines so a delivery that failed after the cache was filled is not hidden
+  // for a refresh interval.
+  const deliveryQueues = buildDeliveryQueueHealthSummary();
+  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
+  for (const entry of listContextEngineQuarantines()) {
+    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
+      engineId: entry.engineId,
+      operation: entry.operation,
+      reason: entry.reason,
+      failedAt: entry.failedAt.getTime(),
+    };
+    if (entry.owner) {
+      summary.owner = entry.owner;
+    }
+    quarantinedContextEngines.push(summary);
+  }
+  return {
+    ...cached,
+    ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(quarantinedContextEngines.length > 0
+      ? { contextEngines: { quarantined: quarantinedContextEngines } }
+      : {}),
+    ...(deliveryQueues ? { deliveryQueues } : {}),
+    ...(params.configReloadHotReloadStatus
+      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
+      : {}),
+  };
+}
+
+/** Gateway handlers for health snapshots and status summaries. */
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
@@ -107,13 +173,21 @@ export const healthHandlers: GatewayRequestHandlers = {
       !cachedDiffersFromRuntime &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
-      if (context.getEventLoopHealth) {
-        cached.eventLoop = context.getEventLoopHealth();
-      }
-      respond(true, cached, undefined, { cached: true });
-      void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
-        logHealth.error(`background health refresh failed: ${formatError(err)}`),
+      respond(
+        true,
+        mergeCachedHealthRuntimeState({
+          cached,
+          eventLoop: context.getEventLoopHealth?.(),
+          configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
+        }),
+        undefined,
+        { cached: true },
       );
+      if (shouldScheduleRequestRefresh(refreshHealthSnapshot, now)) {
+        void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
+          logHealth.error(`background health refresh failed: ${formatError(err)}`),
+        );
+      }
       return;
     }
     try {

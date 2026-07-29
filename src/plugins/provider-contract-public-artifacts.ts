@@ -1,3 +1,6 @@
+// Extracts provider contract public artifacts from plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -5,10 +8,6 @@ type ProviderContractEntry = {
   pluginId: string;
   provider: ProviderPlugin;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isProviderPlugin(value: unknown): value is ProviderPlugin {
   return (
@@ -64,9 +63,7 @@ export function resolveBundledExplicitProviderContractsFromPublicArtifacts(param
   onlyPluginIds: readonly string[];
 }): ProviderContractEntry[] | null {
   const providers: ProviderContractEntry[] = [];
-  for (const pluginId of [...new Set(params.onlyPluginIds)].toSorted((left, right) =>
-    left.localeCompare(right),
-  )) {
+  for (const pluginId of sortUniqueStrings(params.onlyPluginIds)) {
     const mod = tryLoadProviderContractApi(pluginId);
     if (!mod) {
       return null;

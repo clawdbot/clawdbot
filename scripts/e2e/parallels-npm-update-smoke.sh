@@ -2,4 +2,5 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-exec pnpm --dir "$ROOT_DIR" exec tsx scripts/e2e/parallels/npm-update-smoke.ts "$@"
+cd "$ROOT_DIR"
+exec node --import tsx scripts/e2e/parallels/npm-update-smoke.ts "$@"

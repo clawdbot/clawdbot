@@ -1,15 +1,23 @@
-import type { Context, Model } from "@mariozechner/pi-ai";
+// Google tests cover index plugin behavior.
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
+import { describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import googlePlugin from "./index.js";
+import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
@@ -18,6 +26,12 @@ const googleProviderPlugin = {
     registerGoogleGeminiCliProvider(api);
   },
 };
+
+const refreshGeminiCliOAuthTokenMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./oauth.runtime.js", () => ({
+  refreshGeminiCliOAuthToken: refreshGeminiCliOAuthTokenMock,
+}));
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
@@ -56,7 +70,13 @@ describe("google provider plugin hooks", () => {
         modelApi: "google-generative-ai",
         modelId: "gemini-3.1-pro-preview",
       } as never),
-    ).toBe("tagged");
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
 
     const sanitized = await Promise.resolve(
       provider.sanitizeReplayHistory?.({
@@ -79,63 +99,176 @@ describe("google provider plugin hooks", () => {
       } as ProviderSanitizeReplayHistoryContext),
     );
 
-    expect(sanitized).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: "(session bootstrap)",
-        }),
-      ]),
-    );
+    const bootstrapMessage = sanitized?.[0] as
+      | { role?: string; content?: unknown; timestamp?: unknown }
+      | undefined;
+    expect(bootstrapMessage?.role).toBe("user");
+    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
+    expect(typeof bootstrapMessage?.timestamp).toBe("number");
+    expect(sanitized?.[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+    });
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", async () => {
+  it("keeps google-gemini-cli on tagged reasoning mode", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
-    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
-
-    const [tool] =
-      provider.normalizeToolSchemas?.({
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    expect(
+      cliProvider.resolveReasoningOutputMode?.({
         provider: "google-gemini-cli",
-        tools: [
-          {
-            name: "write_file",
-            description: "Write a file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                path: { type: "string", pattern: "^src/" },
+        modelApi: "google-gemini-cli",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-antigravity");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-antigravity",
+        modelApi: "openai-completions",
+        modelId: "gemini-3-pro-low",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-vertex hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelApi: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "",
+          GCLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      googleProviderDiscovery.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+  });
+
+  it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const providerIds = ["google", "google-gemini-cli"] as const;
+
+    for (const providerId of providerIds) {
+      const provider = requireRegisteredProvider(providers, providerId);
+      const [tool] =
+        provider.normalizeToolSchemas?.({
+          provider: providerId,
+          tools: [
+            {
+              name: "write_file",
+              description: "Write a file",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  path: { type: "string", pattern: "^src/" },
+                },
               },
             },
-          },
-        ],
-      } as never) ?? [];
+          ],
+        } as never) ?? [];
 
-    expect(tool).toMatchObject({
-      name: "write_file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
+      expect(tool).toEqual({
+        name: "write_file",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
         },
-      },
-    });
-    expect(tool?.parameters).not.toHaveProperty("additionalProperties");
-    expect(
-      (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
-    ).not.toHaveProperty("pattern");
-    expect(
-      provider.inspectToolSchemas?.({
-        provider: "google-gemini-cli",
-        tools: [tool],
-      } as never),
-    ).toEqual([]);
+      });
+      expect(tool?.parameters).not.toHaveProperty("additionalProperties");
+      expect(
+        (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
+      ).not.toHaveProperty("pattern");
+      expect(
+        provider.inspectToolSchemas?.({
+          provider: providerId,
+          tools: [tool],
+        } as never),
+      ).toEqual([]);
+    }
   });
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
@@ -167,8 +300,12 @@ describe("google provider plugin hooks", () => {
       );
 
       const capturedPayload = capturedStream.getCapturedPayload();
-      expect(capturedPayload).toMatchObject({
-        config: { thinkingConfig: { thinkingLevel: "HIGH" } },
+      expect(capturedPayload).toEqual({
+        config: {
+          thinkingConfig: {
+            thinkingLevel: "HIGH",
+          },
+        },
       });
       const thinkingConfig = (
         (capturedPayload as Record<string, unknown>).config as Record<string, unknown>
@@ -180,6 +317,25 @@ describe("google provider plugin hooks", () => {
     runCase(cliProvider, "google-gemini-cli");
   });
 
+  it("wires Vertex transport before request-time metadata ADC detection", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+
+    expect(
+      provider.createStreamFn?.({
+        model: {
+          api: "google-vertex",
+          provider: "google",
+          id: "gemini-2.5-pro",
+        },
+      } as never),
+    ).toEqual(expect.any(Function));
+  });
+
   it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -187,8 +343,10 @@ describe("google provider plugin hooks", () => {
       name: "Google Provider",
     });
     const provider = requireRegisteredProvider(providers, "google");
-    expect(provider.resolveThinkingProfile).toBeDefined();
-    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    if (!provider.resolveThinkingProfile) {
+      throw new Error("expected Google provider thinking profile resolver");
+    }
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
     const gemini3Profile = resolveThinkingProfile({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
@@ -225,5 +383,67 @@ describe("google provider plugin hooks", () => {
 
     expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
     expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
+  });
+
+  it("buffers early realtime audio while the lazy Google bridge loads", () => {
+    let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
+    googlePlugin.register(
+      createTestPluginApi({
+        registerRealtimeVoiceProvider(provider) {
+          realtimeProvider = provider;
+        },
+      }),
+    );
+
+    const bridge = realtimeProvider?.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio() {},
+      onClearAudio() {},
+    });
+
+    if (!bridge) {
+      throw new Error("expected Google realtime bridge");
+    }
+    expect(bridge.supportsToolResultContinuation).toBe(false);
+    expect(bridge.supportsToolResultSuppression).toBe(false);
+    expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
+    expect(bridge.setMediaTimestamp(20)).toBeUndefined();
+    expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
+  });
+
+  it("refreshes Gemini CLI OAuth through the provider-owned refresh hook", async () => {
+    refreshGeminiCliOAuthTokenMock.mockResolvedValueOnce({
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const credential = {
+      type: "oauth" as const,
+      provider: "google-gemini-cli",
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() - 60_000,
+      email: "user@example.com",
+      projectId: "project-1",
+    };
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toMatchObject({
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+    expect(refreshGeminiCliOAuthTokenMock).toHaveBeenCalledWith(credential);
   });
 });

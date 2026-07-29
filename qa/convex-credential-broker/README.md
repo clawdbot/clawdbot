@@ -1,10 +1,12 @@
 # QA Convex Credential Broker (v1)
 
 Standalone Convex project for shared `qa-lab` live credentials with lease locking.
+Keep private operator notes in `~/Projects/manager/docs/`, not in public docs.
 
 This broker exposes:
 
 - `POST /qa-credentials/v1/acquire`
+- `POST /qa-credentials/v1/payload-chunk`
 - `POST /qa-credentials/v1/heartbeat`
 - `POST /qa-credentials/v1/release`
 - `POST /qa-credentials/v1/admin/add`
@@ -144,6 +146,25 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 - non-empty `driverToken`
 - non-empty `sutToken`
 
+For `kind: "telegram-user"`, broker `admin/add` validates one exclusive real-user
+credential for both the TDLib CLI driver and the Telegram Desktop visual witness:
+
+- `groupId` as a numeric chat id string
+- non-empty `sutToken`
+- `testerUserId` as a numeric Telegram user id string
+- non-empty `testerUsername`
+- `telegramApiId` as a numeric string
+- non-empty `telegramApiHash`
+- non-empty `tdlibDatabaseEncryptionKey`
+- non-empty `tdlibArchiveBase64`
+- `tdlibArchiveSha256` as a SHA-256 hex string
+- non-empty `desktopTdataArchiveBase64`
+- `desktopTdataArchiveSha256` as a SHA-256 hex string
+
+Long-running agent sessions should acquire this lease once, keep it for the
+whole Crabbox review/repro session, then release it from the same session file.
+Do not run parallel `telegram-user` jobs against the burner account.
+
 For `kind: "discord"`, broker `admin/add` validates that payload includes:
 
 - `guildId` as a Discord snowflake string
@@ -151,6 +172,17 @@ For `kind: "discord"`, broker `admin/add` validates that payload includes:
 - non-empty `driverBotToken`
 - non-empty `sutBotToken`
 - `sutApplicationId` as a Discord snowflake string
+
+For `kind: "whatsapp"`, broker `admin/add` validates that payload includes:
+
+- `driverPhoneE164` as an E.164 phone number string
+- `sutPhoneE164` as a distinct E.164 phone number string
+- non-empty `driverAuthArchiveBase64`
+- non-empty `sutAuthArchiveBase64`
+- optional `groupJid`
+
+Other kinds are currently accepted as pass-through payloads. Add broker-side
+validation before treating a new kind as a hardened shared pool.
 
 Admin list (default redacted):
 

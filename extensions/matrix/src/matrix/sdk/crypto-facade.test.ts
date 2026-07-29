@@ -1,3 +1,4 @@
+// Matrix tests cover crypto facade plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -128,7 +129,7 @@ describe("createMatrixCryptoFacade", () => {
       deviceId: "DEVICE",
     });
     expect(result.id).toBe("verification-1");
-    await expect(facade.getRecoveryKey()).resolves.toMatchObject({ keyId: "KEY" });
+    await expect(facade.getRecoveryKey()).resolves.toEqual({ keyId: "KEY" });
   });
 
   it("rehydrates in-progress DM verification requests from the raw crypto layer", async () => {

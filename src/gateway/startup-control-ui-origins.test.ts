@@ -1,28 +1,26 @@
+// Startup control-UI origin tests cover runtime-only origin seeding for LAN
+// gateway binds without mutating persisted config.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
-  it("persists origins seeded from runtime bind and port", async () => {
-    const written: OpenClawConfig[] = [];
+  it("applies origins seeded from runtime bind and port without persisting config", async () => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
     const result = await maybeSeedControlUiAllowedOriginsAtStartup({
       config: { gateway: {} },
-      writeConfig: async (config) => {
-        written.push(config);
-      },
       log,
       runtimeBind: "lan",
       runtimePort: 3000,
     });
 
     const expectedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"];
-    expect(result.persistedAllowedOriginsSeed).toBe(true);
+    expect(result.seededAllowedOrigins).toBe(true);
     expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual(expectedOrigins);
-    expect(written).toHaveLength(1);
-    expect(written[0]?.gateway?.controlUi?.allowedOrigins).toEqual(expectedOrigins);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("for bind=lan"));
+    expect(log.info).toHaveBeenCalledWith(
+      'gateway: seeded gateway.controlUi.allowedOrigins ["http://localhost:3000","http://127.0.0.1:3000"] for bind=lan (required since v2026.2.26; see issue #29385). Applied for this runtime without writing config; add other origins to gateway.controlUi.allowedOrigins if needed.',
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -32,19 +30,16 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
         controlUi: { allowedOrigins: ["https://control.example.com"] },
       },
     };
-    const writeConfig = vi.fn<() => Promise<void>>();
     const log = { info: vi.fn(), warn: vi.fn() };
 
     const result = await maybeSeedControlUiAllowedOriginsAtStartup({
       config,
-      writeConfig,
       log,
       runtimeBind: "lan",
       runtimePort: 3000,
     });
 
-    expect(result).toEqual({ config, persistedAllowedOriginsSeed: false });
-    expect(writeConfig).not.toHaveBeenCalled();
+    expect(result).toEqual({ config, seededAllowedOrigins: false });
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });

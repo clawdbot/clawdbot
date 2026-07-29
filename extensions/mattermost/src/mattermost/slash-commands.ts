@@ -1,23 +1,30 @@
-/**
- * Mattermost native slash command support.
- *
- * Registers custom slash commands via the Mattermost REST API and handles
- * incoming command callbacks via an HTTP endpoint on the gateway.
- *
- * Architecture:
- * - On startup, registers commands with MM via POST /api/v4/commands
- * - MM sends HTTP POST to callbackUrl when a user invokes a command
- * - The callback handler reconstructs the text as `/<command> <args>` and
- *   routes it through the standard inbound reply pipeline
- * - On shutdown, cleans up registered commands via DELETE /api/v4/commands/{id}
- */
-
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Mattermost plugin module implements slash commands behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export const MATTERMOST_SLASH_POST_METHOD = "P";
+const MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES = 128;
+
+// Mattermost rejects command descriptions above 128 UTF-8 bytes. Keep portable
+// descriptions intact until this API boundary so other channels retain their text.
+function truncateMattermostCommandDescription(description: string): string {
+  if (Buffer.byteLength(description, "utf8") <= MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES) {
+    return description;
+  }
+  let bytes = 0;
+  let end = 0;
+  for (const char of description) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES) {
+      break;
+    }
+    bytes += charBytes;
+    end += char.length;
+  }
+  return description.slice(0, end);
+}
 
 export type MattermostSlashCommandConfig = {
   /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
@@ -185,6 +192,14 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
+  {
+    trigger: "oc_queue",
+    originalName: "queue",
+    description: "Adjust active-run queue behavior",
+    autoComplete: true,
+    autoCompleteHint:
+      "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
+  },
 ];
 
 // ─── Command registration ────────────────────────────────────────────────────
@@ -275,7 +290,7 @@ export async function registerSlashCommands(params: {
   }
 
   // Fetch existing commands to avoid duplicates
-  let existing: MattermostCommandResponse[] = [];
+  let existing: MattermostCommandResponse[];
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {
@@ -296,6 +311,7 @@ export async function registerSlashCommands(params: {
   const registered: MattermostRegisteredCommand[] = [];
 
   for (const spec of commands) {
+    const description = truncateMattermostCommandDescription(spec.description);
     const existingForTrigger = existingByTrigger.get(spec.trigger) ?? [];
     const ownedCommands = existingForTrigger.filter(
       (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,
@@ -350,9 +366,9 @@ export async function registerSlashCommands(params: {
           trigger: spec.trigger,
           method: MATTERMOST_SLASH_POST_METHOD,
           url: callbackUrl,
-          description: spec.description,
+          description,
           auto_complete: spec.autoComplete,
-          auto_complete_desc: spec.description,
+          auto_complete_desc: description,
           auto_complete_hint: spec.autoCompleteHint,
         });
         registered.push({
@@ -389,9 +405,9 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         method: MATTERMOST_SLASH_POST_METHOD,
         url: callbackUrl,
-        description: spec.description,
+        description,
         auto_complete: spec.autoComplete,
-        auto_complete_desc: spec.description,
+        auto_complete_desc: description,
         auto_complete_hint: spec.autoCompleteHint,
       });
       log?.(`mattermost: registered command /${spec.trigger} (id=${created.id})`);

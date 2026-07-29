@@ -1,3 +1,4 @@
+// Voice Call tests cover manager.notify plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
@@ -69,9 +70,29 @@ function requireMappedCall(
 }
 
 function requireFirstPlayTtsCall(provider: FakeProvider) {
-  const call = provider.playTtsCalls[0];
+  const call = provider.playTtsCalls.at(0);
   if (!call) {
     throw new Error("expected provider.playTts to be called once");
+  }
+  return call;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireSingleStartListeningCall(provider: FakeProvider) {
+  expect(provider.startListeningCalls).toHaveLength(1);
+  return requireRecord(provider.startListeningCalls.at(0), "start listening call");
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
   }
   return call;
 }
@@ -79,7 +100,9 @@ function requireFirstPlayTtsCall(provider: FakeProvider) {
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function initiateCallWithMessage(
@@ -201,9 +224,8 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-twilio-realtime");
 
     expect(provider.playTtsCalls).toHaveLength(0);
-    expect(requireCall(manager, callId).metadata).toEqual(
-      expect.objectContaining({ initialMessage: "Tell Nana dinner is at 6pm." }),
-    );
+    const metadata = requireRecord(requireCall(manager, callId).metadata, "call metadata");
+    expect(metadata.initialMessage).toBe("Tell Nana dinner is at 6pm.");
   });
 
   it("still speaks initial message in notify mode when realtime is enabled", async () => {
@@ -266,12 +288,9 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-telnyx");
 
     expectFirstPlayTtsText(provider, "Telnyx hello");
-    expect(provider.startListeningCalls).toEqual([
-      expect.objectContaining({
-        callId,
-        providerCallId: "call-uuid",
-      }),
-    ]);
+    const startListeningCall = requireSingleStartListeningCall(provider);
+    expect(startListeningCall.callId).toBe(callId);
+    expect(startListeningCall.providerCallId).toBe("call-uuid");
     expect(requireCall(manager, callId).state).toBe("listening");
   });
 
@@ -290,16 +309,12 @@ describe("CallManager notify and mapping", () => {
       await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
 
       expectFirstPlayTtsText(provider, "Twilio hello");
-      expect(provider.startListeningCalls).toEqual([
-        expect.objectContaining({
-          callId,
-          providerCallId: "call-uuid",
-        }),
-      ]);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
-        ),
+      const startListeningCall = requireSingleStartListeningCall(provider);
+      expect(startListeningCall.callId).toBe(callId);
+      expect(startListeningCall.providerCallId).toBe("call-uuid");
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(requireFirstMockCall(warn.mock.calls, "console warn")[0])).toContain(
+        `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
       );
     } finally {
       warn.mockRestore();
@@ -315,7 +330,8 @@ describe("CallManager notify and mapping", () => {
 
     const afterFailure = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(afterFailure.metadata).toEqual(expect.objectContaining({ initialMessage: "Retry me" }));
+    const metadata = requireRecord(afterFailure.metadata, "call metadata after failed playback");
+    expect(metadata.initialMessage).toBe("Retry me");
     expect(afterFailure.state).toBe("listening");
 
     await answerCall(manager, callId, "evt-retry-2");

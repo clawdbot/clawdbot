@@ -5,23 +5,24 @@
  * resolves agent routes, and handles replies.
  */
 
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
+import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
-export type TwitchRuntimeEnv = {
+type TwitchRuntimeEnv = {
   log?: (message: string) => void;
   error?: (message: string) => void;
 };
 
-export type TwitchMonitorOptions = {
+type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown; // OpenClawConfig
@@ -30,11 +31,12 @@ export type TwitchMonitorOptions = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
-export type TwitchMonitorResult = {
-  stop: () => void;
+type TwitchMonitorResult = {
+  stop: () => Promise<void>;
 };
 
 type TwitchCoreRuntime = ReturnType<typeof getTwitchRuntime>;
+type TwitchIngressLifecycle = Parameters<Parameters<typeof createTwitchIngress>[0]["deliver"]>[1];
 
 /**
  * Process an incoming Twitch message and dispatch to agent.
@@ -46,25 +48,28 @@ async function processTwitchMessage(params: {
   config: unknown;
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
+  turnAdoptionLifecycle: TwitchIngressLifecycle;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { message, account, accountId, config, runtime, core, statusSink } = params;
+  const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
+    params;
   const cfg = config as OpenClawConfig;
 
-  await core.channel.turn.run({
+  await core.channel.inbound.run({
     channel: "twitch",
     accountId,
     raw: message,
+    turnAdoptionLifecycle,
     adapter: {
       ingest: (incoming) => ({
-        id: incoming.id ?? `${incoming.channel}:${incoming.timestamp?.getTime() ?? Date.now()}`,
-        timestamp: incoming.timestamp?.getTime(),
+        id: incoming.id,
+        timestamp: incoming.timestamp,
         rawText: incoming.message,
         textForAgent: incoming.message,
         textForCommands: incoming.message,
         raw: incoming,
       }),
-      resolveTurn: (input) => {
+      resolveTurn: async (input) => {
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
           channel: "twitch",
@@ -76,14 +81,13 @@ async function processTwitchMessage(params: {
         });
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
-        const body = core.channel.reply.formatAgentEnvelope({
+        const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
           channel: "Twitch",
           from: fromLabel,
           timestamp: input.timestamp,
-          envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
           body: input.rawText,
         });
-        const ctxPayload = core.channel.turn.buildContext({
+        const ctxPayload = core.channel.inbound.buildContext({
           channel: "twitch",
           accountId,
           messageId: input.id,
@@ -98,39 +102,25 @@ async function processTwitchMessage(params: {
             kind: "group",
             id: message.channel,
             label: message.channel,
-            routePeer: {
-              kind: "group",
-              id: message.channel,
-            },
           },
           route: {
             agentId: route.agentId,
+            dmScope: route.dmScope,
             accountId: route.accountId,
             routeSessionKey: route.sessionKey,
           },
           reply: {
             to: `twitch:channel:${message.channel}`,
-            originatingTo: `twitch:channel:${message.channel}`,
           },
           message: {
             body,
             rawBody: input.rawText,
             bodyForAgent: input.textForAgent,
             commandBody: input.textForCommands,
-            envelopeFrom: fromLabel,
           },
-        });
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
         });
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg,
-          channel: "twitch",
-          accountId,
-        });
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-          cfg,
-          agentId: route.agentId,
           channel: "twitch",
           accountId,
         });
@@ -138,16 +128,14 @@ async function processTwitchMessage(params: {
           cfg,
           channel: "twitch",
           accountId,
-          agentId: route.agentId,
-          routeSessionKey: route.sessionKey,
-          storePath,
+          route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
           ctxPayload,
-          recordInboundSession: core.channel.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
+            durable: () => ({
+              to: `twitch:channel:${message.channel}`,
+            }),
             deliver: async (payload) => {
-              await deliverTwitchReply({
+              return await deliverTwitchReply({
                 payload,
                 channel: message.channel,
                 account,
@@ -155,17 +143,18 @@ async function processTwitchMessage(params: {
                 config,
                 tableMode,
                 runtime,
-                statusSink,
               });
+            },
+            onDelivered: (_payload, _info, result) => {
+              if (result?.visibleReplySent !== false) {
+                statusSink?.({ lastOutboundAt: Date.now() });
+              }
             },
             onError: (err, info) => {
               runtime.error?.(`Twitch ${info.kind} reply failed: ${String(err)}`);
             },
           },
-          dispatcherOptions: replyPipeline,
-          replyOptions: {
-            onModelSelected,
-          },
+          replyPipeline: {},
           record: {
             onRecordError: (err) => {
               runtime.error?.(`Failed updating session meta: ${String(err)}`);
@@ -188,9 +177,8 @@ async function deliverTwitchReply(params: {
   config: unknown;
   tableMode: MarkdownTableMode;
   runtime: TwitchRuntimeEnv;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-}): Promise<void> {
-  const { payload, channel, account, accountId, config, runtime, statusSink } = params;
+}): Promise<{ visibleReplySent: boolean }> {
+  const { payload, channel, account, accountId, config, runtime } = params;
 
   try {
     const clientManager = getOrCreateClientManager(accountId, {
@@ -200,28 +188,28 @@ async function deliverTwitchReply(params: {
       debug: (msg) => runtime.log?.(msg),
     });
 
-    const client = await clientManager.getClient(
-      account,
-      config as Parameters<typeof clientManager.getClient>[1],
-      accountId,
-    );
-    if (!client) {
-      runtime.error?.(`No client available for sending reply`);
-      return;
-    }
-
-    // Send the reply
     if (!payload.text) {
       runtime.error?.(`No text to send in reply payload`);
-      return;
+      return { visibleReplySent: false };
     }
-
     const textToSend = stripMarkdownForTwitch(payload.text);
-
-    await client.say(channel, textToSend);
-    statusSink?.({ lastOutboundAt: Date.now() });
+    if (!textToSend) {
+      return { visibleReplySent: false };
+    }
+    const result = await clientManager.sendMessage(
+      account,
+      channel,
+      textToSend,
+      config as Parameters<typeof clientManager.sendMessage>[3],
+      accountId,
+    );
+    if (!result.ok) {
+      throw new Error(result.error ?? "Send failed");
+    }
+    return { visibleReplySent: true };
   } catch (err) {
     runtime.error?.(`Failed to send reply: ${String(err)}`);
+    return { visibleReplySent: false };
   }
 }
 
@@ -237,6 +225,7 @@ export async function monitorTwitchProvider(
 
   const core = getTwitchRuntime();
   let stopped = false;
+  let stopTask: Promise<void> | undefined;
 
   const coreLogger = core.logging.getChildLogger({ module: "twitch" });
   const logVerboseMessage = (message: string) => {
@@ -266,49 +255,69 @@ export async function monitorTwitchProvider(
     throw error;
   }
 
+  const ingress = createTwitchIngress({
+    accountId,
+    runtime,
+    deliver: async (message, turnAdoptionLifecycle) => {
+      const botUsername = normalizeLowercaseStringOrEmpty(account.username);
+      if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
+        return;
+      }
+
+      const access = await checkTwitchAccessControl({
+        message,
+        account,
+        botUsername,
+      });
+
+      if (!access.allowed) {
+        return;
+      }
+
+      statusSink?.({ lastInboundAt: Date.now() });
+
+      await processTwitchMessage({
+        message,
+        account,
+        accountId,
+        config,
+        runtime,
+        core,
+        turnAdoptionLifecycle,
+        statusSink,
+      });
+    },
+  });
+  ingress.start();
+
   const unregisterHandler = clientManager.onMessage(account, (message) => {
     if (stopped) {
       return;
     }
 
-    // Access control check
-    const botUsername = normalizeLowercaseStringOrEmpty(account.username);
-    if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
-      return; // Ignore own messages
-    }
-
-    const access = checkTwitchAccessControl({
-      message,
-      account,
-      botUsername,
-    });
-
-    if (!access.allowed) {
-      return;
-    }
-
-    statusSink?.({ lastInboundAt: Date.now() });
-
-    // Fire-and-forget: process message without blocking
-    void processTwitchMessage({
-      message,
-      account,
-      accountId,
-      config,
-      runtime,
-      core,
-      statusSink,
-    }).catch((err) => {
-      runtime.error?.(`Message processing failed: ${String(err)}`);
+    void ingress.accept(message).catch((err: unknown) => {
+      runtime.error?.(`Message durable admission failed: ${String(err)}`);
     });
   });
 
-  const stop = () => {
-    stopped = true;
-    unregisterHandler();
+  const stop = (): Promise<void> => {
+    stopTask ??= (async () => {
+      stopped = true;
+      unregisterHandler();
+      await ingress.stop();
+    })();
+    return stopTask;
   };
 
-  abortSignal.addEventListener("abort", stop, { once: true });
+  abortSignal.addEventListener(
+    "abort",
+    () => {
+      void stop().catch((error: unknown) => {
+        runtime.error?.(`Twitch ingress stop failed: ${String(error)}`);
+      });
+    },
+    { once: true },
+  );
 
   return { stop };
 }

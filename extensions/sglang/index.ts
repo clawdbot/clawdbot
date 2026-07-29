@@ -1,8 +1,10 @@
+// Sglang plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SGLANG_DEFAULT_API_KEY_ENV_VAR,
   SGLANG_DEFAULT_BASE_URL,
@@ -58,7 +60,7 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         order: "late",
         run: async (ctx) => {
           const providerSetup = await loadProviderSetup();
@@ -69,6 +71,10 @@ export default definePluginEntry({
           });
         },
       },
+      ...buildProviderReplayFamilyHooks({
+        family: "openai-compatible",
+        dropReasoningFromHistory: false,
+      }),
       wizard: {
         setup: {
           choiceId: "sglang",

@@ -1,3 +1,4 @@
+// Link-understanding apply step runs configured link processors and folds their output into inbound context.
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,6 +10,7 @@ type ApplyLinkUnderstandingResult = {
   urls: string[];
 };
 
+/** Runs link understanding and folds successful outputs into the inbound context. */
 export async function applyLinkUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

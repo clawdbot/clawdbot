@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { resolveZaloAccount } from "./accounts.js";
+// Zalo tests cover accounts plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  inspectZaloAccount,
+  listZaloAccountIds,
+  resolveDefaultZaloAccountId,
+  resolveZaloAccount,
+} from "./accounts.js";
 
 describe("resolveZaloAccount", () => {
   it("resolves account config when account key casing differs from normalized id", () => {
@@ -66,5 +72,53 @@ describe("resolveZaloAccount", () => {
     expect(resolved.accountId).toBe("work");
     expect(resolved.name).toBe("Work");
     expect(resolved.token).toBe("work-token");
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = {
+      channels: {
+        zalo: {
+          botToken: "default-token",
+          accounts: {
+            work: {
+              enabled: false,
+              botToken: "work-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listZaloAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
+    expect(resolveZaloAccount({ cfg, accountId: "default" }).enabled).toBe(true);
+  });
+});
+
+describe("Zalo account SecretRef inspection", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const unresolvedRef = {
+    source: "env" as const,
+    provider: "default",
+    id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
+  };
+
+  it("keeps direct account resolution strict", () => {
+    expect(() =>
+      resolveZaloAccount({ cfg: { channels: { zalo: { botToken: unresolvedRef } } } }),
+    ).toThrow(/unresolved SecretRef/);
+  });
+
+  it("does not fall through an unavailable configured ref to the environment", () => {
+    vi.stubEnv("ZALO_BOT_TOKEN", "lower-precedence-token");
+    const account = inspectZaloAccount({
+      cfg: { channels: { zalo: { botToken: unresolvedRef } } },
+    });
+    expect(account).toMatchObject({
+      token: "",
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+    });
   });
 });

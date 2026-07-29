@@ -1,3 +1,4 @@
+// Guards config validation modules against expensive cold imports.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,5 +13,6 @@ describe("config validation cold imports", () => {
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*manifest-command-aliases\.runtime\.js["']/);
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*providers\.runtime\.js["']/);
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*loader\.js["']/);
+    expect(source).not.toMatch(/\bfrom\s+["'][^"']*channels\/ids\.js["']/);
   });
 });

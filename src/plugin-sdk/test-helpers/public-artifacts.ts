@@ -1,3 +1,7 @@
+/**
+ * Shared public artifact basename helpers for bundled plugin contracts.
+ */
+import { uniqueStrings } from "../../../packages/normalization-core/src/string-normalization.js";
 import {
   assertUniqueValues,
   BUNDLED_RUNTIME_SIDECAR_PATHS,
@@ -18,7 +22,7 @@ const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
     "index.js",
     "login-qr-api.js",
     "onboard.js",
-    "openai-codex-catalog.js",
+    "openai-chatgpt-catalog.js",
     "provider-catalog.js",
     "session-key-api.js",
     "setup-api.js",
@@ -30,7 +34,7 @@ const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
 );
 
 export const BUNDLED_RUNTIME_SIDECAR_BASENAMES = assertUniqueValues(
-  [...new Set(BUNDLED_RUNTIME_SIDECAR_PATHS.map(getPublicArtifactBasename))],
+  uniqueStrings(BUNDLED_RUNTIME_SIDECAR_PATHS.map(getPublicArtifactBasename)),
   "bundled runtime sidecar basename",
 );
 

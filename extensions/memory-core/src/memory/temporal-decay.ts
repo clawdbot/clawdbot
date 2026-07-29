@@ -1,3 +1,4 @@
+// Memory Core plugin module implements temporal decay behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -21,7 +22,7 @@ function toDecayLambda(halfLifeDays: number): number {
   return Math.LN2 / halfLifeDays;
 }
 
-export function calculateTemporalDecayMultiplier(params: {
+function calculateTemporalDecayMultiplier(params: {
   ageInDays: number;
   halfLifeDays: number;
 }): number {
@@ -33,7 +34,7 @@ export function calculateTemporalDecayMultiplier(params: {
   return Math.exp(-lambda * clampedAge);
 }
 
-export function applyTemporalDecayToScore(params: {
+function applyTemporalDecayToScore(params: {
   score: number;
   ageInDays: number;
   halfLifeDays: number;
@@ -70,7 +71,7 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
 
 function isEvergreenMemoryPath(filePath: string): boolean {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  if (normalized === "MEMORY.md") {
+  if (normalized === "MEMORY.md" || normalized === "USER.md") {
     return true;
   }
   if (!normalized.startsWith("memory/")) {

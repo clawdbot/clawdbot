@@ -1,10 +1,7 @@
+// Qqbot tests cover attachment tags plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  formatAttachmentTags,
-  renderAttachmentTags,
-  TRANSCRIPT_SOURCE_LABELS,
-  type AttachmentSummary,
-} from "./attachment-tags.js";
+import type { RefAttachmentSummary as AttachmentSummary } from "../ref/types.js";
+import { formatAttachmentTags, renderAttachmentTags } from "./attachment-tags.js";
 
 describe("engine/utils/attachment-tags", () => {
   // ────────────────────────── shared body (mode-agnostic) ──────────────────────────
@@ -15,26 +12,26 @@ describe("engine/utils/attachment-tags", () => {
       expect(formatAttachmentTags([])).toBe("");
     });
 
-    it("collapses to MEDIA:{source} when a path/url is present", () => {
+    it("renders bracketed source tags when a path/url is present", () => {
       expect(formatAttachmentTags([{ type: "image", localPath: "/tmp/a.png" }])).toBe(
-        "MEDIA:/tmp/a.png",
+        "[image: /tmp/a.png]",
       );
       expect(formatAttachmentTags([{ type: "file", url: "https://x/y.pdf" }])).toBe(
-        "MEDIA:https://x/y.pdf",
+        "[file: https://x/y.pdf]",
       );
     });
 
     it("inlines voice transcript only for voice attachments", () => {
       expect(
         formatAttachmentTags([{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi" }]),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi")');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi")');
       // Non-voice attachments never get the transcript suffix even if one
       // is present on the summary.
       expect(
         formatAttachmentTags([
           { type: "image", localPath: "/tmp/i.png", transcript: "unused" } as AttachmentSummary,
         ]),
-      ).toBe("MEDIA:/tmp/i.png");
+      ).toBe("[image: /tmp/i.png]");
     });
 
     it("falls back to bracketed tags when no source is available", () => {
@@ -55,7 +52,7 @@ describe("engine/utils/attachment-tags", () => {
           { type: "image", localPath: "/tmp/a.png" },
           { type: "voice", transcript: "hi" },
         ]),
-      ).toBe('MEDIA:/tmp/a.png\n[voice (transcript: "hi")]');
+      ).toBe('[image: /tmp/a.png]\n[voice (transcript: "hi")]');
     });
   });
 
@@ -95,7 +92,7 @@ describe("engine/utils/attachment-tags", () => {
           [{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi", transcriptSource: "stt" }],
           { mode: "ref" },
         ),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi") [source: local STT]');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi") [source: local STT]');
 
       // inline mode: suffix NEVER appears, even with transcriptSource set.
       expect(
@@ -103,7 +100,7 @@ describe("engine/utils/attachment-tags", () => {
           [{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi", transcriptSource: "stt" }],
           { mode: "inline" },
         ),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi")');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi")');
     });
 
     it("omits the source suffix when transcriptSource is missing (both modes identical)", () => {
@@ -129,11 +126,27 @@ describe("engine/utils/attachment-tags", () => {
   // ────────────────────────── Prompt-contract regression guards ──────────────────────────
 
   describe("prompt contract", () => {
-    it("exposes the transcript-source labels table", () => {
-      expect(TRANSCRIPT_SOURCE_LABELS.stt).toBe("local STT");
-      expect(TRANSCRIPT_SOURCE_LABELS.asr).toBe("platform ASR");
-      expect(TRANSCRIPT_SOURCE_LABELS.tts).toBe("TTS source");
-      expect(TRANSCRIPT_SOURCE_LABELS.fallback).toBe("fallback text");
+    it("renders each transcript-source label", () => {
+      const expected = {
+        stt: "local STT",
+        asr: "platform ASR",
+        tts: "TTS source",
+        fallback: "fallback text",
+      } as const;
+      for (const [transcriptSource, label] of Object.entries(expected)) {
+        expect(
+          renderAttachmentTags(
+            [
+              {
+                type: "voice",
+                transcript: "hello",
+                transcriptSource: transcriptSource as AttachmentSummary["transcriptSource"],
+              },
+            ],
+            { mode: "ref" },
+          ),
+        ).toContain(`[source: ${label}]`);
+      }
     });
 
     it("uses the single canonical keyword 'transcript:' (never 'content:')", () => {

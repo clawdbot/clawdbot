@@ -1,3 +1,6 @@
+// `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -5,11 +8,11 @@ import {
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
-import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
+import { formatMissingPluginMessage } from "./error-format.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
+/** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
@@ -34,19 +37,10 @@ function formatCapabilityKinds(
   return capabilities.map((entry) => entry.kind).join(", ");
 }
 
-function formatHookSummary(params: {
-  usesLegacyBeforeAgentStart: boolean;
-  typedHookCount: number;
-  customHookCount: number;
-}): string {
+function formatHookSummary(params: { typedHookCount: number; customHookCount: number }): string {
   const parts: string[] = [];
-  if (params.usesLegacyBeforeAgentStart) {
-    parts.push("before_agent_start");
-  }
-  const nonLegacyTypedHookCount =
-    params.typedHookCount - (params.usesLegacyBeforeAgentStart ? 1 : 0);
-  if (nonLegacyTypedHookCount > 0) {
-    parts.push(`${nonLegacyTypedHookCount} typed`);
+  if (params.typedHookCount > 0) {
+    parts.push(`${params.typedHookCount} typed`);
   }
   if (params.customHookCount > 0) {
     parts.push(`${params.customHookCount} custom`);
@@ -110,6 +104,7 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   return lines;
 }
 
+/** Inspect one plugin or all plugins using either snapshot-only or runtime-loaded registry data. */
 export async function runPluginsInspectCommand(
   id: string | undefined,
   opts: PluginInspectOptions,
@@ -192,7 +187,6 @@ export async function runPluginsInspectCommand(
           : "none",
       Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
       Hooks: formatHookSummary({
-        usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
         typedHookCount: inspect.typedHooks.length,
         customHookCount: inspect.customHooks.length,
       }),
@@ -232,7 +226,25 @@ export async function runPluginsInspectCommand(
   );
   const targetPlugin = snapshotReport.plugins.find((entry) => entry.id === id || entry.name === id);
   if (!targetPlugin) {
-    defaultRuntime.error(`Plugin not found: ${id}`);
+    if (id === "skill-workshop") {
+      const { detectSkillWorkshopToolPolicyDiagnostic } =
+        await import("../skills/workshop/tool-policy-diagnostic.js");
+      const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+        config: cfg,
+        // Invoking the legacy inspect id is explicit Workshop intent even when
+        // autonomous capture is off; report manual-tool availability too.
+        workshopEnabled: true,
+      });
+      const lines = [
+        "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
+      ];
+      if (diagnostic) {
+        lines.push(diagnostic.message);
+      }
+      defaultRuntime.error(lines.join("\n"));
+      return defaultRuntime.exit(1);
+    }
+    defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
     return defaultRuntime.exit(1);
   }
   const report = runtimeInspect
@@ -254,7 +266,9 @@ export async function runPluginsInspectCommand(
     report,
   });
   if (!inspect) {
-    defaultRuntime.error(`Plugin not found: ${id}`);
+    defaultRuntime.error(
+      formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),
+    );
     return defaultRuntime.exit(1);
   }
   const install = installRecords[inspect.plugin.id];
@@ -294,9 +308,6 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
   lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
-  lines.push(
-    `${theme.muted("Legacy before_agent_start:")} ${inspect.usesLegacyBeforeAgentStart ? "yes" : "no"}`,
-  );
   if (inspect.bundleCapabilities.length > 0) {
     lines.push(`${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`);
   }
@@ -340,7 +351,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
-  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(
       "MCP servers",

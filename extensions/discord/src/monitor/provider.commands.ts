@@ -1,29 +1,24 @@
+// Discord provider module implements model/runtime integration.
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
   type NativeCommandSpec,
-} from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GetPluginCommandSpecs =
   typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
 
-let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
-
-async function loadPluginRuntime() {
-  const promise = pluginRuntimePromise ?? import("openclaw/plugin-sdk/plugin-runtime");
-  pluginRuntimePromise = promise;
-  try {
-    return await promise;
-  } catch (error) {
-    if (pluginRuntimePromise === promise) {
-      pluginRuntimePromise = undefined;
-    }
-    throw error;
-  }
-}
+const loadPluginCommandSpecs = createLazyRuntimeNamedExport(
+  () => import("openclaw/plugin-sdk/plugin-runtime"),
+  "getPluginCommandSpecs",
+);
 
 async function appendPluginCommandSpecs(params: {
   commandSpecs: NativeCommandSpec[];
@@ -32,11 +27,8 @@ async function appendPluginCommandSpecs(params: {
   getPluginCommandSpecs?: GetPluginCommandSpecs;
 }): Promise<NativeCommandSpec[]> {
   const merged = [...params.commandSpecs];
-  const existingNames = new Set(
-    merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
-  );
-  const getPluginCommandSpecs =
-    params.getPluginCommandSpecs ?? (await loadPluginRuntime()).getPluginCommandSpecs;
+  const existingNames = new Set(normalizeStringEntriesLower(merged.map((spec) => spec.name)));
+  const getPluginCommandSpecs = params.getPluginCommandSpecs ?? (await loadPluginCommandSpecs());
   for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {
     const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
     if (!normalizedName) {
@@ -114,14 +106,14 @@ export async function resolveDiscordProviderCommandSpecs(params: {
     });
     params.runtime.log?.(
       warn(
-        `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+        `${initialCommandCount} commands exceed the ${maxDiscordCommands}-command Discord limit; removing per-skill commands and keeping /skill.`,
       ),
     );
   }
   if (params.nativeEnabled && commandSpecs.length > maxDiscordCommands) {
     params.runtime.log?.(
       warn(
-        `discord: ${commandSpecs.length} commands exceeds limit; some commands may fail to deploy.`,
+        `${commandSpecs.length} commands exceed the ${maxDiscordCommands}-command Discord limit; some commands may fail to deploy.`,
       ),
     );
   }

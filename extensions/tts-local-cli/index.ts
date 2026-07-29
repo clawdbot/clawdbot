@@ -1,3 +1,4 @@
+// Tts Local Cli plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildCliSpeechProvider } from "./speech-provider.js";
 

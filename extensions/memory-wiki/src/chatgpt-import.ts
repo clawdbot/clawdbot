@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements chatgpt import behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -5,8 +6,18 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  countMemoryWikiImportRunStateRows,
+  MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES,
+  readMemoryWikiImportRunRecord,
+  resolveMemoryWikiImportRunsDir,
+  type ChatGptImportRunRecord,
+  writeMemoryWikiImportRunRecord,
+} from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   parseWikiMarkdown,
@@ -14,6 +25,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
@@ -90,27 +102,6 @@ type ChatGptImportAction = {
   preferenceSignals: string[];
 };
 
-type ChatGptImportRunEntry = {
-  path: string;
-  snapshotPath?: string;
-};
-
-type ChatGptImportRunRecord = {
-  version: 1;
-  runId: string;
-  importType: "chatgpt";
-  exportPath: string;
-  sourcePath: string;
-  appliedAt: string;
-  conversationCount: number;
-  createdCount: number;
-  updatedCount: number;
-  skippedCount: number;
-  createdPaths: string[];
-  updatedPaths: ChatGptImportRunEntry[];
-  rolledBackAt?: string;
-};
-
 export type ChatGptImportResult = {
   dryRun: boolean;
   exportPath: string;
@@ -143,6 +134,25 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function isMissingConversationPageError(error: unknown): boolean {
+  return asRecord(error)?.code === "ENOENT";
+}
+
+async function readExistingConversationPage(absolutePath: string): Promise<string> {
+  try {
+    return await fs.readFile(absolutePath, "utf8");
+  } catch {
+    try {
+      return await fs.readFile(absolutePath, "utf8");
+    } catch (retryError) {
+      if (isMissingConversationPageError(retryError)) {
+        return "";
+      }
+      throw retryError;
+    }
+  }
 }
 
 function resolveConversationSourcePath(exportInputPath: string): {
@@ -201,7 +211,7 @@ function isoFromUnix(raw: unknown): string | undefined {
   if (!Number.isFinite(numeric)) {
     return undefined;
   }
-  return new Date(numeric * 1000).toISOString();
+  return timestampMsToIsoString(numeric * 1000);
 }
 
 function cleanMessageText(value: string): string {
@@ -292,7 +302,7 @@ function inferRisk(title: string, sampleText: string): ChatGptRiskAssessment {
     (rule) => rule.label,
   );
   if (reasons.length > 0) {
-    return { level: "high", reasons: [...new Set(reasons)] };
+    return { level: "high", reasons: uniqueStrings(reasons) };
   }
   if (/\b(career|job|salary|interview|offer|resume|cover letter)\b/i.test(blob)) {
     return { level: "medium", reasons: ["work_career"] };
@@ -573,7 +583,7 @@ function replaceSimpleManagedBlock(params: {
   const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.original.replace(blockPattern, params.replacement);
+  return params.original.replace(blockPattern, () => params.replacement);
 }
 
 function extractSimpleManagedBlock(params: {
@@ -649,14 +659,6 @@ function buildRunId(exportPath: string, nowIso: string): string {
   return `chatgpt-${createHash("sha1").update(seed).digest("hex").slice(0, 12)}`;
 }
 
-function resolveImportRunsDir(vaultRoot: string): string {
-  return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
-}
-
-function resolveImportRunPath(vaultRoot: string, runId: string): string {
-  return path.join(resolveImportRunsDir(vaultRoot), `${runId}.json`);
-}
-
 function normalizeConversationActions(
   records: ChatGptConversationRecord[],
   operations: Map<string, ChatGptImportOperation>,
@@ -678,36 +680,35 @@ async function writeImportRunRecord(
   vaultRoot: string,
   record: ChatGptImportRunRecord,
 ): Promise<void> {
-  const recordPath = resolveImportRunPath(vaultRoot, record.runId);
-  await fs.mkdir(path.dirname(recordPath), { recursive: true });
-  await fs.writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeMemoryWikiImportRunRecord(vaultRoot, record);
 }
 
 async function readImportRunRecord(
   vaultRoot: string,
   runId: string,
 ): Promise<ChatGptImportRunRecord> {
-  const recordPath = resolveImportRunPath(vaultRoot, runId);
-  const raw = await fs.readFile(recordPath, "utf8");
-  return JSON.parse(raw) as ChatGptImportRunRecord;
+  const record = await readMemoryWikiImportRunRecord(vaultRoot, runId);
+  if (!record) {
+    throw new Error(`Memory Wiki import run not found: ${runId}`);
+  }
+  return record;
 }
 
 async function writeTrackedImportPage(params: {
   vaultRoot: string;
   runDir: string;
   relativePath: string;
-  content: string;
+  existing: string;
+  rendered: string;
   record: ChatGptImportRunRecord;
 }): Promise<ChatGptImportOperation> {
   const absolutePath = path.join(params.vaultRoot, params.relativePath);
-  const existing = await fs.readFile(absolutePath, "utf8").catch(() => "");
-  const rendered = preserveExistingPageBlocks(params.content, existing);
-  if (existing === rendered) {
+  if (params.existing === params.rendered) {
     return "skip";
   }
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  if (!existing) {
-    await fs.writeFile(absolutePath, rendered, "utf8");
+  if (!params.existing) {
+    await fs.writeFile(absolutePath, params.rendered, "utf8");
     params.record.createdPaths.push(params.relativePath);
     return "create";
   }
@@ -715,8 +716,8 @@ async function writeTrackedImportPage(params: {
   const snapshotRelativePath = path.join("snapshots", `${snapshotHash}.md`).replace(/\\/g, "/");
   const snapshotAbsolutePath = path.join(params.runDir, snapshotRelativePath);
   await fs.mkdir(path.dirname(snapshotAbsolutePath), { recursive: true });
-  await fs.writeFile(snapshotAbsolutePath, existing, "utf8");
-  await fs.writeFile(absolutePath, rendered, "utf8");
+  await fs.writeFile(snapshotAbsolutePath, params.existing, "utf8");
+  await fs.writeFile(absolutePath, params.rendered, "utf8");
   params.record.updatedPaths.push({
     path: params.relativePath,
     snapshotPath: snapshotRelativePath,
@@ -744,34 +745,18 @@ export async function importChatGptConversations(params: {
   let updatedCount = 0;
   let skippedCount = 0;
   let runId: string | undefined;
-  const nowIso = new Date(params.nowMs ?? Date.now()).toISOString();
-
-  let importRunRecord: ChatGptImportRunRecord | undefined;
-  let importRunDir = "";
-
-  if (!params.dryRun) {
-    runId = buildRunId(exportPath, nowIso);
-    importRunDir = path.join(resolveImportRunsDir(params.config.vault.path), runId);
-    importRunRecord = {
-      version: 1,
-      runId,
-      importType: "chatgpt",
-      exportPath,
-      sourcePath: conversationsPath,
-      appliedAt: nowIso,
-      conversationCount: records.length,
-      createdCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      createdPaths: [],
-      updatedPaths: [],
-    };
-  }
+  const nowIso = resolveMemoryWikiTimestamp(params.nowMs);
+  const importPlans: Array<{
+    relativePath: string;
+    existing: string;
+    rendered: string;
+    operation: ChatGptImportOperation;
+  }> = [];
 
   for (const record of records) {
     const rendered = renderConversationPage(record);
     const absolutePath = path.join(params.config.vault.path, record.pagePath);
-    const existing = await fs.readFile(absolutePath, "utf8").catch(() => "");
+    const existing = await readExistingConversationPage(absolutePath);
     const stabilized = preserveExistingPageBlocks(rendered, existing);
     const operation: ChatGptImportOperation =
       existing === stabilized ? "skip" : existing ? "update" : "create";
@@ -783,12 +768,54 @@ export async function importChatGptConversations(params: {
     } else {
       skippedCount += 1;
     }
-    if (!params.dryRun && importRunRecord) {
+    importPlans.push({
+      relativePath: record.pagePath,
+      existing,
+      rendered: stabilized,
+      operation,
+    });
+  }
+
+  let importRunRecord: ChatGptImportRunRecord | undefined;
+  const changedCount = createdCount + updatedCount;
+
+  if (!params.dryRun && changedCount > 0) {
+    const requiredStateRows = 1 + changedCount;
+    const existingStateRows = await countMemoryWikiImportRunStateRows();
+    const projectedStateRows = existingStateRows + requiredStateRows;
+    if (projectedStateRows > MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES) {
+      throw new Error(
+        `Memory Wiki ChatGPT import exceeds SQLite import-run entry limit (${projectedStateRows}/${MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES})`,
+      );
+    }
+
+    runId = buildRunId(exportPath, nowIso);
+    const importRunDir = path.join(resolveMemoryWikiImportRunsDir(params.config.vault.path), runId);
+    importRunRecord = {
+      version: 1,
+      runId,
+      importType: "chatgpt",
+      exportPath,
+      sourcePath: conversationsPath,
+      appliedAt: nowIso,
+      conversationCount: records.length,
+      createdCount,
+      updatedCount,
+      skippedCount,
+      createdPaths: [],
+      updatedPaths: [],
+    };
+
+    for (const plan of importPlans) {
+      if (plan.operation === "skip") {
+        continue;
+      }
       await writeTrackedImportPage({
         vaultRoot: params.config.vault.path,
         runDir: importRunDir,
-        relativePath: record.pagePath,
-        content: rendered,
+        relativePath: plan.relativePath,
+        existing: plan.existing,
+        rendered: plan.rendered,
         record: importRunRecord,
       });
     }
@@ -796,9 +823,6 @@ export async function importChatGptConversations(params: {
 
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
-    importRunRecord.createdCount = createdCount;
-    importRunRecord.updatedCount = updatedCount;
-    importRunRecord.skippedCount = skippedCount;
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
       const compile = await compileMemoryWikiVault(params.config);
       indexUpdatedFiles = compile.updatedFiles;
@@ -864,7 +888,7 @@ export async function rollbackChatGptImportRun(params: {
     removedCount += 1;
   }
   let restoredCount = 0;
-  const runDir = path.join(resolveImportRunsDir(params.config.vault.path), record.runId);
+  const runDir = path.join(resolveMemoryWikiImportRunsDir(params.config.vault.path), record.runId);
   for (const entry of record.updatedPaths) {
     if (!entry.snapshotPath) {
       continue;
@@ -901,3 +925,4 @@ export async function rollbackChatGptImportRun(params: {
     alreadyRolledBack: false,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

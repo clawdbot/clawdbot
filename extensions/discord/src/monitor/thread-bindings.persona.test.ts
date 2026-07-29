@@ -1,3 +1,4 @@
+// Discord tests cover thread bindings.persona plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveThreadBindingPersona,
@@ -30,5 +31,10 @@ describe("thread binding persona", () => {
       label: "codex-thread",
     } satisfies ThreadBindingRecord;
     expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");
+  });
+
+  it("does not split a surrogate pair at the length limit", () => {
+    const prefix = "a".repeat(76);
+    expect(resolveThreadBindingPersona({ label: `${prefix}😀tail` })).toBe(`⚙️ ${prefix}`);
   });
 });

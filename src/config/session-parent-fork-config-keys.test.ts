@@ -1,3 +1,4 @@
+// Verifies parent-fork session config keys stay aligned with schema.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -13,11 +14,13 @@ describe("session parent fork config keys", () => {
     if (result.ok) {
       return;
     }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "session",
-        message: expect.stringContaining('Unrecognized key: "parentForkMaxTokens"'),
-      }),
+    const issue = result.issues.find(
+      (candidate) =>
+        candidate.path === "session" &&
+        candidate.message.includes('Unrecognized key: "parentForkMaxTokens"'),
     );
+    if (!issue) {
+      throw new Error("Expected legacy session.parentForkMaxTokens validation issue");
+    }
   });
 });

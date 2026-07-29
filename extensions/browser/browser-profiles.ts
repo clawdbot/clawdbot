@@ -1,3 +1,7 @@
+/**
+ * Browser profile API barrel. It exposes browser profile defaults and config
+ * resolution helpers for setup and runtime paths.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,

@@ -1,187 +1,69 @@
+// Persists commitment records in the canonical shared SQLite database.
 import { randomBytes } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
   resolveCommitmentsConfig,
 } from "./config.js";
+import {
+  coerceCommitmentRecord,
+  commitmentRecordFromRow,
+  commitmentRecordToRow,
+  commitmentRecordToUpdate,
+  type CommitmentRow,
+  type CommitmentsDatabase,
+} from "./store-record.js";
 import type {
   CommitmentCandidate,
   CommitmentExtractionItem,
   CommitmentRecord,
   CommitmentScope,
   CommitmentStatus,
-  CommitmentStoreFile,
 } from "./types.js";
 
-const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_STATUSES = ["pending", "snoozed"] as const;
 
-type LoadedCommitmentStore = {
-  store: CommitmentStoreFile;
-  hadLegacySourceText: boolean;
-};
-
-function defaultCommitmentStorePath(): string {
-  return path.join(resolveStateDir(), "commitments", "commitments.json");
+function databaseOptions(env: NodeJS.ProcessEnv = process.env): OpenClawStateDatabaseOptions {
+  return { env };
 }
 
-export function resolveCommitmentStorePath(storePath?: string): string {
-  const trimmed = storePath?.trim();
-  if (!trimmed) {
-    return defaultCommitmentStorePath();
-  }
-  if (trimmed.startsWith("~")) {
-    return path.resolve(expandHomePrefix(trimmed));
-  }
-  return path.resolve(trimmed);
-}
-
-function emptyStore(): CommitmentStoreFile {
-  return { version: STORE_VERSION, commitments: [] };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const dueWindow = isRecord(raw.dueWindow) ? raw.dueWindow : undefined;
-  if (!dueWindow) {
-    return undefined;
-  }
-  const requiredStrings = [
-    raw.id,
-    raw.agentId,
-    raw.sessionKey,
-    raw.channel,
-    raw.kind,
-    raw.sensitivity,
-    raw.source,
-    raw.status,
-    raw.reason,
-    raw.suggestedText,
-    raw.dedupeKey,
-  ];
-  if (requiredStrings.some((value) => typeof value !== "string" || !value.trim())) {
-    return undefined;
-  }
-  if (
-    typeof raw.confidence !== "number" ||
-    typeof raw.createdAtMs !== "number" ||
-    typeof raw.updatedAtMs !== "number" ||
-    typeof raw.attempts !== "number" ||
-    typeof dueWindow.earliestMs !== "number" ||
-    typeof dueWindow.latestMs !== "number" ||
-    typeof dueWindow.timezone !== "string"
-  ) {
-    return undefined;
-  }
-  const commitment = { ...raw } as CommitmentRecord;
-  return stripLegacySourceText(commitment);
-}
-
-function hasLegacySourceText(raw: unknown): boolean {
-  return isRecord(raw) && ("sourceUserText" in raw || "sourceAssistantText" in raw);
-}
-
-function stripLegacySourceText(commitment: CommitmentRecord): CommitmentRecord {
-  const stripped = { ...commitment };
-  // The extraction prompt can read the source turn, but delivery state should
-  // not persist or replay raw conversation text into later heartbeat turns.
-  delete stripped.sourceUserText;
-  delete stripped.sourceAssistantText;
-  return stripped;
-}
-
-function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile {
-  return {
-    ...store,
-    commitments: store.commitments.map(stripLegacySourceText),
-  };
-}
-
-async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
-  const resolved = resolveCommitmentStorePath(storePath);
-  try {
-    const raw = await fs.promises.readFile(resolved, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      !isRecord(parsed) ||
-      parsed.version !== STORE_VERSION ||
-      !Array.isArray(parsed.commitments)
-    ) {
-      return { store: emptyStore(), hadLegacySourceText: false };
-    }
-    let hadLegacySourceText = false;
-    return {
-      store: {
-        version: STORE_VERSION,
-        commitments: parsed.commitments.flatMap((entry) => {
-          hadLegacySourceText ||= hasLegacySourceText(entry);
-          const coerced = coerceCommitment(entry);
-          return coerced ? [coerced] : [];
-        }),
-      },
-      hadLegacySourceText,
-    };
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return { store: emptyStore(), hadLegacySourceText: false };
-    }
-    throw err;
-  }
-}
-
-export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
-  return (await loadCommitmentStoreInternal(storePath)).store;
-}
-
-export async function saveCommitmentStore(
-  storePath: string | undefined,
-  store: CommitmentStoreFile,
-): Promise<void> {
-  const resolved = resolveCommitmentStorePath(storePath);
-  const dir = path.dirname(resolved);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.promises.chmod(dir, 0o700).catch(() => undefined);
-  const json = JSON.stringify(sanitizeStoreForWrite(store), null, 2);
-  const tmp = `${resolved}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.chmod(tmp, 0o600).catch(() => undefined);
-  await fs.promises.rename(tmp, resolved);
-  await fs.promises.chmod(resolved, 0o600).catch(() => undefined);
+export function resolveCommitmentDatabasePath(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOpenClawStateSqlitePath(env);
 }
 
 function generateCommitmentId(nowMs: number): string {
   return `cm_${nowMs.toString(36)}_${randomBytes(5).toString("hex")}`;
 }
 
-function scopeValue(value: string | undefined): string {
-  return value?.trim() ?? "";
+function optionalScopeValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-function buildCommitmentScopeKey(scope: CommitmentScope): string {
-  return [
-    scopeValue(scope.agentId),
-    scopeValue(scope.sessionKey),
-    scopeValue(scope.channel),
-    scopeValue(scope.accountId),
-    scopeValue(scope.to),
-    scopeValue(scope.threadId),
-    scopeValue(scope.senderId),
-  ].join("\u001f");
-}
-
-function isActiveStatus(status: CommitmentStatus): boolean {
-  return status === "pending" || status === "snoozed";
+function normalizeScope(scope: CommitmentScope): CommitmentScope {
+  return {
+    agentId: scope.agentId.trim(),
+    sessionKey: scope.sessionKey.trim(),
+    channel: scope.channel.trim(),
+    ...(optionalScopeValue(scope.accountId) ? { accountId: scope.accountId?.trim() } : {}),
+    ...(optionalScopeValue(scope.to) ? { to: scope.to?.trim() } : {}),
+    ...(optionalScopeValue(scope.threadId) ? { threadId: scope.threadId?.trim() } : {}),
+    ...(optionalScopeValue(scope.senderId) ? { senderId: scope.senderId?.trim() } : {}),
+  };
 }
 
 function candidateToRecord(params: {
@@ -191,16 +73,11 @@ function candidateToRecord(params: {
   earliestMs: number;
   latestMs: number;
   timezone: string;
-}): CommitmentRecord {
-  return {
+}): CommitmentRecord | undefined {
+  const scope = normalizeScope(params.item);
+  return coerceCommitmentRecord({
     id: generateCommitmentId(params.nowMs),
-    agentId: params.item.agentId,
-    sessionKey: params.item.sessionKey,
-    channel: params.item.channel,
-    ...(params.item.accountId ? { accountId: params.item.accountId } : {}),
-    ...(params.item.to ? { to: params.item.to } : {}),
-    ...(params.item.threadId ? { threadId: params.item.threadId } : {}),
-    ...(params.item.senderId ? { senderId: params.item.senderId } : {}),
+    ...scope,
     kind: params.candidate.kind,
     sensitivity: params.candidate.sensitivity,
     source: params.candidate.source,
@@ -214,45 +91,95 @@ function candidateToRecord(params: {
       latestMs: params.latestMs,
       timezone: params.timezone,
     },
-    ...(params.item.sourceMessageId ? { sourceMessageId: params.item.sourceMessageId } : {}),
-    ...(params.item.sourceRunId ? { sourceRunId: params.item.sourceRunId } : {}),
+    ...(optionalScopeValue(params.item.sourceMessageId)
+      ? { sourceMessageId: params.item.sourceMessageId?.trim() }
+      : {}),
+    ...(optionalScopeValue(params.item.sourceRunId)
+      ? { sourceRunId: params.item.sourceRunId?.trim() }
+      : {}),
     createdAtMs: params.nowMs,
     updatedAtMs: params.nowMs,
     attempts: 0,
-  };
+  });
 }
 
 function expireAfterMs(): number {
   return DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
 }
 
-function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number): boolean {
-  const staleAfterMs = expireAfterMs();
-  let changed = false;
-  store.commitments = store.commitments.map((commitment) => {
-    if (
-      !isActiveStatus(commitment.status) ||
-      commitment.dueWindow.latestMs + staleAfterMs >= nowMs
-    ) {
-      return commitment;
-    }
-    changed = true;
-    return {
-      ...commitment,
+function updateCommitmentRow(db: DatabaseSync, record: CommitmentRecord): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<CommitmentsDatabase>(db)
+      .updateTable("commitments")
+      .set(commitmentRecordToUpdate(record))
+      .where("id", "=", record.id),
+  );
+}
+
+function expireStaleCommitmentsInTransaction(db: DatabaseSync, nowMs: number): number {
+  const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    commitmentsDb
+      .selectFrom("commitments")
+      .selectAll()
+      .where("status", "in", [...ACTIVE_STATUSES])
+      .where("due_latest_ms", "<", nowMs - expireAfterMs()),
+  ).rows;
+  for (const row of rows) {
+    updateCommitmentRow(db, {
+      ...commitmentRecordFromRow(row),
       status: "expired",
       expiredAtMs: nowMs,
       updatedAtMs: nowMs,
-    };
-  });
-  return changed;
+    });
+  }
+  return rows.length;
 }
 
-async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
-  const { store, hadLegacySourceText } = await loadCommitmentStoreInternal();
-  if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
-    await saveCommitmentStore(undefined, store);
-  }
-  return store;
+function expireStaleCommitments(nowMs: number): number {
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    expireStaleCommitmentsInTransaction(db, nowMs),
+  );
+}
+
+function applyExactScopeWhere<Output>(
+  query: import("kysely").SelectQueryBuilder<CommitmentsDatabase, "commitments", Output>,
+  scope: CommitmentScope,
+) {
+  const normalized = normalizeScope(scope);
+  let scoped = query
+    .where("agent_id", "=", normalized.agentId)
+    .where("session_key", "=", normalized.sessionKey)
+    .where("channel", "=", normalized.channel);
+  scoped = normalized.accountId
+    ? scoped.where("account_id", "=", normalized.accountId)
+    : scoped.where("account_id", "is", null);
+  scoped = normalized.to
+    ? scoped.where("recipient_id", "=", normalized.to)
+    : scoped.where("recipient_id", "is", null);
+  scoped = normalized.threadId
+    ? scoped.where("thread_id", "=", normalized.threadId)
+    : scoped.where("thread_id", "is", null);
+  return normalized.senderId
+    ? scoped.where("sender_id", "=", normalized.senderId)
+    : scoped.where("sender_id", "is", null);
+}
+
+function activeAndUnsnoozed<Output>(
+  query: import("kysely").SelectQueryBuilder<CommitmentsDatabase, "commitments", Output>,
+  nowMs: number,
+) {
+  return query
+    .where("status", "in", [...ACTIVE_STATUSES])
+    .where((eb) =>
+      eb.or([
+        eb("status", "=", "pending"),
+        eb("snoozed_until_ms", "is", null),
+        eb("snoozed_until_ms", "<=", nowMs),
+      ]),
+    );
 }
 
 export async function listPendingCommitmentsForScope(params: {
@@ -262,20 +189,21 @@ export async function listPendingCommitmentsForScope(params: {
   limit?: number;
 }): Promise<CommitmentRecord[]> {
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
-  const scopeKey = buildCommitmentScopeKey(params.scope);
-  const limit = params.limit ?? 20;
-  return store.commitments
-    .filter(
-      (commitment) =>
-        buildCommitmentScopeKey(commitment) === scopeKey &&
-        isActiveStatus(commitment.status) &&
-        (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs),
-    )
-    .toSorted(
-      (a, b) => a.dueWindow.earliestMs - b.dueWindow.earliestMs || a.createdAtMs - b.createdAtMs,
-    )
-    .slice(0, limit);
+  expireStaleCommitments(nowMs);
+  const database = openOpenClawStateDatabase();
+  const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+  const scoped = applyExactScopeWhere(
+    commitmentsDb.selectFrom("commitments").selectAll(),
+    params.scope,
+  );
+  return executeSqliteQuerySync(
+    database.db,
+    activeAndUnsnoozed(scoped, nowMs)
+      .orderBy("due_earliest_ms", "asc")
+      .orderBy("created_at_ms", "asc")
+      .orderBy("id", "asc")
+      .limit(params.limit ?? 20),
+  ).rows.map(commitmentRecordFromRow);
 }
 
 export async function upsertInferredCommitments(params: {
@@ -293,63 +221,55 @@ export async function upsertInferredCommitments(params: {
     return [];
   }
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
-  const created: CommitmentRecord[] = [];
-  const scopeKey = buildCommitmentScopeKey(params.item);
-
-  for (const entry of params.candidates) {
-    const dedupeKey = entry.candidate.dedupeKey.trim();
-    const existingIndex = store.commitments.findIndex(
-      (commitment) =>
-        buildCommitmentScopeKey(commitment) === scopeKey &&
-        commitment.dedupeKey === dedupeKey &&
-        isActiveStatus(commitment.status),
-    );
-    if (existingIndex >= 0) {
-      const existing = store.commitments[existingIndex];
-      store.commitments[existingIndex] = {
-        ...existing,
-        reason: entry.candidate.reason.trim() || existing.reason,
-        suggestedText: entry.candidate.suggestedText.trim() || existing.suggestedText,
-        confidence: Math.max(existing.confidence, entry.candidate.confidence),
-        dueWindow: {
-          earliestMs: Math.min(existing.dueWindow.earliestMs, entry.earliestMs),
-          latestMs: Math.max(existing.dueWindow.latestMs, entry.latestMs),
-          timezone: entry.timezone,
-        },
-        updatedAtMs: nowMs,
-      };
-      continue;
-    }
-    const record = candidateToRecord({
-      item: params.item,
-      candidate: entry.candidate,
-      nowMs,
-      earliestMs: entry.earliestMs,
-      latestMs: entry.latestMs,
-      timezone: entry.timezone,
-    });
-    store.commitments.push(record);
-    created.push(record);
+  const planned = params.candidates.flatMap((entry) => {
+    const record = candidateToRecord({ item: params.item, ...entry, nowMs });
+    return record ? [record] : [];
+  });
+  if (planned.length === 0) {
+    return [];
   }
-  await saveCommitmentStore(undefined, store);
-  return created;
-}
-
-function countSentCommitmentsForSession(params: {
-  store: CommitmentStoreFile;
-  agentId: string;
-  sessionKey: string;
-  nowMs: number;
-}): number {
-  const sinceMs = params.nowMs - ROLLING_DAY_MS;
-  return params.store.commitments.filter(
-    (commitment) =>
-      commitment.agentId === params.agentId &&
-      commitment.sessionKey === params.sessionKey &&
-      commitment.status === "sent" &&
-      (commitment.sentAtMs ?? 0) >= sinceMs,
-  ).length;
+  const scope = normalizeScope(params.item);
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    expireStaleCommitmentsInTransaction(db, nowMs);
+    const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
+    const created: CommitmentRecord[] = [];
+    for (const record of planned) {
+      const scoped = applyExactScopeWhere(
+        commitmentsDb.selectFrom("commitments").selectAll(),
+        scope,
+      );
+      const existingRow = executeSqliteQueryTakeFirstSync(
+        db,
+        scoped
+          .where("dedupe_key", "=", record.dedupeKey)
+          .where("status", "in", [...ACTIVE_STATUSES])
+          .orderBy("updated_at_ms", "desc")
+          .orderBy("id", "asc"),
+      );
+      if (existingRow) {
+        const existing = commitmentRecordFromRow(existingRow);
+        updateCommitmentRow(db, {
+          ...existing,
+          reason: record.reason,
+          suggestedText: record.suggestedText,
+          confidence: Math.max(existing.confidence, record.confidence),
+          dueWindow: {
+            earliestMs: Math.min(existing.dueWindow.earliestMs, record.dueWindow.earliestMs),
+            latestMs: Math.max(existing.dueWindow.latestMs, record.dueWindow.latestMs),
+            timezone: record.dueWindow.timezone,
+          },
+          updatedAtMs: nowMs,
+        });
+        continue;
+      }
+      executeSqliteQuerySync(
+        db,
+        commitmentsDb.insertInto("commitments").values(commitmentRecordToRow(record)),
+      );
+      created.push(record);
+    }
+    return created;
+  }, databaseOptions());
 }
 
 export async function listDueCommitmentsForSession(params: {
@@ -364,15 +284,20 @@ export async function listDueCommitmentsForSession(params: {
     return [];
   }
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
-  const remainingToday =
-    resolved.maxPerDay -
-    countSentCommitmentsForSession({
-      store,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      nowMs,
-    });
+  expireStaleCommitments(nowMs);
+  const database = openOpenClawStateDatabase();
+  const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+  const sentCountRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    commitmentsDb
+      .selectFrom("commitments")
+      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
+      .where("agent_id", "=", params.agentId)
+      .where("session_key", "=", params.sessionKey)
+      .where("status", "=", "sent")
+      .where("sent_at_ms", ">=", nowMs - ROLLING_DAY_MS),
+  );
+  const remainingToday = resolved.maxPerDay - Number(sentCountRow?.count ?? 0);
   if (remainingToday <= 0) {
     return [];
   }
@@ -381,21 +306,21 @@ export async function listDueCommitmentsForSession(params: {
     remainingToday,
     DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
   );
-  const staleAfterMs = expireAfterMs();
-  return store.commitments
-    .filter(
-      (commitment) =>
-        commitment.agentId === params.agentId &&
-        commitment.sessionKey === params.sessionKey &&
-        isActiveStatus(commitment.status) &&
-        commitment.dueWindow.earliestMs <= nowMs &&
-        commitment.dueWindow.latestMs + staleAfterMs >= nowMs &&
-        (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs),
-    )
-    .toSorted(
-      (a, b) => a.dueWindow.earliestMs - b.dueWindow.earliestMs || a.createdAtMs - b.createdAtMs,
-    )
-    .slice(0, limit);
+  const due = activeAndUnsnoozed(
+    commitmentsDb
+      .selectFrom("commitments")
+      .selectAll()
+      .where("agent_id", "=", params.agentId)
+      .where("session_key", "=", params.sessionKey),
+    nowMs,
+  )
+    .where("due_earliest_ms", "<=", nowMs)
+    .where("due_latest_ms", ">=", nowMs - expireAfterMs())
+    .orderBy("due_earliest_ms", "asc")
+    .orderBy("created_at_ms", "asc")
+    .orderBy("id", "asc")
+    .limit(limit);
+  return executeSqliteQuerySync(database.db, due).rows.map(commitmentRecordFromRow);
 }
 
 export async function listDueCommitmentSessionKeys(params: {
@@ -409,30 +334,41 @@ export async function listDueCommitmentSessionKeys(params: {
     return [];
   }
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
-  const staleAfterMs = expireAfterMs();
-  const keys = new Set<string>();
-  for (const commitment of store.commitments) {
-    if (
-      commitment.agentId === params.agentId &&
-      isActiveStatus(commitment.status) &&
-      commitment.dueWindow.earliestMs <= nowMs &&
-      commitment.dueWindow.latestMs + staleAfterMs >= nowMs &&
-      (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs) &&
-      countSentCommitmentsForSession({
-        store,
-        agentId: params.agentId,
-        sessionKey: commitment.sessionKey,
-        nowMs,
-      }) < resolved.maxPerDay
-    ) {
-      keys.add(commitment.sessionKey);
-    }
-    if (params.limit && keys.size >= params.limit) {
-      break;
-    }
+  expireStaleCommitments(nowMs);
+  const database = openOpenClawStateDatabase();
+  const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+  const dueSessionRows = executeSqliteQuerySync(
+    database.db,
+    activeAndUnsnoozed(
+      commitmentsDb
+        .selectFrom("commitments")
+        .select("session_key")
+        .distinct()
+        .where("agent_id", "=", params.agentId),
+      nowMs,
+    )
+      .where("due_earliest_ms", "<=", nowMs)
+      .where("due_latest_ms", ">=", nowMs - expireAfterMs())
+      .orderBy("session_key", "asc"),
+  ).rows;
+  if (dueSessionRows.length === 0) {
+    return [];
   }
-  return [...keys].toSorted();
+  const sentCountRows = executeSqliteQuerySync(
+    database.db,
+    commitmentsDb
+      .selectFrom("commitments")
+      .select(["session_key", (eb) => eb.fn.countAll<number | bigint>().as("count")])
+      .where("agent_id", "=", params.agentId)
+      .where("status", "=", "sent")
+      .where("sent_at_ms", ">=", nowMs - ROLLING_DAY_MS)
+      .groupBy("session_key"),
+  ).rows;
+  const sentCounts = new Map(sentCountRows.map((row) => [row.session_key, Number(row.count)]));
+  const eligible = dueSessionRows
+    .map((row) => row.session_key)
+    .filter((sessionKey) => (sentCounts.get(sessionKey) ?? 0) < resolved.maxPerDay);
+  return params.limit && params.limit > 0 ? eligible.slice(0, params.limit) : eligible;
 }
 
 export async function markCommitmentsAttempted(params: {
@@ -440,28 +376,27 @@ export async function markCommitmentsAttempted(params: {
   ids: string[];
   nowMs?: number;
 }): Promise<void> {
-  if (params.ids.length === 0) {
+  const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) {
     return;
   }
-  const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStore();
-  let changed = false;
-  store.commitments = store.commitments.map((commitment) => {
-    if (!idSet.has(commitment.id)) {
-      return commitment;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
+    const rows = executeSqliteQuerySync(
+      db,
+      commitmentsDb.selectFrom("commitments").selectAll().where("id", "in", ids),
+    ).rows;
+    for (const row of rows) {
+      const record = commitmentRecordFromRow(row);
+      updateCommitmentRow(db, {
+        ...record,
+        attempts: record.attempts + 1,
+        lastAttemptAtMs: nowMs,
+        updatedAtMs: nowMs,
+      });
     }
-    changed = true;
-    return {
-      ...commitment,
-      attempts: commitment.attempts + 1,
-      lastAttemptAtMs: nowMs,
-      updatedAtMs: nowMs,
-    };
   });
-  if (changed) {
-    await saveCommitmentStore(undefined, store);
-  }
 }
 
 export async function markCommitmentsStatus(params: {
@@ -470,45 +405,53 @@ export async function markCommitmentsStatus(params: {
   status: Extract<CommitmentStatus, "sent" | "dismissed" | "expired">;
   nowMs?: number;
 }): Promise<void> {
-  if (params.ids.length === 0) {
+  const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) {
     return;
   }
-  const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStore();
-  let changed = false;
-  store.commitments = store.commitments.map((commitment) => {
-    if (!idSet.has(commitment.id) || !isActiveStatus(commitment.status)) {
-      return commitment;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
+    const rows = executeSqliteQuerySync(
+      db,
+      commitmentsDb
+        .selectFrom("commitments")
+        .selectAll()
+        .where("id", "in", ids)
+        .where("status", "in", [...ACTIVE_STATUSES]),
+    ).rows;
+    for (const row of rows) {
+      const record = commitmentRecordFromRow(row);
+      updateCommitmentRow(db, {
+        ...record,
+        status: params.status,
+        updatedAtMs: nowMs,
+        ...(params.status === "sent" ? { sentAtMs: nowMs } : {}),
+        ...(params.status === "dismissed" ? { dismissedAtMs: nowMs } : {}),
+        ...(params.status === "expired" ? { expiredAtMs: nowMs } : {}),
+      });
     }
-    changed = true;
-    return {
-      ...commitment,
-      status: params.status,
-      updatedAtMs: nowMs,
-      ...(params.status === "sent" ? { sentAtMs: nowMs } : {}),
-      ...(params.status === "dismissed" ? { dismissedAtMs: nowMs } : {}),
-      ...(params.status === "expired" ? { expiredAtMs: nowMs } : {}),
-    };
   });
-  if (changed) {
-    await saveCommitmentStore(undefined, store);
-  }
 }
 
 export async function listCommitments(params?: {
   cfg?: OpenClawConfig;
   status?: CommitmentStatus;
   agentId?: string;
+  nowMs?: number;
 }): Promise<CommitmentRecord[]> {
-  const store = await loadCommitmentStoreWithExpiredMarked(Date.now());
-  return store.commitments
-    .filter(
-      (commitment) =>
-        (!params?.status || commitment.status === params.status) &&
-        (!params?.agentId || commitment.agentId === params.agentId),
-    )
-    .toSorted(
-      (a, b) => a.dueWindow.earliestMs - b.dueWindow.earliestMs || a.createdAtMs - b.createdAtMs,
-    );
+  expireStaleCommitments(params?.nowMs ?? Date.now());
+  const database = openOpenClawStateDatabase();
+  const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+  let query = commitmentsDb.selectFrom("commitments").selectAll();
+  if (params?.status) {
+    query = query.where("status", "=", params.status);
+  }
+  if (params?.agentId) {
+    query = query.where("agent_id", "=", params.agentId);
+  }
+  return executeSqliteQuerySync(
+    database.db,
+    query.orderBy("due_earliest_ms", "asc").orderBy("created_at_ms", "asc").orderBy("id", "asc"),
+  ).rows.map((row: CommitmentRow) => commitmentRecordFromRow(row));
 }

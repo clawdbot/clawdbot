@@ -1,28 +1,26 @@
+// Verifies model IDs declared by plugin manifests are normalized.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  resolvePluginMetadataControlPlaneFingerprint,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
-import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-
-const ORIGINAL_ENV = {
-  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-  OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
-  OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
-} as const;
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const tempDirs: string[] = [];
+const testEnvSnapshot = captureEnv([
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_HOME",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+]);
+
+function restoreEnv(): void {
+  testEnvSnapshot.restore();
+}
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-id-normalization-"));
@@ -30,31 +28,36 @@ function makeTempDir(): string {
   return dir;
 }
 
-function restoreEnv(): void {
-  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
 function writeInstallIndex(params: { stateDir: string; pluginDir: string }): void {
-  const indexPath = path.join(params.stateDir, "plugins", "installs.json");
-  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
-  fs.writeFileSync(
-    indexPath,
-    JSON.stringify({
+  writePersistedInstalledPluginIndexSync(
+    {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 1,
+      installRecords: {},
       plugins: [
         {
-          id: "normalizer",
+          pluginId: "normalizer",
+          manifestPath: path.join(params.pluginDir, "openclaw.plugin.json"),
+          manifestHash: "normalizer-manifest",
           rootDir: params.pluginDir,
           origin: "global",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
         },
       ],
-    }),
-    "utf-8",
+      diagnostics: [],
+    },
+    { stateDir: params.stateDir },
   );
 }
 
@@ -83,68 +86,6 @@ function writeNormalizerManifest(params: { pluginDir: string; prefix: string }):
   );
 }
 
-function createCurrentSnapshot(params: {
-  manifestHash: string;
-  prefix: string;
-  workspaceDir?: string;
-}): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: InstalledPluginIndex = {
-    version: 1,
-    hostContractVersion: "test-host",
-    compatRegistryVersion: "test-compat",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [
-      {
-        pluginId: "normalizer",
-        manifestPath: `/tmp/normalizer-${params.manifestHash}/openclaw.plugin.json`,
-        manifestHash: params.manifestHash,
-        source: `/tmp/normalizer-${params.manifestHash}/index.ts`,
-        rootDir: `/tmp/normalizer-${params.manifestHash}`,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-    diagnostics: [],
-  };
-  return {
-    policyHash,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
-      {},
-      {
-        env: process.env,
-        index,
-        policyHash,
-        workspaceDir: params.workspaceDir,
-      },
-    ),
-    workspaceDir: params.workspaceDir,
-    index,
-    plugins: [
-      {
-        id: "normalizer",
-        modelIdNormalization: {
-          providers: {
-            demo: {
-              prefixWhenBare: params.prefix,
-            },
-          },
-        },
-      },
-    ],
-  } as unknown as PluginMetadataSnapshot;
-}
-
 function normalizeDemoModel(modelId = "demo-model"): string | undefined {
   return normalizeProviderModelIdWithManifest({
     provider: "demo",
@@ -155,81 +96,28 @@ function normalizeDemoModel(modelId = "demo-model"): string | undefined {
 describe("manifest model id normalization", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    clearPluginMetadataLifecycleCaches();
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
+    clearPluginMetadataLifecycleCaches();
     restoreEnv();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("refreshes cached policies when the current metadata snapshot changes", () => {
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "alpha",
-        prefix: "alpha",
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(normalizeDemoModel()).toBe("alpha/demo-model");
-    expect(normalizeDemoModel("second-model")).toBe("alpha/second-model");
-
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "bravo",
-        prefix: "bravo",
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(normalizeDemoModel()).toBe("bravo/demo-model");
-  });
-
-  it("uses workspace-scoped current metadata through the active plugin runtime", () => {
-    setActivePluginRegistry(
-      createEmptyPluginRegistry(),
-      "workspace-a",
-      "gateway-bindable",
-      "/workspace/a",
-    );
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "alpha",
-        prefix: "alpha",
-        workspaceDir: "/workspace/a",
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(normalizeDemoModel()).toBe("alpha/demo-model");
-    expect(normalizeDemoModel("second-model")).toBe("alpha/second-model");
-
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "bravo",
-        prefix: "bravo",
-        workspaceDir: "/workspace/a",
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(normalizeDemoModel()).toBe("bravo/demo-model");
-  });
-
-  it("reflects manifest edits and state-dir changes on the next lookup", () => {
+  it("reflects manifest and state-dir changes without a prepared snapshot", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "alpha" });
 
-    process.env.OPENCLAW_STATE_DIR = stateDirA;
-    process.env.OPENCLAW_HOME = undefined;
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = undefined;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDirA);
+    deleteTestEnvValue("OPENCLAW_HOME");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
 
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
@@ -241,31 +129,32 @@ describe("manifest model id normalization", () => {
     writeInstallIndex({ stateDir: stateDirB, pluginDir: pluginDirB });
     writeNormalizerManifest({ pluginDir: pluginDirB, prefix: "charlie" });
 
-    process.env.OPENCLAW_STATE_DIR = stateDirB;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDirB);
+    clearPluginMetadataLifecycleCaches();
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 
   it("reuses manifest metadata while file fingerprints are unchanged", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "normalizer");
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     writeInstallIndex({ stateDir, pluginDir });
     writeNormalizerManifest({ pluginDir, prefix: "alpha" });
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_HOME = undefined;
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = undefined;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    deleteTestEnvValue("OPENCLAW_HOME");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
 
-    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
-
-    expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
-    expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
-
-    const manifestReads = readFileSyncSpy.mock.calls.filter(
-      ([filePath]) => String(filePath) === manifestPath,
-    );
-    expect(manifestReads).toHaveLength(1);
-    readFileSyncSpy.mockRestore();
+    // The scan also lists source-checkout extensions/ manifests when tests run
+    // from a repo checkout, so only pin the record for the plugin under test.
+    const listNormalizerRecords = () =>
+      listOpenClawPluginManifestMetadata(process.env).filter(
+        (record) => record.pluginDir === pluginDir,
+      );
+    const firstRecords = listNormalizerRecords();
+    const secondRecords = listNormalizerRecords();
+    expect(firstRecords).toHaveLength(1);
+    expect(secondRecords).toHaveLength(1);
+    expect(secondRecords[0]).toBe(firstRecords[0]);
   });
 });

@@ -1,3 +1,4 @@
+// Runtime bridge for plugin-owned memory hooks and state.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -6,6 +7,7 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { getMemoryRuntime } from "./memory-state.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 
+/** Resolves the configured memory slot to the single runtime plugin that may load memory. */
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
   const memorySlot = plugins.slots.memory;
@@ -53,6 +55,7 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   return getMemoryRuntime();
 }
 
+/** Returns the active plugin-backed memory search manager for an agent. */
 export async function getActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -65,12 +68,23 @@ export async function getActiveMemorySearchManager(params: {
   return await runtime.getMemorySearchManager(params);
 }
 
+/** Resolves current memory backend config without constructing a manager. */
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
   return ensureMemoryRuntime(params.cfg)?.resolveMemoryBackendConfig(params) ?? null;
 }
 
+/** Closes all active plugin-backed memory search managers. */
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
   void cfg;
   const runtime = getMemoryRuntime();
   await runtime?.closeAllMemorySearchManagers?.();
+}
+
+/** Closes the plugin-backed memory search manager for one agent. */
+export async function closeActiveMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const runtime = getMemoryRuntime();
+  await runtime?.closeMemorySearchManager?.(params);
 }

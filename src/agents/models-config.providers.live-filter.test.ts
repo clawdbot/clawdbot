@@ -1,11 +1,13 @@
+// Covers live-test provider filters before they reach runtime plugin discovery.
 import { describe, expect, it } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import {
   resolvePluginMetadataProviderOwnersForTest,
   resolveProviderDiscoveryFilterForTest,
-} from "./models-config.providers.implicit.js";
+} from "./models-config.providers.implicit.test-support.js";
 
 function liveFilterEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // VITEST enables the live-filter parsing path without requiring real live creds.
   return {
     VITEST: "1",
     ...overrides,
@@ -19,6 +21,7 @@ function resolveOwners(provider: string): readonly string[] | undefined {
 function metadataOwners(
   overrides: Partial<PluginMetadataSnapshotOwnerMaps>,
 ): PluginMetadataSnapshotOwnerMaps {
+  // Owner lookups are sparse in these tests, so default every map explicitly.
   return {
     channels: new Map(),
     channelConfigs: new Map(),
@@ -112,16 +115,15 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
     ).toEqual(["anthropic"]);
   });
 
-  it("normalizes provider aliases through plugin metadata owners", () => {
+  it("does not resolve provider aliases through plugin metadata owners", () => {
     const snapshot = {
       owners: metadataOwners({
         providers: new Map([["volcengine", ["volcengine"]]]),
       }),
     };
 
-    expect(resolvePluginMetadataProviderOwnersForTest(snapshot, "bytedance")).toEqual([
-      "volcengine",
-    ]);
+    // Metadata owns concrete provider ids; auth/provider aliases stay a separate layer.
+    expect(resolvePluginMetadataProviderOwnersForTest(snapshot, "bytedance")).toBeUndefined();
     expect(
       resolveProviderDiscoveryFilterForTest({
         env: liveFilterEnv({
@@ -130,7 +132,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
         }),
         resolveOwners: (provider) => resolvePluginMetadataProviderOwnersForTest(snapshot, provider),
       }),
-    ).toEqual(["volcengine"]);
+    ).toEqual(["bytedance"]);
   });
 
   it("scopes normal startup discovery to requested provider owners", () => {
@@ -152,17 +154,17 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
     ).toEqual(["openai"]);
   });
 
-  it("maps scoped startup provider aliases through model catalog owners", () => {
+  it("maps scoped startup provider ids through model catalog owners", () => {
     const snapshot = {
       owners: metadataOwners({
-        modelCatalogProviders: new Map([["openai-codex", ["codex"]]]),
+        modelCatalogProviders: new Map([["openai", ["codex"]]]),
       }),
     };
 
     expect(
       resolveProviderDiscoveryFilterForTest({
         env: liveFilterEnv({}),
-        providerIds: ["OpenAI-Codex"],
+        providerIds: ["OpenAI"],
         resolveOwners: (provider) => resolvePluginMetadataProviderOwnersForTest(snapshot, provider),
       }),
     ).toEqual(["codex"]);

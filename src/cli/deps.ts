@@ -1,10 +1,8 @@
-import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+// Default CLI dependency surface with lazy outbound channel send adapters.
+import { normalizeChannelId } from "../channels/registry.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { CliDeps } from "./deps.types.js";
-import {
-  CLI_OUTBOUND_SEND_FACTORY,
-  createOutboundSendDepsFromCliSource,
-} from "./outbound-send-mapping.js";
+import { CLI_OUTBOUND_SEND_FACTORY } from "./outbound-send-mapping.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
@@ -47,6 +45,10 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "valueOf",
 ]);
 
+function resolveKnownChannelId(raw: string): string | undefined {
+  return normalizeChannelId(raw) ?? undefined;
+}
+
 // Per-channel module caches for lazy loading.
 const senderCache = new Map<string, Promise<RuntimeSend>>();
 
@@ -71,6 +73,7 @@ function createLazySender(
 }
 
 export function createDefaultDeps(): CliDeps {
+  // Proxy lookup preserves the historic deps.channelName shape without eagerly importing plugins.
   const deps: CliDeps = {};
   const resolveSender = (channelId: string) =>
     createLazySender(channelId, async () => {
@@ -100,13 +103,15 @@ export function createDefaultDeps(): CliDeps {
       if (existing !== undefined || NON_CHANNEL_DEP_KEYS.has(property)) {
         return existing;
       }
-      const sender = resolveSender(property);
+      const channelId = resolveKnownChannelId(property);
+      if (!channelId) {
+        return existing;
+      }
+      const sender = resolveSender(channelId);
       Reflect.set(target, property, sender, receiver);
       return sender;
     },
   });
 }
 
-export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return createOutboundSendDepsFromCliSource(deps);
-}
+export { createOutboundSendDeps } from "./outbound-send-deps.js";

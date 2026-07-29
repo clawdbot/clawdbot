@@ -1,3 +1,4 @@
+// Slack plugin module implements debounce key behavior.
 import type { SlackMessageEvent } from "../../types.js";
 
 function resolveSlackSenderId(message: SlackMessageEvent): string | null {
@@ -15,6 +16,7 @@ function isTopLevelSlackMessage(message: SlackMessageEvent): boolean {
 export function buildTopLevelSlackConversationKey(
   message: SlackMessageEvent,
   accountId: string,
+  teamId?: string,
 ): string | null {
   if (!isTopLevelSlackMessage(message)) {
     return null;
@@ -23,12 +25,13 @@ export function buildTopLevelSlackConversationKey(
   if (!senderId) {
     return null;
   }
-  return `slack:${accountId}:${message.channel}:${senderId}`;
+  return `slack:${accountId}:${teamId ? `${teamId}:` : ""}${message.channel}:${senderId}`;
 }
 
 export function buildSlackDebounceKey(
   message: SlackMessageEvent,
   accountId: string,
+  teamId?: string,
 ): string | null {
   const senderId = resolveSlackSenderId(message);
   if (!senderId) {
@@ -42,5 +45,5 @@ export function buildSlackDebounceKey(
       : messageTs && !isSlackDirectMessageChannel(message.channel)
         ? `${message.channel}:${messageTs}`
         : message.channel;
-  return `slack:${accountId}:${threadKey}:${senderId}`;
+  return `slack:${accountId}:${teamId ? `${teamId}:` : ""}${threadKey}:${senderId}`;
 }

@@ -1,3 +1,4 @@
+// Vitest gateway config wires the gateway test shard.
 import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -21,10 +22,10 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
   });
 }
 
-export function createGatewayProjectShardVitestConfig() {
+function createGatewayProjectShardVitestConfig() {
   return createProjectShardVitestConfig(gatewayProjectConfigs);
 }
 
-export default process.env.OPENCLAW_GATEWAY_PROJECT_SHARDS === "1"
-  ? createGatewayProjectShardVitestConfig()
-  : createGatewayVitestConfig();
+export default process.env.OPENCLAW_GATEWAY_PROJECT_SHARDS === "0"
+  ? createGatewayVitestConfig()
+  : createGatewayProjectShardVitestConfig();

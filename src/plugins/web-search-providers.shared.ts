@@ -1,3 +1,4 @@
+// Shares web-search provider loading helpers across runtime paths.
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
@@ -22,7 +23,6 @@ export function resolveBundledWebSearchResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
 }): {
   config: PluginLoadOptions["config"];
   activationSourceConfig?: PluginLoadOptions["config"];
@@ -33,6 +33,5 @@ export function resolveBundledWebSearchResolutionConfig(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
   });
 }

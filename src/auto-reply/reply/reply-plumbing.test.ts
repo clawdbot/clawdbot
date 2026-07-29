@@ -1,6 +1,9 @@
+// Tests reply plumbing helpers that connect payloads, routes, and delivery modes.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -26,7 +29,7 @@ function createSlackThreadingPlugin(): ChannelPlugin {
         currentChannelId: context.To?.replace(/^channel:/, ""),
         currentThreadTs:
           context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
-        replyToMode: "all",
+        replyToMode: context.ReplyToMode ?? "all",
       }),
     },
   } as ChannelPlugin;
@@ -193,6 +196,64 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("C1");
     expect(result.currentThreadTs).toBe("123.456");
   });
+
+  it("passes the prepared reply mode to the Slack threading adapter", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: createSlackThreadingPlugin(), source: "test" },
+      ]),
+    );
+
+    const result = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "slack",
+        To: "channel:C1",
+        ReplyToMode: "off",
+      },
+      config: { channels: { slack: { replyToMode: "all" } } } as OpenClawConfig,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.replyToMode).toBe("off");
+  });
+
+  it("lets plugin threading adapters suppress the generic message-id fallback", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "googlechat",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "googlechat", label: "Google Chat" }),
+            threading: {
+              buildToolContext: ({ context }) => ({
+                currentChannelId: context.To?.replace(/^googlechat:/, ""),
+                currentMessageId: undefined,
+                currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
+              }),
+            },
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    const sessionCtx = {
+      Provider: "googlechat",
+      To: "googlechat:spaces/AAA",
+      MessageSidFull: "spaces/AAA/messages/msg-1",
+      ReplyToId: "spaces/AAA/threads/short",
+      ReplyToIdFull: "spaces/AAA/threads/full",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: { channels: { googlechat: { replyToMode: "all" } } } as OpenClawConfig,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("spaces/AAA");
+    expect(result.currentThreadTs).toBe("spaces/AAA/threads/full");
+    expect(result.currentMessageId).toBeUndefined();
+  });
 });
 
 describe("applyReplyThreading auto-threading", () => {
@@ -204,7 +265,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
   });
 
   it("threads only first payload when mode is 'first'", () => {
@@ -215,8 +276,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[1].replyToId).toBeUndefined();
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
+    expect(expectDefined(result[1], "result[1] test invariant").replyToId).toBeUndefined();
   });
 
   it("threads only first payload when mode is 'batched' and the turn is batched", () => {
@@ -228,8 +289,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[1].replyToId).toBeUndefined();
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
+    expect(expectDefined(result[1], "result[1] test invariant").replyToId).toBeUndefined();
   });
 
   it("can disable implicit reply threading for the current turn", () => {
@@ -241,7 +302,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBeUndefined();
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBeUndefined();
   });
 
   it("still honors explicit reply tags when implicit reply threading is disabled", () => {
@@ -253,7 +314,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
   });
 
   it("threads all payloads when mode is 'all'", () => {
@@ -264,8 +325,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[1].replyToId).toBe("42");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
+    expect(expectDefined(result[1], "result[1] test invariant").replyToId).toBe("42");
   });
 
   it("strips replyToId when mode is 'off'", () => {
@@ -276,7 +337,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBeUndefined();
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBeUndefined();
   });
 
   it("does not bypass off mode for Slack when reply is implicit", () => {
@@ -288,7 +349,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBeUndefined();
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBeUndefined();
   });
 
   it("keeps explicit tags for Slack when off mode allows explicit tags", () => {
@@ -300,8 +361,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[0].replyToTag).toBe(true);
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToTag).toBe(true);
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
@@ -313,8 +374,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[0].replyToTag).toBe(true);
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToTag).toBe(true);
   });
 
   it("resolves [[reply_to_current]] to currentMessageId when replyToMode is 'all'", () => {
@@ -327,9 +388,9 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("mm-post-abc123");
-    expect(result[0].replyToTag).toBe(true);
-    expect(result[0].text).toBe("some reply text");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("mm-post-abc123");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToTag).toBe(true);
+    expect(expectDefined(result[0], "result[0] test invariant").text).toBe("some reply text");
   });
 
   it("resolves [[reply_to:<id>]] to explicit id when replyToMode is 'all'", () => {
@@ -340,8 +401,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("mm-post-xyz789");
-    expect(result[0].text).toBe("threaded reply");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("mm-post-xyz789");
+    expect(expectDefined(result[0], "result[0] test invariant").text).toBe("threaded reply");
   });
 
   it("prefers explicit reply_to over reply_to_current when both tags are present", () => {
@@ -352,8 +413,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("mm-post-xyz789");
-    expect(result[0].text).toBe("hi");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("mm-post-xyz789");
+    expect(expectDefined(result[0], "result[0] test invariant").text).toBe("hi");
   });
 
   it("sets replyToId via implicit threading when replyToMode is 'all'", () => {
@@ -366,7 +427,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("mm-post-abc123");
+    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("mm-post-abc123");
   });
 });
 

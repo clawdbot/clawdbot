@@ -1,3 +1,4 @@
+// Verifies agents_list reports only subagents visible to the requester.
 import { describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
@@ -19,6 +20,7 @@ describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
 
   function setConfigWithAgentList(agentList: AgentConfig[]) {
+    // Each test gets a fresh per-sender session config plus its agent list.
     configOverride = {
       session: createPerSenderSessionConfig(),
       agents: {
@@ -34,6 +36,7 @@ describe("agents_list", () => {
   }
 
   function readAgentList(result: unknown) {
+    // Tool results expose the machine-readable agent list in details.
     return (result as { details?: { agents?: Array<{ id: string; configured?: boolean }> } })
       .details?.agents;
   }
@@ -44,10 +47,9 @@ describe("agents_list", () => {
     };
     const tool = createTool();
     const result = await tool.execute("call1", {});
-    expect(result.details).toMatchObject({
-      requester: "main",
-      allowAny: false,
-    });
+    const details = result.details as { requester?: string; allowAny?: boolean };
+    expect(details.requester).toBe("main");
+    expect(details.allowAny).toBe(false);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
@@ -121,14 +123,13 @@ describe("agents_list", () => {
 
     const tool = createTool();
     const result = await tool.execute("call3", {});
-    expect(result.details).toMatchObject({
-      allowAny: true,
-    });
+    const details = result.details as { allowAny?: boolean };
+    expect(details.allowAny).toBe(true);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
 
-  it("marks allowlisted-but-unconfigured agents", async () => {
+  it("omits allowlisted-but-unconfigured agents", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -141,8 +142,6 @@ describe("agents_list", () => {
     const tool = createTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
-    const research = agents?.find((agent) => agent.id === "research");
-    expect(research?.configured).toBe(false);
+    expect(agents?.map((agent) => agent.id)).toEqual([]);
   });
 });

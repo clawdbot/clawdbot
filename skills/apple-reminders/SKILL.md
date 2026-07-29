@@ -1,6 +1,6 @@
 ---
 name: apple-reminders
-description: List, add, edit, complete, or delete Apple Reminders and reminder lists via remindctl.
+description: "List, add, edit, complete, or delete Apple Reminders and reminder lists via remindctl."
 homepage: https://github.com/steipete/remindctl
 metadata:
   {
@@ -29,7 +29,7 @@ Use `remindctl` to manage Apple Reminders directly from the terminal.
 
 ## When to Use
 
-✅ **USE this skill when:**
+Use when:
 
 - User explicitly mentions "reminder" or "Reminders app"
 - Creating personal to-dos with due dates that sync to iOS
@@ -38,13 +38,13 @@ Use `remindctl` to manage Apple Reminders directly from the terminal.
 
 ## When NOT to Use
 
-❌ **DON'T use this skill when:**
+Do not use when:
 
-- Scheduling OpenClaw tasks or alerts → use `cron` tool with systemEvent instead
-- Calendar events or appointments → use Apple Calendar
-- Project/work task management → use Notion, GitHub Issues, or task queue
-- One-time notifications → use `cron` tool for timed alerts
-- User says "remind me" but means an OpenClaw alert → clarify first
+- Scheduling OpenClaw tasks or alerts -> use `cron` tool with systemEvent instead
+- Calendar events or appointments -> use Apple Calendar
+- Project/work task management -> use Notion, GitHub Issues, or task queue
+- One-time notifications -> use `cron` tool for timed alerts
+- User says "remind me" but means an OpenClaw alert -> clarify first
 
 ## Setup
 
@@ -114,5 +114,5 @@ User: "Remind me to check on the deploy in 2 hours"
 
 **Ask:** "Do you want this in Apple Reminders (syncs to your phone) or as an OpenClaw alert (I'll message you here)?"
 
-- Apple Reminders → use this skill
-- OpenClaw alert → use `cron` tool with systemEvent
+- Apple Reminders -> use this skill
+- OpenClaw alert -> use `cron` tool with systemEvent

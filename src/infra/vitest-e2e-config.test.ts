@@ -1,3 +1,4 @@
+// Covers the standalone Vitest E2E config shape.
 import { describe, expect, it } from "vitest";
 import {
   normalizeConfigPath,
@@ -21,11 +22,16 @@ describe("e2e vitest config", () => {
       "src/gateway/sessions-history-http.test.ts",
       BUNDLED_PLUGIN_E2E_TEST_GLOB,
     ]);
+    expect(e2eConfig.test?.exclude).toContain("src/tui/tui-pty-harness.e2e.test.ts");
+    const excludesTuiPtyLocal =
+      e2eConfig.test?.exclude?.includes("src/tui/tui-pty-local.e2e.test.ts") ?? false;
+    expect(excludesTuiPtyLocal).toBe(process.arch === "arm64");
     expect(e2eConfig.test?.pool).toBe("threads");
     expect(e2eConfig.test?.isolate).toBe(false);
     expect(normalizeConfigPath(e2eConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
-    expect(normalizeConfigPaths(e2eConfig.test?.setupFiles)).toContain(
+    expect(normalizeConfigPaths(e2eConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
-    );
+    ]);
   });
 });

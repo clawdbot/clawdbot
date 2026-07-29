@@ -1,3 +1,4 @@
+/** Runtime entrypoint for image generation with provider fallback and override normalization. */
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
@@ -8,9 +9,11 @@ import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
+  resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
@@ -19,7 +22,10 @@ import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
-export type ImageGenerationRuntimeDeps = {
+// Runtime dependency seam for tests and plugin-host callers. Production uses
+// the plugin registry and provider-env helpers by default.
+/** Dependency seam used by image-generation runtime tests and plugin host callers. */
+type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
@@ -35,12 +41,13 @@ function buildNoImageGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "image-generation",
-    modelConfigKey: "imageGenerationModel",
+    modelConfigKey: "mediaModels.image",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
 }
 
+/** Lists image-generation providers visible for the current config. */
 export function listRuntimeImageGenerationProviders(
   params?: { config?: OpenClawConfig },
   deps: ImageGenerationRuntimeDeps = {},
@@ -55,12 +62,12 @@ export async function generateImage(
   const getProvider = deps.getProvider ?? getImageGenerationProvider;
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   const logger = deps.log ?? log;
-  const timeoutMs =
+  const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,
@@ -74,6 +81,8 @@ export async function generateImage(
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  // Try configured/fallback models in order and return the first provider that
+  // yields at least one image; failed attempts are preserved for diagnostics.
   for (const candidate of candidates) {
     const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
@@ -90,17 +99,50 @@ export async function generateImage(
       continue;
     }
 
+    const inputImageCount = params.inputImages?.length ?? 0;
+    const maxInputImages = resolveImageGenerationMaxInputImages({
+      provider,
+      model: candidate.model,
+    });
+    if (maxInputImages !== undefined && inputImageCount > maxInputImages) {
+      const error = `${candidate.provider}/${candidate.model} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${inputImageCount} requested`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+      });
+      lastError = new Error(error);
+      logger.warn(`image-generation candidate skipped: ${error}`);
+      continue;
+    }
+
     try {
+      const timeoutMs = resolveMediaProviderRequestTimeoutMs({
+        timeoutMs: requestedTimeoutMs,
+        providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+      });
+      const modelResolutions =
+        provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+      const modeCapabilities = params.inputImages?.length
+        ? provider.capabilities.edit
+        : provider.capabilities.generate;
+      const inferredResolution =
+        modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
+          ? undefined
+          : params.inferredResolution;
       const sanitized = resolveImageGenerationOverrides({
         provider,
+        model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        resolution: params.resolution ?? inferredResolution,
         quality: params.quality,
         outputFormat: params.outputFormat,
         background: params.background,
         inputImages: params.inputImages,
       });
+      // Providers receive only supported overrides. Ignored/normalized values
+      // are returned to callers so user-facing replies can explain adjustments.
       const result: ImageGenerationResult = await provider.generateImage({
         provider: candidate.provider,
         model: candidate.model,
@@ -118,6 +160,7 @@ export async function generateImage(
         inputImages: params.inputImages,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,
+        ssrfPolicy: params.ssrfPolicy,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");
@@ -127,6 +170,7 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        ...(sanitized.resolution ? { appliedResolution: sanitized.resolution } : {}),
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,

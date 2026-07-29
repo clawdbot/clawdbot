@@ -1,3 +1,4 @@
+// Voyage provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
   normalizeEmbeddingModelWithPrefixes,
@@ -36,7 +37,11 @@ export async function createVoyageEmbeddingProvider(
   const client = await resolveVoyageEmbeddingClient(options);
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
-  const embed = async (input: string[], input_type?: "query" | "document"): Promise<number[][]> => {
+  const embed = async (
+    input: string[],
+    input_type?: "query" | "document",
+    signal?: AbortSignal,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -52,6 +57,7 @@ export async function createVoyageEmbeddingProvider(
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
+      signal,
       body,
       errorPrefix: "voyage embeddings failed",
     });
@@ -62,11 +68,11 @@ export async function createVoyageEmbeddingProvider(
       id: "voyage",
       model: client.model,
       maxInputTokens: VOYAGE_MAX_INPUT_TOKENS[client.model],
-      embedQuery: async (text) => {
-        const [vec] = await embed([text], "query");
+      embedQuery: async (text, optionsValue) => {
+        const [vec] = await embed([text], "query", optionsValue?.signal);
         return vec ?? [];
       },
-      embedBatch: async (texts) => embed(texts, "document"),
+      embedBatch: async (texts, optionsLocal) => embed(texts, "document", optionsLocal?.signal),
     },
     client,
   };

@@ -1,9 +1,10 @@
+// Matrix tests cover config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
-  getMatrixScopedEnvVarNames,
   resolveMatrixConfigForAccount,
   resolveMatrixAuthContext,
   resolveValidatedMatrixHomeserverUrl,
@@ -83,6 +84,24 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolved.deviceName).toBe("EnvDevice");
     expect(resolved.initialSyncLimit).toBeUndefined();
     expect(resolved.encryption).toBe(false);
+  });
+
+  it("ignores non-finite initial sync limits", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          initialSyncLimit: Number.NaN,
+          accounts: {
+            ops: {
+              initialSyncLimit: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
+    expect(resolved.initialSyncLimit).toBeUndefined();
   });
 
   it("resolves accessToken SecretRef against the provided env", () => {
@@ -228,7 +247,7 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/not allowlisted in secrets\.providers\.matrix-env\.allowlist/i);
   });
 
-  it("does not throw when accessToken uses a non-env SecretRef", () => {
+  it("leaves non-env SecretRef access tokens unresolved", () => {
     const cfg = {
       channels: {
         matrix: {
@@ -307,12 +326,18 @@ describe("Matrix auth/config live surfaces", () => {
 
     const resolved = resolveMatrixAuthContext({ cfg, env });
     expect(resolved.accountId).toBe("default");
-    expect(resolved.resolved).toMatchObject({
+    expect(resolved.resolved).toEqual({
       homeserver: "https://matrix.gumadeiras.com",
       userId: "@pinguini:matrix.gumadeiras.com",
+      accessToken: undefined,
       password: "cfg-pass",
+      deviceId: undefined,
       deviceName: "OpenClaw Gateway Pinguini",
+      initialSyncLimit: undefined,
       encryption: true,
+      allowPrivateNetwork: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
     });
   });
 
@@ -516,6 +541,47 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/Matrix account "typo" is not configured/i);
   });
 
+  it("rejects invalid explicit account ids instead of borrowing the default account", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://legacy.example.org",
+          accessToken: "legacy-token",
+        },
+      },
+    } as CoreConfig;
+
+    expect(() =>
+      resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv, accountId: "!!!" }),
+    ).toThrow(/Matrix account id "!!!" is invalid/i);
+  });
+
+  it("rejects explicitly selected disabled accounts instead of borrowing another account", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://legacy.example.org",
+          accessToken: "legacy-token",
+          accounts: {
+            disabled: {
+              enabled: false,
+              homeserver: "https://disabled.example.org",
+              accessToken: "disabled-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(() =>
+      resolveMatrixAuthContext({
+        cfg,
+        env: {} as NodeJS.ProcessEnv,
+        accountId: "disabled",
+      }),
+    ).toThrow(/Matrix account "disabled" is disabled/i);
+  });
+
   it("allows explicit non-default account ids backed only by scoped env vars", () => {
     const cfg = {
       channels: {
@@ -633,6 +699,9 @@ describe("Matrix auth/config live surfaces", () => {
       "Matrix homeserver must use https:// unless it targets a private or loopback host",
     );
     expect(validateMatrixHomeserverUrl("http://127.0.0.1:8008")).toBe("http://127.0.0.1:8008");
+    expect(validateMatrixHomeserverUrl("http://[::ffff:127.0.0.1]:8008")).toBe(
+      "http://[::ffff:127.0.0.1]:8008",
+    );
   });
 
   it("accepts internal http homeservers only when private-network access is enabled", () => {

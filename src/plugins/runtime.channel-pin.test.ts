@@ -1,7 +1,10 @@
+// Verifies runtime channel pinning for plugin activation.
 import { afterEach, describe, expect, it } from "vitest";
 import { loadChannelOutboundAdapter } from "../channels/plugins/outbound/load.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import {
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
@@ -87,6 +90,7 @@ function expectChannelRegistrySwap(params: {
 
 describe("channel registry pinning", () => {
   afterEach(() => {
+    resetAgentEventsForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -102,6 +106,36 @@ describe("channel registry pinning", () => {
     const replacement = createEmptyPluginRegistry();
     expectPinnedChannelRegistry(startup, replacement);
     expect(getActivePluginChannelRegistry()!.channels).toHaveLength(1);
+  });
+
+  it("keeps pinned channel registries live until they are released", () => {
+    const { registry: startup } = createRegistryWithChannel();
+    const replacement = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    expect(getActivePluginChannelRegistry()).toBe(startup);
+    expect(isPluginRegistryRetired(startup)).toBe(false);
+
+    releasePinnedPluginChannelRegistry(startup);
+
+    expect(getActivePluginChannelRegistry()).toBe(replacement);
+    expect(isPluginRegistryRetired(startup)).toBe(true);
+  });
+
+  it("falls back to the active channel registry when the pinned registry is empty", () => {
+    const startup = createEmptyPluginRegistry();
+    const { registry: replacement } = createRegistryWithChannel("replacement-channel");
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+
+    const channelVersionBeforeSwap = getActivePluginChannelRegistryVersion();
+    setActivePluginRegistry(replacement);
+
+    expectActiveChannelRegistry(replacement);
+    expect(getActivePluginChannelRegistryVersion()).not.toBe(channelVersionBeforeSwap);
   });
 
   it("re-pin invalidates cached channel lookups", () => {
@@ -163,8 +197,7 @@ describe("channel registry pinning", () => {
   it("requireActivePluginChannelRegistry creates a registry when none exists", () => {
     resetPluginRuntimeStateForTest();
     const registry = requireActivePluginChannelRegistry();
-    expect(registry).toBeDefined();
-    expect(registry.channels).toEqual([]);
+    expect(registry).toEqual(createEmptyPluginRegistry());
   });
 
   it("resetPluginRuntimeStateForTest clears channel pin", () => {
@@ -195,5 +228,122 @@ describe("channel registry pinning", () => {
     // The outbound loader must still find the telegram adapter from the pinned registry.
     const adapter = await loadChannelOutboundAdapter("telegram");
     expect(adapter).toBe(outboundAdapter);
+  });
+
+  it("loadChannelOutboundAdapter falls back to active registry when pinned setup entry cannot send", async () => {
+    const outboundAdapter = { sendText: async () => ({ messageId: "1" }) };
+    const startup = createEmptyPluginRegistry();
+    startup.channels = [
+      {
+        pluginId: "discord",
+        plugin: { id: "discord", meta: {} },
+        source: "setup",
+      },
+    ] as never;
+    const replacement = createEmptyPluginRegistry();
+    replacement.channels = [
+      {
+        pluginId: "discord",
+        plugin: { id: "discord", meta: {}, outbound: outboundAdapter },
+        source: "runtime",
+      },
+    ] as never;
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    const adapter = await loadChannelOutboundAdapter("discord");
+    expect(adapter).toBe(outboundAdapter);
+  });
+
+  it("keeps pinned channel registry agent-event subscriptions live after active registry replacement", () => {
+    const observed: string[] = [];
+    const startup = createEmptyPluginRegistry();
+    startup.agentEventSubscriptions = [
+      {
+        pluginId: "startup-plugin",
+        pluginName: "Startup Plugin",
+        source: "test",
+        subscription: {
+          id: "startup-subscription",
+          handle: (event) => {
+            observed.push(`startup:${event.stream}`);
+          },
+        },
+      },
+    ];
+    const replacement = createEmptyPluginRegistry();
+    replacement.agentEventSubscriptions = [
+      {
+        pluginId: "replacement-plugin",
+        pluginName: "Replacement Plugin",
+        source: "test",
+        subscription: {
+          id: "replacement-subscription",
+          handle: (event) => {
+            observed.push(`replacement:${event.stream}`);
+          },
+        },
+      },
+    ];
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    emitAgentEvent({
+      runId: "run-pinned-agent-events",
+      stream: "approval",
+      data: { state: "queued" },
+    });
+
+    expect(observed.toSorted()).toEqual(["replacement:approval", "startup:approval"]);
+  });
+
+  it("dedupes the agent-event bridge across multiple runtime module instances", async () => {
+    const observed: string[] = [];
+    const runtimeA = await import(new URL("./runtime.ts?runtimeA", import.meta.url).href);
+    const runtimeB = await import(new URL("./runtime.ts?runtimeB", import.meta.url).href);
+    const startup = createEmptyPluginRegistry();
+    startup.agentEventSubscriptions = [
+      {
+        pluginId: "startup-plugin",
+        pluginName: "Startup Plugin",
+        source: "test",
+        subscription: {
+          id: "startup-subscription",
+          handle: (event) => {
+            observed.push(`startup:${event.stream}`);
+          },
+        },
+      },
+    ];
+    const replacement = createEmptyPluginRegistry();
+    replacement.agentEventSubscriptions = [
+      {
+        pluginId: "replacement-plugin",
+        pluginName: "Replacement Plugin",
+        source: "test",
+        subscription: {
+          id: "replacement-subscription",
+          handle: (event) => {
+            observed.push(`replacement:${event.stream}`);
+          },
+        },
+      },
+    ];
+
+    runtimeA.setActivePluginRegistry(startup);
+    runtimeA.pinActivePluginChannelRegistry(startup);
+    runtimeB.setActivePluginRegistry(replacement);
+
+    emitAgentEvent({
+      runId: "run-cross-module-pinned-agent-events",
+      stream: "approval",
+      data: { state: "queued" },
+    });
+
+    expect(observed.toSorted()).toEqual(["replacement:approval", "startup:approval"]);
   });
 });

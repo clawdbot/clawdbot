@@ -1,7 +1,9 @@
+// Qqbot plugin module implements register all behavior.
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import { registerApproveCommands } from "./register-approve.js";
 import { registerBasicBotCommands } from "./register-basic.js";
 import { registerClearStorageCommands } from "./register-clear-storage.js";
+import { registerGroupAllwaysCommand } from "./register-group-allways.js";
 import { registerLogCommands } from "./register-logs.js";
 import { registerStreamingCommands } from "./register-streaming.js";
 
@@ -14,4 +16,5 @@ export function registerBuiltinSlashCommands(registry: SlashCommandRegistry): vo
   registerClearStorageCommands(registry);
   registerStreamingCommands(registry);
   registerApproveCommands(registry);
+  registerGroupAllwaysCommand(registry);
 }

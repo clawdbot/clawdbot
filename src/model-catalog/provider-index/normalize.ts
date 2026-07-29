@@ -1,12 +1,14 @@
+// Provider-index normalization validates generated discovery metadata and rejects unsafe provider entries.
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
+import { asFiniteNumber } from "../../../packages/normalization-core/src/number-coercion.js";
+import { normalizeOptionalString } from "../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueTrimmedStringList } from "../../../packages/normalization-core/src/string-normalization.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { isRecord } from "../../utils.js";
-import { normalizeModelCatalog } from "../normalize.js";
-import { normalizeModelCatalogProviderId } from "../refs.js";
-import type { ModelCatalogProvider } from "../types.js";
 import type {
   OpenClawProviderIndex,
   OpenClawProviderIndexPluginInstall,
@@ -15,6 +17,8 @@ import type {
   OpenClawProviderIndexProvider,
 } from "./types.js";
 
+// Provider-index normalization accepts generated discovery metadata from the
+// bundled index and rejects malformed or prototype-polluting entries.
 const OPENCLAW_PROVIDER_INDEX_VERSION = 1;
 
 function normalizeSafeKey(value: unknown): string {
@@ -30,6 +34,7 @@ function normalizeInstall(value: unknown): OpenClawProviderIndexPluginInstall | 
   const parsedClawHub = clawhubSpec ? parseClawHubPluginSpec(clawhubSpec) : null;
   const npmSpec = normalizeOptionalString(value.npmSpec);
   const parsedNpm = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
+  // Install metadata is useful only when at least one install spec parses.
   if (!parsedClawHub && !parsedNpm) {
     return undefined;
   }
@@ -70,13 +75,15 @@ function normalizePlugin(value: unknown): OpenClawProviderIndexPlugin | undefine
 }
 
 function normalizeCategories(value: unknown): readonly string[] {
-  return [...new Set(normalizeTrimmedStringList(value))];
+  return normalizeUniqueTrimmedStringList(value);
 }
 
 function normalizePreviewCatalog(params: {
   providerId: string;
   value: unknown;
 }): ModelCatalogProvider | undefined {
+  // Reuse catalog-core normalization so preview models obey the same model
+  // schema as installed plugin manifests.
   const catalog = normalizeModelCatalog(
     { providers: { [params.providerId]: params.value } },
     { ownedProviders: new Set([params.providerId]) },
@@ -94,21 +101,17 @@ function normalizePreviewCatalog(params: {
 function normalizeOnboardingScopes(
   value: unknown,
 ): OpenClawProviderIndexProviderAuthChoice["onboardingScopes"] | undefined {
-  const scopes = normalizeTrimmedStringList(value).filter(
-    (scope): scope is "text-inference" | "image-generation" =>
-      scope === "text-inference" || scope === "image-generation",
+  const scopes = normalizeUniqueTrimmedStringList(value).filter(
+    (scope): scope is "text-inference" | "image-generation" | "music-generation" =>
+      scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
   );
-  return scopes.length > 0 ? [...new Set(scopes)] : undefined;
+  return scopes.length > 0 ? scopes : undefined;
 }
 
 function normalizeAssistantVisibility(
   value: unknown,
 ): OpenClawProviderIndexProviderAuthChoice["assistantVisibility"] | undefined {
   return value === "visible" || value === "manual-only" ? value : undefined;
-}
-
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeAuthChoice(params: {
@@ -133,7 +136,7 @@ function normalizeAuthChoice(params: {
   const cliFlag = normalizeOptionalString(params.value.cliFlag);
   const cliOption = normalizeOptionalString(params.value.cliOption);
   const cliDescription = normalizeOptionalString(params.value.cliDescription);
-  const assistantPriority = normalizeFiniteNumber(params.value.assistantPriority);
+  const assistantPriority = asFiniteNumber(params.value.assistantPriority);
   const assistantVisibility = normalizeAssistantVisibility(params.value.assistantVisibility);
   const onboardingScopes = normalizeOnboardingScopes(params.value.onboardingScopes);
   return {
@@ -220,6 +223,8 @@ export function normalizeOpenClawProviderIndex(value: unknown): OpenClawProvider
   const providers: Record<string, OpenClawProviderIndexProvider> = {};
   for (const [rawProviderId, rawProvider] of Object.entries(value.providers)) {
     const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    // Provider ids become object keys, so blocked keys are dropped before
+    // writing into the normalized provider map.
     if (!providerId || isBlockedObjectKey(providerId)) {
       continue;
     }

@@ -1,9 +1,10 @@
+/** Runtime facade for compact command dependencies. */
 export {
-  abortEmbeddedPiRun,
-  compactEmbeddedPiSession,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded.js";
+  abortEmbeddedAgentRun,
+  compactEmbeddedAgentSession,
+  isEmbeddedAgentRunAbortableForCompaction,
+  waitForEmbeddedAgentRunEnd,
+} from "../../agents/embedded-agent.js";
 export {
   resolveFreshSessionTotalTokens,
   resolveSessionFilePath,

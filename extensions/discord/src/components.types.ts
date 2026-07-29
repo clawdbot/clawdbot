@@ -1,8 +1,10 @@
+// Discord type declarations define plugin contracts.
 import type { TopLevelComponents } from "./internal/discord.js";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 
 export type DiscordComponentSelectType = "string" | "user" | "role" | "mentionable" | "channel";
+export type DiscordComponentCallbackDataKind = "command" | "callback";
 
 export type DiscordComponentModalFieldType =
   | "text"
@@ -17,6 +19,7 @@ export type DiscordComponentButtonSpec = {
   style?: DiscordComponentButtonStyle;
   url?: string;
   callbackData?: string;
+  callbackDataKind?: DiscordComponentCallbackDataKind;
   /** Internal use only: bypass dynamic component ids with a fixed custom id. */
   internalCustomId?: string;
   emoji?: {
@@ -25,6 +28,8 @@ export type DiscordComponentButtonSpec = {
     animated?: boolean;
   };
   disabled?: boolean;
+  /** Keep this action available after a successful interaction. */
+  reusable?: boolean;
   /** Optional allowlist of users who can interact with this button (ids or names). */
   allowedUsers?: string[];
 };
@@ -44,6 +49,7 @@ export type DiscordComponentSelectOption = {
 export type DiscordComponentSelectSpec = {
   type?: DiscordComponentSelectType;
   callbackData?: string;
+  callbackDataKind?: DiscordComponentCallbackDataKind;
   placeholder?: string;
   minValues?: number;
   maxValues?: number;
@@ -134,6 +140,7 @@ export type DiscordComponentEntry = {
   kind: "button" | "select" | "modal-trigger";
   label: string;
   callbackData?: string;
+  callbackDataKind?: DiscordComponentCallbackDataKind;
   selectType?: DiscordComponentSelectType;
   options?: Array<{ value: string; label: string }>;
   modalId?: string;

@@ -1,10 +1,9 @@
 /**
  * QQ Bot Approval Capability — entry point.
  *
- * QQBot uses a simpler approval model than Telegram/Slack: any user who
- * can see the inline-keyboard buttons can approve. No explicit approver
- * list is required — the bot simply sends the approval message to the
- * originating conversation and whoever clicks the button resolves it.
+ * QQBot uses a simpler approval model than Telegram/Slack: when no
+ * approver list is configured, the bot sends the approval message to the
+ * originating conversation and any participant can approve from there.
  *
  * When `execApprovals` IS configured, it gates which requests are
  * handled natively and who is authorized.  When it is NOT configured,
@@ -16,16 +15,15 @@ import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-s
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveApprovalTarget } from "../../engine/approval/index.js";
 import {
   isQQBotExecApprovalClientEnabled,
   matchesQQBotApprovalAccount,
   shouldHandleQQBotExecApprovalRequest,
-  isQQBotExecApprovalAuthorizedSender,
-  isQQBotExecApprovalApprover,
   resolveQQBotExecApprovalConfig,
+  authorizeQQBotApprovalAction,
 } from "../../exec-approvals.js";
 import { ensurePlatformAdapter } from "../bootstrap.js";
 import { resolveQQBotAccount } from "../config.js";
@@ -101,44 +99,22 @@ function canResolveTarget(request: {
   return sessionConversation?.id != null;
 }
 
+function resolveNativeDeliveryState(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): { kind: "enabled" } | { kind: "disabled" } {
+  const enabled = isNativeDeliveryEnabled(params);
+  return enabled ? { kind: "enabled" } : { kind: "disabled" };
+}
+
 function createQQBotApprovalCapability(): ChannelApprovalCapability {
   return createChannelApprovalCapability({
-    authorizeActorAction: ({ cfg, accountId, senderId, approvalKind }) => {
-      if (hasExecApprovalConfig({ cfg, accountId })) {
-        const authorized =
-          approvalKind === "plugin"
-            ? isQQBotExecApprovalApprover({ cfg, accountId, senderId })
-            : isQQBotExecApprovalAuthorizedSender({ cfg, accountId, senderId });
-        return authorized
-          ? { authorized: true }
-          : { authorized: false, reason: "You are not authorized to approve this request." };
-      }
-      return { authorized: true };
-    },
+    authorizeActorAction: ({ cfg, accountId, senderId, approvalKind }) =>
+      authorizeQQBotApprovalAction({ cfg, accountId, senderId, approvalKind }),
 
-    getActionAvailabilityState: ({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      action: "approve";
-    }) => {
-      const enabled = isNativeDeliveryEnabled({ cfg, accountId });
-      return enabled ? { kind: "enabled" } : { kind: "disabled" };
-    },
+    getActionAvailabilityState: resolveNativeDeliveryState,
 
-    getExecInitiatingSurfaceState: ({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      action: "approve";
-    }) => {
-      const enabled = isNativeDeliveryEnabled({ cfg, accountId });
-      return enabled ? { kind: "enabled" } : { kind: "disabled" };
-    },
+    getExecInitiatingSurfaceState: resolveNativeDeliveryState,
 
     describeExecApprovalSetup: ({ accountId }: { accountId?: string | null }) => {
       const prefix =
@@ -229,9 +205,9 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
 
 const qqbotApprovalCapability = createQQBotApprovalCapability();
 
-let _cachedCapability: ChannelApprovalCapability | undefined;
+let cachedCapability: ChannelApprovalCapability | undefined;
 
 export function getQQBotApprovalCapability(): ChannelApprovalCapability {
-  _cachedCapability ??= qqbotApprovalCapability;
-  return _cachedCapability;
+  cachedCapability ??= qqbotApprovalCapability;
+  return cachedCapability;
 }

@@ -1,11 +1,9 @@
-import type { ClawdbotConfig, HistoryEntry, RuntimeEnv } from "../runtime-api.js";
+// Feishu plugin module implements monitor.bot menu handler behavior.
+import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
-import {
-  claimUnprocessedFeishuMessage,
-  recordProcessedFeishuMessage,
-  releaseFeishuMessageProcessing,
-} from "./dedup.js";
+import { claimUnprocessedFeishuMessage, forgetProcessedFeishuMessage } from "./dedup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { isFeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 
@@ -18,16 +16,8 @@ type FeishuBotMenuEvent = {
   };
 };
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function readStringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseFeishuBotMenuEvent(value: unknown): FeishuBotMenuEvent | null {
@@ -60,6 +50,7 @@ export function createFeishuBotMenuHandler(params: {
   cfg: ClawdbotConfig;
   accountId: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
   getBotOpenId?: (accountId: string) => string | undefined;
@@ -108,11 +99,11 @@ export function createFeishuBotMenuHandler(params: {
         namespace: accountId,
         log,
       });
-      if (claim === "duplicate") {
+      if (claim.kind === "duplicate") {
         log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
         return;
       }
-      if (claim === "inflight") {
+      if (claim.kind === "inflight") {
         log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
         return;
       }
@@ -123,9 +114,10 @@ export function createFeishuBotMenuHandler(params: {
           botOpenId: getBotOpenId(accountId),
           botName: getBotName(accountId),
           runtime,
+          channelRuntime: params.channelRuntime,
           chatHistories,
           accountId,
-          processingClaimHeld: true,
+          processingClaim: claim.kind === "claimed" ? claim.handle : undefined,
         });
 
       const promise = maybeHandleFeishuQuickActionMenu({
@@ -137,22 +129,26 @@ export function createFeishuBotMenuHandler(params: {
       })
         .then(async (handledMenu) => {
           if (handledMenu) {
-            await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+            if (claim.kind === "claimed") {
+              await claim.handle.commit();
+            }
             return;
           }
           return await handleLegacyMenu();
         })
-        .catch(async (err) => {
+        .catch(async (err: unknown) => {
           if (isFeishuRetryableSyntheticEventError(err)) {
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-          } else {
-            await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            await forgetProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            if (claim.kind === "claimed") {
+              claim.handle.release({ error: err });
+            }
+          } else if (claim.kind === "claimed") {
+            await claim.handle.commit();
           }
           throw err;
         });
       if (fireAndForget) {
-        promise.catch((err) => {
+        promise.catch((err: unknown) => {
           error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
         });
         return;

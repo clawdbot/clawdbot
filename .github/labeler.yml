@@ -1,8 +1,3 @@
-"channel: bluebubbles":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/bluebubbles/**"
-          - "docs/channels/bluebubbles.md"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
@@ -15,6 +10,22 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: linux-node":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/linux-node/**"
+          - "docs/nodes/camera.md"
+          - "docs/nodes/location-command.md"
+          - "docs/platforms/linux.md"
+"plugin: cua-computer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cua-computer/**"
+"plugin: pixverse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/pixverse/**"
+          - "docs/providers/pixverse.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -25,6 +36,11 @@
       - any-glob-to-any-file:
           - "extensions/irc/**"
           - "docs/channels/irc.md"
+"channel: reef":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/reef/**"
+          - "docs/channels/reef.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
@@ -36,11 +52,40 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: logbook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/logbook/**"
+          - "docs/plugins/logbook.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: teams-meetings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/teams-meetings/**"
+          - "docs/plugins/teams-meetings.md"
+          - "docs/plugins/reference/teams-meetings.md"
+"plugin: zoom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zoom-meetings/**"
+          - "docs/plugins/zoom-meetings.md"
+          - "docs/plugins/reference/zoom-meetings.md"
+"plugin: workboard":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workboard/**"
+          - "docs/plugins/workboard.md"
+          - "docs/plugins/reference/workboard.md"
+"plugin: beam":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/beam/**"
+          - "docs/plugins/beam.md"
+          - "docs/plugins/reference/beam.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -52,6 +97,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mxc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mxc/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -92,11 +141,21 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: buzz":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/buzz/**"
+          - "docs/channels/buzz.md"
 "channel: qqbot":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: raft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/raft/**"
+          - "docs/channels/raft.md"
 "channel: qa-channel":
   - changed-files:
       - any-glob-to-any-file:
@@ -106,7 +165,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qa-lab/**"
+          - "qa/scenarios/**"
+          - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
   - changed-files:
@@ -118,6 +180,11 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: sms":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sms/**"
+          - "docs/channels/sms.md"
 "channel: synology-chat":
   - changed-files:
       - any-glob-to-any-file:
@@ -152,6 +219,10 @@
       - any-glob-to-any-file:
           - "extensions/zalo/**"
           - "docs/channels/zalo.md"
+"channel: zaloclawbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/channels/zaloclawbot.md"
 "channel: zalouser":
   - changed-files:
       - any-glob-to-any-file:
@@ -163,6 +234,11 @@
       - any-glob-to-any-file:
           - "apps/android/**"
           - "docs/platforms/android.md"
+"app: wearos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/wear/**"
+          - "apps/android/wear-shared/**"
 "app: ios":
   - changed-files:
       - any-glob-to-any-file:
@@ -174,13 +250,19 @@
           - "apps/macos/**"
           - "docs/platforms/macos.md"
           - "docs/platforms/mac/**"
+"app: linux":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/linux/**"
+          - "docs/platforms/linux.md"
+          - "extensions/linux-canvas/**"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:
           - "ui/**"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
-          - "src/gateway/protocol/**"
+          - "packages/gateway-protocol/src/**"
           - "src/gateway/server-methods/chat.ts"
           - "src/infra/control-ui-assets.ts"
 
@@ -188,8 +270,17 @@
   - changed-files:
       - any-glob-to-any-file:
           - "src/gateway/**"
+          - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
+
+"fleet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/fleet/**"
+          - "src/cli/fleet-cli/**"
+          - "docs/gateway/multi-tenant-hosting.md"
+          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:
@@ -228,12 +319,12 @@
           - "src/agents/sandbox*.ts"
           - "src/commands/sandbox*.ts"
           - "src/cli/sandbox-cli.ts"
-          - "src/docker-setup.test.ts"
+          - "src/docker-setup.e2e.test.ts"
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
-          - "docs/multi-agent-sandbox-tools.md"
+          - "docs/tools/multi-agent-sandbox-tools.md"
 
 "agents":
   - changed-files:
@@ -246,9 +337,13 @@
           - ".github/workflows/opengrep-*.yml"
           - ".semgrepignore"
           - "docs/cli/security.md"
-          - "docs/gateway/security.md"
+          - "docs/gateway/security/**"
           - "security/**"
 
+"extensions: admin-http-rpc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/admin-http-rpc/**"
 "extensions: copilot-proxy":
   - changed-files:
       - any-glob-to-any-file:
@@ -269,6 +364,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lobster/**"
+"extensions: llama-cpp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llama-cpp/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:
@@ -281,6 +380,15 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
+"extensions: oc-path":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/oc-path/**"
+"extensions: policy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/policy/**"
+          - "docs/cli/policy.md"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
@@ -289,6 +397,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tokenjuice/**"
+"extensions: vault":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vault/**"
+          - "docs/plugins/vault.md"
+          - "docs/plugins/reference/vault.md"
+"extensions: onepassword":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onepassword/**"
+          - "docs/plugins/onepassword.md"
+          - "docs/plugins/reference/onepassword.md"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:
@@ -318,6 +438,20 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: baseten":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/baseten/**"
+          - "docs/providers/baseten.md"
+"extensions: clawrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/clawrouter/**"
+          - "docs/providers/clawrouter.md"
+"extensions: crabbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/crabbox/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -327,6 +461,16 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: featherless":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/featherless/**"
+          - "docs/providers/featherless.md"
+"extensions: gmi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gmi/**"
+          - "docs/providers/gmi.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
@@ -339,6 +483,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+          - "docs/providers/anthropic.md"
+          - "docs/plugins/reference/anthropic.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -356,6 +502,12 @@
       - any-glob-to-any-file:
           - "extensions/inworld/**"
           - "docs/providers/inworld.md"
+"extensions: fish-audio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fish-audio/**"
+          - "docs/providers/fish-audio.md"
+          - "docs/tools/tts.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -377,10 +529,30 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
+          - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness-reference.md"
+          - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-supervision.md"
+          - "docs/specs/codex-supervision.md"
+"extensions: copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot/**"
+          - "docs/plugins/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kimi-coding/**"
+"extensions: longcat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/longcat/**"
+          - "docs/providers/longcat.md"
+"extensions: meta":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/meta/**"
+          - "docs/providers/meta.md"
 "extensions: minimax":
   - changed-files:
       - any-glob-to-any-file:
@@ -397,6 +569,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
+"extensions: novita":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/novita/**"
+          - "docs/providers/novita.md"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:
@@ -455,3 +632,96 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/gradium/**"
+"extensions: amazon-bedrock":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/amazon-bedrock/**"
+"extensions: anthropic-vertex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/anthropic-vertex/**"
+"extensions: brave":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/brave/**"
+"extensions: chutes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/chutes/**"
+"extensions: diffs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diffs/**"
+          - "extensions/diffs-language-pack/**"
+"extensions: elevenlabs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/elevenlabs/**"
+"extensions: firecrawl":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/firecrawl/**"
+"extensions: github-copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github-copilot/**"
+"extensions: google":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google/**"
+"extensions: microsoft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/microsoft/**"
+"extensions: mistral":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mistral/**"
+"extensions: ollama":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ollama/**"
+"extensions: opencode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opencode/**"
+"extensions: opencode-go":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opencode-go/**"
+"extensions: openrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openrouter/**"
+"extensions: openshell":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openshell/**"
+"extensions: parallel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/parallel/**"
+"extensions: perplexity":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/perplexity/**"
+"extensions: sglang":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sglang/**"
+"extensions: thread-ownership":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/thread-ownership/**"
+"extensions: vllm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vllm/**"
+"extensions: xai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/xai/**"
+"extensions: zai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zai/**"

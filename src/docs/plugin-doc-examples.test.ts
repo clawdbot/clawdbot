@@ -1,7 +1,11 @@
+// Plugin documentation example tests validate plugin snippets from docs.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const PLUGIN_DOCS_DIR = path.join(process.cwd(), "docs", "plugins");
 
@@ -10,6 +14,47 @@ function lineNumberAt(source: string, index: number): number {
 }
 
 function listMarkdownFiles(dir: string): string[] {
+  const externalFiles = listExternalMarkdownFiles(dir);
+  if (externalFiles) {
+    return externalFiles;
+  }
+  return walkMarkdownFiles(dir);
+}
+
+function listExternalMarkdownFiles(dir: string): string[] | null {
+  const repoPath = toRepoRelativePath(process.cwd(), dir);
+  return listGitMarkdownFiles(repoPath) ?? listFindMarkdownFiles(dir);
+}
+
+function listGitMarkdownFiles(repoPath: string): string[] | null {
+  const files = listGitTrackedFiles({ pathspecs: repoPath });
+  if (!files) {
+    return null;
+  }
+  return files
+    .filter((line) => line.endsWith(".md"))
+    .map((filePath) => path.join(process.cwd(), filePath))
+    .toSorted();
+}
+
+function listFindMarkdownFiles(dir: string): string[] | null {
+  const result = spawnSync("find", [dir, "-type", "f", "-name", "*.md"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .toSorted();
+}
+
+function walkMarkdownFiles(dir: string): string[] {
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const entryPath = path.join(dir, entry.name);
@@ -23,6 +68,15 @@ function listMarkdownFiles(dir: string): string[] {
 }
 
 describe("plugin docs examples", () => {
+  it("lists plugin docs without scanning directories in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const files = listMarkdownFiles(PLUGIN_DOCS_DIR);
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((filePath) => filePath.endsWith(".md"))).toBe(true);
+    });
+  });
+
   it("keeps plugin docs JSON fences parseable", () => {
     const failures: string[] = [];
     for (const docPath of listMarkdownFiles(PLUGIN_DOCS_DIR)) {
@@ -31,7 +85,7 @@ describe("plugin docs examples", () => {
       for (const match of blocks) {
         const lang = match[1] ?? "";
         const code = match[2] ?? "";
-        const relativePath = path.relative(process.cwd(), docPath).split(path.sep).join("/");
+        const relativePath = toRepoRelativePath(process.cwd(), docPath);
         const location = `${relativePath}:${lineNumberAt(markdown, match.index ?? 0)}`;
         try {
           if (lang === "json") {
@@ -44,6 +98,6 @@ describe("plugin docs examples", () => {
         }
       }
     }
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 });

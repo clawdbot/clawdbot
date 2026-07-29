@@ -1,3 +1,6 @@
+/**
+ * Gateway server network runtime tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();

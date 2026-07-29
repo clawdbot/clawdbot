@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="$(cd "${OPENCLAW_NPM_ONBOARD_SOURCE_ROOT:-${OPENCLAW_LIVE_DOCKER_REPO_ROOT:-$ROOT_DIR}}" && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -12,6 +13,29 @@ DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
+USE_SOURCE_PLUGIN_PACKAGE="${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}"
+JSON_ARTIFACT_MAX_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES 1048576
+)"
+STATUS_TEXT_MAX_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES 1048576
+)"
+run_log=""
+plugin_pack_dir=""
+plugin_package_args=()
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+  if [ -n "${plugin_pack_dir:-}" ]; then
+    rm -rf "$plugin_pack_dir"
+  fi
+}
+trap cleanup EXIT
 
 case "$CHANNEL" in
 telegram | discord | slack) ;;
@@ -37,6 +61,40 @@ prepare_package_tgz() {
 
 prepare_package_tgz
 
+prepare_source_plugin_package() {
+  if [ "$USE_SOURCE_PLUGIN_PACKAGE" != "1" ] || [ "$CHANNEL" = "telegram" ]; then
+    return 0
+  fi
+
+  local package_dir="extensions/$CHANNEL"
+  if [ ! -f "$SOURCE_ROOT/$package_dir/package.json" ]; then
+    echo "Missing source plugin package for $CHANNEL: $package_dir" >&2
+    exit 1
+  fi
+
+  plugin_pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-plugin.XXXXXX")"
+  (
+    cd "$SOURCE_ROOT"
+    OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="$plugin_pack_dir" \
+      bash scripts/plugin-npm-publish.sh --pack "$package_dir"
+  )
+
+  local archives=("$plugin_pack_dir"/*.tgz)
+  if [ "${#archives[@]}" -ne 1 ] || [ ! -f "${archives[0]}" ]; then
+    echo "Expected exactly one packed source plugin for $CHANNEL" >&2
+    exit 1
+  fi
+
+  local container_package="/tmp/openclaw-channel-plugin.tgz"
+  plugin_package_args=(
+    -v "${archives[0]}:$container_package:ro"
+    -e OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1
+    -e "OPENCLAW_PLUGIN_INSTALL_OVERRIDES={\"$CHANNEL\":\"npm-pack:$container_package\"}"
+  )
+}
+
+prepare_source_plugin_package
+
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
@@ -45,10 +103,13 @@ echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e "OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES=$JSON_ARTIFACT_MAX_BYTES" \
+  -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  "${plugin_package_args[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
-set -euo pipefail
+set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -61,7 +122,8 @@ CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:?missing OPENCLAW_NPM_ONBOARD_CHANNEL}"
 PORT="18789"
 MOCK_PORT="44080"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
-MOCK_REQUEST_LOG="/tmp/openclaw-mock-openai-requests.jsonl"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
 
@@ -93,6 +155,7 @@ esac
 
 cleanup() {
   openclaw_e2e_stop_process "${mock_pid:-}"
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 
@@ -112,13 +175,16 @@ dump_debug_logs() {
     /tmp/openclaw-agent.err \
     /tmp/openclaw-agent.json \
     /tmp/openclaw-mock-openai.log \
-    "$MOCK_REQUEST_LOG"
+    "$MOCK_REQUEST_LOG" \
+    "$OPENCLAW_HOME/.openclaw/openclaw.json" \
+    "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 package_root="$(openclaw_e2e_package_root)"
 if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
   CHANNEL_PACKAGE_MODE="bundled"
@@ -144,7 +210,6 @@ openclaw onboard --non-interactive --accept-risk \
   --json >/tmp/openclaw-onboard.json
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
-node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
 
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
@@ -165,22 +230,31 @@ else
   openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 fi
 
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-mock-model-config "$MOCK_PORT"
+
 echo "Running local agent turn against mocked OpenAI..."
-openclaw agent --local \
+if openclaw agent --local \
   --agent main \
   --session-id npm-onboard-channel-agent \
   --message "Return the success marker from the test server." \
   --thinking off \
-  --json >/tmp/openclaw-agent.combined 2>&1
+  --json >/tmp/openclaw-agent.combined 2>&1; then
+  agent_status=0
+else
+  agent_status=$?
+fi
+if [ "$agent_status" -ne 0 ]; then
+  dump_debug_logs "$agent_status"
+  exit "$agent_status"
+fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
-rm -f "$run_log"
 echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"

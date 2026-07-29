@@ -25,7 +25,7 @@ describe("createSlackSetupWizardProxy", () => {
   it("does not load the wizard module just by constructing the proxy", () => {
     const loader = vi.fn(async () => ({ slackSetupWizard: makeFakeWizard() }));
     const proxy = createSlackSetupWizardProxy(loader);
-    expect(proxy).toBeDefined();
+    expect(proxy.channel).toBe("slack");
     expect(loader).not.toHaveBeenCalled();
   });
 

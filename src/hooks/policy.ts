@@ -1,7 +1,9 @@
+// Hook policy helpers decide when hooks may run for a configured event.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookEntry, HookSource } from "./types.js";
 
+/** Human-readable reason for disabling a hook at policy resolution time. */
 export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
 
 type HookEnableState = {
@@ -54,10 +56,12 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
   },
 };
 
+/** Resolve source trust, precedence, default enablement, and override rules. */
 function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
   return HOOK_SOURCE_POLICIES[source];
 }
 
+/** Resolve explicit per-hook config by hook key. */
 export function resolveHookConfig(
   config: OpenClawConfig | undefined,
   hookKey: string,
@@ -73,6 +77,7 @@ export function resolveHookConfig(
   return entry;
 }
 
+/** Resolve whether a hook is enabled before runtime requirement checks. */
 export function resolveHookEnableState(params: {
   entry: HookEntry;
   config?: OpenClawConfig;
@@ -106,6 +111,7 @@ function canOverrideHook(candidate: HookEntry, existing: HookEntry): boolean {
   );
 }
 
+/** Merge hook entries by name using source precedence and override policy. */
 export function resolveHookEntries(
   entries: HookEntry[],
   opts?: {
@@ -128,6 +134,8 @@ export function resolveHookEntries(
       merged.set(entry.hook.name, entry);
       continue;
     }
+    // Source policy is asymmetric: higher precedence alone is not enough unless
+    // both source policies agree the candidate may replace the existing hook.
     if (canOverrideHook(entry, existing)) {
       merged.set(entry.hook.name, entry);
       continue;

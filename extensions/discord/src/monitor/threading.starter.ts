@@ -1,6 +1,8 @@
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
+// Discord plugin module implements threading.starter behavior.
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
-import { normalizeOptionalString, truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ChannelType, getChannelMessage, type Client } from "../internal/discord.js";
 import {
   resolveDiscordChannelIdSafe,
@@ -8,6 +10,7 @@ import {
   resolveDiscordChannelParentIdSafe,
   resolveDiscordChannelParentSafe,
 } from "./channel-access.js";
+import { formatDiscordMediaText } from "./message-media.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
@@ -186,7 +189,12 @@ function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessag
   const content = normalizeOptionalString(starter.content) ?? "";
   const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
   const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
-  return content || embedText || forwardedText;
+  const text = content || embedText || forwardedText;
+  const mediaText = formatDiscordMediaText({
+    attachments: starter.attachments ?? undefined,
+    stickers: starter.sticker_items ?? undefined,
+  });
+  return [text, mediaText].filter(Boolean).join("\n");
 }
 
 function resolveDiscordThreadStarterIdentity(

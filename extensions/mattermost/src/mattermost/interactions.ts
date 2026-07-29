@@ -1,13 +1,19 @@
+// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
-import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
+import {
+  isTrustedProxyAddress,
+  readRequestBodyWithLimit,
+  resolveClientIp,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
@@ -58,10 +64,6 @@ const callbackUrls = new Map<string, string>();
 
 export function setInteractionCallbackUrl(accountId: string, url: string): void {
   callbackUrls.set(accountId, url);
-}
-
-export function getInteractionCallbackUrl(accountId: string): string | undefined {
-  return callbackUrls.get(accountId);
 }
 
 type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
@@ -181,7 +183,7 @@ export function setInteractionSecret(accountIdOrBotToken: string, botToken?: str
   defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
 }
 
-export function getInteractionSecret(accountId?: string): string {
+function getInteractionSecret(accountId?: string): string {
   const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
   if (scoped) {
     return scoped;
@@ -215,16 +217,13 @@ function canonicalizeInteractionContext(value: unknown): unknown {
   return value;
 }
 
-export function generateInteractionToken(
-  context: Record<string, unknown>,
-  accountId?: string,
-): string {
+function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
   const secret = getInteractionSecret(accountId);
   const payload = JSON.stringify(canonicalizeInteractionContext(context));
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-export function verifyInteractionToken(
+function verifyInteractionToken(
   context: Record<string, unknown>,
   token: string,
   accountId?: string,
@@ -353,35 +352,9 @@ export function buildButtonProps(params: {
 // ── Request body reader ────────────────────────────────────────────────
 
 function readInteractionBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    const timer = setTimeout(() => {
-      req.destroy();
-      reject(new Error("Request body read timeout"));
-    }, INTERACTION_BODY_TIMEOUT_MS);
-
-    req.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > INTERACTION_MAX_BODY_BYTES) {
-        req.destroy();
-        clearTimeout(timer);
-        reject(new Error("Request body too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on("end", () => {
-      clearTimeout(timer);
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-
-    req.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+  return readRequestBodyWithLimit(req, {
+    maxBytes: INTERACTION_MAX_BODY_BYTES,
+    timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
   });
 }
 
@@ -426,6 +399,14 @@ export function createMattermostInteractionHandler(params: {
   const { client, accountId, log } = params;
   const core = getMattermostRuntime();
 
+  function parseInteractionPayload(raw: string): MattermostInteractionPayload {
+    try {
+      return JSON.parse(raw) as MattermostInteractionPayload;
+    } catch {
+      throw new Error("Mattermost interaction body was malformed JSON");
+    }
+  }
+
   return async (req: IncomingMessage, res: ServerResponse) => {
     // Only accept POST
     if (req.method !== "POST") {
@@ -456,7 +437,7 @@ export function createMattermostInteractionHandler(params: {
     let payload: MattermostInteractionPayload;
     try {
       const raw = await readInteractionBody(req);
-      payload = JSON.parse(raw) as MattermostInteractionPayload;
+      payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
       res.statusCode = 400;
@@ -474,7 +455,7 @@ export function createMattermostInteractionHandler(params: {
     }
 
     // Verify HMAC token
-    const token = context._token;
+    const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
       res.statusCode = 403;
@@ -516,8 +497,8 @@ export function createMattermostInteractionHandler(params: {
     }
 
     const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let originalPost: MattermostPost | null = null;
+    let originalMessage;
+    let originalPost: MattermostPost | null;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);

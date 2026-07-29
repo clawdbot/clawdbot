@@ -1,6 +1,10 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Voice Call plugin module implements twiml policy behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WebhookContext } from "../../types.js";
 
+// Twilio webhook policy for deciding whether to stream, pause, queue, or serve stored TwiML.
+
+/** Normalized Twilio webhook request fields used by TwiML policy. */
 type TwimlRequestView = {
   callStatus: string | null;
   direction: string | null;
@@ -9,6 +13,7 @@ type TwimlRequestView = {
   callIdFromQuery?: string;
 };
 
+/** Full TwiML policy input including manager/runtime state. */
 type TwimlPolicyInput = TwimlRequestView & {
   hasStoredTwiml: boolean;
   isNotifyCall: boolean;
@@ -16,6 +21,7 @@ type TwimlPolicyInput = TwimlRequestView & {
   canStream: boolean;
 };
 
+/** TwiML response decision plus side effects the caller should apply. */
 type TwimlDecision =
   | {
       kind: "empty" | "pause" | "queue";
@@ -33,10 +39,12 @@ type TwimlDecision =
       activateStreamCallSid?: string;
     };
 
+/** Return true for Twilio outbound call directions. */
 function isOutboundDirection(direction: string | null): boolean {
   return direction?.startsWith("outbound") ?? false;
 }
 
+/** Read the Twilio request fields needed by TwiML decision logic. */
 export function readTwimlRequestView(ctx: WebhookContext): TwimlRequestView {
   const params = new URLSearchParams(ctx.rawBody);
   const type = normalizeOptionalString(ctx.query?.type);
@@ -51,6 +59,7 @@ export function readTwimlRequestView(ctx: WebhookContext): TwimlRequestView {
   };
 }
 
+/** Decide the TwiML response kind for a Twilio webhook request. */
 export function decideTwimlResponse(input: TwimlPolicyInput): TwimlDecision {
   if (input.callIdFromQuery && !input.isStatusCallback) {
     if (input.hasStoredTwiml) {

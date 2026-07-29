@@ -1,3 +1,5 @@
+// File Transfer plugin module implements descriptors behavior.
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 
@@ -18,21 +20,22 @@ export const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 export const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const FILE_WRITE_HARD_MAX_BYTES = 16 * 1024 * 1024;
 
-export const FileFetchToolSchema = Type.Object({
+const PAIRED_NODE_DESCRIPTION =
+  "Existing paired node id, display name, or IP shown by nodes status. Do not use local, host, gateway, or auto; use local file/exec tools for local workspace paths.";
+
+const FileFetchToolSchema = Type.Object({
   node: Type.String({
-    description: "Node id, name, or IP. Resolves the same way as the nodes tool.",
+    description: PAIRED_NODE_DESCRIPTION,
   }),
   path: Type.String({
     description: "Absolute path to the file on the node. Canonicalized server-side.",
   }),
-  maxBytes: Type.Optional(
-    Type.Number({
-      description: "Max bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
-    }),
-  ),
+  maxBytes: optionalPositiveIntegerSchema({
+    description: "Max bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
+  }),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: optionalPositiveIntegerSchema(),
 });
 
 export const FILE_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
@@ -43,9 +46,9 @@ export const FILE_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   parameters: FileFetchToolSchema,
 };
 
-export const DirListToolSchema = Type.Object({
+const DirListToolSchema = Type.Object({
   node: Type.String({
-    description: "Node id, name, or IP. Resolves the same way as the nodes tool.",
+    description: PAIRED_NODE_DESCRIPTION,
   }),
   path: Type.String({
     description: "Absolute path to the directory on the node. Canonicalized server-side.",
@@ -56,37 +59,33 @@ export const DirListToolSchema = Type.Object({
         "Pagination token from a previous dir_list call. Omit to start from the beginning.",
     }),
   ),
-  maxEntries: Type.Optional(
-    Type.Number({
-      description: `Max entries per page. Default ${DIR_LIST_DEFAULT_MAX_ENTRIES}, hard ceiling ${DIR_LIST_HARD_MAX_ENTRIES}.`,
-    }),
-  ),
+  maxEntries: optionalPositiveIntegerSchema({
+    description: `Max entries per page. Default ${DIR_LIST_DEFAULT_MAX_ENTRIES}, hard ceiling ${DIR_LIST_HARD_MAX_ENTRIES}.`,
+  }),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: optionalPositiveIntegerSchema(),
 });
 
 export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory List",
   name: "dir_list",
   description:
-    "Retrieve a structured directory listing from a paired node. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path. Without policy configured, every call is denied.",
+    "Retrieve a structured directory listing from a paired node, not the local workspace. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path. Without policy configured, every call is denied.",
   parameters: DirListToolSchema,
 };
 
-export const DirFetchToolSchema = Type.Object({
+const DirFetchToolSchema = Type.Object({
   node: Type.String({
-    description: "Node id, name, or IP. Resolves the same way as the nodes tool.",
+    description: PAIRED_NODE_DESCRIPTION,
   }),
   path: Type.String({
     description: "Absolute path to the directory on the node to fetch. Canonicalized server-side.",
   }),
-  maxBytes: Type.Optional(
-    Type.Number({
-      description:
-        "Max gzipped tarball bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
-    }),
-  ),
+  maxBytes: optionalPositiveIntegerSchema({
+    description:
+      "Max gzipped tarball bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
+  }),
   includeDotfiles: Type.Optional(
     Type.Boolean({
       description: "Reserved for v2; currently always includes dotfiles (v1 quirk in BSD tar).",
@@ -94,7 +93,7 @@ export const DirFetchToolSchema = Type.Object({
   ),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: optionalPositiveIntegerSchema(),
 });
 
 export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
@@ -105,8 +104,8 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   parameters: DirFetchToolSchema,
 };
 
-export const FileWriteToolSchema = Type.Object({
-  node: Type.String({ description: "Node id or display name to write the file on." }),
+const FileWriteToolSchema = Type.Object({
+  node: Type.String({ description: PAIRED_NODE_DESCRIPTION }),
   path: Type.String({
     description: "Absolute path on the node to write. Canonicalized server-side.",
   }),

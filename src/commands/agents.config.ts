@@ -1,22 +1,30 @@
+// Agent config mutation and summary builders used by `openclaw agents` commands.
+import {
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
+import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 
 export type AgentSummary = {
   id: string;
   name?: string;
   identityName?: string;
   identityEmoji?: string;
+  identityAvatarUrl?: string;
   identitySource?: "identity" | "config";
   workspace: string;
   agentDir: string;
@@ -33,6 +41,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 export type AgentIdentity = AgentIdentityFile;
 export { listAgentEntries };
 
+/** Find a configured agent entry by normalized id. */
 export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number {
   const id = normalizeAgentId(agentId);
   return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
@@ -49,6 +58,7 @@ function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
   return resolvePrimaryStringValue(cfg.agents?.defaults?.model);
 }
 
+/** Load non-empty identity metadata from a workspace identity file. */
 export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   const parsed = loadAgentIdentityFromWorkspace(workspace);
   if (!parsed) {
@@ -57,6 +67,7 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   return identityHasValues(parsed) ? parsed : null;
 }
 
+/** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const configuredAgents = listAgentEntries(cfg);
@@ -70,7 +81,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
     bindingCounts.set(agentId, (bindingCounts.get(agentId) ?? 0) + 1);
   }
 
-  const ordered = orderedIds.filter((id, index) => orderedIds.indexOf(id) === index);
+  const ordered = uniqueStrings(orderedIds);
 
   return ordered.map((id) => {
     const workspace = resolveAgentWorkspaceDir(cfg, id);
@@ -80,12 +91,17 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
     )?.identity;
     const identityName = identity?.name ?? configIdentity?.name?.trim();
     const identityEmoji = identity?.emoji ?? configIdentity?.emoji?.trim();
+    const identityAvatarUrl = resolveAgentAvatarUrlFromSource(
+      cfg,
+      id,
+      identity?.avatar ?? configIdentity?.avatar,
+    );
     const identitySource = identity
       ? "identity"
-      : configIdentity && (identityName || identityEmoji)
+      : configIdentity && (identityName || identityEmoji || identityAvatarUrl)
         ? "config"
         : undefined;
-    return {
+    const summary: AgentSummary = {
       id,
       name: normalizeOptionalString(
         configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
@@ -99,9 +115,14 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: id === defaultAgentId,
     };
+    if (identityAvatarUrl) {
+      summary.identityAvatarUrl = identityAvatarUrl;
+    }
+    return summary;
   });
 }
 
+/** Add or update one agent entry. The first roster entry becomes the explicit default. */
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -109,7 +130,7 @@ export function applyAgentConfig(
     name?: string;
     workspace?: string;
     agentDir?: string;
-    model?: string;
+    model?: string | null;
     identity?: IdentityConfig;
   },
 ): OpenClawConfig {
@@ -117,34 +138,41 @@ export function applyAgentConfig(
   const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
-  const base = index >= 0 ? list[index] : { id: agentId };
+  const base = (index >= 0 ? list[index] : undefined) ?? {
+    id: agentId,
+    ...(list.length === 0 ? { default: true } : {}),
+  };
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
     ...(mergedIdentity ? { identity: mergedIdentity } : {}),
   };
+  // Model is tri-state: omission preserves the override, null restores inheritance.
+  if (params.model === null) {
+    delete nextEntry.model;
+  } else if (params.model !== undefined) {
+    nextEntry.model = params.model;
+  }
   const nextList = [...list];
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
-    if (nextList.length === 0 && agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))) {
-      nextList.push({ id: resolveDefaultAgentId(cfg) });
-    }
     nextList.push(nextEntry);
   }
+  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
   return {
     ...cfg,
     agents: {
-      ...cfg.agents,
-      list: nextList,
+      ...agentsConfig,
+      entries: toAgentEntriesRecord(nextList),
     },
   };
 }
 
+/** Remove an agent and any config references that route or allow traffic to it. */
 export function pruneAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -155,8 +183,29 @@ export function pruneAgentConfig(
 } {
   const id = normalizeAgentId(agentId);
   const agents = listAgentEntries(cfg);
-  const nextAgentsList = agents.filter((entry) => normalizeAgentId(entry.id) !== id);
-  const nextAgents = nextAgentsList.length > 0 ? nextAgentsList : undefined;
+  const pruneAllowAgents = (allowAgents: string[] | undefined) =>
+    allowAgents?.filter((entry) => {
+      const trimmed = entry.trim();
+      return !trimmed || trimmed === "*" || normalizeAgentId(trimmed) !== id;
+    });
+  const nextAgentsList = [];
+  for (const entry of agents) {
+    if (normalizeAgentId(entry.id) === id) {
+      continue;
+    }
+    nextAgentsList.push(
+      entry.subagents?.allowAgents
+        ? {
+            ...entry,
+            subagents: {
+              ...entry.subagents,
+              allowAgents: pruneAllowAgents(entry.subagents.allowAgents),
+            },
+          }
+        : entry,
+    );
+  }
+  const nextAgents = nextAgentsList.length > 0 ? toAgentEntriesRecord(nextAgentsList) : undefined;
 
   const bindings = cfg.bindings ?? [];
   const filteredBindings = bindings.filter((binding) => normalizeAgentId(binding.agentId) !== id);
@@ -164,10 +213,20 @@ export function pruneAgentConfig(
   const allow = cfg.tools?.agentToAgent?.allow ?? [];
   const filteredAllow = allow.filter((entry) => entry !== id);
 
+  const nextDefaults = cfg.agents?.defaults?.subagents?.allowAgents
+    ? {
+        ...cfg.agents.defaults,
+        subagents: {
+          ...cfg.agents.defaults.subagents,
+          allowAgents: pruneAllowAgents(cfg.agents.defaults.subagents.allowAgents),
+        },
+      }
+    : cfg.agents?.defaults;
+  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
-    ? { ...cfg.agents, list: nextAgents }
+    ? { ...agentsConfig, defaults: nextDefaults, entries: nextAgents }
     : nextAgents
-      ? { list: nextAgents }
+      ? { entries: nextAgents }
       : undefined;
   const nextTools = cfg.tools?.agentToAgent
     ? {

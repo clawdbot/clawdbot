@@ -1,3 +1,4 @@
+// Image Generation Core API module exposes the plugin public contract.
 export type { AuthProfileStore } from "openclaw/plugin-sdk/image-generation-core";
 export {
   buildNoCapabilityModelConfiguredMessage,
@@ -9,7 +10,6 @@ export {
   listImageGenerationProviders,
   normalizeGoogleModelId,
   OPENAI_DEFAULT_IMAGE_MODEL,
-  parseGeminiAuth,
   parseImageGenerationModelRef,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,

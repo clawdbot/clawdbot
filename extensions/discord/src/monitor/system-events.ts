@@ -1,3 +1,4 @@
+// Discord plugin module implements system events behavior.
 import { type Message, MessageType } from "../internal/discord.js";
 import { formatDiscordUserTag } from "./format.js";
 

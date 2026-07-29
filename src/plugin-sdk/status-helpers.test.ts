@@ -1,3 +1,4 @@
+// Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
 import {
   createAsyncComputedAccountStatusAdapter,
@@ -11,7 +12,60 @@ import {
   collectStatusIssuesFromLastError,
   createDependentCredentialStatusIssueCollector,
   createDefaultChannelRuntimeState,
+  readAccountStatusSnapshot,
+  standardDmPolicyOpenIssue,
+  standardNotConfiguredIssue,
 } from "./status-helpers.js";
+
+describe("status issue composition", () => {
+  it("coerces only standard and requested account fields", () => {
+    expect(
+      readAccountStatusSnapshot(
+        { accountId: "work", enabled: true, configured: true, mode: "polling", secret: "drop" },
+        ["mode"],
+      ),
+    ).toEqual({
+      accountId: "work",
+      enabled: true,
+      configured: true,
+      running: undefined,
+      connected: undefined,
+      mode: "polling",
+    });
+    expect(readAccountStatusSnapshot(null, ["mode"])).toBeNull();
+  });
+
+  it("builds standard open-policy and missing-auth issues", () => {
+    expect(
+      standardDmPolicyOpenIssue({
+        channel: "zalo",
+        accountId: "default",
+        channelLabel: "Zalo",
+        configPath: "channels.zalo",
+      }),
+    ).toEqual({
+      channel: "zalo",
+      accountId: "default",
+      kind: "config",
+      message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
+      fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
+    });
+    expect(
+      standardNotConfiguredIssue({
+        channel: "zalouser",
+        accountId: "default",
+        message: "Not authenticated.",
+        fix: "Run login.",
+      }),
+    ).toEqual({
+      channel: "zalouser",
+      accountId: "default",
+      kind: "auth",
+      message: "Not authenticated.",
+      fix: "Run login.",
+    });
+  });
+});
 
 const defaultRuntimeState = {
   running: false,
@@ -248,7 +302,12 @@ describe("buildComputedAccountStatusSnapshot", () => {
         enabled: true,
         configured: false,
       }),
-    ).toEqual(expectedAccountSnapshot({ enabled: true }));
+    ).toEqual(
+      expectedAccountSnapshot({
+        enabled: true,
+        stateReason: "not configured",
+      }),
+    );
   });
 
   it("merges computed extras after the shared fields", () => {
@@ -345,6 +404,24 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastEventAt: 13,
         lastTransportActivityAt: 14,
         healthState: "healthy",
+        probe: undefined,
+      },
+    },
+    {
+      name: "projects terminalDisconnect when set",
+      input: {
+        runtime: {
+          running: false,
+          healthState: "logged-out",
+          terminalDisconnect: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: false,
+        healthState: "logged-out",
+        terminalDisconnect: true,
         probe: undefined,
       },
     },

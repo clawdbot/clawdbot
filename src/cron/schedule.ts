@@ -1,7 +1,11 @@
+/** Computes at/every/cron schedule timestamps with bounded Croner caching. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron } from "croner";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
+
+export { coerceFiniteScheduleNumber } from "./schedule-number.js";
 
 const CRON_EVAL_CACHE_MAX = 512;
 const cronEvalCache = new Map<string, Cron>();
@@ -18,12 +22,14 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
   const cached = cronEvalCache.get(key);
   if (cached) {
-    // Move to end of Map iteration order for LRU eviction
+    // Move to the end of Map iteration order so the bounded cache behaves as LRU.
     cronEvalCache.delete(key);
     cronEvalCache.set(key, cached);
     return cached;
   }
   if (cronEvalCache.size >= CRON_EVAL_CACHE_MAX) {
+    // Expression parsing is expensive enough to cache, but cron jobs can be
+    // edited dynamically; keep the cache bounded and LRU-like.
     const oldest = cronEvalCache.keys().next().value;
     if (oldest) {
       cronEvalCache.delete(oldest);
@@ -34,51 +40,21 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
-function resolveCronFromSchedule(schedule: {
-  tz?: string;
-  expr?: unknown;
-  cron?: unknown;
-}): Cron | undefined {
-  const exprSource = typeof schedule.expr === "string" ? schedule.expr : schedule.cron;
-  if (typeof exprSource !== "string") {
+function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }): Cron | undefined {
+  if (typeof schedule.expr !== "string") {
     throw new Error("invalid cron schedule: expr is required");
   }
-  const expr = exprSource.trim();
+  const expr = schedule.expr.trim();
   if (!expr) {
     return undefined;
   }
   return resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
 }
 
-export function coerceFiniteScheduleNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
+/** Computes the next scheduled run timestamp after now for at/every/cron schedules. */
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const sched = schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof sched.atMs === "number" && Number.isFinite(sched.atMs) && sched.atMs > 0
-        ? sched.atMs
-        : typeof sched.atMs === "string"
-          ? parseAbsoluteTimeMs(sched.atMs)
-          : typeof sched.at === "string"
-            ? parseAbsoluteTimeMs(sched.at)
-            : null;
+    const atMs = parseAbsoluteTimeMs(schedule.at);
     if (atMs === null) {
       return undefined;
     }
@@ -97,20 +73,22 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
       return anchor;
     }
     const elapsed = nowMs - anchor;
-    const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
+    const steps = Math.floor(elapsed / everyMs) + 1;
     return anchor + steps * everyMs;
   }
 
-  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  if (schedule.kind === "on-exit" || schedule.kind === "stream") {
+    // Event-driven trigger: never time-due. The gateway watcher calls
+    // enqueueRun when the watched command exits or a stream batch closes.
+    return undefined;
+  }
+
+  const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;
   }
-  let next = cron.nextRun(new Date(nowMs));
-  if (!next) {
-    return undefined;
-  }
-  let nextMs = next.getTime();
-  if (!Number.isFinite(nextMs)) {
+  const nextMs = cron.nextRun(new Date(nowMs))?.getTime();
+  if (nextMs === undefined) {
     return undefined;
   }
 
@@ -120,21 +98,15 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   // future.
   if (nextMs <= nowMs) {
     const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
-    const retry = cron.nextRun(new Date(nextSecondMs));
-    if (retry) {
-      const retryMs = retry.getTime();
-      if (Number.isFinite(retryMs) && retryMs > nowMs) {
-        return retryMs;
-      }
+    const retryMs = cron.nextRun(new Date(nextSecondMs))?.getTime();
+    if (retryMs !== undefined && retryMs > nowMs) {
+      return retryMs;
     }
     // Still in the past — try from start of tomorrow (UTC) as a broader reset.
     const tomorrowMs = new Date(nowMs).setUTCHours(24, 0, 0, 0);
-    const retry2 = cron.nextRun(new Date(tomorrowMs));
-    if (retry2) {
-      const retry2Ms = retry2.getTime();
-      if (Number.isFinite(retry2Ms) && retry2Ms > nowMs) {
-        return retry2Ms;
-      }
+    const retry2Ms = cron.nextRun(new Date(tomorrowMs))?.getTime();
+    if (retry2Ms !== undefined && retry2Ms > nowMs) {
+      return retry2Ms;
     }
     return undefined;
   }
@@ -142,41 +114,47 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   return nextMs;
 }
 
+/** Computes the previous cron-expression run timestamp before now. */
 export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind !== "cron") {
     return undefined;
   }
-  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;
   }
-  const previousRuns = cron.previousRuns(1, new Date(nowMs));
-  const previous = previousRuns[0];
-  if (!previous) {
-    return undefined;
-  }
-  const previousMs = previous.getTime();
-  if (!Number.isFinite(previousMs)) {
-    return undefined;
-  }
-  if (previousMs >= nowMs) {
+  const previousMs = cron.previousRuns(1, new Date(nowMs))[0]?.getTime();
+  if (previousMs === undefined || previousMs >= nowMs) {
     return undefined;
   }
   return previousMs;
 }
 
-export function clearCronScheduleCacheForTest(): void {
+/** Clears the Croner expression cache for deterministic tests. */
+function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }
 
-export function getCronScheduleCacheSizeForTest(): number {
+/** Returns the Croner expression cache size for tests. */
+function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
 }
 
-export function getCronScheduleCacheMaxForTest(): number {
+/** Returns the Croner expression cache capacity for tests. */
+function getCronScheduleCacheMaxForTest(): number {
   return CRON_EVAL_CACHE_MAX;
 }
 
-export function hasCronInCacheForTest(expr: string, tz: string): boolean {
+/** Returns whether an expression/timezone pair is present in the Croner cache for tests. */
+function hasCronInCacheForTest(expr: string, tz: string): boolean {
   return cronEvalCache.has(`${tz}\u0000${expr}`);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronScheduleTestApi")] = {
+    clearCronScheduleCacheForTest,
+    getCronScheduleCacheSizeForTest,
+    getCronScheduleCacheMaxForTest,
+    hasCronInCacheForTest,
+  };
 }

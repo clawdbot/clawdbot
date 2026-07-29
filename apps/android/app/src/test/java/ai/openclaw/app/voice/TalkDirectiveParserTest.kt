@@ -46,6 +46,20 @@ class TalkDirectiveParserTest {
   }
 
   @Test
+  fun parsesAliasKeysCaseInsensitively() {
+    val input =
+      """
+      {"Voice":"voice-abc","NoSpeakerBoost":true,"Language_Code":"en"}
+      Speak clearly.
+      """.trimIndent()
+    val result = TalkDirectiveParser.parse(input)
+    assertEquals("voice-abc", result.directive?.voiceId)
+    assertEquals(false, result.directive?.speakerBoost)
+    assertEquals("en", result.directive?.language)
+    assertEquals(emptyList<String>(), result.unknownKeys)
+  }
+
+  @Test
   fun returnsNullWhenNoDirectivePresent() {
     val input =
       """

@@ -1,3 +1,4 @@
+// Matrix plugin module implements sync state behavior.
 export type MatrixSyncState =
   | "PREPARED"
   | "SYNCING"

@@ -1,9 +1,11 @@
+// Isolated agent delivery test helpers build delivery targets and mocks.
 import { expect, vi } from "vitest";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob } from "./isolated-agent.test-harness.js";
 
+/** Creates mocked CLI delivery deps for isolated-agent delivery tests. */
 export function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
     sendMessageSlack: vi.fn().mockResolvedValue({ messageTs: "slack-1", channel: "C1" }),
@@ -20,9 +22,9 @@ export function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
 
 export function mockAgentPayloads(
   payloads: Array<Record<string, unknown>>,
-  extra: Partial<Awaited<ReturnType<typeof runEmbeddedPiAgent>>> = {},
+  extra: Partial<Awaited<ReturnType<typeof runEmbeddedAgent>>> = {},
 ): void {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+  vi.mocked(runEmbeddedAgent).mockResolvedValue({
     payloads,
     meta: {
       durationMs: 5,

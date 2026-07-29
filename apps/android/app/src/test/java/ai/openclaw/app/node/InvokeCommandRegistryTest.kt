@@ -7,11 +7,13 @@ import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
+import ai.openclaw.app.protocol.OpenClawTalkCommand
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -26,7 +28,7 @@ class InvokeCommandRegistryTest {
       OpenClawCapability.Device.rawValue,
       OpenClawCapability.Notifications.rawValue,
       OpenClawCapability.System.rawValue,
-      OpenClawCapability.Photos.rawValue,
+      OpenClawCapability.Talk.rawValue,
       OpenClawCapability.Contacts.rawValue,
       OpenClawCapability.Calendar.rawValue,
     )
@@ -37,8 +39,10 @@ class InvokeCommandRegistryTest {
       OpenClawCapability.Location.rawValue,
       OpenClawCapability.Sms.rawValue,
       OpenClawCapability.CallLog.rawValue,
-      OpenClawCapability.VoiceWake.rawValue,
       OpenClawCapability.Motion.rawValue,
+      OpenClawCapability.Photos.rawValue,
+      OpenClawCapability.VoiceWake.rawValue,
+      OpenClawCapability.MobileUI.rawValue,
     )
 
   private val coreCommands =
@@ -50,7 +54,10 @@ class InvokeCommandRegistryTest {
       OpenClawNotificationsCommand.List.rawValue,
       OpenClawNotificationsCommand.Actions.rawValue,
       OpenClawSystemCommand.Notify.rawValue,
-      OpenClawPhotosCommand.Latest.rawValue,
+      OpenClawTalkCommand.PttStart.rawValue,
+      OpenClawTalkCommand.PttStop.rawValue,
+      OpenClawTalkCommand.PttCancel.rawValue,
+      OpenClawTalkCommand.PttOnce.rawValue,
       OpenClawContactsCommand.Search.rawValue,
       OpenClawContactsCommand.Add.rawValue,
       OpenClawCalendarCommand.Events.rawValue,
@@ -68,6 +75,9 @@ class InvokeCommandRegistryTest {
       OpenClawSmsCommand.Send.rawValue,
       OpenClawSmsCommand.Search.rawValue,
       OpenClawCallLogCommand.Search.rawValue,
+      OpenClawPhotosCommand.Latest.rawValue,
+      OpenClawMobileUiCommand.Observe.rawValue,
+      OpenClawMobileUiCommand.Act.rawValue,
     )
 
   private val debugCommands = setOf("debug.logs", "debug.ed25519")
@@ -91,9 +101,11 @@ class InvokeCommandRegistryTest {
           readSmsAvailable = true,
           smsSearchPossible = true,
           callLogAvailable = true,
-          voiceWakeEnabled = true,
+          photosAvailable = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
+          voiceWakeEnabled = true,
+          mobileUiAvailable = true,
         ),
       )
 
@@ -109,6 +121,15 @@ class InvokeCommandRegistryTest {
   }
 
   @Test
+  fun advertisedCommands_includesDeviceAppsOnlyWhenUserOptedIn() {
+    val disabled = InvokeCommandRegistry.advertisedCommands(defaultFlags(installedAppsSharingEnabled = false))
+    val enabled = InvokeCommandRegistry.advertisedCommands(defaultFlags(installedAppsSharingEnabled = true))
+
+    assertFalse(disabled.contains(OpenClawDeviceCommand.Apps.rawValue))
+    assertTrue(enabled.contains(OpenClawDeviceCommand.Apps.rawValue))
+  }
+
+  @Test
   fun advertisedCommands_includesFeatureCommandsWhenEnabled() {
     val commands =
       InvokeCommandRegistry.advertisedCommands(
@@ -119,9 +140,11 @@ class InvokeCommandRegistryTest {
           readSmsAvailable = true,
           smsSearchPossible = true,
           callLogAvailable = true,
+          photosAvailable = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
           debugBuild = true,
+          mobileUiAvailable = true,
         ),
       )
 
@@ -139,9 +162,10 @@ class InvokeCommandRegistryTest {
           readSmsAvailable = false,
           smsSearchPossible = false,
           callLogAvailable = false,
-          voiceWakeEnabled = false,
+          photosAvailable = false,
           motionActivityAvailable = true,
           motionPedometerAvailable = false,
+          installedAppsSharingEnabled = false,
           debugBuild = false,
         ),
       )
@@ -207,23 +231,37 @@ class InvokeCommandRegistryTest {
   }
 
   @Test
-  fun advertisedCapabilities_includesVoiceWakeWithoutAdvertisingCommands() {
-    val capabilities = InvokeCommandRegistry.advertisedCapabilities(defaultFlags(voiceWakeEnabled = true))
-    val commands = InvokeCommandRegistry.advertisedCommands(defaultFlags(voiceWakeEnabled = true))
+  fun advertisedPhotosSurface_respectsFeatureAvailability() {
+    val disabledFlags = defaultFlags(photosAvailable = false)
+    val enabledFlags = defaultFlags(photosAvailable = true)
 
-    assertTrue(capabilities.contains(OpenClawCapability.VoiceWake.rawValue))
-    assertFalse(commands.any { it.contains("voice", ignoreCase = true) })
+    assertFalse(InvokeCommandRegistry.advertisedCapabilities(disabledFlags).contains(OpenClawCapability.Photos.rawValue))
+    assertFalse(InvokeCommandRegistry.advertisedCommands(disabledFlags).contains(OpenClawPhotosCommand.Latest.rawValue))
+    assertTrue(InvokeCommandRegistry.advertisedCapabilities(enabledFlags).contains(OpenClawCapability.Photos.rawValue))
+    assertTrue(InvokeCommandRegistry.advertisedCommands(enabledFlags).contains(OpenClawPhotosCommand.Latest.rawValue))
   }
 
   @Test
   fun find_returnsForegroundMetadataForCameraCommands() {
     val list = InvokeCommandRegistry.find(OpenClawCameraCommand.List.rawValue)
     val location = InvokeCommandRegistry.find(OpenClawLocationCommand.Get.rawValue)
+    val pttStart = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStart.rawValue)
+    val pttStop = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStop.rawValue)
+    val pttCancel = InvokeCommandRegistry.find(OpenClawTalkCommand.PttCancel.rawValue)
+    val pttOnce = InvokeCommandRegistry.find(OpenClawTalkCommand.PttOnce.rawValue)
 
     assertNotNull(list)
     assertEquals(true, list?.requiresForeground)
     assertNotNull(location)
     assertEquals(false, location?.requiresForeground)
+    assertNotNull(pttStart)
+    assertEquals(false, pttStart?.requiresForeground)
+    assertNotNull(pttStop)
+    assertEquals(false, pttStop?.requiresForeground)
+    assertNotNull(pttCancel)
+    assertEquals(false, pttCancel?.requiresForeground)
+    assertNotNull(pttOnce)
+    assertEquals(true, pttOnce?.requiresForeground)
   }
 
   @Test
@@ -238,10 +276,13 @@ class InvokeCommandRegistryTest {
     readSmsAvailable: Boolean = false,
     smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
-    voiceWakeEnabled: Boolean = false,
+    photosAvailable: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
+    installedAppsSharingEnabled: Boolean = false,
     debugBuild: Boolean = false,
+    voiceWakeEnabled: Boolean = false,
+    mobileUiAvailable: Boolean = false,
   ): NodeRuntimeFlags =
     NodeRuntimeFlags(
       cameraEnabled = cameraEnabled,
@@ -250,10 +291,13 @@ class InvokeCommandRegistryTest {
       readSmsAvailable = readSmsAvailable,
       smsSearchPossible = smsSearchPossible,
       callLogAvailable = callLogAvailable,
-      voiceWakeEnabled = voiceWakeEnabled,
+      photosAvailable = photosAvailable,
       motionActivityAvailable = motionActivityAvailable,
       motionPedometerAvailable = motionPedometerAvailable,
+      installedAppsSharingEnabled = installedAppsSharingEnabled,
       debugBuild = debugBuild,
+      voiceWakeEnabled = voiceWakeEnabled,
+      mobileUiAvailable = mobileUiAvailable,
     )
 
   private fun assertContainsAll(

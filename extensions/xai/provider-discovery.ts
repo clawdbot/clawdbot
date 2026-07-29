@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
@@ -19,7 +20,7 @@ function resolveXaiSyntheticAuth(config: unknown) {
 const xaiProviderDiscovery: ProviderPlugin = {
   id: PROVIDER_ID,
   label: "xAI",
-  docsPath: "/providers/models",
+  docsPath: "/providers/xai",
   auth: [],
   resolveSyntheticAuth: ({ config }) => resolveXaiSyntheticAuth(config),
 };

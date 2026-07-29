@@ -1,14 +1,18 @@
+// Huggingface plugin module implements models behavior.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
-export const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
+const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
   input: 0,
@@ -46,7 +50,7 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 131072,
     maxTokens: 8192,
-    cost: { input: 3.0, output: 7.0, cacheRead: 3.0, cacheWrite: 3.0 },
+    cost: { input: 3, output: 7, cacheRead: 3, cacheWrite: 3 },
   },
   {
     id: "deepseek-ai/DeepSeek-V3.1",
@@ -56,15 +60,6 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 131072,
     maxTokens: 8192,
     cost: { input: 0.6, output: 1.25, cacheRead: 0.6, cacheWrite: 0.6 },
-  },
-  {
-    id: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    name: "Llama 3.3 70B Instruct Turbo",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 0.88, output: 0.88, cacheRead: 0.88, cacheWrite: 0.88 },
   },
   {
     id: "openai/gpt-oss-120b",
@@ -144,24 +139,32 @@ export async function discoverHuggingfaceModels(
   }
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${HUGGINGFACE_BASE_URL}/models`,
-      init: {
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: {
-          Authorization: `Bearer ${trimmedKey}`,
-          "Content-Type": "application/json",
+    const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+    const { response, release } = await fetchWithSsrFGuard(
+      withTrustedEnvProxyGuardedFetchMode({
+        url: `${HUGGINGFACE_BASE_URL}/models`,
+        init: {
+          signal: AbortSignal.timeout(requestTimeoutMs),
+          headers: {
+            Authorization: `Bearer ${trimmedKey}`,
+            "Content-Type": "application/json",
+          },
         },
-      },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
-      auditContext: "huggingface-model-discovery",
-    });
+        timeoutMs: requestTimeoutMs,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
+        auditContext: "huggingface-model-discovery",
+      }),
+    );
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = await readProviderJsonResponse<OpenAIListModelsResponse>(
+        response,
+        "huggingface.model-discovery",
+      );
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);

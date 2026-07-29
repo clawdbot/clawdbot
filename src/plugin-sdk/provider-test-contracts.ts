@@ -1,3 +1,6 @@
+/**
+ * Test SDK subpath for provider auth, catalog, discovery, runtime, and media contracts.
+ */
 export {
   describeGithubCopilotProviderAuthContract,
   describeOpenAICodexProviderAuthContract,
@@ -44,6 +47,10 @@ export {
   expectExplicitMusicGenerationCapabilities,
   expectExplicitVideoGenerationCapabilities,
 } from "./test-helpers/provider-media-capability-assertions.js";
+export {
+  expectUnifiedModelCatalogEntries,
+  expectUnifiedModelCatalogProviderRegistration,
+} from "./test-helpers/unified-model-catalog-contract.js";
 export {
   expectProviderOnboardAllowlistAlias,
   expectProviderOnboardMergedLegacyConfig,

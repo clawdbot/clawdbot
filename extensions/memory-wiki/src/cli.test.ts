@@ -1,19 +1,18 @@
+// Memory Wiki tests cover cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerWikiCli,
-  runWikiBridgeImport,
-  runWikiChatGptImport,
-  runWikiChatGptRollback,
-  runWikiDoctor,
-  runWikiStatus,
-} from "./cli.js";
-import type { MemoryWikiPluginConfig } from "./config.js";
+import { registerWikiCli } from "./cli.js";
+import type { MemoryWikiPluginConfig, ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
-import type { MemoryWikiDoctorReport, MemoryWikiStatus } from "./status.js";
+import {
+  renderMemoryWikiStatus,
+  type MemoryWikiDoctorReport,
+  type MemoryWikiStatus,
+} from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
@@ -25,6 +24,11 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
+let stdoutWriteMock: ReturnType<typeof vi.fn>;
+
+function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
+}
 
 describe("memory-wiki cli", () => {
   beforeAll(async () => {
@@ -39,8 +43,9 @@ describe("memory-wiki cli", () => {
 
   beforeEach(() => {
     callGatewayFromCliMock.mockReset();
+    stdoutWriteMock = vi.fn(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(
-      (() => true) as typeof process.stdout.write,
+      stdoutWriteMock as unknown as typeof process.stdout.write,
     );
     process.exitCode = undefined;
   });
@@ -60,6 +65,18 @@ describe("memory-wiki cli", () => {
       initialize: options?.initialize,
       config: options?.config,
     });
+  }
+
+  async function runRegisteredWikiCommand(
+    config: ResolvedMemoryWikiConfig,
+    args: string[],
+  ): Promise<string> {
+    stdoutWriteMock.mockClear();
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+    await program.parseAsync(["wiki", ...args], { from: "user" });
+    return stdoutWriteMock.mock.calls.map(([chunk]) => String(chunk)).join("");
   }
 
   async function createChatGptExport(rootDir: string) {
@@ -104,10 +121,13 @@ describe("memory-wiki cli", () => {
   }
 
   function createGatewayStatus(config: {
-    vault: { path: string };
+    agentId?: string;
+    vault: { path: string; scope?: MemoryWikiStatus["vaultScope"] };
     bridge: MemoryWikiStatus["bridge"];
   }): MemoryWikiStatus {
     return {
+      vaultScope: config.vault.scope ?? "global",
+      agentId: config.agentId ?? null,
       vaultMode: "bridge",
       renderMode: "native",
       vaultPath: config.vault.path,
@@ -146,7 +166,7 @@ describe("memory-wiki cli", () => {
     const { rootDir, config } = await createCliVault();
     const program = new Command();
     program.name("test");
-    registerWikiCli(program, config);
+    registerWikiCli(program, { config });
 
     await program.parseAsync(
       [
@@ -169,6 +189,237 @@ describe("memory-wiki cli", () => {
     expect(page).toContain("source.alpha");
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
+    );
+  });
+
+  it("resolves --agent for local commands and requires it with multiple agent vaults", async () => {
+    const { rootDir, config } = await createCliVault({
+      config: { vault: { scope: "agent" } },
+    });
+    const appConfig = {
+      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+    };
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    registerWikiCli(program, { config, getAppConfig: () => appConfig });
+
+    await program.parseAsync(["wiki", "--agent", "marketing", "init", "--json"], {
+      from: "user",
+    });
+
+    await expect(fs.stat(path.join(rootDir, "marketing", "index.md"))).resolves.toBeDefined();
+
+    const missingAgentProgram = new Command();
+    missingAgentProgram.name("test");
+    missingAgentProgram.exitOverride();
+    registerWikiCli(missingAgentProgram, { config, getAppConfig: () => appConfig });
+    await expect(
+      missingAgentProgram.parseAsync(["wiki", "status", "--json"], { from: "user" }),
+    ).rejects.toThrow("agentId is required for memory-wiki when vault.scope=agent.");
+  });
+
+  it("forwards --agent through every bridge Gateway call", async () => {
+    const { config } = await createCliVault({
+      config: {
+        vaultMode: "bridge",
+        vault: { scope: "agent" },
+        bridge: { enabled: true, readMemoryArtifacts: true },
+      },
+    });
+    const appConfig = {
+      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+    };
+    const status = createGatewayStatus(config);
+    const report: MemoryWikiDoctorReport = {
+      healthy: true,
+      warningCount: 0,
+      status,
+      fixes: [],
+    };
+    callGatewayFromCliMock
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce(report)
+      .mockResolvedValueOnce({
+        importedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        removedCount: 0,
+        artifactCount: 0,
+        workspaces: 0,
+        pagePaths: [],
+        indexesRefreshed: false,
+        indexUpdatedFiles: [],
+        indexRefreshReason: "no-import-changes",
+      });
+    const register = () => {
+      const program = new Command();
+      program.name("test");
+      registerWikiCli(program, { config, getAppConfig: () => appConfig });
+      return program;
+    };
+
+    await register().parseAsync(["wiki", "--agent", "marketing", "status", "--json"], {
+      from: "user",
+    });
+    await register().parseAsync(["wiki", "--agent", "marketing", "doctor", "--json"], {
+      from: "user",
+    });
+    await register().parseAsync(["wiki", "--agent", "marketing", "bridge", "import", "--json"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCliMock.mock.calls.map(([method, , params]) => [method, params])).toEqual(
+      [
+        ["wiki.status", { agentId: "marketing" }],
+        ["wiki.doctor", { agentId: "marketing" }],
+        ["wiki.bridge.import", { agentId: "marketing" }],
+      ],
+    );
+  });
+
+  it("registers OKF import and searches imported concepts", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bundlePath = path.join(rootDir, "okf-bundle");
+    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    await fs.writeFile(path.join(bundlePath, "index.md"), "# Sales OKF\n", "utf8");
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "customers.md"),
+      `---
+type: BigQuery Table
+title: Customers
+---
+
+Customer rows.
+`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "orders.md"),
+      `---
+type: BigQuery Table
+title: Orders
+description: One row per completed order.
+---
+
+Orders join to [customers](/tables/customers.md).
+`,
+      "utf8",
+    );
+
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+
+    await program.parseAsync(["wiki", "okf", "import", bundlePath, "--json"], { from: "user" });
+
+    const importOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
+    const importResult = JSON.parse(importOutput) as {
+      importedCount: number;
+      pagePaths: string[];
+    };
+    expect(importResult.importedCount).toBe(2);
+    expect(importResult.pagePaths).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
+      ]),
+    );
+
+    stdoutWriteMock.mockClear();
+    await program.parseAsync(["wiki", "search", "completed order", "--json"], { from: "user" });
+
+    const searchOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
+    const searchResults = JSON.parse(searchOutput) as Array<{ path: string; title: string }>;
+    expect(searchResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Orders",
+          path: expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects apply confidence values outside the documented range", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "CLI Alpha",
+          "--body",
+          "Alpha from CLI.",
+          "--source-id",
+          "source.alpha",
+          "--confidence",
+          "Infinity",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1.5"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1e-1"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+  });
+
+  it("rejects non-decimal wiki search and get numeric options before dispatch", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(["wiki", "search", "alpha", "--max-results", "0x10"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-results must be a positive integer.");
+    await expect(
+      program.parseAsync(["wiki", "get", "entity.alpha", "--from", "1e2"], { from: "user" }),
+    ).rejects.toThrow("--from must be a positive integer.");
+    await expect(
+      program.parseAsync(["wiki", "get", "entity.alpha", "--lines", "1.5"], { from: "user" }),
+    ).rejects.toThrow("--lines must be a positive integer.");
+  });
+
+  it("accepts signed and zero-padded wiki get line options", async () => {
+    const { rootDir, config } = await createCliVault();
+    const targetPath = path.join(rootDir, "syntheses", "cli-lines.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "# CLI Lines\n\nfirst\nsecond\n", "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+
+    await program.parseAsync(
+      ["wiki", "get", "syntheses/cli-lines.md", "--from", "+01", "--lines", "02"],
+      {
+        from: "user",
+      },
     );
   });
 
@@ -199,7 +450,7 @@ cli note
 
     const program = new Command();
     program.name("test");
-    registerWikiCli(program, config);
+    registerWikiCli(program, { config });
 
     await program.parseAsync(
       [
@@ -222,12 +473,10 @@ cli note
 
     const page = await fs.readFile(path.join(rootDir, "entities", "alpha.md"), "utf8");
     const parsed = parseWikiMarkdown(page);
-    expect(parsed.frontmatter).toMatchObject({
-      sourceIds: ["source.new"],
-      contradictions: ["Conflicts with source.beta"],
-      questions: ["Still active?"],
-      status: "review",
-    });
+    expect(parsed.frontmatter.sourceIds).toEqual(["source.new"]);
+    expect(parsed.frontmatter.contradictions).toEqual(["Conflicts with source.beta"]);
+    expect(parsed.frontmatter.questions).toEqual(["Still active?"]);
+    expect(parsed.frontmatter.status).toBe("review");
     expect(parsed.frontmatter).not.toHaveProperty("confidence");
     expect(parsed.body).toContain("cli note");
   });
@@ -241,7 +490,7 @@ cli note
     });
     const program = new Command();
     program.name("test");
-    registerWikiCli(program, config);
+    registerWikiCli(program, { config });
     await fs.rm(rootDir, { recursive: true, force: true });
 
     await program.parseAsync(["wiki", "doctor", "--json"], { from: "user" });
@@ -280,8 +529,11 @@ cli note
     };
     callGatewayFromCliMock.mockResolvedValueOnce(status).mockResolvedValueOnce(report);
 
-    await expect(runWikiStatus({ config, json: true })).resolves.toBe(status);
-    await expect(runWikiDoctor({ config, json: true })).resolves.toBe(report);
+    const statusOutput = await runRegisteredWikiCommand(config, ["status", "--json"]);
+    const doctorOutput = await runRegisteredWikiCommand(config, ["doctor", "--json"]);
+
+    expect(JSON.parse(statusOutput)).toEqual(status);
+    expect(JSON.parse(doctorOutput)).toEqual(report);
 
     expect(process.exitCode).toBe(1);
     expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
@@ -318,34 +570,17 @@ cli note
         message: "missing artifacts\r\nfake success\u001B[31m\u202E",
       },
     ];
-    const textOutput: string[] = [];
     callGatewayFromCliMock.mockResolvedValueOnce(unsafeStatus);
 
-    await runWikiStatus({
-      config,
-      stdout: {
-        write: ((chunk: string) => textOutput.push(chunk) > 0) as NodeJS.WriteStream["write"],
-      },
-    });
-
-    const renderedText = textOutput.join("");
+    const renderedText = await runRegisteredWikiCommand(config, ["status"]);
     expect(renderedText).not.toContain("\u001B");
     expect(renderedText).not.toContain("\u202E");
     expect(renderedText).toContain("(/tmp/wiki forged prompt)");
     expect(renderedText).toContain("- missing artifacts fake success");
 
-    const jsonOutput: string[] = [];
     callGatewayFromCliMock.mockResolvedValueOnce(unsafeStatus);
 
-    await runWikiStatus({
-      config,
-      json: true,
-      stdout: {
-        write: ((chunk: string) => jsonOutput.push(chunk) > 0) as NodeJS.WriteStream["write"],
-      },
-    });
-
-    const renderedJson = jsonOutput.join("");
+    const renderedJson = await runRegisteredWikiCommand(config, ["status", "--json"]);
     expect(renderedJson).not.toContain("\u001B");
     expect(renderedJson).not.toContain("\u202E");
     expect(renderedJson).not.toContain("\r");
@@ -367,7 +602,7 @@ cli note
     });
     callGatewayFromCliMock.mockResolvedValueOnce({ vaultMode: "bridge" });
 
-    await expect(runWikiStatus({ config })).rejects.toThrow(
+    await expect(runRegisteredWikiCommand(config, ["status"])).rejects.toThrow(
       "Invalid Gateway response for wiki.status.",
     );
   });
@@ -389,12 +624,12 @@ cli note
     ];
     callGatewayFromCliMock.mockResolvedValueOnce(status);
 
-    await expect(runWikiStatus({ config })).rejects.toThrow(
+    await expect(runRegisteredWikiCommand(config, ["status"])).rejects.toThrow(
       "Invalid Gateway response for wiki.status.",
     );
   });
 
-  it("truncates gateway status text output after rendering", async () => {
+  it("truncates gateway status text output without splitting surrogate pairs", async () => {
     const { config } = await createCliVault({
       config: {
         vaultMode: "bridge",
@@ -403,24 +638,29 @@ cli note
       initialize: true,
     });
     const status = createGatewayStatus(config);
+    const warningWithoutMessage = renderMemoryWikiStatus({
+      ...status,
+      warnings: [{ code: "bridge-artifacts-missing", message: "" }],
+    });
+    const warningPrefix = "x".repeat(1_999 - warningWithoutMessage.length);
     status.warnings = [
       {
         code: "bridge-artifacts-missing",
-        message: `${"warning ".repeat(500)}tail`,
+        message: `${warningPrefix}\u{1F600}tail`,
       },
     ];
-    const textOutput: string[] = [];
+    const renderedStatus = renderMemoryWikiStatus(status);
+    expect(renderedStatus.charCodeAt(1_999)).toBe(0xd83d);
+    expect(renderedStatus.charCodeAt(2_000)).toBe(0xde00);
     callGatewayFromCliMock.mockResolvedValueOnce(status);
 
-    await runWikiStatus({
-      config,
-      stdout: {
-        write: ((chunk: string) => textOutput.push(chunk) > 0) as NodeJS.WriteStream["write"],
-      },
-    });
-
-    const renderedText = textOutput.join("");
-    expect(renderedText).toContain("... [truncated]");
+    const renderedText = await runRegisteredWikiCommand(config, ["status"]);
+    const truncationMarker = "... [truncated]\n";
+    expect(renderedText.length).toBeLessThanOrEqual(2_000 + truncationMarker.length);
+    expect(renderedText.length).toBeGreaterThan(1_990 + truncationMarker.length);
+    expect(renderedText.endsWith(truncationMarker)).toBe(true);
+    expect(renderedText).not.toContain("\ud83d");
+    expect(Buffer.from(renderedText).includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(false);
     expect(renderedText).not.toContain("tail");
   });
 
@@ -445,7 +685,9 @@ cli note
       indexRefreshReason: "import-changed",
     });
 
-    const activeResult = await runWikiBridgeImport({ config: active.config, json: true });
+    const activeResult = JSON.parse(
+      await runRegisteredWikiCommand(active.config, ["bridge", "import", "--json"]),
+    ) as { importedCount: number };
 
     expect(activeResult.importedCount).toBe(1);
     expect(callGatewayFromCliMock).toHaveBeenCalledWith(
@@ -463,7 +705,9 @@ cli note
       },
     });
 
-    const disabledResult = await runWikiBridgeImport({ config: disabled.config, json: true });
+    const disabledResult = JSON.parse(
+      await runRegisteredWikiCommand(disabled.config, ["bridge", "import", "--json"]),
+    ) as { artifactCount: number };
 
     expect(disabledResult.artifactCount).toBe(0);
     expect(callGatewayFromCliMock).not.toHaveBeenCalled();
@@ -473,52 +717,99 @@ cli note
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);
 
-    const dryRun = await runWikiChatGptImport({
-      config,
-      exportPath: exportDir,
-      dryRun: true,
-      json: true,
-    });
+    const dryRun = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--dry-run",
+        "--json",
+      ]),
+    ) as { dryRun: boolean; createdCount: number };
     expect(dryRun.dryRun).toBe(true);
     expect(dryRun.createdCount).toBe(1);
-    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toStrictEqual([]);
 
-    const applied = await runWikiChatGptImport({
-      config,
-      exportPath: exportDir,
-      json: true,
-    });
-    expect(applied.runId).toBeTruthy();
+    const applied = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { runId?: string; createdCount: number };
+    expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
+    await expect(
+      fs.stat(resolveLegacyImportRunRecordPath(rootDir, applied.runId ?? "")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",
     );
     expect(sourceFiles).toHaveLength(1);
-    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFiles[0]), "utf8");
+    const sourceFile = expectDefined(sourceFiles[0], "imported ChatGPT source file");
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile), "utf8");
     expect(pageContent).toContain("ChatGPT Export: Travel preference check");
     expect(pageContent).toContain("I prefer aisle seats");
     expect(pageContent).toContain("Preference signals:");
 
-    const secondDryRun = await runWikiChatGptImport({
-      config,
-      exportPath: exportDir,
-      dryRun: true,
-      json: true,
-    });
+    const secondDryRun = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--dry-run",
+        "--json",
+      ]),
+    ) as { createdCount: number; updatedCount: number; skippedCount: number };
     expect(secondDryRun.createdCount).toBe(0);
     expect(secondDryRun.updatedCount).toBe(0);
     expect(secondDryRun.skippedCount).toBe(1);
+    if (!applied.runId) {
+      throw new Error("Expected ChatGPT import dry-run apply runId");
+    }
 
-    const rollback = await runWikiChatGptRollback({
-      config,
-      runId: applied.runId!,
-      json: true,
-    });
+    const rollback = JSON.parse(
+      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", applied.runId, "--json"]),
+    ) as { alreadyRolledBack: boolean };
     expect(rollback.alreadyRolledBack).toBe(false);
     await expect(
       fs
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
+  });
+
+  it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    expectDefined(conversations[0], "first ChatGPT conversation").update_time = 9_000_000_000_000;
+    await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
+
+    const result = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { createdCount: number };
+
+    expect(result.createdCount).toBe(1);
+    const sourceFile = (await fs.readdir(path.join(rootDir, "sources"))).find(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFile).toBeDefined();
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
+    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
   });
 });

@@ -1,3 +1,6 @@
+// Builds web-search install catalog entries from plugin metadata.
+import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { enablePluginInConfig } from "./enable.js";
@@ -9,8 +12,9 @@ import {
   resolveOfficialExternalPluginLabel,
   type OfficialExternalWebSearchProvider,
 } from "./official-external-plugin-catalog.js";
-import type { PluginWebSearchProviderEntry } from "./types.js";
+import type { PluginWebSearchProviderEntry } from "./web-provider-types.js";
 
+/** Install catalog entry for an official external web-search provider plugin. */
 export type WebSearchInstallCatalogEntry = {
   pluginId: string;
   label: string;
@@ -18,16 +22,6 @@ export type WebSearchInstallCatalogEntry = {
   provider: PluginWebSearchProviderEntry;
   trustedSourceLinkedOfficialInstall?: boolean;
 };
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function normalizeStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map(normalizeString).filter((entry): entry is string => Boolean(entry))
-    : [];
-}
 
 function normalizeOnboardingScopes(
   value: OfficialExternalWebSearchProvider["onboardingScopes"],
@@ -80,13 +74,23 @@ function buildProviderEntry(params: {
   const providerId = normalizeString(params.provider.id);
   const label = normalizeString(params.provider.label);
   const hint = normalizeString(params.provider.hint);
+  const configuredCredentialPath = normalizeString(params.provider.credentialPath);
   const credentialPath =
-    normalizeString(params.provider.credentialPath) ??
-    `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const envVars = normalizeStringList(params.provider.envVars);
+    params.provider.credentialPath === ""
+      ? ""
+      : (configuredCredentialPath ?? `plugins.entries.${params.pluginId}.config.webSearch.apiKey`);
+  const requiresCredential = params.provider.requiresCredential !== false;
+  const envVars = normalizeTrimmedStringList(params.provider.envVars);
   const placeholder = normalizeString(params.provider.placeholder);
   const signupUrl = normalizeString(params.provider.signupUrl);
-  if (!providerId || !label || !hint || envVars.length === 0 || !placeholder || !signupUrl) {
+  if (
+    !providerId ||
+    !label ||
+    !hint ||
+    (requiresCredential && envVars.length === 0) ||
+    !placeholder ||
+    !signupUrl
+  ) {
     return null;
   }
   return {
@@ -126,6 +130,7 @@ function buildProviderEntry(params: {
   };
 }
 
+/** Lists web-search provider install catalog entries from official external plugins. */
 export function resolveWebSearchInstallCatalogEntries(): WebSearchInstallCatalogEntry[] {
   const entries: WebSearchInstallCatalogEntry[] = [];
   for (const entry of listOfficialExternalPluginCatalogEntries()) {
@@ -156,6 +161,18 @@ export function resolveWebSearchInstallCatalogEntries(): WebSearchInstallCatalog
   );
 }
 
+/** Lists credential-backed web provider plugins selected by documented environment variables. */
+export function resolveWebSearchInstallCatalogEntriesForEnv(
+  env: NodeJS.ProcessEnv,
+): WebSearchInstallCatalogEntry[] {
+  return resolveWebSearchInstallCatalogEntries().filter(
+    (entry) =>
+      entry.provider.requiresCredential !== false &&
+      entry.provider.envVars.some((envVar) => Boolean(env[envVar]?.trim())),
+  );
+}
+
+/** Resolves one web-search install catalog entry by provider id or plugin id. */
 export function resolveWebSearchInstallCatalogEntry(params: {
   providerId?: string;
   pluginId?: string;

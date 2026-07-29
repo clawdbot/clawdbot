@@ -1,4 +1,6 @@
+// Status overview row tests cover status-all overview values, update metadata, and display rows.
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
   buildStatusCommandOverviewRows,
@@ -8,67 +10,95 @@ import {
   createStatusCommandOverviewRowsParams,
 } from "./status.test-support.ts";
 
+function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string) {
+  return rows.find((row) => row.Item === item)?.Value;
+}
+
 describe("status-overview-rows", () => {
   it("builds command overview rows from the shared surface", () => {
-    expect(buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams())).toEqual(
-      expect.arrayContaining([
-        { Item: "OS", Value: `macOS · node ${process.versions.node}` },
-        {
-          Item: "Memory",
-          Value:
-            "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
-        },
-        { Item: "Plugin compatibility", Value: "warn(1 notice · 1 plugin)" },
-        { Item: "Sessions", Value: "2 active · default gpt-5.5 (12k ctx) · store.json" },
-      ]),
+    const rows = buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams());
+
+    expect(findRowValue(rows, "OS")).toBe(`macOS · node ${process.versions.node}`);
+    expect(findRowValue(rows, "Memory")).toBe(
+      "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
+    );
+    expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
+    expect(findRowValue(rows, "Sessions")).toBe(
+      "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
   });
 
   it("marks skipped memory inspection as not checked in fast status output", () => {
-    expect(
-      buildStatusCommandOverviewRows(
-        createStatusCommandOverviewRowsParams({
-          memory: null,
-          memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
-        }),
-      ),
-    ).toEqual(
-      expect.arrayContaining([
-        {
-          Item: "Memory",
-          Value: "muted(enabled (plugin memory-lancedb-pro) · not checked)",
-        },
-      ]),
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        memory: null,
+        memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
+      }),
+    );
+
+    expect(findRowValue(rows, "Memory")).toBe(
+      "muted(enabled (plugin memory-lancedb-pro) · not checked)",
     );
   });
 
-  it("builds status-all overview rows from the shared surface", () => {
-    expect(
-      buildStatusAllOverviewRows({
-        surface: {
-          ...baseStatusOverviewSurface,
-          tailscaleMode: "off",
-          tailscaleHttpsUrl: null,
-          gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
-        },
-        osLabel: "macOS",
-        configPath: "/tmp/openclaw.json",
-        secretDiagnosticsCount: 2,
-        agentStatus: {
-          bootstrapPendingCount: 1,
-          totalSessions: 2,
-          agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
-        },
-        tailscaleBackendState: "Running",
+  it("shows update restart state in fast status output", () => {
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        updateRestartValue: "failed · managed-service-handoff-failed",
       }),
-    ).toEqual(
-      expect.arrayContaining([
-        { Item: "Version", Value: expect.any(String) },
-        { Item: "OS", Value: "macOS" },
-        { Item: "Config", Value: "/tmp/openclaw.json" },
-        { Item: "Security", Value: "Run: openclaw security audit --deep" },
-        { Item: "Secrets", Value: "2 diagnostics" },
-      ]),
     );
+
+    expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
+  });
+
+  it("lists plugins quarantined as configured-unavailable", () => {
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        summary: {
+          ...createStatusCommandOverviewRowsParams().summary,
+          degradedPlugins: [
+            {
+              pluginId: "discord",
+              state: "configured-unavailable",
+              diagnostic: {
+                kind: "plugin-verification",
+                reason: "unreadable-package-json",
+                detail: "permission denied",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
+  });
+
+  it("builds status-all overview rows from the shared surface", () => {
+    const rows = buildStatusAllOverviewRows({
+      surface: {
+        ...baseStatusOverviewSurface,
+        tailscaleMode: "off",
+        tailscaleHttpsUrl: null,
+        gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
+      },
+      osLabel: "macOS",
+      configPath: "/tmp/openclaw.json",
+      secretDiagnosticsCount: 2,
+      updateRestartValue: "restart pending health verification",
+      agentStatus: {
+        bootstrapPendingCount: 1,
+        totalSessions: 2,
+        agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
+      },
+      tailscaleBackendState: "Running",
+    });
+
+    expect(findRowValue(rows, "Version")).toBe(VERSION);
+    expect(findRowValue(rows, "OS")).toBe("macOS");
+    expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
+    expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
+    expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
+    expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });
 });

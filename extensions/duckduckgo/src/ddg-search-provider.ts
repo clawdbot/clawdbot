@@ -1,22 +1,17 @@
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Duckduckgo provider module implements model/runtime integration.
+import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { createDuckDuckGoWebSearchProviderBase } from "./ddg-search-provider.shared.js";
 
-type DuckDuckGoClientModule = typeof import("./ddg-client.js");
-
-let duckDuckGoClientModulePromise: Promise<DuckDuckGoClientModule> | undefined;
-
-function loadDuckDuckGoClientModule(): Promise<DuckDuckGoClientModule> {
-  duckDuckGoClientModulePromise ??= import("./ddg-client.js");
-  return duckDuckGoClientModulePromise;
-}
+const loadDuckDuckGoClientModule = createLazyRuntimeModule(() => import("./ddg-client.js"));
 
 const DuckDuckGoSearchSchema = {
   type: "object",
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -45,7 +40,10 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
         return await runDuckDuckGoSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
-          count: readNumberParam(args, "count", { integer: true }),
+          count: readPositiveIntegerParam(args, "count", {
+            max: 10,
+            message: "count must be an integer from 1 to 10.",
+          }),
           region: readStringParam(args, "region"),
           safeSearch: readStringParam(args, "safeSearch") as
             | "strict"

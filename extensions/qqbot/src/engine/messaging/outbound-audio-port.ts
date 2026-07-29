@@ -1,20 +1,21 @@
+// Qqbot plugin module implements outbound audio port behavior.
 import type { OutboundAudioPort } from "../adapter/audio.port.js";
 
-let _audioPort: OutboundAudioPort | null = null;
+let outboundAudioPort: OutboundAudioPort | null = null;
 
 /**
  * Initialize the outbound audio adapter. Called once by gateway startup
  * via `adapters.outboundAudio`.
  */
 export function setOutboundAudioPort(port: OutboundAudioPort): void {
-  _audioPort = port;
+  outboundAudioPort = port;
 }
 
 function getAudio(): OutboundAudioPort {
-  if (!_audioPort) {
+  if (!outboundAudioPort) {
     throw new Error("OutboundAudioPort not initialized — call setOutboundAudioPort first");
   }
-  return _audioPort;
+  return outboundAudioPort;
 }
 
 export function audioFileToSilkBase64(p: string, f?: string[]): Promise<string | undefined> {

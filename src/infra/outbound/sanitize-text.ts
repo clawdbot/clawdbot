@@ -1,31 +1,16 @@
-/**
- * Sanitize model output for plain-text messaging surfaces.
- *
- * LLMs occasionally produce HTML tags (`<br>`, `<b>`, `<i>`, etc.) that render
- * correctly on web but appear as literal text on WhatsApp, Signal, SMS, and IRC.
- *
- * Converts common inline HTML to lightweight-markup equivalents used by
- * WhatsApp/Signal/Telegram and strips any remaining tags.
- *
- * @see https://github.com/openclaw/openclaw/issues/31884
- * @see https://github.com/openclaw/openclaw/issues/18558
- */
+import { flattenMarkdownDetails } from "./markdown-details.js";
+// Plain-text sanitization strips internal runtime scaffolding and converts a
+// conservative subset of model-produced HTML into channel-friendly text.
+import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 
-const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
-const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
-const INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE = new RegExp(
-  `<\\s*(${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*\\1\\s*>`,
-  "gi",
-);
-const INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE = new RegExp(
-  `<\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*\\/\\s*>`,
-  "gi",
-);
-const INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE = new RegExp(
-  `<\\s*\\/?\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>`,
-  "gi",
-);
+// Retained for the deprecated plugin-sdk/infra-runtime compatibility barrel.
+export { stripInternalRuntimeScaffolding };
+
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi;
+
+// Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
+const CONVERTIBLE_HTML_OPEN_TAG_RE =
+  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 
 function stripRemainingHtmlTags(text: string): string {
   let previous: string;
@@ -37,13 +22,6 @@ function stripRemainingHtmlTags(text: string): string {
   return current;
 }
 
-export function stripInternalRuntimeScaffolding(text: string): string {
-  return text
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
-}
-
 /**
  * Convert common HTML tags to their plain-text/lightweight-markup equivalents
  * and strip anything that remains.
@@ -52,26 +30,30 @@ export function stripInternalRuntimeScaffolding(text: string): string {
  * are known to produce and avoids false positives on angle brackets in normal
  * prose (e.g. `a < b`).
  */
-export function sanitizeForPlainText(text: string): string {
-  const converted = stripInternalRuntimeScaffolding(text)
+export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
+  const boldMarker = options.style === "markdown" ? "**" : "*";
+  const strikeMarker = options.style === "markdown" ? "~~" : "~";
+  const converted = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text))
     // Preserve angle-bracket autolinks as plain URLs before tag stripping.
     .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
+    // Normalize attributes once; conversions below only need exact bare tag names.
+    .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>")
     // Line breaks
     .replace(/<br\s*\/?>/gi, "\n")
     // Block elements → newlines
     .replace(/<\/?(p|div)>/gi, "\n")
-    // Bold → WhatsApp/Signal bold
-    .replace(/<(b|strong)>(.*?)<\/\1>/gi, "*$2*")
+    // Bold → selected lightweight markup
+    .replace(/<(b|strong)>(.*?)<\/\1>/gi, `${boldMarker}$2${boldMarker}`)
     // Italic → WhatsApp/Signal italic
     .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
-    // Strikethrough → WhatsApp/Signal strikethrough
-    .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, "~$2~")
+    // Strikethrough → selected lightweight markup
+    .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, `${strikeMarker}$2${strikeMarker}`)
     // Inline code
     .replace(/<code>(.*?)<\/code>/gi, "`$1`")
     // Headings → bold text with newline
-    .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "\n*$1*\n")
+    .replace(/<h[1-6]>(.*?)<\/h[1-6]>/gi, `\n${boldMarker}$1${boldMarker}\n`)
     // List items → bullet points
-    .replace(/<li[^>]*>(.*?)<\/li>/gi, "• $1\n");
+    .replace(/<li>(.*?)<\/li>/gi, "• $1\n");
 
   return stripRemainingHtmlTags(converted).replace(/\n{3,}/g, "\n\n");
 }

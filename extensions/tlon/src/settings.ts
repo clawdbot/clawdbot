@@ -299,7 +299,7 @@ type SettingsLogger = {
  *   settings.subscribe((newSettings) => { ... });
  */
 export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogger) {
-  let state: TlonSettingsState = {
+  const state: TlonSettingsState = {
     current: {},
     loaded: false,
   };

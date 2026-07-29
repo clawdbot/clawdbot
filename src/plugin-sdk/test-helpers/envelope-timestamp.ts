@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for asserting envelope timestamp normalization in channel tests.
+ */
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
@@ -27,14 +30,18 @@ export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone 
   })();
 
   if (normalized === "utc" || normalized === "gmt") {
-    const ts = formatUtcTimestamp(date);
+    const ts = formatUtcTimestamp(date, { displaySeconds: true });
     return weekday ? `${weekday} ${ts}` : ts;
   }
   if (normalized === "local" || normalized === "host") {
-    const ts = formatZonedTimestamp(date) ?? formatUtcTimestamp(date);
+    const ts =
+      formatZonedTimestamp(date, { displaySeconds: true }) ??
+      formatUtcTimestamp(date, { displaySeconds: true });
     return weekday ? `${weekday} ${ts}` : ts;
   }
-  const ts = formatZonedTimestamp(date, { timeZone: trimmedZone }) ?? formatUtcTimestamp(date);
+  const ts =
+    formatZonedTimestamp(date, { timeZone: trimmedZone, displaySeconds: true }) ??
+    formatUtcTimestamp(date, { displaySeconds: true });
   return weekday ? `${weekday} ${ts}` : ts;
 }
 

@@ -1,8 +1,16 @@
+/** Verifies host hook cleanup timeout behavior and cancellation reporting. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  PLUGIN_HOST_CLEANUP_TIMEOUT_MS,
-  withPluginHostCleanupTimeout,
-} from "./host-hook-cleanup-timeout.js";
+import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
+
+const PLUGIN_HOST_CLEANUP_TIMEOUT_MS = 5_000;
+
+function requireSetTimeoutCall(callIndex: number): unknown[] {
+  const call = vi.mocked(globalThis.setTimeout).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected setTimeout call ${callIndex}`);
+  }
+  return call as unknown[];
+}
 
 describe("withPluginHostCleanupTimeout", () => {
   afterEach(() => {
@@ -27,10 +35,9 @@ describe("withPluginHostCleanupTimeout", () => {
 
     await expect(withPluginHostCleanupTimeout("fast-cleanup", () => "ok")).resolves.toBe("ok");
 
-    expect(globalThis.setTimeout).toHaveBeenCalledWith(
-      expect.any(Function),
-      PLUGIN_HOST_CLEANUP_TIMEOUT_MS,
-    );
+    const timeoutCall = requireSetTimeoutCall(0);
+    expect(typeof timeoutCall?.[0]).toBe("function");
+    expect(timeoutCall?.[1]).toBe(PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
     expect(unref).toHaveBeenCalledTimes(1);
   });
 });

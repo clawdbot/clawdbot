@@ -1,3 +1,4 @@
+// Matrix tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { matrixApprovalAuth } from "./approval-auth.js";
 

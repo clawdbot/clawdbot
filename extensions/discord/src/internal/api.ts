@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 export {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -44,6 +45,7 @@ export {
   editChannelMessage,
   getChannel,
   getChannelMessage,
+  getThreadMember,
   listChannelArchivedThreads,
   listChannelMessages,
   listChannelPins,

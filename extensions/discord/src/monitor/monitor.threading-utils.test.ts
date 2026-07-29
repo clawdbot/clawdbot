@@ -1,14 +1,11 @@
+// Discord tests cover monitor.threading utils plugin behavior.
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Client } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
-import {
-  resolveDiscordMemberAllowed,
-  resolveDiscordOwnerAllowFrom,
-  resolveDiscordRoleAllowed,
-} from "./allow-list.js";
+import { resolveDiscordMemberAllowed, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import {
   clearGateways,
   getGateway,
@@ -23,6 +20,15 @@ import {
   resolveDiscordAutoThreadReplyPlan,
   resolveDiscordReplyDeliveryPlan,
 } from "./threading.js";
+
+function resolveDiscordRoleAllowed(params: { allowList?: string[]; memberRoleIds: string[] }) {
+  return resolveDiscordMemberAllowed({
+    userAllowList: [],
+    roleAllowList: params.allowList,
+    memberRoleIds: params.memberRoleIds,
+    userId: "unmatched-user",
+  });
+}
 
 describe("resolveDiscordOwnerAllowFrom", () => {
   it("returns undefined when no allowlist is configured", () => {
@@ -245,20 +251,27 @@ describe("resolveDiscordPresenceUpdate", () => {
 
   it("returns status-only presence when activity is omitted", () => {
     const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("dnd");
-    expect(presence?.activities).toEqual([]);
+    expect(presence).toEqual({
+      since: null,
+      status: "dnd",
+      activities: [],
+      afk: false,
+    });
   });
 
   it("defaults to custom activity type when activity is set without type", () => {
     const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("online");
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
-      type: 4,
-      name: "Custom Status",
-      state: "Focus time",
+    expect(presence).toEqual({
+      since: null,
+      status: "online",
+      activities: [
+        {
+          type: 4,
+          name: "Custom Status",
+          state: "Focus time",
+        },
+      ],
+      afk: false,
     });
   });
 
@@ -268,12 +281,17 @@ describe("resolveDiscordPresenceUpdate", () => {
       activityType: 1,
       activityUrl: "https://twitch.tv/openclaw",
     });
-    expect(presence).not.toBeNull();
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
-      type: 1,
-      name: "Live",
-      url: "https://twitch.tv/openclaw",
+    expect(presence).toEqual({
+      since: null,
+      activities: [
+        {
+          type: 1,
+          name: "Live",
+          url: "https://twitch.tv/openclaw",
+        },
+      ],
+      status: "online",
+      afk: false,
     });
   });
 });
@@ -331,17 +349,21 @@ describe("resolveDiscordAutoThreadContext", () => {
         continue;
       }
 
-      expect(context, testCase.name).not.toBeNull();
-      expect(context?.To, testCase.name).toBe("channel:thread");
-      expect(context?.From, testCase.name).toBe("discord:channel:thread");
-      expect(context?.OriginatingTo, testCase.name).toBe("channel:thread");
-      expect(context?.SessionKey, testCase.name).toBe(
-        buildAgentSessionKey({
+      expect(context, testCase.name).toEqual({
+        createdThreadId: "thread",
+        To: "channel:thread",
+        From: "discord:channel:thread",
+        OriginatingTo: "channel:thread",
+        SessionKey: buildAgentSessionKey({
           agentId: "agent",
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
         }),
-      );
+        ModelParentSessionKey: testCase.expectedModelParentSessionKey,
+        ...(testCase.parentInheritanceEnabled
+          ? { ParentSessionKey: testCase.expectedParentSessionKey }
+          : {}),
+      });
       expect(context?.ParentSessionKey, testCase.name).toBe(testCase.expectedParentSessionKey);
       expect(context?.ModelParentSessionKey, testCase.name).toBe(
         testCase.expectedModelParentSessionKey,

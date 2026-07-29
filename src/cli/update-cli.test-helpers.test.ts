@@ -1,3 +1,4 @@
+// Update CLI test-helper tests cover helper fixtures used by update command tests.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isOwningNpmCommand } from "./update-cli.test-helpers.js";

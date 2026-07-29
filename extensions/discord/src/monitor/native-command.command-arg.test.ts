@@ -1,11 +1,10 @@
-import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth";
-import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover native command.command arg plugin behavior.
+import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
+import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDiscordCommandArgFallbackButton,
-  type DispatchDiscordCommandInteraction,
-} from "./native-command-ui.js";
+import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
+import { createDiscordCommandArgFallbackButton } from "./native-command-ui.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type CommandArgContext = Parameters<typeof createDiscordCommandArgFallbackButton>[0]["ctx"];
@@ -65,6 +64,14 @@ async function safeInteractionCall<T>(_label: string, fn: () => Promise<T>): Pro
   return await fn();
 }
 
+function firstDispatchCall(dispatchSpy: { mock: { calls: unknown[][] } }) {
+  const firstCall = dispatchSpy.mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error("expected Discord command interaction dispatch");
+  }
+  return firstCall[0] as Parameters<DispatchDiscordCommandInteraction>[0];
+}
+
 describe("discord command argument fallback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -89,11 +96,12 @@ describe("discord command argument fallback", () => {
       user: "owner",
     } satisfies CommandArgData);
 
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "/think high",
-        responseEphemeral: false,
-      }),
-    );
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = firstDispatchCall(dispatchSpy);
+    expect(dispatchCall?.prompt).toBe("/think high");
+    expect(dispatchCall?.responseEphemeral).toBe(false);
+    expect(dispatchCall?.accountId).toBe("default");
+    expect(dispatchCall?.sessionPrefix).toBe("discord:slash");
+    expect(dispatchCall?.preferFollowUp).toBe(true);
   });
 });

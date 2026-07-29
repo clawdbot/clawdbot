@@ -1,29 +1,32 @@
-import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
+// Postinstall Bundled Plugins tests cover postinstall bundled plugins script behavior.
+import { spawnSync } from "node:child_process";
+import { readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import {
+  applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
-  pruneOpenClawCompileCache,
+  MAX_INSTALLED_DIST_SCAN_ENTRIES,
   pruneInstalledPackageDist,
   pruneLegacyPluginRuntimeDepsState,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
-import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
+async function expectPathExists(filePath: string) {
+  await expect(fs.access(filePath)).resolves.toBeUndefined();
+}
 
-async function createExtensionsDir() {
-  const root = await createTempDirAsync("openclaw-postinstall-");
-  const extensionsDir = path.join(root, "dist", "extensions");
-  await fs.mkdir(extensionsDir, { recursive: true });
-  return extensionsDir;
+async function expectPathMissing(filePath: string) {
+  await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
 }
 
 async function writePluginPackage(
@@ -50,14 +53,21 @@ async function writePluginPackage(
   }
 }
 
-describe("bundled plugin postinstall", () => {
-  function existsSyncWithoutGlobalCompileCache(value: string) {
-    if (path.resolve(value) === path.join(tmpdir(), "node-compile-cache")) {
-      return false;
-    }
-    return existsSyncOriginal(value);
-  }
+async function writeBaileysMediaFile(packageRoot: string, text: string) {
+  const mediaFile = path.join(
+    packageRoot,
+    "node_modules",
+    "baileys",
+    "lib",
+    "Utils",
+    "messages-media.js",
+  );
+  await fs.mkdir(path.dirname(mediaFile), { recursive: true });
+  await fs.writeFile(mediaFile, text);
+  return mediaFile;
+}
 
+describe("bundled plugin postinstall", () => {
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
@@ -72,79 +82,193 @@ describe("bundled plugin postinstall", () => {
     ).toBe(true);
   });
 
-  it("prunes Node versioned compile cache dirs during package postinstall", () => {
-    const configuredBase = path.join("/tmp", "openclaw-cache");
-    const defaultBase = path.join(tmpdir(), "node-compile-cache");
-    const removed: string[] = [];
-    const existsSync = vi.fn((value: string) => value === configuredBase || value === defaultBase);
-    const readdirSync = vi.fn((value: string) => {
-      if (value === configuredBase) {
-        return [
-          { name: "v22.13.1-x64-efe9a9df-1001", isDirectory: () => true },
-          { name: "openclaw", isDirectory: () => true },
-          { name: "README", isDirectory: () => false },
-        ];
-      }
-      if (value === defaultBase) {
-        return [{ name: "v24.14.1-x64-efe9a9df-1001", isDirectory: () => true }];
-      }
-      throw new Error(`unexpected readdir: ${value}`);
-    });
-    const rmSync = vi.fn((value: string) => {
-      removed.push(value);
-    });
+  it.each([
+    { cacheMode: "disabled", disableCompileCache: "1" },
+    { cacheMode: "enabled", disableCompileCache: undefined },
+  ])(
+    "preserves shared default and configured Node caches during $cacheMode packaged postinstall",
+    async ({ disableCompileCache }) => {
+      const packageRoot = await createTempDirAsync("openclaw-packaged-compile-cache-");
+      const scriptRoot = path.join(packageRoot, "scripts");
+      const temporaryRoot = path.join(packageRoot, "temporary");
+      const configuredCacheRoot = path.join(packageRoot, "configured-node-cache");
+      const defaultCacheRoot = path.join(temporaryRoot, "node-compile-cache");
+      const sentinels = [
+        path.join(defaultCacheRoot, "v22.22.3-x64-another-app", "keep.txt"),
+        path.join(defaultCacheRoot, "v24.15.0-x64-other-install", "keep.txt"),
+        path.join(configuredCacheRoot, "v25.9.0-x64-another-app", "keep.txt"),
+        path.join(configuredCacheRoot, "v26.4.0-x64-other-install", "keep.txt"),
+      ];
 
-    pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: configuredBase },
-      existsSync,
-      readdirSync,
-      rmSync,
-      log: { warn: vi.fn() },
-    });
+      await fs.mkdir(path.join(scriptRoot, "lib"), { recursive: true });
+      await fs.mkdir(path.join(packageRoot, "home"), { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
+      );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url)),
+        path.join(scriptRoot, "postinstall-bundled-plugins.mjs"),
+      );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/lib/package-dist-imports.mjs", import.meta.url)),
+        path.join(scriptRoot, "lib", "package-dist-imports.mjs"),
+      );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/lib/guard-inventory-utils.mjs", import.meta.url)),
+        path.join(scriptRoot, "lib", "guard-inventory-utils.mjs"),
+      );
+      await fs.mkdir(path.join(packageRoot, "node_modules"), { recursive: true });
+      await fs.symlink(
+        fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+        path.join(packageRoot, "node_modules", "typescript"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      for (const sentinel of sentinels) {
+        await fs.mkdir(path.dirname(sentinel), { recursive: true });
+        await fs.writeFile(sentinel, "owned by another Node application\n");
+      }
 
-    expect(removed).toEqual([
-      path.join(configuredBase, "v22.13.1-x64-efe9a9df-1001"),
-      path.join(defaultBase, "v24.14.1-x64-efe9a9df-1001"),
-    ]);
-    expect(removed).not.toContain(path.join(configuredBase, "openclaw"));
-    for (const cacheDir of removed) {
-      expect(rmSync).toHaveBeenCalledWith(cacheDir, {
-        recursive: true,
-        force: true,
-        maxRetries: 2,
-        retryDelay: 100,
-      });
-    }
+      const result = spawnSync(
+        process.execPath,
+        [path.join(scriptRoot, "postinstall-bundled-plugins.mjs")],
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: path.join(packageRoot, "home"),
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
+            OPENCLAW_HOME: path.join(packageRoot, "home"),
+            OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
+            STATE_DIRECTORY: undefined,
+            NODE_COMPILE_CACHE: configuredCacheRoot,
+            NODE_DISABLE_COMPILE_CACHE: disableCompileCache,
+            TEMP: temporaryRoot,
+            TMP: temporaryRoot,
+            TMPDIR: temporaryRoot,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      for (const sentinel of sentinels) {
+        await expectPathExists(sentinel);
+      }
+    },
+  );
+
+  it("patches the Baileys upload helper dispatcher guard", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    const mediaFile = await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const nodeStream = createReadStream(filePath);",
+        "    const webStream = Readable.toWeb(nodeStream);",
+        "    const response = await fetch(url, {",
+        "        dispatcher: agent,",
+        "        method: 'POST',",
+        "        body: webStream,",
+        "        headers,",
+        "        duplex: 'half',",
+        "        signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
+      applied: true,
+      reason: "patched",
+      targetPath: mediaFile,
+    });
+    const patchedText = await fs.readFile(mediaFile, "utf8");
+    expect(patchedText).toContain(
+      "...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+    );
+    expect(patchedText).not.toContain("        dispatcher: agent,");
   });
 
-  it("keeps pruning sibling compile cache dirs after one removal fails", () => {
-    const configuredBase = path.join("/tmp", "openclaw-cache");
-    const attempted: string[] = [];
-    const warn = vi.fn();
-    const firstCacheDir = path.join(configuredBase, "v22.13.1-x64-efe9a9df-1001");
-    const secondCacheDir = path.join(configuredBase, "v22.13.1-x64-efe9a9df-1002");
-    const rmSync = vi.fn((value: string) => {
-      attempted.push(value);
-      if (value === firstCacheDir) {
-        throw new Error("locked");
-      }
-    });
-
-    pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: configuredBase },
-      existsSync: vi.fn((value: string) => value === configuredBase),
-      readdirSync: vi.fn(() => [
-        { name: path.basename(firstCacheDir), isDirectory: () => true },
-        { name: path.basename(secondCacheDir), isDirectory: () => true },
-      ]),
-      rmSync,
-      log: { warn },
-    });
-
-    expect(attempted).toEqual([firstCacheDir, secondCacheDir]);
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] could not prune OpenClaw compile cache: Error: locked",
+  it("recognizes already patched Baileys upload helpers", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const response = await fetch(url, {",
+        "        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+        "        method: 'POST',",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
     );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
+      applied: false,
+      reason: "already_patched",
+    });
+  });
+
+  it("recognizes Baileys upload helpers with a prepared dispatcher", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
+        "    const response = await fetch(url, {",
+        "        ...(dispatcher ? { dispatcher } : {}),",
+        "        method: 'POST',",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
+      applied: false,
+      reason: "already_patched",
+    });
   });
 
   it("does not classify published packages with source files as source checkouts", () => {
@@ -187,9 +311,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(extensionsDir, "acpx", "node_modules"));
   });
 
   it("keeps source-checkout prune non-fatal", async () => {
@@ -201,7 +323,7 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       runBundledPluginPostinstall({
         env: { HOME: "/tmp/home" },
         packageRoot,
@@ -210,7 +332,7 @@ describe("bundled plugin postinstall", () => {
         }),
         log: { log: vi.fn(), warn },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] could not prune bundled plugin source node_modules: Error: locked",
@@ -233,7 +355,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(legacyRuntimeRoot)).resolves.toBeTruthy();
+    await expectPathExists(legacyRuntimeRoot);
   });
 
   it("honors disable env before source-checkout pruning", async () => {
@@ -250,7 +372,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
+    await expectPathExists(path.join(extensionsDir, "acpx", "node_modules"));
   });
 
   it("migrates the plugin registry during postinstall from built dist contracts", async () => {
@@ -285,7 +407,16 @@ describe("bundled plugin postinstall", () => {
       log,
     });
 
-    expect(result).toMatchObject({ status: "migrated" });
+    expect(result).toEqual({
+      current: {
+        plugins: [{ pluginId: "demo" }],
+      },
+      migrated: true,
+      preflight: {
+        deprecationWarnings: [],
+      },
+      status: "migrated",
+    });
     expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
       env: { OPENCLAW_HOME: "/tmp/home" },
       packageRoot,
@@ -295,27 +426,35 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
-  it("surfaces deprecated plugin registry migration break-glass warnings", async () => {
-    const warn = vi.fn();
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {
-        deprecationWarnings: ["OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated"],
-      },
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+  it("does not migrate operator plugin state from a source checkout", async () => {
+    const packageRoot = "/source";
+    const existingPaths = new Set([
+      path.join(packageRoot, ".git"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(
+        packageRoot,
+        "dist",
+        "commands",
+        "doctor",
+        "shared",
+        "plugin-registry-migration.js",
+      ),
+    ]);
+    const importModule = vi.fn();
 
-    await runPluginRegistryPostinstallMigration({
-      packageRoot: "/pkg",
-      existsSync: vi.fn(() => true),
-      importModule,
-      log: { log: vi.fn(), warn },
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot,
+        existsSync: vi.fn((filePath: string) => existingPaths.has(filePath)),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "source-checkout",
     });
-
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated",
-    );
+    expect(importModule).not.toHaveBeenCalled();
   });
 
   it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
@@ -334,53 +473,6 @@ describe("bundled plugin postinstall", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("honors plugin registry postinstall migration disable env", async () => {
-    const importModule = vi.fn(async () => {
-      throw new Error("dist migration module should not import when migration is disabled");
-    });
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toMatchObject({
-      status: "disabled",
-      migrated: false,
-      reason: "disabled-env",
-    });
-    expect(importModule).not.toHaveBeenCalled();
-  });
-
-  it("does not disable plugin registry migration for falsey env flag strings", async () => {
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
-
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toMatchObject({
-      status: "skip-existing",
-      migrated: false,
-    });
-    expect(importModule).toHaveBeenCalledOnce();
-    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
-      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-      packageRoot: "/pkg",
-    });
-  });
-
   it("prunes stale dist files from packaged installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
     const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
@@ -397,8 +489,36 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual(["dist/channel-CJUAgRQR.js"]);
 
-    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
-    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathExists(currentFile);
+    await expectPathMissing(staleFile);
+  });
+
+  it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
+    const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "channel-test-helpers.js");
+    const nestedTestHelperFile = path.join(
+      packageRoot,
+      "dist",
+      "plugin-sdk",
+      "src",
+      "plugin-sdk",
+      "test-helpers",
+      "provider-contract.d.ts",
+    );
+    await fs.mkdir(path.dirname(nestedTestHelperFile), { recursive: true });
+    await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
+    await fs.writeFile(runtimeFile, "export {};\n");
+    await fs.writeFile(testHelperFile, "export {};\n");
+    await fs.writeFile(nestedTestHelperFile, "export {};\n");
+
+    const inventory = await writePackageDistInventory(packageRoot);
+
+    expect(inventory).toContain("dist/plugin-sdk/runtime.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/channel-test-helpers.js");
+    expect(inventory).not.toContain(
+      "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
+    );
   });
 
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {
@@ -455,19 +575,23 @@ describe("bundled plugin postinstall", () => {
         STATE_DIRECTORY: systemState,
       },
       packageRoot,
-      existsSync: existsSyncWithoutGlobalCompileCache,
       log,
     });
 
-    await expect(fs.stat(defaultLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(oldBrandLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(overrideLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(systemLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.lstat(legacySymlink)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeTruthy();
+    await expectPathMissing(defaultLegacyRoot);
+    await expectPathMissing(oldBrandLegacyRoot);
+    await expectPathMissing(overrideLegacyRoot);
+    await expectPathMissing(systemLegacyRoot);
+    await expectPathMissing(legacySymlink);
+    await expectPathExists(thirdPartyNodeModules);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
-      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps:"),
+      `[postinstall] pruned legacy plugin runtime deps: ${[
+        oldBrandLegacyRoot,
+        defaultLegacyRoot,
+        overrideLegacyRoot,
+        systemLegacyRoot,
+      ].join(", ")}`,
     );
   });
 
@@ -500,18 +624,18 @@ describe("bundled plugin postinstall", () => {
       log,
     });
 
-    await expect(fs.lstat(slackLink)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(legacyRuntimeRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(slackLink);
+    await expectPathMissing(legacyRuntimeRoot);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
-      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps symlinks:"),
+      `[postinstall] pruned legacy plugin runtime deps symlinks: ${slackLink}`,
     );
   });
 
   it("keeps legacy plugin runtime deps cleanup non-fatal", () => {
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       pruneLegacyPluginRuntimeDepsState({
         env: { HOME: "/home/alice" },
         existsSync: vi.fn(() => true),
@@ -521,12 +645,16 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn },
         homedir: () => "/home/alice",
       }),
-    ).not.toThrow();
+    ).toStrictEqual([]);
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "[postinstall] could not prune legacy plugin runtime deps /home/alice/.openclaw/plugin-runtime-deps: Error: locked",
-      ),
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
+      "[postinstall] could not prune legacy plugin runtime deps /home/alice/.clawdbot/plugin-runtime-deps: Error: locked",
+    );
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      "[postinstall] could not prune legacy plugin runtime deps /home/alice/.openclaw/plugin-runtime-deps: Error: locked",
     );
   });
 
@@ -569,8 +697,42 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual(["dist/memory-state-old.js"]);
 
-    await expect(fs.stat(importedChunk)).resolves.toBeTruthy();
-    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathExists(importedChunk);
+    await expectPathMissing(staleFile);
+  });
+
+  it("keeps named imported chunks without preserving template-literal pseudoimports", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-named-import-");
+    const entryFile = path.join(packageRoot, "dist", "cli", "run-main.js");
+    const importedChunk = path.join(packageRoot, "dist", "memory-state-current.js");
+    const phantomChunk = path.join(packageRoot, "dist", "memory-state-phantom.js");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(
+      entryFile,
+      [
+        "import {",
+        "  value,",
+        '} from "../memory-state-current.js";',
+        "const example = `",
+        'import "../memory-state-phantom.js"',
+        "`;",
+        "export { value, example };",
+        "",
+      ].join("\n"),
+    );
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(importedChunk, "export const value = 42;\n");
+    await fs.writeFile(phantomChunk, "export const stale = true;\n");
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/memory-state-phantom.js"]);
+
+    await expectPathExists(importedChunk);
+    await expectPathMissing(phantomChunk);
   });
 
   it("does not abort dist pruning when a listed chunk disappears before import expansion", async () => {
@@ -590,15 +752,15 @@ describe("bundled plugin postinstall", () => {
       return readFileSyncOriginal(filePath, options);
     });
 
-    expect(() =>
+    expect(
       pruneInstalledPackageDist({
         packageRoot,
         readFileSync,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).not.toThrow();
+    ).toEqual(["dist/stale.js"]);
 
-    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(staleFile);
   });
 
   it("prunes stale private QA files without restoring compat sidecars", async () => {
@@ -623,20 +785,20 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(stalePackage);
+    await expectPathMissing(staleManifest);
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+    );
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json"),
+    );
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json"),
+    );
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"),
+    );
   });
 
   it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {
@@ -646,14 +808,14 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(staleFile, "export {};\n");
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       runBundledPluginPostinstall({
         packageRoot,
         log: { log: vi.fn(), warn },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
-    await expect(fs.stat(staleFile)).resolves.toBeTruthy();
+    await expectPathExists(staleFile);
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] skipping dist prune: missing dist inventory: dist/postinstall-inventory.json",
     );
@@ -668,14 +830,14 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(inventoryPath, "{not-json}\n");
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       runBundledPluginPostinstall({
         packageRoot,
         log: { log: vi.fn(), warn },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
-    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    await expectPathExists(currentFile);
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] skipping dist prune: invalid dist inventory: dist/postinstall-inventory.json",
     );
@@ -727,6 +889,145 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toThrow("unsafe dist entry: dist/escape");
+  });
+
+  it("rejects packaged dist scans that exceed the filesystem entry limit", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        maxDistScanEntries: 1,
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath, options) => {
+          if (filePath === "/pkg/dist" && options?.withFileTypes) {
+            return [
+              {
+                name: "first.js",
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              },
+              {
+                name: "second.js",
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              },
+            ];
+          }
+          return [];
+        }),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow(
+      "installed dist scan exceeded 1 filesystem entries; refusing to scan unbounded package contents",
+    );
+    // One budget spans all three prune walks, and npm upgrades scan old+new
+    // content-hashed dist files (~24k entries as of 2026.6.x). A cap without
+    // several-x headroom fails `npm install -g openclaw` for upgrading users.
+    expect(MAX_INSTALLED_DIST_SCAN_ENTRIES).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it("uses one packaged dist scan budget across listing and pruning phases", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(["dist/kept.js"]),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        maxDistScanEntries: 1,
+        readFileSync: vi.fn(() => "export {};\n"),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath, options) => {
+          if (filePath === "/pkg/dist" && options?.withFileTypes) {
+            return [
+              {
+                name: "kept.js",
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              },
+            ];
+          }
+          return [];
+        }),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow(
+      "installed dist scan exceeded 1 filesystem entries; refusing to scan unbounded package contents",
+    );
+  });
+
+  it("applies the packaged dist scan budget to legacy dependency debris prepass", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        maxDistScanEntries: 1,
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath, options) => {
+          if (filePath === "/pkg/dist/extensions" && options?.withFileTypes) {
+            return [
+              {
+                name: "slack",
+                isDirectory: () => true,
+                isFile: () => false,
+                isSymbolicLink: () => false,
+              },
+            ];
+          }
+          if (filePath === "/pkg/dist/extensions/slack" && options?.withFileTypes) {
+            return [
+              {
+                name: "node_modules",
+                isDirectory: () => true,
+                isFile: () => false,
+                isSymbolicLink: () => false,
+              },
+            ];
+          }
+          return [];
+        }),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow(
+      "installed dist scan exceeded 1 filesystem entries; refusing to scan unbounded package contents",
+    );
+  });
+
+  it("prunes sibling empty dist directories after closing parent scans", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-empty-dirs-");
+    const firstEmptyDir = path.join(packageRoot, "dist", "empty-a");
+    const secondEmptyDir = path.join(packageRoot, "dist", "empty-b");
+    await fs.mkdir(firstEmptyDir, { recursive: true });
+    await fs.mkdir(secondEmptyDir, { recursive: true });
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        expectedFiles: new Set(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual([]);
+
+    await expectPathMissing(firstEmptyDir);
+    await expectPathMissing(secondEmptyDir);
   });
 
   it("prunes stale bundled plugin dependency debris from packaged dist", async () => {
@@ -787,15 +1088,9 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toEqual(["dist/stale-runtime.js"]);
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "slack", "node_modules")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(path.dirname(installStageFile))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.dirname(retryInstallStageFile))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(packageRoot, "dist", "extensions", "slack", "node_modules"));
+    await expectPathMissing(path.dirname(installStageFile));
+    await expectPathMissing(path.dirname(retryInstallStageFile));
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {
@@ -844,12 +1139,8 @@ describe("bundled plugin postinstall", () => {
 
     pruneBundledPluginSourceNodeModules({ extensionsDir });
 
-    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(
-      fs.stat(path.join(extensionsDir, "fixtures", "node_modules")),
-    ).resolves.toBeTruthy();
+    await expectPathMissing(path.join(extensionsDir, "acpx", "node_modules"));
+    await expectPathExists(path.join(extensionsDir, "fixtures", "node_modules"));
   });
 
   it("skips symlink entries when pruning source-checkout bundled plugin node_modules", () => {

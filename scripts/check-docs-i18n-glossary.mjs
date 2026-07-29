@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Validates docs i18n glossary terms against configured usage rules.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,17 +22,25 @@ const MAX_TERM_LENGTH = 80;
  * }} TermMatch
  */
 
-function parseArgs(argv) {
+function readRefOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   /** @type {{ base: string; head: string }} */
   const args = { base: "", head: "" };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
-      args.base = argv[i + 1] ?? "";
+      args.base = readRefOptionValue(argv, i, "--base");
       i += 1;
       continue;
     }
     if (argv[i] === "--head") {
-      args.head = argv[i + 1] ?? "";
+      args.head = readRefOptionValue(argv, i, "--head");
       i += 1;
     }
   }
@@ -234,4 +243,6 @@ function main() {
   process.exit(1);
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+  main();
+}

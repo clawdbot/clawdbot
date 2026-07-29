@@ -1,3 +1,4 @@
+// Check Live Cache script supports OpenClaw repository automation.
 import { runLiveCacheRegression } from "../src/agents/live-cache-regression-runner.js";
 import { LIVE_CACHE_TEST_ENABLED, logLiveCache } from "../src/agents/live-cache-test-support.js";
 
@@ -18,7 +19,8 @@ if (result.regressions.length > 0) {
   for (const regression of result.regressions) {
     process.stderr.write(`- ${regression}\n`);
   }
-  process.exitCode = 1;
+  process.exit(1);
 } else {
   process.stderr.write("\n[live-cache] all regression floors satisfied\n");
+  process.exit(0);
 }

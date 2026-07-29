@@ -1,3 +1,4 @@
+// Shared Vitest mock harness for channel command config and secret resolution.
 import { vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 

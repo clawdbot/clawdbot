@@ -1,3 +1,4 @@
+// Account action gate tests cover channel account action visibility and enablement checks.
 import { describe, expect, it } from "vitest";
 import { createAccountActionGate } from "./account-action-gate.js";
 

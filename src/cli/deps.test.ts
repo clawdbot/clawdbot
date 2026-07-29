@@ -1,6 +1,7 @@
+// Dependency tests cover CLI dependency imports and cold-start safety.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 
 const runtimeFactories = vi.hoisted(() => ({
   whatsapp: vi.fn(),
@@ -83,6 +84,15 @@ describe("createDefaultDeps", () => {
     expect(runtimeFactories.telegram).toHaveBeenCalledTimes(1);
     expect(sendFns.telegram).toHaveBeenCalledTimes(1);
     expectUnusedRuntimeFactoriesNotLoaded("telegram");
+  });
+
+  it("does not create channel senders for Discord voice helper keys", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("discord-voice-helper");
+    const deps = createDefaultDeps();
+
+    expect(deps.discordVoice).toBeUndefined();
+    expect(deps.sendDiscordVoice).toBeUndefined();
+    expect(runtimeFactories.discord).not.toHaveBeenCalled();
   });
 
   it("reuses cached runtime send surfaces after first lazy load", async () => {

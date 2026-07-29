@@ -1,3 +1,4 @@
+// Qqbot plugin module implements register approve behavior.
 import type { ApproveRuntimeGetter } from "../../adapter/commands.port.js";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import { getApproveRuntimeGetter } from "./state.js";

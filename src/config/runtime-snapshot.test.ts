@@ -1,16 +1,23 @@
+// Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   finalizeRuntimeSnapshotWrite,
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
+  hasManagedRuntimeConfigWriteOwner,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
+  registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
@@ -93,6 +100,25 @@ describe("runtime snapshot state", () => {
     );
   });
 
+  it("tracks the applied source revision independently from runtime fingerprints", () => {
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+
+    setRuntimeConfigAppliedHash("disk-hash-1");
+    setRuntimeConfigSnapshot({ gateway: { port: 18789 } });
+    expect(getRuntimeConfigAppliedHash()).toBe("disk-hash-1");
+
+    resetConfigRuntimeState();
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+  });
+
+  it("hashes resolved source content independently from root-file revision metadata", () => {
+    const first = hashRuntimeConfigValue({ logging: { level: "info" } });
+    const second = hashRuntimeConfigValue({ logging: { level: "debug" } });
+
+    expect(first).not.toBe(second);
+    expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
+  });
+
   it("selects runtime config only when input still matches the runtime source", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
@@ -119,9 +145,7 @@ describe("runtime snapshot state", () => {
     const scopedResolvedConfig: OpenClawConfig = {
       ...runtimeConfig,
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     };
 
@@ -225,7 +249,7 @@ describe("runtime snapshot state", () => {
     const loadFreshConfig = vi.fn<() => OpenClawConfig>(() => ({
       gateway: { auth: { mode: "token" } },
     }));
-    let releaseRefresh!: () => void;
+    let releaseRefresh: (() => void) | undefined;
     const refreshPending = new Promise<boolean>((resolve) => {
       releaseRefresh = () => resolve(true);
     });
@@ -287,6 +311,9 @@ describe("runtime snapshot state", () => {
     expect(getRuntimeConfigSnapshot()?.gateway?.auth).toBeUndefined();
     expect(loadFreshConfig).not.toHaveBeenCalled();
 
+    if (!releaseRefresh) {
+      throw new Error("Expected runtime snapshot refresh release callback to be initialized");
+    }
     releaseRefresh();
     await writePromise;
 
@@ -323,5 +350,70 @@ describe("runtime snapshot state", () => {
         runtimeConfig: { gateway: { port: 19003 } },
       },
     ]);
+  });
+
+  it("scopes managed write ownership by path and reference count", () => {
+    const releaseA = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");
+    const releaseA2 = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");
+    const releaseB = registerManagedRuntimeConfigWriteOwner("/tmp/b.json");
+
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(true);
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/b.json")).toBe(true);
+    releaseA();
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(true);
+    releaseA2();
+    releaseA2();
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(false);
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/b.json")).toBe(true);
+    releaseB();
+  });
+
+  it("keeps prepared candidates scoped to each managed owner", async () => {
+    const runtimeConfigA: OpenClawConfig = { gateway: { port: 19001 } };
+    const runtimeConfigB: OpenClawConfig = { gateway: { port: 19002 } };
+    const candidateA = { runtimeConfig: runtimeConfigA, compareConfig: {} };
+    const candidateB = { runtimeConfig: runtimeConfigB, compareConfig: {} };
+    const releaseA = registerManagedRuntimeConfigWriteOwner(
+      "/tmp/scoped.json",
+      async () => candidateA,
+    );
+    const releaseB = registerManagedRuntimeConfigWriteOwner(
+      "/tmp/scoped.json",
+      async () => candidateB,
+    );
+
+    try {
+      const prepared = await preflightManagedRuntimeConfigWrite("/tmp/scoped.json", {});
+      expect(prepared.get(releaseA.ownerId)).toBe(candidateA);
+      expect(prepared.get(releaseB.ownerId)).toBe(candidateB);
+    } finally {
+      releaseA();
+      releaseB();
+    }
+  });
+
+  it("defers raw runtime activation to a managed write owner", async () => {
+    const activeConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    setRuntimeConfigSnapshot(activeConfig);
+    const notifyCommittedWrite = vi.fn();
+    const refresh = vi.fn(async () => true);
+    const loadFreshConfig = vi.fn(() => ({ gateway: { port: 19001 } }));
+    setRuntimeConfigSnapshotRefreshHandler({ refresh });
+
+    await finalizeRuntimeSnapshotWrite({
+      nextSourceConfig: { gateway: { port: 19001 } },
+      hadRuntimeSnapshot: true,
+      hadBothSnapshots: false,
+      loadFreshConfig,
+      notifyCommittedWrite,
+      deferRuntimeActivation: true,
+      formatRefreshError: (error) => String(error),
+      createRefreshError: (detail, cause) => new Error(detail, { cause }),
+    });
+
+    expect(getRuntimeConfigSnapshot()).toBe(activeConfig);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(loadFreshConfig).not.toHaveBeenCalled();
+    expect(notifyCommittedWrite).toHaveBeenCalledOnce();
   });
 });

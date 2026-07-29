@@ -1,7 +1,8 @@
+// Channels account tests cover non-default Telegram account setup, status, removal, and binding behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPatchedAccountSetupAdapter } from "../channels/plugins/setup-helpers.js";
-import type { ChannelStatusIssue } from "../channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelSetupInput, ChannelStatusIssue } from "../channels/plugins/types.core.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -15,10 +16,15 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 const runtime = createTestRuntime();
 let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
 const createClackPrompterMock = vi.hoisted(() => vi.fn());
+const catalogMocks = vi.hoisted(() => ({
+  listTrustedChannelPluginCatalogEntries: vi.fn(() => []),
+}));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: createClackPrompterMock,
 }));
+
+vi.mock("./channel-setup/trusted-catalog.js", () => catalogMocks);
 
 type ChannelSectionConfig = {
   enabled?: boolean;
@@ -29,6 +35,8 @@ type ChannelSectionConfig = {
   account?: string;
   accounts?: Record<string, Record<string, unknown>>;
 };
+
+type SignalSetupInput = ChannelSetupInput & { signalNumber?: string };
 
 function formatChannelStatusJoined(channelAccounts: Record<string, unknown>) {
   return formatGatewayChannelsStatusLines({
@@ -119,7 +127,7 @@ function createScopedCommandTestPlugin(params: {
             token: input.token,
             botToken: input.botToken,
             appToken: input.appToken,
-            signalNumber: input.signalNumber,
+            signalNumber: (input as SignalSetupInput).signalNumber,
           }),
       }),
       ...(params.singleAccountKeysToMove
@@ -339,7 +347,11 @@ describe("channels command", () => {
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe written config shape.
   function getWrittenConfig<T>(): T {
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    return configMocks.writeConfigFile.mock.calls[0]?.[0] as T;
+    const [config] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+    if (config === undefined) {
+      throw new Error("expected written channel config");
+    }
+    return config as T;
   }
 
   async function runRemoveWithConfirm(
@@ -451,7 +463,7 @@ describe("channels command", () => {
 
     const next = await addAlertsTelegramAccount("alerts-token");
     expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.accounts?.default).toEqual({});
+    expect(next.channels?.telegram?.accounts?.default).toStrictEqual({});
     expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
   });
 
@@ -660,6 +672,26 @@ describe("channels command", () => {
     expect(telegramIndex).toBeGreaterThan(-1);
     expect(whatsappIndex).toBeGreaterThan(-1);
     expect(telegramIndex).toBeLessThan(whatsappIndex);
+  });
+
+  it("formats phone allowlists without interpreting arbitrary account names", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      channelLabels: { signal: "Signal" },
+      channelAccounts: {
+        signal: [
+          {
+            accountId: "work",
+            name: "+12133734253",
+            configured: true,
+            allowFrom: ["+442079460018", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+          },
+        ],
+      },
+    });
+
+    expect(lines).toContain(
+      "- Signal work (+12133734253): configured, allow:+44 20 7946 0018 (id: +442079460018),uuid:123e4567-e89b-12d3-a456-426614174000",
+    );
   });
 
   it.each([

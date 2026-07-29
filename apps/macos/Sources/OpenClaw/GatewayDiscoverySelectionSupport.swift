@@ -25,14 +25,14 @@ enum GatewayDiscoverySelectionSupport {
         state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
 
         if preferredTransport == .direct {
-            if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
-                OpenClawConfigFile.setRemoteGatewayUrl(
-                    host: endpoint.host,
-                    port: endpoint.port)
+            OpenClawConfigFile.setRemoteGatewayTransport(AppState.RemoteTransport.direct.rawValue)
+            if !state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                OpenClawConfigFile.setRemoteGatewayUrlString(state.remoteUrl)
             } else {
                 OpenClawConfigFile.clearRemoteGatewayUrl()
             }
         } else {
+            OpenClawConfigFile.setRemoteGatewayTransport(AppState.RemoteTransport.ssh.rawValue)
             OpenClawConfigFile.setRemoteGatewayUrlString(state.remoteUrl)
         }
     }
@@ -65,9 +65,10 @@ enum GatewayDiscoverySelectionSupport {
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool
     {
         guard GatewayDiscoveryHelpers.directUrl(for: gateway) != nil else { return false }
-        if gateway.stableID.hasPrefix("tailscale-serve|") {
+        if gateway.gatewayTls || gateway.gatewayDirectReachable {
             return true
         }
+
         guard let host = GatewayDiscoveryHelpers.resolvedServiceHost(for: gateway)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()

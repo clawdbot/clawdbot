@@ -1,33 +1,32 @@
+/**
+ * OpenClaw-managed Chrome profile decoration.
+ *
+ * Applies managed-browser policy, a stable profile name, color, download
+ * directory, and clean-exit markers to Chrome's profile files.
+ */
 import fs from "node:fs";
 import path from "node:path";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+
+const CHROME_NETWORK_PREDICTION_DISABLED = 2;
 
 function decoratedMarkerPath(userDataDir: string) {
   return path.join(userDataDir, ".openclaw-profile-decorated");
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return null;
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  const parsed = loadJsonFile(filePath);
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
 }
 
 function safeWriteJson(filePath: string, data: Record<string, unknown>) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  saveJsonFile(filePath, data);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -40,7 +39,14 @@ function readNestedRecord(root: unknown, key: string): Record<string, unknown> |
   return asRecord(asRecord(root)?.[key]);
 }
 
+function readDefaultProfileInfo(localState: unknown): Record<string, unknown> | null {
+  return readNestedRecord(readNestedRecord(asRecord(localState)?.profile, "info_cache"), "Default");
+}
+
 function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
+  if (keys.length === 0) {
+    return;
+  }
   let node: Record<string, unknown> = obj;
   for (const key of keys.slice(0, -1)) {
     const next = node[key];
@@ -49,7 +55,10 @@ function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
     }
     node = node[key] as Record<string, unknown>;
   }
-  node[keys[keys.length - 1] ?? ""] = value;
+  const lastKey = keys.at(-1);
+  if (lastKey !== undefined) {
+    node[lastKey] = value;
+  }
 }
 
 function parseHexRgbToSignedArgbInt(hex: string): number | null {
@@ -63,6 +72,7 @@ function parseHexRgbToSignedArgbInt(hex: string): number | null {
   return argbUnsigned > 0x7fffffff ? argbUnsigned - 0x1_0000_0000 : argbUnsigned;
 }
 
+/** Return true when a managed Chrome profile already has desired decoration. */
 export function isProfileDecorated(
   userDataDir: string,
   desiredName: string,
@@ -75,8 +85,7 @@ export function isProfileDecorated(
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
 
   const localState = safeReadJson(localStatePath);
-  const profile = localState?.profile;
-  const info = readNestedRecord(readNestedRecord(profile, "info_cache"), "Default");
+  const info = readDefaultProfileInfo(localState);
 
   const prefs = safeReadJson(preferencesPath);
   const browserTheme = readNestedRecord(prefs?.browser, "theme");
@@ -110,13 +119,29 @@ export function isProfileDecorated(
   return nameOk && localSeedOk && prefOk && downloadOk;
 }
 
+/** Return whether this profile was initialized with Chromium's automation keychain. */
+export function usesOpenClawMockKeychain(userDataDir: string): boolean {
+  const localState = safeReadJson(path.join(userDataDir, "Local State"));
+  return readDefaultProfileInfo(localState)?.openclaw_mock_keychain === true;
+}
+
+/** Disable Chromium network prediction in an OpenClaw-managed Chrome profile. */
+export function ensureProfileNetworkPredictionDisabled(userDataDir: string) {
+  const preferencesPath = path.join(userDataDir, "Default", "Preferences");
+  const prefs = safeReadJson(preferencesPath) ?? {};
+  // Chromium can preconnect before CDP Fetch interception. Disable that source
+  // of target contact before each fresh managed-browser launch.
+  setDeep(prefs, ["net", "network_prediction_options"], CHROME_NETWORK_PREDICTION_DISABLED);
+  safeWriteJson(preferencesPath, prefs);
+}
+
 /**
  * Best-effort profile decoration (name + lobster-orange). Chrome preference keys
  * vary by version; we keep this conservative and idempotent.
  */
 export function decorateOpenClawProfile(
   userDataDir: string,
-  opts?: { name?: string; color?: string; downloadDir?: string },
+  opts?: { name?: string; color?: string; downloadDir?: string; mockKeychain?: boolean },
 ) {
   const desiredName = opts?.name ?? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
   const desiredColor = (opts?.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase();
@@ -130,6 +155,11 @@ export function decorateOpenClawProfile(
   setDeep(localState, ["profile", "info_cache", "Default", "name"], desiredName);
   setDeep(localState, ["profile", "info_cache", "Default", "shortcut_name"], desiredName);
   setDeep(localState, ["profile", "info_cache", "Default", "user_name"], desiredName);
+  if (opts?.mockKeychain) {
+    // Chrome preserves extra fields in this per-profile dictionary. Recording
+    // the key source here keeps later launches on the same encryption backend.
+    setDeep(localState, ["profile", "info_cache", "Default", "openclaw_mock_keychain"], true);
+  }
   // Color keys are best-effort (Chrome changes these frequently).
   setDeep(localState, ["profile", "info_cache", "Default", "profile_color"], desiredColor);
   setDeep(localState, ["profile", "info_cache", "Default", "user_color"], desiredColor);
@@ -183,6 +213,7 @@ export function decorateOpenClawProfile(
   }
 }
 
+/** Mark the managed Chrome profile as cleanly exited. */
 export function ensureProfileCleanExit(userDataDir: string) {
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const prefs = safeReadJson(preferencesPath) ?? {};

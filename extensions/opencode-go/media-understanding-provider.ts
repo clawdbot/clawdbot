@@ -1,3 +1,4 @@
+// Opencode Go provider module implements model/runtime integration.
 import {
   describeImageWithModel,
   describeImagesWithModel,

@@ -1,3 +1,4 @@
+// Vitest channels config wires the channels test shard.
 import { coreChannelTestInclude } from "./vitest.channel-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

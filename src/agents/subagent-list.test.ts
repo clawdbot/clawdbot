@@ -1,16 +1,19 @@
+// Subagent list tests cover active/recent formatting, usage summaries, and
+// stale-run filtering for the user-visible subagent status command.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions/store.js";
-import { buildSubagentList } from "./subagent-list.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { buildLatestSubagentRunIndex, buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
+
+const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -31,6 +34,34 @@ beforeEach(() => {
   resetSubagentRegistryForTests();
 });
 
+describe("buildLatestSubagentRunIndex", () => {
+  it("prefers the newer generation when runs share a creation timestamp", () => {
+    const childSessionKey = "agent:main:subagent:reused";
+    const makeRun = (runId: string, generation: number): SubagentRunRecord => ({
+      runId,
+      generation,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: runId,
+      cleanup: "keep",
+      createdAt: 1_000,
+      startedAt: 1_000,
+    });
+    const older = makeRun("run-older", 1);
+    const newer = makeRun("run-newer", 2);
+
+    const index = buildLatestSubagentRunIndex(
+      new Map([
+        [older.runId, older],
+        [newer.runId, newer],
+      ]),
+    );
+
+    expect(index.latestByChildSessionKey.get(childSessionKey)).toBe(newer);
+  });
+});
+
 describe("buildSubagentList", () => {
   it("returns empty active and recent sections when no runs exist", () => {
     const cfg = {
@@ -43,8 +74,8 @@ describe("buildSubagentList", () => {
       recentMinutes: 30,
       taskMaxChars: 110,
     });
-    expect(list.active).toEqual([]);
-    expect(list.recent).toEqual([]);
+    expect(list.active).toStrictEqual([]);
+    expect(list.recent).toStrictEqual([]);
     expect(list.text).toContain("active subagents:");
     expect(list.text).toContain("recent (last 30m):");
   });
@@ -71,14 +102,43 @@ describe("buildSubagentList", () => {
       recentMinutes: 30,
       taskMaxChars: 110,
     });
-    expect(list.active[0]?.line).toContain(
-      "This is a deliberately long task description used to verify that subagent list output keeps the full task text",
-    );
-    expect(list.active[0]?.line).toContain("...");
+    expect(list.active[0]?.task).toHaveLength(110);
+    expect(list.active[0]?.task).toMatch(/\.\.\.$/);
     expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
   });
 
+  it("shows taskName in list lines and structured views", () => {
+    const run = {
+      runId: "run-task-name",
+      childSessionKey: "agent:main:subagent:task-name",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "review the subagent orchestration code",
+      taskName: "review_subagents",
+      cleanup: "keep",
+      label: "Review worker",
+      createdAt: 1000,
+      startedAt: 1000,
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+    });
+
+    expect(list.active[0]?.taskName).toBe("review_subagents");
+    expect(list.active[0]?.line).toContain("review_subagents: Review worker");
+  });
+
   it("keeps ended orchestrators active while descendants remain pending", () => {
+    // Parent orchestrators can finish their own turn before child workers do;
+    // list output should keep them active until descendants settle.
     const now = Date.now();
     const orchestratorRun = {
       runId: "run-orchestrator-ended",
@@ -118,7 +178,7 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.childSessions).toEqual([
       "agent:main:subagent:orchestrator-ended:subagent:child",
     ]);
-    expect(list.recent).toEqual([]);
+    expect(list.recent).toStrictEqual([]);
   });
 
   it("omits old ended descendants from child session summaries", () => {
@@ -174,21 +234,27 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:subagent:usage"] = {
+    await replaceSessionEntry(
+      {
+        storePath,
+        sessionKey: "agent:main:subagent:usage",
+      },
+      {
         sessionId: "child-session-usage",
         updatedAt: Date.now(),
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
         model: "opencode/claude-opus-4-6",
-      };
-    });
+      },
+    );
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
     } as OpenClawConfig;
+    // Prompt/cache usage is separate from visible IO so operators can spot
+    // cache-heavy sessions without misreading it as assistant output.
     const list = buildSubagentList({
       cfg,
       runs: [run],
@@ -227,8 +293,8 @@ describe("buildSubagentList", () => {
     });
 
     expect(list.total).toBe(1);
-    expect(list.active).toEqual([]);
-    expect(list.recent).toEqual([]);
+    expect(list.active).toStrictEqual([]);
+    expect(list.recent).toStrictEqual([]);
     expect(list.text).toContain("active subagents:\n(none)");
   });
 
@@ -269,7 +335,7 @@ describe("buildSubagentList", () => {
       taskMaxChars: 110,
     });
 
-    expect(list.active).toEqual([]);
+    expect(list.active).toStrictEqual([]);
     expect(list.recent[0]?.status).toBe("done");
   });
 });

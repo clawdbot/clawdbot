@@ -1,18 +1,24 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Vydra plugin module implements shared behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
-  fetchWithTimeout,
-  resolveProviderOperationTimeoutMs,
+  createProviderOperationTimeoutResolver,
+  fetchWithTimeoutGuarded,
+  pollProviderOperationJson,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
+  sanitizeConfiguredModelProviderRequest,
+  type ProviderOperationDeadline,
+  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
 export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
@@ -24,7 +30,15 @@ const POLL_INTERVAL_MS = 2_500;
 const MAX_POLL_ATTEMPTS = 120;
 type VydraAuthStore = Parameters<typeof resolveApiKeyForProvider>[0]["store"];
 
-type VydraMediaKind = "audio" | "image" | "video";
+type VydraRequestPolicy = Pick<
+  ReturnType<typeof resolveProviderHttpRequestConfig>,
+  "allowPrivateNetwork" | "dispatcherPolicy" | "headers"
+> & {
+  headerOrigin: string;
+  ssrfPolicy?: SsrFPolicy;
+};
+
+type VydraMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 
 type VydraJobPayload = {
   id?: string;
@@ -92,12 +106,11 @@ export async function resolveVydraRequestContext(params: {
   agentDir?: string;
   authStore?: VydraAuthStore;
   capability: "image" | "video";
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   fetchFn: typeof fetch;
   baseUrl: string;
-  allowPrivateNetwork: boolean;
-  headers: Headers;
-  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
+  requestPolicy: VydraRequestPolicy;
 }> {
   const auth = await resolveApiKeyForProvider({
     provider: "vydra",
@@ -109,11 +122,11 @@ export async function resolveVydraRequestContext(params: {
     throw new Error("Vydra API key missing");
   }
   const fetchFn = fetch;
+  const providerConfig = params.cfg.models?.providers?.vydra;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: resolveVydraBaseUrlFromConfig(params.cfg),
       defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-      allowPrivateNetwork: false,
       defaultHeaders: {
         Authorization: `Bearer ${auth.apiKey}`,
         "Content-Type": "application/json",
@@ -121,13 +134,18 @@ export async function resolveVydraRequestContext(params: {
       provider: "vydra",
       capability: params.capability,
       transport: "http",
+      request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
     });
   return {
     fetchFn,
     baseUrl,
-    allowPrivateNetwork,
-    headers,
-    dispatcherPolicy,
+    requestPolicy: {
+      allowPrivateNetwork,
+      dispatcherPolicy,
+      headers,
+      headerOrigin: new URL(baseUrl).origin,
+      ...(params.ssrfPolicy ? { ssrfPolicy: params.ssrfPolicy } : {}),
+    },
   };
 }
 
@@ -193,99 +211,171 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
   return [...urls];
 }
 
-function inferExtension(kind: VydraMediaKind, mimeType: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
-  if (normalized.includes("jpeg")) {
-    return "jpg";
+function resolveVydraFileExtension(kind: VydraMediaKind, mimeType: string): string {
+  return (
+    extensionForMime(mimeType)?.slice(1) ??
+    (kind === "image" ? "png" : kind === "audio" ? "mp3" : "mp4")
+  );
+}
+
+function resolveVydraHttpTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return DEFAULT_HTTP_TIMEOUT_MS;
   }
-  if (normalized.includes("webp")) {
-    return "webp";
+  return resolved;
+}
+
+function createVydraTimeoutError(deadline: ProviderOperationDeadline): Error {
+  const timeoutLabel =
+    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
+  return new Error(`${deadline.label} timed out${timeoutLabel}`);
+}
+
+function resolveVydraGuardedRequestOptions(
+  policy: VydraRequestPolicy,
+): NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]> {
+  const ssrfPolicy = policy.allowPrivateNetwork
+    ? { ...policy.ssrfPolicy, allowPrivateNetwork: true }
+    : policy.ssrfPolicy;
+  return {
+    ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
+    auditContext: "vydra-media-download",
+  };
+}
+
+function resolveVydraAssetRequestHeaders(
+  url: string,
+  policy: VydraRequestPolicy,
+): Headers | undefined {
+  try {
+    // Same-origin assets may need the configured provider headers. Cross-origin
+    // result URLs must not receive the Vydra API credential or custom headers.
+    return new URL(url).origin === policy.headerOrigin ? policy.headers : undefined;
+  } catch {
+    return undefined;
   }
-  if (normalized.includes("wav")) {
-    return "wav";
-  }
-  if (normalized.includes("mpeg") || normalized.includes("mp3")) {
-    return "mp3";
-  }
-  if (normalized.includes("webm")) {
-    return "webm";
-  }
-  if (normalized.includes("quicktime")) {
-    return "mov";
-  }
-  return kind === "image" ? "png" : kind === "audio" ? "mp3" : "mp4";
 }
 
 export async function downloadVydraAsset(params: {
   url: string;
   kind: VydraMediaKind;
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
+  requestPolicy: VydraRequestPolicy;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
-  const response = await fetchWithTimeout(
+  const timeoutMs = resolveVydraHttpTimeoutMs(params.timeoutMs);
+  const deadline = createProviderOperationDeadline({
+    timeoutMs,
+    label: `Vydra ${params.kind} download`,
+  });
+  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: timeoutMs,
+  });
+  const headers = resolveVydraAssetRequestHeaders(params.url, params.requestPolicy);
+  const result = await fetchWithTimeoutGuarded(
     params.url,
-    { method: "GET" },
-    params.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+    {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+    },
+    resolveTimeoutMs(),
     params.fetchFn,
+    resolveVydraGuardedRequestOptions(params.requestPolicy),
   );
-  await assertOkOrThrowHttpError(response, `Vydra ${params.kind} download failed`);
-  const mimeType =
-    response.headers.get("content-type")?.trim() ||
-    (params.kind === "image" ? "image/png" : params.kind === "audio" ? "audio/mpeg" : "video/mp4");
-  const arrayBuffer = await response.arrayBuffer();
-  const extension = inferExtension(params.kind, mimeType);
-  const fileStem = params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
-  return {
-    buffer: Buffer.from(arrayBuffer),
-    mimeType,
-    fileName: `${fileStem}-1.${extension}`,
-  };
+  try {
+    try {
+      await assertOkOrThrowHttpError(result.response, `Vydra ${params.kind} download failed`, {
+        bodyTimeoutMs: resolveTimeoutMs,
+        onBodyTimeout: () => createVydraTimeoutError(deadline),
+      });
+      const mimeType =
+        result.response.headers.get("content-type")?.trim() ||
+        (params.kind === "image"
+          ? "image/png"
+          : params.kind === "audio"
+            ? "audio/mpeg"
+            : "video/mp4");
+      const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+        timeoutMs: resolveTimeoutMs,
+        onTimeout: () => createVydraTimeoutError(deadline),
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
+      });
+      const extension = resolveVydraFileExtension(params.kind, mimeType);
+      const fileStem =
+        params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
+      return {
+        buffer,
+        mimeType,
+        fileName: `${fileStem}-1.${extension}`,
+      };
+    } catch (error) {
+      // The guarded request signal remains active through body consumption and
+      // can win the same absolute-deadline race. Keep timeout precedence stable.
+      if (typeof deadline.deadlineAtMs === "number" && Date.now() >= deadline.deadlineAtMs) {
+        throw createVydraTimeoutError(deadline);
+      }
+      throw error;
+    }
+  } finally {
+    await result.release();
+  }
 }
 
 async function waitForVydraJob(params: {
   baseUrl: string;
   jobId: string;
-  headers: Headers;
   timeoutMs?: number;
+  deadline?: ProviderOperationDeadline;
   fetchFn: typeof fetch;
   kind: VydraMediaKind;
+  requestPolicy: VydraRequestPolicy;
 }): Promise<unknown> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: `Vydra job ${params.jobId}`,
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs,
+      label: `Vydra job ${params.jobId}`,
+    });
+  return await pollProviderOperationJson<unknown>({
+    url: `${params.baseUrl}/jobs/${params.jobId}`,
+    headers: params.requestPolicy.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "Vydra job status request failed",
+    timeoutMessage: `Vydra job ${params.jobId} did not finish in time`,
+    allowPrivateNetwork: params.requestPolicy.allowPrivateNetwork,
+    ssrfPolicy: params.requestPolicy.ssrfPolicy,
+    dispatcherPolicy: params.requestPolicy.dispatcherPolicy,
+    auditContext: "vydra-job-status",
+    isComplete: (payload) =>
+      resolveVydraResponseStatus(payload) === "completed" ||
+      extractVydraResultUrls(payload, params.kind).length > 0,
+    getFailureMessage: (payload) => {
+      const status = resolveVydraResponseStatus(payload);
+      return status === "failed" || status === "error" || status === "cancelled"
+        ? (resolveVydraErrorMessage(payload) ?? `Vydra job ${params.jobId} failed`)
+        : undefined;
+    },
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
-      `${params.baseUrl}/jobs/${params.jobId}`,
-      {
-        method: "GET",
-        headers: params.headers,
-      },
-      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS }),
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, "Vydra job status request failed");
-    const payload = await response.json();
-    const status = resolveVydraResponseStatus(payload);
-    if (status === "completed" || extractVydraResultUrls(payload, params.kind).length > 0) {
-      return payload;
-    }
-    if (status === "failed" || status === "error" || status === "cancelled") {
-      throw new Error(resolveVydraErrorMessage(payload) ?? `Vydra job ${params.jobId} failed`);
-    }
-    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-  }
-  throw new Error(`Vydra job ${params.jobId} did not finish in time`);
 }
 
 export async function resolveCompletedVydraPayload(params: {
   submitted: unknown;
   baseUrl: string;
-  headers: Headers;
   timeoutMs?: number;
+  deadline?: ProviderOperationDeadline;
   fetchFn: typeof fetch;
   kind: VydraMediaKind;
   missingJobIdMessage: string;
+  requestPolicy: VydraRequestPolicy;
 }): Promise<unknown> {
   if (
     resolveVydraResponseStatus(params.submitted) === "completed" ||
@@ -300,9 +390,10 @@ export async function resolveCompletedVydraPayload(params: {
   return waitForVydraJob({
     baseUrl: params.baseUrl,
     jobId,
-    headers: params.headers,
     timeoutMs: params.timeoutMs,
+    ...(params.deadline ? { deadline: params.deadline } : {}),
     fetchFn: params.fetchFn,
     kind: params.kind,
+    requestPolicy: params.requestPolicy,
   });
 }

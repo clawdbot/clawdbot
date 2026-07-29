@@ -1,5 +1,5 @@
 ---
-summary: "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution."
+summary: "OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution."
 read_when:
   - You are installing, configuring, or auditing the openshell plugin
 title: "Openshell plugin"
@@ -7,12 +7,12 @@ title: "Openshell plugin"
 
 # Openshell plugin
 
-Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.
+OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.
 
 ## Distribution
 
 - Package: `@openclaw/openshell-sandbox`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub
 
 ## Surface
 

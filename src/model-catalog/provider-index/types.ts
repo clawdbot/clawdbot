@@ -1,5 +1,8 @@
-import type { ModelCatalogProvider } from "../types.js";
+// Provider-index types describe install hints, auth choices, and preview catalogs for discoverable providers.
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 
+// Normalized provider-index schema. It describes providers discoverable before
+// plugin install, including install hints, auth choices, and preview catalogs.
 export type OpenClawProviderIndexPluginInstall = {
   clawhubSpec?: string;
   npmSpec?: string;
@@ -29,7 +32,7 @@ export type OpenClawProviderIndexProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation")[];
+  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type OpenClawProviderIndexProvider = {

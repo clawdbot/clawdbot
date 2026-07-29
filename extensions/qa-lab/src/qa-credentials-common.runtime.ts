@@ -1,3 +1,7 @@
+// Qa Lab plugin module implements qa credentials common behavior.
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+
 export const QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
 const QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
 
@@ -17,8 +21,8 @@ export function parseQaCredentialPositiveIntegerEnv(params: {
   if (!raw) {
     return params.fallback;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
     throw (params.toError ?? makeError)(`${params.key} must be a positive integer.`);
   }
   return value;
@@ -27,10 +31,6 @@ export function parseQaCredentialPositiveIntegerEnv(params: {
 export function isQaCredentialTruthyOptIn(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function isQaCredentialLoopbackHostname(hostname: string) {
-  return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
 }
 
 export function normalizeQaCredentialConvexSiteUrl(params: {
@@ -57,7 +57,7 @@ export function normalizeQaCredentialConvexSiteUrl(params: {
   const allowInsecureHttp = isQaCredentialTruthyOptIn(
     params.env[QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY],
   );
-  if (!allowInsecureHttp || !isQaCredentialLoopbackHostname(url.hostname)) {
+  if (!allowInsecureHttp || !isLoopbackHost(url.hostname)) {
     throw toError(
       `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
     );

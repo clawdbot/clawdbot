@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime api.actions behavior.
 export { handleDiscordAction } from "./src/actions/runtime.js";
 export {
   isDiscordModerationAction,

@@ -1,3 +1,8 @@
+/**
+ * Environment snapshot helpers for live gateway tests.
+ */
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+
 const COMMON_LIVE_ENV_NAMES = [
   "OPENCLAW_AGENT_RUNTIME",
   "OPENCLAW_CONFIG_PATH",
@@ -14,6 +19,7 @@ const COMMON_LIVE_ENV_NAMES = [
 
 export type LiveEnvSnapshot = Record<string, string | undefined>;
 
+/** Captures live-test environment variables so tests can restore them later. */
 export function snapshotLiveEnv(extraNames: readonly string[] = []): LiveEnvSnapshot {
   const snapshot: LiveEnvSnapshot = {};
   for (const name of [...COMMON_LIVE_ENV_NAMES, ...extraNames]) {
@@ -22,12 +28,13 @@ export function snapshotLiveEnv(extraNames: readonly string[] = []): LiveEnvSnap
   return snapshot;
 }
 
+/** Restores a previously captured live-test environment snapshot. */
 export function restoreLiveEnv(snapshot: LiveEnvSnapshot): void {
   for (const [name, value] of Object.entries(snapshot)) {
     if (value === undefined) {
-      delete process.env[name];
+      deleteTestEnvValue(name);
     } else {
-      process.env[name] = value;
+      setTestEnvValue(name, value);
     }
   }
 }

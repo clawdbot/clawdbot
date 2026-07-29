@@ -1,3 +1,4 @@
+// Whatsapp tests cover monitor inbox.behavior plugin behavior.
 import "./monitor-inbox.allows-messages-from-senders-allowfrom-list.test-support.js";
 import "./monitor-inbox.append-upsert.test-support.js";
 import "./monitor-inbox.blocks-messages-from-unauthorized-senders-not-allowfrom.test-support.js";

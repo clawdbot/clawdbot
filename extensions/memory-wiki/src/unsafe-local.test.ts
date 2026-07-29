@@ -1,3 +1,4 @@
+// Memory Wiki tests cover unsafe local plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -73,7 +74,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(second.removedCount).toBe(0);
   });
 
-  it("prunes stale unsafe-local pages when configured files disappear", async () => {
+  it("prunes stale unsafe-local pages from an available configured directory", async () => {
     const privateDir = await createPrivateDir("private-prune");
 
     const secretPath = path.join(privateDir, "secret.md");
@@ -85,23 +86,90 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
         vaultMode: "unsafe-local",
         unsafeLocal: {
           allowPrivateMemoryCoreAccess: true,
-          paths: [secretPath],
+          paths: [privateDir],
         },
       },
     });
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const firstPagePath = first.pagePaths[0] ?? "";
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
+      "# private",
+    );
 
     await fs.rm(secretPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(second.artifactCount).toBe(0);
     expect(second.removedCount).toBe(1);
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toMatchObject({
-      code: "ENOENT",
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+  });
+
+  it("preserves pages and human notes for unavailable configured paths", async () => {
+    const unavailableDir = await createPrivateDir("temporarily-unavailable");
+    const availableDir = await createPrivateDir("still-available");
+    const unavailableSource = path.join(unavailableDir, "keep.md");
+    const availableSource = path.join(availableDir, "delete.md");
+    await fs.writeFile(unavailableSource, "# keep me\n", "utf8");
+    await fs.writeFile(availableSource, "# delete me\n", "utf8");
+
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("unavailable-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [unavailableDir, availableDir],
+        },
+      },
     });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const pageContents = await Promise.all(
+      first.pagePaths.map(async (pagePath) => ({
+        pagePath,
+        content: await fs.readFile(path.join(vaultDir, pagePath), "utf8"),
+      })),
+    );
+    const unavailablePage = pageContents.find((page) => page.content.includes("# keep me"));
+    const availablePage = pageContents.find((page) => page.content.includes("# delete me"));
+    expect(unavailablePage).toBeDefined();
+    expect(availablePage).toBeDefined();
+    await fs.writeFile(
+      path.join(vaultDir, unavailablePage!.pagePath),
+      unavailablePage!.content.replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        "<!-- openclaw:human:start -->\nremember this\n<!-- openclaw:human:end -->",
+      ),
+      "utf8",
+    );
+
+    const offlinePath = `${unavailableDir}.offline`;
+    await fs.rename(unavailableDir, offlinePath);
+    await fs.rm(availableSource);
+    const duringOutage = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(duringOutage.artifactCount).toBe(0);
+    expect(duringOutage.removedCount).toBe(1);
+    await expect(
+      fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
+    ).resolves.toContain("remember this");
+    await expect(fs.stat(path.join(vaultDir, availablePage!.pagePath))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+
+    await fs.rename(offlinePath, unavailableDir);
+    const afterRecovery = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(afterRecovery.skippedCount).toBe(1);
+    expect(afterRecovery.removedCount).toBe(0);
+    await expect(
+      fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
+    ).resolves.toContain("remember this");
   });
 
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {
@@ -127,6 +195,8 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     expect(result.importedCount).toBe(1);
     expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
-    await expect(fs.stat(path.join(vaultDir, pagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, pagePath), "utf8")).resolves.toContain(
+      "# very private",
+    );
   });
 });

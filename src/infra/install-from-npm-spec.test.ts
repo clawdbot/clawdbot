@@ -1,3 +1,4 @@
+// Tests package installation from npm registry specs.
 import { describe, expect, it, vi } from "vitest";
 
 const validateRegistryNpmSpecMock = vi.hoisted(() => vi.fn());

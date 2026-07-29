@@ -28,7 +28,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 return
             }
 
-            let userWantsDockHidden = !UserDefaults.standard.bool(forKey: showDockIconKey)
+            let userWantsDockHidden = (UserDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
             let visibleWindows = NSApp?.windows.filter { window in
                 window.isVisible &&
                     window.frame.width > 1 &&
@@ -58,7 +58,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     }
 
     private func setupObservers() {
-        Task { @MainActor in
+        Task { @MainActor [self] in
             guard let app = NSApp else {
                 self.logger.warning("NSApp not ready, delaying Dock observers")
                 try? await Task.sleep(for: .milliseconds(200))

@@ -1,4 +1,6 @@
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Discord plugin module implements agent components.handlers behavior.
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveDiscordComponentEntryWithPersistence,
   resolveDiscordModalEntryWithPersistence,
@@ -17,12 +19,7 @@ import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
 import type { DiscordComponentControlHandlers } from "./agent-components.wildcard-controls.js";
 
-let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
-
-async function loadComponentsRuntime() {
-  componentsRuntimePromise ??= import("../components.js");
-  return await componentsRuntimePromise;
-}
+const loadComponentsRuntime = createLazyRuntimeModule(() => import("../components.js"));
 
 async function handleDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
@@ -128,14 +125,21 @@ async function handleDiscordComponentEvent(params: {
   }
 
   const values = params.values ? mapSelectValues(consumed, params.values) : undefined;
-  if (consumed.callbackData) {
+  const selectedCallbackData =
+    consumed.kind === "select" &&
+    consumed.callbackDataKind === "callback" &&
+    params.values?.length === 1
+      ? params.values[0]?.trim()
+      : undefined;
+  const pluginCallbackData = consumed.callbackData ?? selectedCallbackData;
+  if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
       ctx: params.ctx,
       interaction: params.interaction,
       interactionCtx,
       channelCtx,
       isAuthorizedSender: commandAuthorized,
-      data: consumed.callbackData,
+      data: pluginCallbackData,
       kind: consumed.kind === "select" ? "select" : "button",
       values,
       messageId: consumed.messageId ?? params.interaction.message?.id,
@@ -144,11 +148,21 @@ async function handleDiscordComponentEvent(params: {
       return;
     }
   }
-  // Preserve explicit callback payloads for button fallbacks so Discord
-  // behaves like Telegram when buttons carry synthetic command text. Select
-  // fallbacks still need their chosen values in the synthesized event text.
+  // Command actions opt into synthetic command fallback. Opaque callback actions
+  // are plugin data only; falling through as slash commands would execute data.
+  const buttonCallbackFallback =
+    consumed.kind === "button" && consumed.callbackDataKind !== "callback"
+      ? consumed.callbackData?.trim()
+      : undefined;
+  const selectedCommandFallback =
+    consumed.kind === "select" &&
+    consumed.callbackDataKind === "command" &&
+    params.values?.length === 1
+      ? params.values[0]?.trim()
+      : undefined;
   const eventText =
-    (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
+    buttonCallbackFallback ||
+    selectedCommandFallback ||
     (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,

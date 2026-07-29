@@ -1,15 +1,18 @@
-import fs from "node:fs";
+// Webchat media helpers translate reply payload media into assistant content
+// blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { openLocalFileSafely } from "../../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 
-/** Cap embedded audio size to avoid multi‑MB payloads on the chat WebSocket. */
+/** Cap local audio files exposed through assistant media. */
 const MAX_WEBCHAT_AUDIO_BYTES = 15 * 1024 * 1024;
 const MAX_WEBCHAT_IMAGE_DATA_URL_CHARS = 2_000_000;
 const MAX_WEBCHAT_IMAGE_DATA_BYTES = 1_500_000;
@@ -23,23 +26,20 @@ const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
   "image/webp",
 ]);
 
-const MIME_BY_EXT: Record<string, string> = {
-  ".aac": "audio/aac",
-  ".m4a": "audio/mp4",
-  ".mp3": "audio/mpeg",
-  ".oga": "audio/ogg",
-  ".ogg": "audio/ogg",
-  ".opus": "audio/opus",
-  ".wav": "audio/wav",
-  ".webm": "audio/webm",
-};
-
 type WebchatAudioEmbeddingOptions = {
   localRoots?: readonly string[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 
-type WebchatAssistantMediaOptions = WebchatAudioEmbeddingOptions;
+type LocalAudioContentBlock = {
+  path: string;
+  block: Record<string, unknown>;
+};
+
+type ReplyMediaAudioEmbedding = {
+  url: string;
+  audioBlock?: Record<string, unknown>;
+};
 
 /** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
 function resolveLocalMediaPathForEmbedding(raw: string): string | null {
@@ -75,13 +75,13 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   return trimmed;
 }
 
-/** Returns a readable local file path when it is a regular file and within the size cap (single stat before read). */
-async function resolveLocalAudioFileForEmbedding(
+async function readLocalAudioContentBlockForEmbedding(
   payload: ReplyPayload,
   raw: string,
   options: WebchatAudioEmbeddingOptions | undefined,
-): Promise<string | null> {
+): Promise<LocalAudioContentBlock | null> {
   if (payload.trustedLocalMedia !== true) {
+    // WebChat may embed local audio only after an upstream path normalizer grants trust.
     return null;
   }
   const resolved = resolveLocalMediaPathForEmbedding(raw);
@@ -91,30 +91,84 @@ async function resolveLocalAudioFileForEmbedding(
   if (!isAudioFileName(resolved)) {
     return null;
   }
+  let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | undefined;
   try {
     await assertLocalMediaAllowed(resolved, options?.localRoots);
-    const st = fs.statSync(resolved);
-    if (!st.isFile() || st.size > MAX_WEBCHAT_AUDIO_BYTES) {
+    opened = await openLocalFileSafely({ filePath: resolved });
+    await assertLocalMediaAllowed(opened.realPath, options?.localRoots);
+    if (opened.stat.size > MAX_WEBCHAT_AUDIO_BYTES) {
       return null;
     }
-    return resolved;
+    return {
+      path: opened.realPath,
+      block: {
+        type: "attachment",
+        attachment: {
+          url: opened.realPath,
+          kind: "audio",
+          label: path.basename(opened.realPath),
+          mimeType: mimeTypeForPath(opened.realPath),
+          ...(payload.audioAsVoice === true ? { isVoiceNote: true } : {}),
+        },
+      },
+    };
   } catch (err) {
     if (err instanceof LocalMediaAccessError) {
       options?.onLocalAudioAccessDenied?.(err);
     }
     return null;
+  } finally {
+    await opened?.handle.close().catch(() => {});
   }
 }
 
-function mimeTypeForPath(filePath: string): string {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  return MIME_BY_EXT[ext] ?? "audio/mpeg";
+async function resolveReplyMediaAudioEmbedding(
+  payload: ReplyPayload,
+  raw: string,
+  seenAudio: Set<string>,
+  options: WebchatAudioEmbeddingOptions | undefined,
+): Promise<ReplyMediaAudioEmbedding | null> {
+  const url = raw.trim();
+  if (!url) {
+    return null;
+  }
+  const audio = await readLocalAudioContentBlockForEmbedding(payload, url, options);
+  if (!audio || seenAudio.has(audio.path)) {
+    return { url };
+  }
+  seenAudio.add(audio.path);
+  return { url, audioBlock: audio.block };
 }
 
-function estimateBase64DecodedBytes(base64: string): number {
-  const sanitized = base64.replace(/\s+/g, "");
-  const padding = sanitized.endsWith("==") ? 2 : sanitized.endsWith("=") ? 1 : 0;
-  return Math.floor((sanitized.length * 3) / 4) - padding;
+function mimeTypeForPath(filePath: string): string {
+  return mimeTypeFromFilePath(filePath) ?? "audio/mpeg";
+}
+
+function isBase64DataPayload(value: string): boolean {
+  if (value.length === 0) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    const isBase64Char =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f ||
+      code === 0x3d;
+    const isWhitespace =
+      code === 0x09 ||
+      code === 0x0a ||
+      code === 0x0b ||
+      code === 0x0c ||
+      code === 0x0d ||
+      code === 0x20;
+    if (!isBase64Char && !isWhitespace) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function resolveEmbeddableImageUrl(url: string): string | null {
@@ -125,15 +179,21 @@ function resolveEmbeddableImageUrl(url: string): string | null {
   if (trimmed.length > MAX_WEBCHAT_IMAGE_DATA_URL_CHARS) {
     return null;
   }
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i.exec(trimmed);
-  if (!match) {
+  const commaIndex = trimmed.indexOf(",");
+  if (commaIndex < 0) {
+    return null;
+  }
+  const metadata = trimmed.slice(0, commaIndex);
+  const match = /^data:(image\/[a-z0-9.+-]+);base64$/i.exec(metadata);
+  const base64Data = trimmed.slice(commaIndex + 1);
+  if (!match || !isBase64DataPayload(base64Data)) {
     return null;
   }
   const mediaType = normalizeLowercaseStringOrEmpty(match[1]);
-  const base64Data = match[2];
   if (!ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES.has(mediaType)) {
     return null;
   }
+  // Size-check the decoded image, not just the data URL string length.
   if (estimateBase64DecodedBytes(base64Data) > MAX_WEBCHAT_IMAGE_DATA_BYTES) {
     return null;
   }
@@ -155,7 +215,7 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
  * Build Control UI / transcript `content` blocks for local TTS (or other) audio files
  * referenced by slash-command / agent replies when the webchat path only had text aggregation.
  */
-export async function buildWebchatAudioContentBlocksFromReplyPayloads(
+async function buildWebchatAudioContentBlocksFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAudioEmbeddingOptions,
 ): Promise<Array<Record<string, unknown>>> {
@@ -167,19 +227,11 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
     }
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
-      const url = raw.trim();
-      if (!url) {
+      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seen, options);
+      if (!media?.audioBlock) {
         continue;
       }
-      const resolved = await resolveLocalAudioFileForEmbedding(payload, url, options);
-      if (!resolved || seen.has(resolved)) {
-        continue;
-      }
-      seen.add(resolved);
-      const block = tryReadLocalAudioContentBlock(resolved);
-      if (block) {
-        blocks.push(block);
-      }
+      blocks.push(media.audioBlock);
     }
   }
   return blocks;
@@ -187,7 +239,7 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
 
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
-  options?: WebchatAssistantMediaOptions,
+  options?: WebchatAudioEmbeddingOptions,
 ): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
   const content: Array<Record<string, unknown>> = [];
   const transcriptTextParts: string[] = [];
@@ -209,25 +261,17 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     const payloadMediaBlocks: Array<Record<string, unknown>> = [];
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
-      const url = raw.trim();
-      if (!url) {
+      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seenAudio, options);
+      if (!media) {
         continue;
       }
-      const resolvedAudioPath = await resolveLocalAudioFileForEmbedding(payload, url, options);
-      if (resolvedAudioPath) {
-        if (seenAudio.has(resolvedAudioPath)) {
-          continue;
-        }
-        seenAudio.add(resolvedAudioPath);
-        const block = tryReadLocalAudioContentBlock(resolvedAudioPath);
-        if (block) {
-          payloadMediaBlocks.push(block);
-          hasAudio = true;
-          payloadHasAudio = true;
-        }
+      if (media.audioBlock) {
+        payloadMediaBlocks.push(media.audioBlock);
+        hasAudio = true;
+        payloadHasAudio = true;
         continue;
       }
-      const imageUrl = resolveEmbeddableImageUrl(url);
+      const imageUrl = resolveEmbeddableImageUrl(media.url);
       if (!imageUrl || seenImages.has(imageUrl)) {
         continue;
       }
@@ -240,6 +284,7 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       payloadMediaBlocks.length > 0 &&
       (!text || replyDirectivePrefix) &&
       transcriptTextParts.length === 0;
+    // Media-only replies need stable transcript text so later context is readable.
     const syntheticText = needsSyntheticText
       ? payloadHasAudio && payloadHasImage
         ? "Media reply"
@@ -271,19 +316,5 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   return { content, transcriptText };
 }
 
-function tryReadLocalAudioContentBlock(filePath: string): Record<string, unknown> | null {
-  try {
-    const buf = fs.readFileSync(filePath);
-    if (buf.length > MAX_WEBCHAT_AUDIO_BYTES) {
-      return null;
-    }
-    const mediaType = mimeTypeForPath(filePath);
-    const base64Data = buf.toString("base64");
-    return {
-      type: "audio",
-      source: { type: "base64", media_type: mediaType, data: base64Data },
-    };
-  } catch {
-    return null;
-  }
-}
+const testing = { buildWebchatAudioContentBlocksFromReplyPayloads };
+export { testing as __testing };

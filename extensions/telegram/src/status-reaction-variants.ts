@@ -1,6 +1,11 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
+// Telegram plugin module implements status reaction variants behavior.
+import type { ReactionTypeEmoji } from "grammy/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
 type StatusReactionEmojiKey = keyof Required<StatusReactionEmojis>;
@@ -94,6 +99,9 @@ const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]
   tool: ["🔥", "⚡", "👍"],
   coding: ["👨‍💻", "🔥", "⚡"],
   web: ["⚡", "🔥", "👍"],
+  deploy: ["🔥", "⚡", "👍"],
+  build: ["🔥", "👨‍💻", "⚡"],
+  concierge: ["👀", "🔥", "⚡"],
   done: ["👍", "🎉", "💯"],
   error: ["😱", "😨", "🤯"],
   stallSoft: ["🥱", "😴", "🤔"],
@@ -107,6 +115,9 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
   "tool",
   "coding",
   "web",
+  "deploy",
+  "build",
+  "concierge",
   "done",
   "error",
   "stallSoft",
@@ -115,7 +126,7 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
 ];
 
 function toUniqueNonEmpty(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  return uniqueStrings(normalizeStringEntries(values));
 }
 
 export function resolveTelegramStatusReactionEmojis(params: {
@@ -130,6 +141,9 @@ export function resolveTelegramStatusReactionEmojis(params: {
     tool: normalizeOptionalString(overrides?.tool) ?? DEFAULT_EMOJIS.tool,
     coding: normalizeOptionalString(overrides?.coding) ?? DEFAULT_EMOJIS.coding,
     web: normalizeOptionalString(overrides?.web) ?? DEFAULT_EMOJIS.web,
+    deploy: normalizeOptionalString(overrides?.deploy) ?? DEFAULT_EMOJIS.deploy,
+    build: normalizeOptionalString(overrides?.build) ?? DEFAULT_EMOJIS.build,
+    concierge: normalizeOptionalString(overrides?.concierge) ?? DEFAULT_EMOJIS.concierge,
     done: normalizeOptionalString(overrides?.done) ?? DEFAULT_EMOJIS.done,
     error: normalizeOptionalString(overrides?.error) ?? DEFAULT_EMOJIS.error,
     stallSoft: normalizeOptionalString(overrides?.stallSoft) ?? DEFAULT_EMOJIS.stallSoft,
@@ -158,7 +172,7 @@ export function isTelegramSupportedReactionEmoji(emoji: string): emoji is Telegr
   return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji as TelegramReactionEmoji);
 }
 
-export function extractTelegramAllowedEmojiReactions(
+function extractTelegramAllowedEmojiReactions(
   chat: TelegramChatDetails | null | undefined,
 ): Set<TelegramReactionEmoji> | null | undefined {
   if (!chat) {

@@ -1,3 +1,4 @@
+// Discord tests cover outbound adapter.interactive order plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,
@@ -10,6 +11,16 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 const { discordOutbound } = await import("./outbound-adapter.js");
 
+type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
+
+function requireDiscordSendPayload(): DiscordSendPayload {
+  const sendPayload = discordOutbound.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected Discord outbound sendPayload");
+  }
+  return sendPayload;
+}
+
 describe("discordOutbound shared interactive ordering", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
@@ -20,7 +31,8 @@ describe("discordOutbound shared interactive ordering", () => {
   });
 
   it("keeps shared text blocks in authored order without hoisting fallback text", async () => {
-    const result = await discordOutbound.sendPayload!({
+    const sendPayload = requireDiscordSendPayload();
+    const result = await sendPayload({
       cfg: {},
       to: "channel:123456",
       text: "",
@@ -40,7 +52,7 @@ describe("discordOutbound shared interactive ordering", () => {
 
     expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
       "channel:123456",
-      {
+      expect.objectContaining({
         blocks: [
           { type: "text", text: "First" },
           {
@@ -49,9 +61,16 @@ describe("discordOutbound shared interactive ordering", () => {
           },
           { type: "text", text: "Last" },
         ],
-      },
+      }),
       expect.objectContaining({
+        accountId: undefined,
+        chunkMode: undefined,
         cfg: {},
+        maxLinesPerMessage: undefined,
+        reply: undefined,
+        silent: undefined,
+        tableMode: undefined,
+        textLimit: undefined,
       }),
     );
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();

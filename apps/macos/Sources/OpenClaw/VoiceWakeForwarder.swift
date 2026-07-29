@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OSLog
 
 enum VoiceWakeForwarder {
@@ -34,7 +35,7 @@ enum VoiceWakeForwarder {
 
     struct ForwardOptions {
         var sessionKey: String = "main"
-        var thinking: String = "low"
+        var thinking: String?
         var deliver: Bool = true
         var to: String?
         var channel: GatewayAgentChannel = .webchat
@@ -97,7 +98,6 @@ enum VoiceWakeForwarder {
 
         return ForwardOptions(
             sessionKey: sessionKey,
-            thinking: "low",
             deliver: true,
             to: to,
             channel: channel,
@@ -139,22 +139,15 @@ enum VoiceWakeForwarder {
         return .failure(.rpcFailed(message))
     }
 
-    static func checkConnection() async -> Result<Void, VoiceWakeForwardError> {
-        let status = await GatewayConnection.shared.status()
-        if status.ok { return .success(()) }
-        return .failure(.rpcFailed(status.error ?? "agent rpc unreachable"))
-    }
-
     private static func loadSessionRouteEntry(sessionKey: String) async -> SessionRouteEntry? {
         do {
-            let data = try await GatewayConnection.shared.request(
-                method: "sessions.list",
-                params: [
-                    "includeGlobal": AnyCodable(false),
-                    "includeUnknown": AnyCodable(false),
-                    "limit": AnyCodable(500),
-                ],
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: 500,
+                search: nil,
+                archived: false,
+                includeGlobal: false,
                 timeoutMs: 10000)
+            let data = try await GatewayConnection.shared.request(request)
             let response = try JSONDecoder().decode(SessionListResponse.self, from: data)
             return response.sessions.first {
                 $0.key.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,3 +1,4 @@
+// Qqbot API module exposes the plugin public contract.
 export { qqbotPlugin } from "./src/channel.js";
 export { qqbotSetupPlugin } from "./src/channel.setup.js";
 export { getFrameworkCommands } from "./src/engine/commands/slash-commands-impl.js";

@@ -1,3 +1,4 @@
+// Qqbot tests cover sender match plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createQQBotSenderMatcher,
@@ -32,8 +33,8 @@ describe("normalizeQQBotAllowFrom", () => {
   });
 
   it("returns empty array for undefined/null", () => {
-    expect(normalizeQQBotAllowFrom(undefined)).toEqual([]);
-    expect(normalizeQQBotAllowFrom(null)).toEqual([]);
+    expect(normalizeQQBotAllowFrom(undefined)).toStrictEqual([]);
+    expect(normalizeQQBotAllowFrom(null)).toStrictEqual([]);
   });
 });
 

@@ -1,3 +1,6 @@
+/**
+ * Tests managed Markdown block replacement helpers.
+ */
 import { describe, expect, it } from "vitest";
 import { replaceManagedMarkdownBlock, withTrailingNewline } from "./memory-host-markdown.js";
 

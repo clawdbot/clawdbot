@@ -1,18 +1,25 @@
+// SSRF policy helpers validate hostnames/IP literals, build pinned DNS lookups,
+// and create dispatcher policies for guarded network fetches.
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
+  isCloudMetadataIpAddress,
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
+  isLinkLocalIpAddress,
+  isLoopbackIpAddress,
   type Ipv4SpecialUseBlockOptions,
   type Ipv6SpecialUseBlockOptions,
   isIpv4Address,
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
-} from "../../shared/net/ip.js";
+} from "@openclaw/net-policy/ip";
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { Dispatcher } from "undici";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,
@@ -27,6 +34,7 @@ type LookupCallback = (
 ) => void;
 
 type LookupResult = LookupAddress | LookupAddress[];
+const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -50,19 +58,25 @@ export type SsrFPolicy = {
    */
   allowIpv6UniqueLocalRange?: boolean;
   allowedHostnames?: string[];
+  /**
+   * Exact HTTP origins that may promote only the current request hostname into
+   * `allowedHostnames`. Evaluated per URL inside the redirect loop.
+   */
+  allowedOrigins?: string[];
   hostnameAllowlist?: string[];
 };
 
 function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(
-    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
-  ).toSorted();
+  return normalizePolicyHostnames(values).toSorted();
+}
+
+function normalizePolicyHostnames(values?: string[]): string[] {
+  return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
 }
 
 function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+  // Policy equality needs deterministic set ordering and normalized host/origin
+  // forms so equivalent operator config compares equal.
   if (!policy) {
     return null;
   }
@@ -72,6 +86,7 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
     allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
   };
 }
@@ -81,6 +96,45 @@ export function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean {
     JSON.stringify(normalizeSsrFPolicyForComparison(a)) ===
     JSON.stringify(normalizeSsrFPolicyForComparison(b))
   );
+}
+
+export function mergeSsrFPolicies(
+  ...policies: Array<SsrFPolicy | undefined>
+): SsrFPolicy | undefined {
+  const merged: SsrFPolicy = {};
+  for (const policy of policies) {
+    if (!policy) {
+      continue;
+    }
+    if (policy.allowPrivateNetwork) {
+      merged.allowPrivateNetwork = true;
+    }
+    if (policy.dangerouslyAllowPrivateNetwork) {
+      merged.dangerouslyAllowPrivateNetwork = true;
+    }
+    if (policy.allowRfc2544BenchmarkRange) {
+      merged.allowRfc2544BenchmarkRange = true;
+    }
+    if (policy.allowIpv6UniqueLocalRange) {
+      merged.allowIpv6UniqueLocalRange = true;
+    }
+    if (policy.allowedHostnames?.length) {
+      merged.allowedHostnames = Array.from(
+        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
+      );
+    }
+    if (policy.allowedOrigins?.length) {
+      merged.allowedOrigins = Array.from(
+        new Set([...(merged.allowedOrigins ?? []), ...policy.allowedOrigins]),
+      );
+    }
+    if (policy.hostnameAllowlist?.length) {
+      merged.hostnameAllowlist = Array.from(
+        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
+      );
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
@@ -97,6 +151,41 @@ export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFP
   } catch {
     return undefined;
   }
+}
+
+function normalizeSsrFPolicyOrigin(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeSsrFPolicyOrigins(values?: string[]): string[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeSsrFPolicyOrigin(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).toSorted();
+}
+
+export function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPolicy | undefined {
+  const origin = normalizeSsrFPolicyOrigin(baseUrl);
+  return origin ? { allowedOrigins: [origin] } : undefined;
 }
 
 export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
@@ -128,23 +217,11 @@ const BLOCKED_HOSTNAMES = new Set([
 ]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
-  if (!values || values.length === 0) {
-    return new Set<string>();
-  }
-  return new Set(values.map((value) => normalizeHostname(value)).filter(Boolean));
+  return new Set(normalizePolicyHostnames(values));
 }
 
 export function normalizeHostnameAllowlist(values?: string[]): string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(
-    new Set(
-      values
-        .map((value) => normalizeHostname(value))
-        .filter((value) => value !== "*" && value !== "*." && value.length > 0),
-    ),
-  );
+  return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
 }
 
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
@@ -156,6 +233,27 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): 
     isPrivateNetworkAllowedByPolicy(policy) ||
     normalizeHostnameSet(policy?.allowedHostnames).has(hostname)
   );
+}
+
+export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined {
+  // allowedOrigins trust only the current request hostname for the matching
+  // origin; redirects must re-evaluate against their own URL.
+  if (!policy?.allowedOrigins?.length) {
+    return policy;
+  }
+  const requestOrigin = normalizeSsrFPolicyOrigin(url.toString());
+  if (
+    !requestOrigin ||
+    !normalizeSsrFPolicyOrigins(policy.allowedOrigins).includes(requestOrigin)
+  ) {
+    return policy;
+  }
+  return {
+    ...policy,
+    allowedHostnames: Array.from(
+      new Set([...(policy.allowedHostnames ?? []), normalizeHostname(url.hostname)]),
+    ),
+  };
 }
 
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
@@ -314,6 +412,64 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
+function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
+  // Keep this stricter SSRF classifier local: locality/auth callers intentionally
+  // recognize only canonical loopback forms, while DNS answers need all encodings.
+  if (isLoopbackIpAddress(address)) {
+    return true;
+  }
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed || isIpv4Address(parsed)) {
+    return false;
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(parsed);
+  return embeddedIpv4?.range() === "loopback";
+}
+
+function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed) {
+    return false;
+  }
+  if (isIpv4Address(parsed)) {
+    return parsed.range() === "unspecified";
+  }
+  if (parsed.range() === "unspecified") {
+    return true;
+  }
+  if (parsed.range() === "loopback") {
+    return false;
+  }
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
+}
+
+function isExplicitLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "localhost.localdomain" ||
+    hostname.endsWith(".localhost") ||
+    isLoopbackIpAddressIncludingEmbeddedIpv4(hostname)
+  );
+}
+
+function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
+  results: readonly LookupAddress[],
+  hostname: string,
+): void {
+  const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
+
+  for (const entry of results) {
+    if (
+      isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
+      (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
+      isLinkLocalIpAddress(entry.address) ||
+      isCloudMetadataIpAddress(entry.address)
+    ) {
+      throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
+    }
+  }
+}
+
 function normalizeLookupResults(results: LookupResult): readonly LookupAddress[] {
   if (Array.isArray(results)) {
     return results;
@@ -344,6 +500,8 @@ export function createPinnedLookup(params: {
     address,
     family: address.includes(":") ? 6 : 4,
   }));
+  const ipv4Records = records.filter((entry) => entry.family === 4);
+  const automaticRecords = ipv4Records.length > 0 ? ipv4Records : records;
   let index = 0;
 
   return ((host: string, options?: unknown, callback?: unknown) => {
@@ -369,15 +527,24 @@ export function createPinnedLookup(params: {
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : records;
-    const usable = candidates.length > 0 ? candidates : records;
+        : automaticRecords;
+    const usable = candidates.length > 0 ? candidates : automaticRecords;
+    // Match dns.lookup's asynchronous callback contract so connection errors
+    // cannot fire before the socket owner attaches its error listener.
     if (opts.all) {
-      cb(null, usable as LookupAddress[]);
+      process.nextTick(() => {
+        cb(null, usable as LookupAddress[]);
+      });
       return;
     }
-    const chosen = usable[index % usable.length];
+    const chosen = expectDefined(
+      usable[index % usable.length],
+      "usable entry at index % usable.length",
+    );
     index += 1;
-    cb(null, chosen.address, chosen.family);
+    process.nextTick(() => {
+      cb(null, chosen.address, chosen.family);
+    });
   }) as typeof dnsLookupCb;
 }
 
@@ -450,6 +617,10 @@ export async function resolvePinnedHostnameWithPolicy(
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
+  } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
+    // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
+    // it must not turn metadata/link-local DNS rebinding into an implicit allow.
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -504,6 +675,8 @@ function resolvePinnedDispatcherLookup(
   }));
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
+  } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
@@ -551,19 +724,55 @@ export function createPinnedDispatcher(
   );
 }
 
+type ClosableDispatcher = {
+  close?: () => Promise<void> | void;
+  destroy?: () => void;
+};
+
+function destroyDispatcher(candidate: ClosableDispatcher): void {
+  try {
+    candidate.destroy?.();
+  } catch {
+    // ignore dispatcher cleanup errors
+  }
+}
+
+async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<void> {
+  const close = candidate.close;
+  if (typeof close !== "function") {
+    destroyDispatcher(candidate);
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(close.call(candidate)),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timeout = undefined;
+          destroyDispatcher(candidate);
+          resolve();
+        }, DISPATCHER_CLOSE_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } catch (err) {
+    destroyDispatcher(candidate);
+    throw err;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as ClosableDispatcher;
   try {
-    if (typeof candidate.close === "function") {
-      await candidate.close();
-      return;
-    }
-    if (typeof candidate.destroy === "function") {
-      candidate.destroy();
-    }
+    await waitForDispatcherClose(candidate);
   } catch {
     // ignore dispatcher cleanup errors
   }

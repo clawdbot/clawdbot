@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embedding chunk limits behavior.
 import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
 import { hasNonTextEmbeddingParts } from "./embedding-inputs.js";
 import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
@@ -5,6 +6,14 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./internal.js";
 
+// Enforces provider byte budgets before chunks reach embedding workers.
+
+/**
+ * Split text-only chunks to the provider's effective input limit.
+ *
+ * Structured multimodal chunks are preserved because only the provider can decide how to count
+ * non-text parts.
+ */
 export function enforceEmbeddingMaxInputTokens(
   provider: EmbeddingProvider,
   chunks: MemoryChunk[],
@@ -31,9 +40,13 @@ export function enforceEmbeddingMaxInputTokens(
       out.push({
         startLine: chunk.startLine,
         endLine: chunk.endLine,
+        ...(chunk.entryStartLine !== undefined
+          ? { entryStartLine: chunk.entryStartLine, entryEndLine: chunk.entryEndLine }
+          : {}),
         text,
         hash: hashText(text),
         embeddingInput: { text },
+        ...(chunk.provenance ? { provenance: chunk.provenance } : {}),
       });
     }
   }

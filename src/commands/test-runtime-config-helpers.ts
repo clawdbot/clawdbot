@@ -1,3 +1,6 @@
+// Test helpers for command runtime/config fixtures.
+// Kept under commands because many command tests need the same mock runtime shapes.
+
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
@@ -25,6 +28,7 @@ type CapturingTestRuntime = {
   errors: string[];
 };
 
+/** Creates a mocked runtime whose calls can be asserted by Vitest tests. */
 export function createTestRuntime(): TestRuntime {
   const log = vi.fn() as MockFn<RuntimeEnv["log"]>;
   const error = vi.fn() as MockFn<RuntimeEnv["error"]>;
@@ -36,6 +40,7 @@ export function createTestRuntime(): TestRuntime {
   };
 }
 
+/** Creates a runtime that captures log/error strings in arrays. */
 export function createCapturingTestRuntime(): CapturingTestRuntime {
   const logs: string[] = [];
   const errors: string[] = [];
@@ -47,6 +52,7 @@ export function createCapturingTestRuntime(): CapturingTestRuntime {
   return { runtime, logs, errors };
 }
 
+/** Creates a runtime that throws on exit so tests can assert early termination. */
 export function createThrowingTestRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),

@@ -1,11 +1,12 @@
-import { execFile } from "node:child_process";
+/** Selects stable Node runtime paths for daemon installs across platforms. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { runExec } from "../process/exec.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -44,6 +45,8 @@ function buildSystemNodeCandidates(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
 ): string[] {
+  // Prefer system package-manager Node paths over shell-managed shims; daemons
+  // launch without interactive shell init files.
   if (platform === "darwin") {
     return [
       "/opt/homebrew/bin/node",
@@ -72,29 +75,73 @@ function buildSystemNodeCandidates(
 type ExecFileAsync = (
   file: string,
   args: readonly string[],
-  options: { encoding: "utf8" },
+  options: { encoding: "utf8"; timeoutMs: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const execFileAsync = promisify(execFile) as unknown as ExecFileAsync;
+const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 
-async function resolveNodeVersion(
+const execFileAsync: ExecFileAsync = async (file, args, options) =>
+  await runExec(file, [...args], { logOutput: false, timeoutMs: options.timeoutMs });
+
+const NODE_RUNTIME_PROBE = String.raw`
+let sqliteVersion = null;
+try {
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    sqliteVersion = db.prepare("SELECT sqlite_version() AS version").get()?.version ?? null;
+  } finally {
+    db.close();
+  }
+} catch {}
+const variables = (process.config && process.config.variables) || {};
+const nodeSharedSqlite = variables.node_shared_sqlite === true || variables.node_shared_sqlite === "true";
+process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, sqliteVersion, nodeSharedSqlite }));
+`;
+
+type NodeRuntimeInfo = {
+  nodeVersion: string | null;
+  sqliteVersion: string | null;
+  nodeSharedSqlite: boolean;
+  supported: boolean;
+};
+
+async function resolveNodeRuntimeInfo(
   nodePath: string,
   execFileImpl: ExecFileAsync,
-): Promise<string | null> {
+): Promise<NodeRuntimeInfo> {
   try {
-    const { stdout } = await execFileImpl(nodePath, ["-p", "process.versions.node"], {
+    const { stdout } = await execFileImpl(nodePath, ["-e", NODE_RUNTIME_PROBE], {
       encoding: "utf8",
+      timeoutMs: NODE_RUNTIME_PROBE_TIMEOUT_MS,
     });
-    const value = stdout.trim();
-    return value ? value : null;
+    const parsed = JSON.parse(stdout) as {
+      nodeVersion?: unknown;
+      sqliteVersion?: unknown;
+      nodeSharedSqlite?: unknown;
+    };
+    const nodeVersion = typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : null;
+    const sqliteVersion = typeof parsed.sqliteVersion === "string" ? parsed.sqliteVersion : null;
+    const nodeSharedSqlite = parsed.nodeSharedSqlite === true || parsed.nodeSharedSqlite === "true";
+    return {
+      nodeVersion,
+      sqliteVersion,
+      nodeSharedSqlite,
+      supported:
+        isSupportedNodeVersion(nodeVersion) &&
+        sqliteVersion !== null &&
+        isSqliteWalResetSafeVersion(sqliteVersion),
+    };
   } catch {
-    return null;
+    return { nodeVersion: null, sqliteVersion: null, nodeSharedSqlite: false, supported: false };
   }
 }
 
 type SystemNodeInfo = {
   path: string;
+  sqliteVersion: string | null;
   version: string | null;
+  nodeSharedSqlite: boolean;
   supported: boolean;
 };
 
@@ -104,12 +151,14 @@ async function isVersionManagedRealNodePath(
 ): Promise<boolean> {
   try {
     const realPath = await fs.realpath(nodePath);
+    // Symlinks in /usr/local/bin can resolve into version-manager trees.
     return isVersionManagedNodePath(realPath, platform);
   } catch {
     return false;
   }
 }
 
+/** True when a Node path lives under a known user version-manager root. */
 export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
@@ -118,6 +167,7 @@ export function isVersionManagedNodePath(
   return VERSION_MANAGER_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+/** True when a Node path matches known system install candidates for the platform. */
 export function isSystemNodePath(
   nodePath: string,
   env: Record<string, string | undefined> = process.env,
@@ -130,6 +180,7 @@ export function isSystemNodePath(
   });
 }
 
+/** Resolves the first available system Node candidate for the platform. */
 export async function resolveSystemNodePath(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -146,6 +197,7 @@ export async function resolveSystemNodePath(
   return null;
 }
 
+/** Resolves system Node info, preferring a supported non-version-managed install. */
 export async function resolveSystemNodeInfo(params: {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
@@ -164,11 +216,13 @@ export async function resolveSystemNodeInfo(params: {
     if (await isVersionManagedRealNodePath(systemNode, platform)) {
       continue;
     }
-    const version = await resolveNodeVersion(systemNode, execFileImpl);
+    const runtime = await resolveNodeRuntimeInfo(systemNode, execFileImpl);
     const info = {
       path: systemNode,
-      version,
-      supported: isSupportedNodeVersion(version),
+      sqliteVersion: runtime.sqliteVersion,
+      version: runtime.nodeVersion,
+      nodeSharedSqlite: runtime.nodeSharedSqlite,
+      supported: runtime.supported,
     };
     if (info.supported) {
       return info;
@@ -178,6 +232,7 @@ export async function resolveSystemNodeInfo(params: {
   return firstAvailable;
 }
 
+/** Renders a warning when the system Node exists but is unsuitable for the daemon. */
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
   selectedNodePath?: string,
@@ -185,12 +240,24 @@ export function renderSystemNodeWarning(
   if (!systemNode || systemNode.supported) {
     return null;
   }
-  const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
-  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.14+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
+  if (systemNode.version === null) {
+    return `System Node at ${systemNode.path} is available, but its version could not be determined.${selectedLabel} Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`;
+  }
+  const versionLabel = systemNode.version;
+  if (isSupportedNodeVersion(systemNode.version)) {
+    const sqliteLabel = systemNode.sqliteVersion ?? "unknown";
+    if (systemNode.nodeSharedSqlite) {
+      return (
+        `System Node ${versionLabel} at ${systemNode.path} uses shared system SQLite ${sqliteLabel}, which is not WAL-reset-safe.${selectedLabel} ` +
+        "Upgrade the system SQLite library to 3.51.3+ (or patched 3.50.7+/3.44.6+), or install a Node build that embeds a safe version."
+      );
+    }
+    return `System Node ${versionLabel} at ${systemNode.path} uses SQLite ${sqliteLabel}, which is not WAL-reset-safe.${selectedLabel} Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`;
+  }
+  return `System Node ${versionLabel} at ${systemNode.path} is outside the supported range.${selectedLabel} Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`;
 }
-export { resolveStableNodePath };
-
+/** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
   runtime?: string;
@@ -206,12 +273,14 @@ export async function resolvePreferredNodePath(params: {
   const currentExecPath = params.execPath ?? process.execPath;
   const execFileImpl = params.execFile ?? execFileAsync;
   if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
-    const version = await resolveNodeVersion(currentExecPath, execFileImpl);
-    if (isSupportedNodeVersion(version)) {
+    const runtime = await resolveNodeRuntimeInfo(currentExecPath, execFileImpl);
+    if (runtime.supported) {
       const stableCurrentPath = await resolveStableNodePath(currentExecPath);
       if (!isVersionManagedNodePath(currentExecPath, platform)) {
         return stableCurrentPath;
       }
+      // Prefer system Node over a version-manager shim so daemon launch survives
+      // shell setup differences and package manager upgrades.
       const systemNode = await resolveSystemNodeInfo({
         env: params.env,
         platform,
@@ -224,7 +293,7 @@ export async function resolvePreferredNodePath(params: {
     }
   }
 
-  // Fall back to system node.
+  // Fall back to system Node when the current executable is unsupported or not Node.
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;

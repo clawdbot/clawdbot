@@ -1,3 +1,4 @@
+// Slack tests cover registry plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

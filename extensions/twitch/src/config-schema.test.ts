@@ -1,15 +1,18 @@
-import AjvPkg from "ajv";
+// Twitch tests cover config schema plugin behavior.
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { TwitchConfigSchema } from "./config-schema.js";
 
 function validateTwitchConfig(value: unknown): boolean {
-  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
   const schema = buildChannelConfigSchema(TwitchConfigSchema).schema;
-  const validate = new Ajv({ allErrors: true, strict: false }).compile(schema);
-  const ok = validate(value);
-  if (!ok) {
-    throw new Error(`expected valid Twitch config: ${JSON.stringify(validate.errors)}`);
+  const result = validateJsonSchemaValue({
+    cacheKey: "twitch.config-schema.test",
+    schema,
+    value,
+  });
+  if (!result.ok) {
+    throw new Error(`expected valid Twitch config: ${JSON.stringify(result.errors)}`);
   }
   return true;
 }

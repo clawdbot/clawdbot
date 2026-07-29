@@ -1,9 +1,11 @@
+// Test routing roots for media generation, media understanding, and voice plugins.
 export const mediaExtensionTestRoots = [
   "extensions/alibaba",
   "extensions/deepgram",
   "extensions/elevenlabs",
   "extensions/fal",
   "extensions/image-generation-core",
+  "extensions/pixverse",
   "extensions/runway",
   "extensions/talk-voice",
   "extensions/video-generation-core",

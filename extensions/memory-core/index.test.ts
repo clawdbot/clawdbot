@@ -1,16 +1,68 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, expect, it } from "vitest";
-import {
-  buildMemoryFlushPlan,
-  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
-  DEFAULT_MEMORY_FLUSH_PROMPT,
-  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-} from "./src/flush-plan.js";
+// Memory Core tests cover index plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+
+const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const createMemoryRuntimeMock = vi.hoisted(() =>
+  vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: getMemorySearchManagerMock,
+  })),
+);
+
+vi.mock("./src/runtime-provider.js", () => ({
+  createMemoryRuntime: createMemoryRuntimeMock,
+  memoryRuntime: {
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: getMemorySearchManagerMock,
+  },
+}));
+
+import plugin from "./index.js";
+
+const hostRuntime = {
+  llm: {
+    acquireLocalService: async () => undefined,
+  },
+  state: {
+    withLease: vi.fn(),
+    openKeyedStore: vi.fn(() => ({
+      lookup: vi.fn(),
+      register: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(),
+    })),
+  },
+} as unknown as OpenClawPluginApi["runtime"];
+
+function registerMemoryCoreRuntime(): MemoryPluginRuntime {
+  let runtime: MemoryPluginRuntime | undefined;
+  plugin.register(
+    createTestPluginApi({
+      runtime: hostRuntime,
+      registerMemoryCapability(capability) {
+        runtime = capability.runtime;
+      },
+    }),
+  );
+  if (!runtime) {
+    throw new Error("expected memory-core to register a memory runtime");
+  }
+  return runtime;
+}
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
-    expect(buildPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(buildPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
@@ -53,6 +105,231 @@ describe("buildPromptSection", () => {
   });
 });
 
+describe("memory-core plugin runtime registration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers the dreaming runtime slash command", () => {
+    let command: OpenClawPluginCommandDefinition | undefined;
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+        registerCommand(definition) {
+          command = definition;
+        },
+      }),
+    );
+
+    expect(command?.name).toBe("dreaming");
+    expect(command?.acceptsArgs).toBe(true);
+    expect(command?.exposeSenderIsOwner).toBe(true);
+    expect(command?.description).toContain("Enable or disable");
+  });
+
+  it("registers the standing-intent tool and deterministic prompt hook", () => {
+    const toolNames: string[] = [];
+    const hooks: string[] = [];
+    const subagentRun = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never,
+        registerTool(_factory, options?: Parameters<OpenClawPluginApi["registerTool"]>[1]) {
+          toolNames.push(...(options?.names ?? []));
+        },
+        on(hookName) {
+          hooks.push(hookName);
+        },
+      }),
+    );
+
+    expect(toolNames).toContain("intent");
+    expect(hooks).toContain("before_prompt_build");
+    expect(subagentRun).not.toHaveBeenCalled();
+  });
+
+  it("scopes both reply hooks to scheduled turns across three registrations", () => {
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      const replyHookTriggers: unknown[] = [];
+      plugin.register(
+        createTestPluginApi({
+          runtime: hostRuntime,
+          on(hookName, _handler, options) {
+            if (hookName === "before_agent_reply") {
+              replyHookTriggers.push(options?.eligibleTriggers);
+            }
+          },
+        }),
+      );
+
+      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([
+        ["heartbeat", "cron"],
+        ["heartbeat", "cron"],
+      ]);
+    }
+  });
+
+  it("hides intent create, list, and cancel from non-owner turns", () => {
+    let intentFactory:
+      | ((ctx: { config?: OpenClawConfig; senderIsOwner?: boolean }) => unknown)
+      | undefined;
+    plugin.register(
+      createTestPluginApi({
+        config: {},
+        runtime: hostRuntime,
+        registerTool(factory, options) {
+          if (options?.names?.includes("intent") && typeof factory === "function") {
+            intentFactory = factory as typeof intentFactory;
+          }
+        },
+      }),
+    );
+    if (!intentFactory) {
+      throw new Error("expected standing-intent tool factory");
+    }
+
+    expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
+    expect(intentFactory({ config: {} })).toBeNull();
+    expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
+  });
+
+  it("warms each configured memory manager at gateway start and logs failures at debug", async () => {
+    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
+      [];
+    const syncMain = vi.fn(async () => {});
+    const syncWork = vi.fn(async () => {
+      throw new Error("warmup failed");
+    });
+    const debug = vi.fn();
+    getMemorySearchManagerMock
+      .mockResolvedValueOnce({ manager: { sync: syncMain } } as never)
+      .mockResolvedValueOnce({ manager: { sync: syncWork } } as never);
+    const config = {
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    } as OpenClawConfig;
+    const testApi = createTestPluginApi({
+      config,
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      runtime: hostRuntime,
+      on(hookName, handler) {
+        if (hookName === "gateway_start") {
+          gatewayStartHandlers.push(
+            handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
+          );
+        }
+      },
+    });
+
+    plugin.register(testApi);
+    const warmup = gatewayStartHandlers.at(-1);
+    if (!warmup) {
+      throw new Error("expected memory warmup gateway_start hook");
+    }
+    warmup({}, { config });
+
+    await vi.waitFor(() => {
+      expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
+      expect(syncMain).toHaveBeenCalledWith({ reason: "startup-warmup" });
+      expect(syncWork).toHaveBeenCalledWith({ reason: "startup-warmup" });
+      expect(debug).toHaveBeenCalledWith(
+        "memory-core: startup index warmup failed for work: warmup failed",
+      );
+    });
+  });
+
+  it("leaves QMD startup synchronization to the backend boot policy", async () => {
+    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
+      [];
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValueOnce({ manager: { sync } } as never);
+    const config = {
+      memory: { backend: "qmd", qmd: { update: { onBoot: false } } },
+    } as OpenClawConfig;
+    plugin.register(
+      createTestPluginApi({
+        config,
+        runtime: hostRuntime,
+        on(hookName, handler) {
+          if (hookName === "gateway_start") {
+            gatewayStartHandlers.push(
+              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
+            );
+          }
+        },
+      }),
+    );
+    const warmup = gatewayStartHandlers.at(-1);
+    if (!warmup) {
+      throw new Error("expected memory warmup gateway_start hook");
+    }
+
+    warmup({}, { config });
+
+    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
+    expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("does not warm memory-core when another plugin owns the memory slot", async () => {
+    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
+      [];
+    const config = {
+      plugins: { slots: { memory: "memory-lancedb" } },
+    } as OpenClawConfig;
+    plugin.register(
+      createTestPluginApi({
+        config,
+        runtime: hostRuntime,
+        on(hookName, handler) {
+          if (hookName === "gateway_start") {
+            gatewayStartHandlers.push(
+              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
+            );
+          }
+        },
+      }),
+    );
+    const warmup = gatewayStartHandlers.at(-1);
+    if (!warmup) {
+      throw new Error("expected memory warmup gateway_start hook");
+    }
+
+    warmup({}, { config });
+
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("wires scoped memory search cleanup through the lazy runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
+
+    expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("binds the host local-service hook to the registered memory runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
+
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
+      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      withLease: expect.any(Function),
+    });
+  });
+
+  it("binds the host SQLite lease hook to tools and CLI runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
+
+    const host = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    expect(host?.withLease).toEqual(expect.any(Function));
+  });
+});
+
 describe("buildMemoryFlushPlan", () => {
   const cfg = {
     agents: {
@@ -65,58 +342,31 @@ describe("buildMemoryFlushPlan", () => {
 
   it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
     const plan = buildMemoryFlushPlan({
-      cfg: {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          defaults: {
-            ...cfg.agents?.defaults,
-            compaction: {
-              memoryFlush: {
-                prompt: "Store durable notes in memory/YYYY-MM-DD.md",
-              },
-            },
-          },
-        },
-      },
+      cfg,
       nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
     });
 
     expect(plan?.prompt).toContain("memory/2026-02-16.md");
     expect(plan?.prompt).toContain(
-      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York)",
     );
+    expect(plan?.prompt).toContain("Reference UTC: 2026-02-16 15:00 UTC");
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
   });
 
-  it("does not append a duplicate current time line", () => {
+  it("appends one current time line to the built-in prompt", () => {
     const plan = buildMemoryFlushPlan({
-      cfg: {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          defaults: {
-            ...cfg.agents?.defaults,
-            compaction: {
-              memoryFlush: {
-                prompt: "Store notes.\nCurrent time: already present",
-              },
-            },
-          },
-        },
-      },
+      cfg,
       nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
     });
 
-    expect(plan?.prompt).toContain("Current time: already present");
     expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 
   it("defaults to safe prompts and gating values", () => {
     const plan = buildMemoryFlushPlan();
-    expect(plan).not.toBeNull();
-    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
+    expect(plan?.softThresholdTokens).toBe(4000);
+    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
     expect(plan?.prompt).toContain("memory/");
     expect(plan?.prompt).toContain("MEMORY.md");
     expect(plan?.systemPrompt).toContain("MEMORY.md");
@@ -158,7 +408,6 @@ describe("buildMemoryFlushPlan", () => {
         agents: {
           defaults: {
             compaction: {
-              reserveTokensFloor: Number.NaN,
               memoryFlush: {
                 softThresholdTokens: -100,
               },
@@ -168,9 +417,8 @@ describe("buildMemoryFlushPlan", () => {
       },
     });
 
-    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(plan?.reserveTokensFloor).toBe(20_000);
+    expect(plan?.softThresholdTokens).toBe(4000);
+    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
   });
 
   it("parses forceFlushTranscriptBytes from byte-size strings", () => {
@@ -192,9 +440,10 @@ describe("buildMemoryFlushPlan", () => {
   });
 
   it("keeps overwrite guards in the default prompt", () => {
-    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toMatch(/APPEND/i);
-    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("do not overwrite");
-    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped variant");
-    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD.md");
+    const prompt = buildMemoryFlushPlan()?.prompt;
+    expect(prompt).toMatch(/APPEND/i);
+    expect(prompt).toContain("do not overwrite");
+    expect(prompt).toContain("timestamped variant");
+    expect(prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
   });
 });

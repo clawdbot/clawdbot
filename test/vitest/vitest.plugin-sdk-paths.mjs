@@ -1,3 +1,4 @@
+// Test routing map for lightweight plugin SDK tests and source triggers.
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
 const pluginSdkLightEntries = [
@@ -49,10 +50,6 @@ export const pluginSdkLightTestFiles = pluginSdkLightEntries.map(({ test }) => t
 
 export function isPluginSdkLightTarget(file) {
   return pluginSdkLightIncludePatternByFile.has(normalizeRepoPath(file));
-}
-
-export function isPluginSdkLightTestFile(file) {
-  return pluginSdkLightTestFiles.includes(normalizeRepoPath(file));
 }
 
 export function resolvePluginSdkLightIncludePattern(file) {

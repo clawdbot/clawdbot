@@ -1,3 +1,4 @@
+// Matrix tests cover room info plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -46,7 +47,13 @@ function createMissingMetadataError() {
 }
 
 function getRoomStateCallCount(client: RoomInfoClientStub, eventType: string) {
-  return client.getRoomStateEvent.mock.calls.filter(([, type]) => type === eventType).length;
+  let count = 0;
+  for (const [, type] of client.getRoomStateEvent.mock.calls) {
+    if (type === eventType) {
+      count++;
+    }
+  }
+  return count;
 }
 
 describe("createMatrixRoomInfoResolver", () => {

@@ -1,3 +1,4 @@
+// Covers script-free npm install args and environment.
 import { describe, expect, it } from "vitest";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
@@ -6,6 +7,8 @@ describe("safe npm install helpers", () => {
     expect(
       createSafeNpmInstallArgs({
         omitDev: true,
+        omitPeer: true,
+        legacyPeerDeps: true,
         ignoreWorkspaces: true,
         loglevel: "error",
         noAudit: true,
@@ -14,6 +17,8 @@ describe("safe npm install helpers", () => {
     ).toEqual([
       "install",
       "--omit=dev",
+      "--omit=peer",
+      "--legacy-peer-deps",
       "--loglevel=error",
       "--ignore-scripts",
       "--workspaces=false",
@@ -23,66 +28,84 @@ describe("safe npm install helpers", () => {
   });
 
   it("forces project-local script-free npm install env", () => {
-    expect(
-      createSafeNpmInstallEnv(
-        {
-          PATH: "/usr/bin:/bin",
-          NPM_CONFIG_IGNORE_SCRIPTS: "false",
-          npm_config_global: "true",
-          npm_config_include_workspace_root: "true",
-          npm_config_ignore_scripts: "false",
-          npm_config_location: "global",
-          npm_config_package_lock: "true",
-          npm_config_workspace: "extensions/telegram",
-          npm_config_workspaces: "true",
-        },
-        {
-          cacheDir: "/tmp/openclaw-npm-cache",
-          ignoreWorkspaces: true,
-          legacyPeerDeps: true,
-          packageLock: false,
-          quiet: true,
-        },
-      ),
-    ).toEqual({
+    const env = createSafeNpmInstallEnv(
+      {
+        PATH: "/usr/bin:/bin",
+        NPM_CONFIG_IGNORE_SCRIPTS: "false",
+        NPM_CONFIG_LEGACY_PEER_DEPS: "false",
+        NPM_CONFIG_STRICT_PEER_DEPS: "true",
+        npm_config_global: "true",
+        npm_config_include_workspace_root: "true",
+        npm_config_ignore_scripts: "false",
+        npm_config_location: "global",
+        npm_config_package_lock: "true",
+        npm_config_workspace: "extensions/telegram",
+        npm_config_workspaces: "true",
+      },
+      {
+        cacheDir: "/tmp/openclaw-npm-cache",
+        ignoreWorkspaces: true,
+        legacyPeerDeps: true,
+        packageLock: false,
+        quiet: true,
+      },
+    );
+
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.NPM_CONFIG_BEFORE).toBe("");
+    expect(env.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
+    expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
+    expect(env.npm_config_audit).toBe("false");
+    expect(env.npm_config_before).toBe("");
+    expect(env.npm_config_cache).toBe("/tmp/openclaw-npm-cache");
+    expect(env.npm_config_dry_run).toBe("false");
+    expect(env.npm_config_fetch_retries).toBe("5");
+    expect(env.npm_config_fetch_retry_maxtimeout).toBe("120000");
+    expect(env.npm_config_fetch_retry_mintimeout).toBe("10000");
+    expect(env.npm_config_fetch_timeout).toBe("300000");
+    expect(env.npm_config_fund).toBe("false");
+    expect(env.npm_config_global).toBe("false");
+    expect(env.npm_config_ignore_scripts).toBe("true");
+    expect(env.npm_config_legacy_peer_deps).toBe("true");
+    expect(env.npm_config_location).toBe("project");
+    expect(env.npm_config_loglevel).toBe("error");
+    expect(env.npm_config_package_lock).toBe("false");
+    expect(env.npm_config_progress).toBe("false");
+    expect(env.npm_config_save).toBe("false");
+    expect(env.npm_config_strict_peer_deps).toBe("false");
+    expect(env.npm_config_workspaces).toBe("false");
+    expect(env.npm_config_yes).toBe("true");
+    expect(env.npm_config_include_workspace_root).toBeUndefined();
+    expect(env.npm_config_workspace).toBeUndefined();
+    expect(env["npm_config_min-release-age"]).toBe("");
+    expect(env.npm_config_min_release_age).toBe("0");
+    expect(env.npm_config_before).toBe("");
+  });
+
+  it("does not inherit host legacy peer dependency mode by default", () => {
+    const env = createSafeNpmInstallEnv({
       PATH: "/usr/bin:/bin",
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-      NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      npm_config_audit: "false",
-      npm_config_cache: "/tmp/openclaw-npm-cache",
-      npm_config_dry_run: "false",
-      npm_config_fetch_retries: "5",
-      npm_config_fetch_retry_maxtimeout: "120000",
-      npm_config_fetch_retry_mintimeout: "10000",
-      npm_config_fetch_timeout: "300000",
-      npm_config_fund: "false",
-      npm_config_global: "false",
-      npm_config_ignore_scripts: "true",
       npm_config_legacy_peer_deps: "true",
-      npm_config_location: "project",
-      npm_config_loglevel: "error",
-      npm_config_package_lock: "false",
-      npm_config_progress: "false",
-      npm_config_save: "false",
-      npm_config_workspaces: "false",
-      npm_config_yes: "true",
+      npm_config_strict_peer_deps: "true",
     });
+
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.npm_config_legacy_peer_deps).toBe("false");
+    expect(env.npm_config_strict_peer_deps).toBe("false");
   });
 
   it("allows package-lock-enabled installs to write lockfiles", () => {
-    expect(
-      createSafeNpmInstallEnv(
-        {
-          PATH: "/usr/bin:/bin",
-          npm_config_save: "false",
-        },
-        {
-          packageLock: true,
-        },
-      ),
-    ).toMatchObject({
-      npm_config_package_lock: "true",
-      npm_config_save: "true",
-    });
+    const env = createSafeNpmInstallEnv(
+      {
+        PATH: "/usr/bin:/bin",
+        npm_config_save: "false",
+      },
+      {
+        packageLock: true,
+      },
+    );
+
+    expect(env.npm_config_package_lock).toBe("true");
+    expect(env.npm_config_save).toBe("true");
   });
 });

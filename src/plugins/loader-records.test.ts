@@ -1,7 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "./loader-records.js";
+/** Verifies plugin loader records expose stable metadata for registered plugin surfaces. */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginRecord, recordPluginError } from "./loader-records.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 describe("plugin loader records", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps package attribution separate from the runtime version", () => {
+    const record = createPluginRecord({
+      id: "versioned",
+      name: "Versioned",
+      source: "test",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+      packageVersion: "1.2.3",
+      version: "runtime-4",
+    });
+
+    expect(record).toMatchObject({
+      packageVersion: "1.2.3",
+      version: "runtime-4",
+    });
+  });
+
   it("preserves manifest-declared channel ids before runtime registration", () => {
     const record = createPluginRecord({
       id: "kitchen-sink",
@@ -38,6 +62,7 @@ describe("plugin loader records", () => {
       origin: "global",
       enabled: true,
       contracts: {
+        embeddingProviders: ["kitchen-sink-embedding-provider"],
         speechProviders: ["kitchen-sink-speech-provider"],
         realtimeTranscriptionProviders: ["kitchen-sink-transcription-provider"],
         realtimeVoiceProviders: ["kitchen-sink-voice-provider"],
@@ -53,6 +78,7 @@ describe("plugin loader records", () => {
       configSchema: false,
     });
 
+    expect(record.embeddingProviderIds).toEqual(["kitchen-sink-embedding-provider"]);
     expect(record.speechProviderIds).toEqual(["kitchen-sink-speech-provider"]);
     expect(record.realtimeTranscriptionProviderIds).toEqual([
       "kitchen-sink-transcription-provider",
@@ -66,5 +92,37 @@ describe("plugin loader records", () => {
     expect(record.webSearchProviderIds).toEqual(["kitchen-sink-web-search-provider"]);
     expect(record.migrationProviderIds).toEqual(["kitchen-sink-migration-provider"]);
     expect(record.memoryEmbeddingProviderIds).toEqual(["kitchen-sink-memory-provider"]);
+  });
+
+  it.each([
+    { diagnostics: "", expected: "Error: boom" },
+    { diagnostics: "1", expected: "Error: boom\n    at plugin-entry.ts:1:1" },
+  ])("uses lifecycle tracing for loader error stacks", ({ diagnostics, expected }) => {
+    vi.stubEnv("OPENCLAW_PLUGIN_LIFECYCLE_TRACE", diagnostics);
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "broken-plugin",
+      source: "/tmp/broken-plugin/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const error = new Error("boom");
+    error.stack = "Error: boom\n    at plugin-entry.ts:1:1";
+
+    recordPluginError({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      registry,
+      record,
+      seenIds: new Map(),
+      pluginId: record.id,
+      origin: record.origin,
+      phase: "load",
+      error,
+      logPrefix: "",
+      diagnosticMessagePrefix: "",
+    });
+
+    expect(record.error).toBe(expected);
   });
 });

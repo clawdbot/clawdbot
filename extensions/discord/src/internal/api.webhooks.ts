@@ -1,3 +1,4 @@
+// Discord plugin module implements api.webhooks behavior.
 import { Routes } from "discord-api-types/v10";
 import type { RequestClient, RequestData } from "./rest.js";
 

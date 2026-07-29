@@ -1,3 +1,4 @@
+// Tlon plugin module implements errors behavior.
 type UrbitErrorCode =
   | "invalid_url"
   | "http_error"

@@ -1,3 +1,4 @@
+// Matrix plugin module implements status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createConnectedChannelStatusPatch,
@@ -70,9 +71,13 @@ export function createMatrixMonitorStatusController(params: {
     emit();
   };
 
-  const noteDisconnected = (params: { state: MatrixSyncState; at?: number; error?: unknown }) => {
-    const at = params.at ?? Date.now();
-    const error = formatSyncError(params.error);
+  const noteDisconnected = (paramsLocal: {
+    state: MatrixSyncState;
+    at?: number;
+    error?: unknown;
+  }) => {
+    const at = paramsLocal.at ?? Date.now();
+    const error = formatSyncError(paramsLocal.error);
     status.connected = false;
     status.lastEventAt = at;
     status.lastDisconnect = {
@@ -80,7 +85,7 @@ export function createMatrixMonitorStatusController(params: {
       ...(error ? { error } : {}),
     };
     status.lastError = error;
-    status.healthState = params.state.toLowerCase();
+    status.healthState = paramsLocal.state.toLowerCase();
     emit();
   };
 

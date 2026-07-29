@@ -1,3 +1,4 @@
+// Outbound payload contract tests cover channel plugin outbound payload shape and normalization.
 import { describe, vi } from "vitest";
 import { createDirectTextMediaOutbound } from "../outbound/direct-text-media.js";
 import {
@@ -22,8 +23,12 @@ function createDirectTextMediaHarness(params: OutboundPayloadHarnessParams) {
     text: "",
     payload: params.payload,
   };
+  const sendPayload = outbound.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected direct text/media outbound sendPayload");
+  }
   return {
-    run: async () => await outbound.sendPayload!(ctx),
+    run: async () => await sendPayload(ctx),
     sendMock: sendFn,
     to: ctx.to,
   };

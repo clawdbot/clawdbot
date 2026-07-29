@@ -1,3 +1,4 @@
+// Gmail hook ops helpers run Gmail setup and watcher support commands.
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -42,6 +43,8 @@ import {
   normalizeHooksPath,
   normalizeServePath,
   parseTopicPath,
+  resolveGogExecutable,
+  resolveGogServeInvocation,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
@@ -318,8 +321,21 @@ export async function runGmailService(opts: GmailRunOptions) {
   let child = spawnGogServe(runtimeConfig);
 
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
+  let renewalInFlight: Promise<void> | null = null;
   const renewTimer = setInterval(() => {
-    void startGmailWatch(runtimeConfig);
+    if (shuttingDown || renewalInFlight) {
+      return;
+    }
+    const renewal = startGmailWatch(runtimeConfig)
+      .catch((err: unknown) => {
+        defaultRuntime.error(`gmail watch renew failed: ${String(err)}`);
+      })
+      .finally(() => {
+        if (renewalInFlight === renewal) {
+          renewalInFlight = null;
+        }
+      });
+    renewalInFlight = renewal;
   }, renewMs);
 
   const detachSignals = () => {
@@ -358,14 +374,19 @@ export async function runGmailService(opts: GmailRunOptions) {
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
   defaultRuntime.log(`Starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
-  return spawn("gog", args, { stdio: "inherit" });
+  const invocation = resolveGogServeInvocation(args);
+  return spawn(invocation.command, invocation.args, {
+    stdio: "inherit",
+    windowsHide: invocation.windowsHide,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
 }
 
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
   fatal = false,
 ) {
-  const args = ["gog", ...buildGogWatchStartArgs(cfg)];
+  const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
   const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
   if (result.code !== 0) {
     const message = result.stderr || result.stdout || "gog watch start failed";

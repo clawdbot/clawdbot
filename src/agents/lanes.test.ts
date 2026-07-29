@@ -1,26 +1,13 @@
+// Documents nested-agent command lane resolution and session scoping.
 import { describe, expect, it } from "vitest";
-import { CommandLane } from "../process/lanes.js";
 import {
-  AGENT_LANE_CRON_NESTED,
-  AGENT_LANE_NESTED,
   isNestedAgentLane,
   resolveCronAgentLane,
-  resolveNestedAgentLane,
   resolveNestedAgentLaneForSession,
 } from "./lanes.js";
 
-describe("resolveNestedAgentLane", () => {
-  it("defaults to the nested lane when no lane is provided", () => {
-    expect(resolveNestedAgentLane()).toBe(AGENT_LANE_NESTED);
-  });
-
-  it("preserves explicit lanes", () => {
-    expect(resolveNestedAgentLane("cron")).toBe(CommandLane.Cron);
-    expect(resolveNestedAgentLane("  cron  ")).toBe(CommandLane.Cron);
-    expect(resolveNestedAgentLane("subagent")).toBe("subagent");
-    expect(resolveNestedAgentLane(" custom-lane ")).toBe("custom-lane");
-  });
-});
+const AGENT_LANE_CRON_NESTED = "cron-nested";
+const AGENT_LANE_NESTED = "nested";
 
 describe("resolveCronAgentLane", () => {
   it("defaults cron-owned runs to the cron-nested lane", () => {
@@ -46,6 +33,8 @@ describe("resolveNestedAgentLaneForSession (#67502)", () => {
   });
 
   it("scopes the nested lane per target session key", () => {
+    // Per-session lane suffixes prevent two nested agents from serializing
+    // unrelated work just because both are nested runs.
     expect(resolveNestedAgentLaneForSession("agent:ebao-next:discord:channel:1")).toBe(
       `${AGENT_LANE_NESTED}:agent:ebao-next:discord:channel:1`,
     );
@@ -87,6 +76,7 @@ describe("isNestedAgentLane", () => {
   });
 
   it("returns false for lanes that merely contain 'nested' as a substring", () => {
+    // Lane checks are prefix-contract based, not substring heuristics.
     expect(isNestedAgentLane("deeply-nested-lane")).toBe(false);
     expect(isNestedAgentLane("session:nested")).toBe(false);
     expect(isNestedAgentLane("nestedfoo")).toBe(false);

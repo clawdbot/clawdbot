@@ -1,3 +1,4 @@
+// Nostr plugin module implements nostr profile http runtime behavior.
 export {
   readJsonBodyWithLimit,
   requestBodyErrorToText,

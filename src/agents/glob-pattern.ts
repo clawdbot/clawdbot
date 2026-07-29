@@ -1,3 +1,6 @@
+/**
+ * Compiles and matches lightweight glob patterns used by agent policies.
+ */
 type CompiledGlobPattern =
   | { kind: "all" }
   | { kind: "exact"; value: string }

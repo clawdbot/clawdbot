@@ -76,7 +76,8 @@ can affect bundled plugins and third-party plugins.
 
 ## Expanding The Boundary
 
-- Additive, backwards-compatible changes are the default.
+- SDK surface is too large. Do not add compat barrels, aliases, or fallback exports for convenience. Replace old entrypoints when cleaner.
+- Public third-party API is the only compat exception: document/version breaks, migrate ALL bundled/internal plugins first, then aggressively deprecate unused exports.
 - When adding or changing a public subpath, keep these aligned:
   - docs in `docs/plugins/*`
   - `scripts/lib/plugin-sdk-entrypoints.json`

@@ -1,8 +1,10 @@
+// TTS status config tests cover status file path and config resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
 
 let fixtureRoot = "";
@@ -20,34 +22,44 @@ afterAll(() => {
 
 async function withStatusTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = path.join(fixtureRoot, `case-${fixtureId++}`);
-  const previousHome = process.env.HOME;
-  const previousUserProfile = process.env.USERPROFILE;
-  const previousOpenClawHome = process.env.OPENCLAW_HOME;
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   fs.mkdirSync(home, { recursive: true });
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  delete process.env.OPENCLAW_HOME;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-  try {
-    await run(home);
-  } finally {
-    restoreEnv("HOME", previousHome);
-    restoreEnv("USERPROFILE", previousUserProfile);
-    restoreEnv("OPENCLAW_HOME", previousOpenClawHome);
-    restoreEnv("OPENCLAW_STATE_DIR", previousStateDir);
-  }
-}
-
-function restoreEnv(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
+  await withEnvAsync(
+    {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+    },
+    async () => await run(home),
+  );
 }
 
 describe("resolveStatusTtsSnapshot", () => {
+  it("treats null prefs as empty settings", async () => {
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, "null");
+
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            tts: {
+              auto: "always",
+              provider: "edge",
+              prefsPath,
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "microsoft",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("uses prefs overrides without loading speech providers", async () => {
     await withStatusTempHome(async (home) => {
       const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
@@ -67,10 +79,8 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                prefsPath,
-              },
+            tts: {
+              prefsPath,
             },
           } as OpenClawConfig,
         }),
@@ -88,10 +98,8 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-              },
+            tts: {
+              auto: "always",
             },
           } as OpenClawConfig,
         }),
@@ -109,11 +117,9 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "off",
-                provider: "openai",
-              },
+            tts: {
+              auto: "off",
+              provider: "openai",
             },
             agents: {
               list: [
@@ -143,14 +149,12 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                persona: "alfred",
-                personas: {
-                  alfred: { provider: "google" },
-                  jarvis: { provider: "edge" },
-                },
+            tts: {
+              auto: "always",
+              persona: "alfred",
+              personas: {
+                alfred: { provider: "google" },
+                jarvis: { provider: "edge" },
               },
             },
             agents: {
@@ -181,17 +185,15 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                provider: "openai",
-                providers: {
-                  openai: {
-                    displayName: "NeuTTS local",
-                    baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
-                    model: "neutts-nano",
-                    voice: "clara",
-                  },
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  displayName: "NeuTTS local",
+                  baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+                  model: "neutts-nano",
+                  voice: "clara",
                 },
               },
             },
@@ -211,21 +213,46 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("keeps truncated status detail fields well-formed at UTF-16 boundaries", async () => {
+    await withStatusTempHome(async () => {
+      const displayName = `${"d".repeat(92)}😀tail`;
+      const model = `${"m".repeat(92)}😀tail`;
+      const voice = `${"v".repeat(92)}😀tail`;
+      const snapshot = resolveStatusTtsSnapshot({
+        cfg: {
+          tts: {
+            auto: "always",
+            provider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                displayName,
+                model,
+                voice,
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(snapshot?.displayName).toBe(`${"d".repeat(92)}...`);
+      expect(snapshot?.model).toBe(`${"m".repeat(92)}...`);
+      expect(snapshot?.voice).toBe(`${"v".repeat(92)}...`);
+    });
+  });
+
   it("omits default OpenAI endpoint details from status", async () => {
     await withStatusTempHome(async () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                provider: "openai",
-                providers: {
-                  openai: {
-                    baseUrl: "https://api.openai.com/v1/",
-                    model: "gpt-4o-mini-tts",
-                    voice: "coral",
-                  },
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1/",
+                  model: "gpt-4o-mini-tts",
+                  voice: "coral",
                 },
               },
             },
@@ -242,20 +269,44 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("reports migrated canonical speaker voice fields", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  speakerVoiceId: "voice-123",
+                },
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "elevenlabs",
+        voice: "voice-123",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("reports merged per-agent provider metadata", async () => {
     await withStatusTempHome(async () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "off",
-                provider: "openai",
-                providers: {
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "coral",
-                  },
+            tts: {
+              auto: "off",
+              provider: "openai",
+              providers: {
+                openai: {
+                  model: "gpt-4o-mini-tts",
+                  voice: "coral",
                 },
               },
             },
@@ -305,18 +356,16 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                provider: "openai",
-                prefsPath,
-                providers: {
-                  microsoft: {
-                    voice: "en-US-AvaMultilingualNeural",
-                  },
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "coral",
-                  },
+            tts: {
+              provider: "openai",
+              prefsPath,
+              providers: {
+                microsoft: {
+                  voice: "en-US-AvaMultilingualNeural",
+                },
+                openai: {
+                  model: "gpt-4o-mini-tts",
+                  voice: "coral",
                 },
               },
             },
@@ -347,26 +396,26 @@ describe("resolveStatusTtsSnapshot", () => {
         }),
       );
 
-      delete process.env.OPENCLAW_STATE_DIR;
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-      try {
-        expect(
-          resolveStatusTtsSnapshot({
-            cfg: {
-              messages: {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        },
+        async () => {
+          expect(
+            resolveStatusTtsSnapshot({
+              cfg: {
                 tts: {},
-              },
-            } as OpenClawConfig,
-          }),
-        ).toEqual({
-          autoMode: "always",
-          provider: "openai",
-          maxLength: 1500,
-          summarize: true,
-        });
-      } finally {
-        vi.unstubAllEnvs();
-      }
+              } as OpenClawConfig,
+            }),
+          ).toEqual({
+            autoMode: "always",
+            provider: "openai",
+            maxLength: 1500,
+            summarize: true,
+          });
+        },
+      );
     });
   });
 });

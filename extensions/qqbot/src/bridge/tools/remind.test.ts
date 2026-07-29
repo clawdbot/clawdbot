@@ -1,3 +1,9 @@
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/core";
+// Qqbot tests cover remind plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayToolMock } = vi.hoisted(() => ({
@@ -8,7 +14,44 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   callGatewayTool: callGatewayToolMock,
 }));
 
-import { createRemindTool } from "./remind.js";
+import { registerRemindTool } from "./remind.js";
+
+function createRegisteredRemindTool(context: OpenClawPluginToolContext = {}): AnyAgentTool {
+  let factory: ((ctx: OpenClawPluginToolContext) => AnyAgentTool) | undefined;
+  const api = {
+    registerTool(tool: AnyAgentTool | ((ctx: OpenClawPluginToolContext) => AnyAgentTool)) {
+      if (typeof tool === "function") {
+        factory = tool;
+      }
+    },
+  } as unknown as OpenClawPluginApi;
+  registerRemindTool(api);
+  if (!factory) {
+    throw new Error("Expected QQBot reminder tool factory");
+  }
+  return factory(context);
+}
+
+type CronAddToolPayload = {
+  name?: string;
+  schedule?: {
+    kind?: string;
+    at?: string;
+    atMs?: number;
+  };
+  sessionTarget?: string;
+  payload?: {
+    kind?: string;
+    message?: string;
+    toolsAllow?: string[];
+  };
+  delivery?: {
+    mode?: string;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
+};
 
 describe("bridge/tools/remind", () => {
   beforeEach(() => {
@@ -16,15 +59,9 @@ describe("bridge/tools/remind", () => {
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
-  it("marks qqbot_remind as owner-only", () => {
-    const tool = createRemindTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
-
   it("schedules reminders directly through Gateway cron with ambient QQ delivery context", async () => {
     callGatewayToolMock.mockResolvedValue({ id: "job-1" });
-    const tool = createRemindTool({
-      senderIsOwner: true,
+    const tool = createRegisteredRemindTool({
       deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
     });
 
@@ -34,22 +71,25 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "cron.add",
-      { timeoutMs: 60_000 },
-      {
-        job: expect.objectContaining({
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: expect.stringContaining("drink water") },
-          delivery: {
-            mode: "announce",
-            channel: "qqbot",
-            to: "qqbot:c2c:user-openid",
-            accountId: "bot2",
-          },
-        }),
-      },
-    );
+    const addCall = callGatewayToolMock.mock.calls.at(0);
+    const addPayload = addCall?.[2] as CronAddToolPayload | undefined;
+    expect(addCall?.[0]).toBe("cron.add");
+    expect(addCall?.[1]).toEqual({ timeoutMs: 60_000 });
+    expect(addPayload).not.toHaveProperty("job");
+    expect(addPayload?.name).toBe("Reminder: drink water");
+    expect(addPayload?.schedule?.kind).toBe("at");
+    expect(addPayload?.schedule?.at).toEqual(expect.any(String));
+    expect(addPayload?.schedule).not.toHaveProperty("atMs");
+    expect(addPayload?.sessionTarget).toBe("isolated");
+    expect(addPayload?.payload?.kind).toBe("agentTurn");
+    expect(addPayload?.payload?.message).toContain("drink water");
+    expect(addPayload?.payload?.toolsAllow).toEqual([]);
+    expect(addPayload?.delivery).toEqual({
+      mode: "announce",
+      channel: "qqbot",
+      to: "qqbot:c2c:user-openid",
+      accountId: "bot2",
+    });
     expect(result.details).toEqual({
       ok: true,
       action: "add",
@@ -59,7 +99,7 @@ describe("bridge/tools/remind", () => {
   });
 
   it("routes list and remove through Gateway cron without exposing generic cron to the model", async () => {
-    const tool = createRemindTool({ senderIsOwner: true });
+    const tool = createRegisteredRemindTool();
 
     await tool.execute("tool-call-1", { action: "list" });
     await tool.execute("tool-call-2", { action: "remove", jobId: "job-1" });
@@ -71,54 +111,5 @@ describe("bridge/tools/remind", () => {
       { timeoutMs: 60_000 },
       { jobId: "job-1" },
     );
-  });
-
-  it("supports injected cron scheduler dependencies for engine-level tests", async () => {
-    const callCron = vi.fn(async () => ({ id: "job-1" }));
-    const tool = createRemindTool(
-      {
-        senderIsOwner: true,
-        deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
-      },
-      { callCron },
-    );
-
-    await tool.execute("tool-call-1", {
-      action: "add",
-      content: "drink water",
-      time: "5m",
-    });
-
-    expect(callCron).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "add",
-        job: expect.objectContaining({
-          delivery: expect.objectContaining({ to: "qqbot:c2c:user-openid", accountId: "bot2" }),
-        }),
-      }),
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("does not schedule when sender ownership is missing", async () => {
-    const callCron = vi.fn(async () => ({ id: "job-1" }));
-    const tool = createRemindTool(
-      {
-        deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
-      },
-      { callCron },
-    );
-
-    const result = await tool.execute("tool-call-1", {
-      action: "add",
-      content: "drink water",
-      time: "5m",
-    });
-
-    expect(callCron).not.toHaveBeenCalled();
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-    expect(result.details).toEqual({
-      error: "QQ reminders require an owner-authorized sender.",
-    });
   });
 });

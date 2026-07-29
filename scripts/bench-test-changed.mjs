@@ -1,9 +1,48 @@
+// Benchmarks `pnpm test:changed` planning/runtime behavior across repeated runs.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { floatFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { pathToFileURL } from "node:url";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
 
-function parseArgs(argv) {
+function parsePositiveInteger(raw, label) {
+  const value = raw?.trim();
+  if (!value) {
+    throw new Error(`${label} requires a value`);
+  }
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a safe positive integer`);
+  }
+  return parsed;
+}
+
+function positiveIntegerFlag(flag, key) {
+  return {
+    consume(argv, index) {
+      if (argv[index] !== flag) {
+        return null;
+      }
+      const rawValue = argv[index + 1];
+      if (!rawValue || rawValue.startsWith("--")) {
+        throw new Error(`${flag} requires a value`);
+      }
+      return {
+        flag,
+        nextIndex: index + 1,
+        repeatable: false,
+        apply(target) {
+          target[key] = parsePositiveInteger(rawValue, flag);
+        },
+      };
+    },
+  };
+}
+
+export function parseArgs(argv) {
   const args = parseFlagArgs(
     argv,
     {
@@ -15,10 +54,9 @@ function parseArgs(argv) {
     [
       stringFlag("--cwd", "cwd"),
       stringFlag("--ref", "ref"),
-      floatFlag("--max-workers", "maxWorkers", { min: 1 }),
+      positiveIntegerFlag("--max-workers", "maxWorkers"),
     ],
     {
-      allowUnknownOptions: true,
       onUnhandledArg(arg, target) {
         if (arg === "--no-rss") {
           target.rss = false;
@@ -37,7 +75,7 @@ function parseArgs(argv) {
     mode: args.mode,
     ref: args.ref,
     rss: args.rss,
-    ...(typeof args.maxWorkers === "number" ? { maxWorkers: Math.trunc(args.maxWorkers) } : {}),
+    ...(typeof args.maxWorkers === "number" ? { maxWorkers: args.maxWorkers } : {}),
   };
 }
 
@@ -71,16 +109,37 @@ function listChangedPaths(opts) {
   return runGitList(["diff", "--name-only", `${opts.ref}...HEAD`], opts.cwd);
 }
 
-function parseMaxRssKb(output) {
-  const match = output.match(/(\d+)\s+maximum resident set size/u);
-  return match ? Number.parseInt(match[1], 10) : null;
+export function parseMaxRssBytes(output) {
+  const match = output.match(
+    /(?:^|\n)[^\S\r\n]*(\d+)[^\S\r\n]+maximum resident set size[^\S\r\n]*(?:\r?\n|$)/u,
+  );
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function formatRss(valueKb) {
-  if (valueKb === null) {
+export function formatRss(valueBytes) {
+  if (valueBytes === null) {
     return "n/a";
   }
-  return `${(valueKb / 1024).toFixed(1)}MB`;
+  return `${(valueBytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+export function resolveBenchRssResult({ label, output, rss, status }) {
+  if (!rss) {
+    return { maxRssBytes: null, output, status };
+  }
+  const maxRssBytes = parseMaxRssBytes(output);
+  if (status === 0 && maxRssBytes === null) {
+    return {
+      maxRssBytes,
+      output: `${output}${output.endsWith("\n") ? "" : "\n"}[bench-test-changed] ${label} missing maximum resident set size from /usr/bin/time -l output\n`,
+      status: 1,
+    };
+  }
+  return { maxRssBytes, output, status };
 }
 
 function runBenchCommand(params) {
@@ -102,86 +161,111 @@ function runBenchCommand(params) {
   );
   const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  const normalized = resolveBenchRssResult({
+    label: params.label,
+    output,
+    rss: params.rss,
+    status: result.status ?? 1,
+  });
   return {
     elapsedMs,
-    maxRssKb: params.rss ? parseMaxRssKb(output) : null,
-    status: result.status ?? 1,
-    output,
+    maxRssBytes: normalized.maxRssBytes,
+    status: normalized.status,
+    output: normalized.output,
   };
 }
 
 function printRunSummary(label, result) {
   console.log(
     `${label.padEnd(8, " ")} wall=${formatMs(result.elapsedMs).padStart(9, " ")} rss=${formatRss(
-      result.maxRssKb,
+      result.maxRssBytes,
     ).padStart(9, " ")}`,
   );
 }
 
-const opts = parseArgs(process.argv.slice(2));
-const changedPaths = listChangedPaths(opts);
-if (changedPaths.length === 0) {
+function main() {
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  const changedPaths = listChangedPaths(opts);
+  if (changedPaths.length === 0) {
+    console.log(
+      opts.mode === "worktree"
+        ? "[bench-test-changed] no changed paths in worktree"
+        : `[bench-test-changed] no changed paths for ${opts.ref}...HEAD`,
+    );
+    process.exit(0);
+  }
+
   console.log(
     opts.mode === "worktree"
-      ? "[bench-test-changed] no changed paths in worktree"
-      : `[bench-test-changed] no changed paths for ${opts.ref}...HEAD`,
+      ? "[bench-test-changed] mode=worktree"
+      : `[bench-test-changed] ref=${opts.ref}`,
   );
-  process.exit(0);
+  console.log("[bench-test-changed] changed paths:");
+  for (const changedPath of changedPaths) {
+    console.log(`- ${changedPath}`);
+  }
+
+  const routedCommand =
+    opts.mode === "worktree"
+      ? [process.execPath, "scripts/test-projects.mjs", ...changedPaths]
+      : [process.execPath, "scripts/test-projects.mjs", "--changed", opts.ref];
+  const rootCommand = [
+    process.execPath,
+    "scripts/run-vitest.mjs",
+    "run",
+    "--config",
+    "vitest.config.ts",
+    ...changedPaths,
+  ];
+
+  console.log(`[bench-test-changed] routed: ${routedCommand.map(quoteArg).join(" ")}`);
+  const routed = runBenchCommand({
+    command: routedCommand,
+    cwd: opts.cwd,
+    label: "routed",
+    rss: opts.rss,
+    ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
+  });
+  if (routed.status !== 0) {
+    process.stderr.write(routed.output);
+    process.exit(routed.status);
+  }
+
+  console.log(`[bench-test-changed] root:   ${rootCommand.map(quoteArg).join(" ")}`);
+  const root = runBenchCommand({
+    command: rootCommand,
+    cwd: opts.cwd,
+    label: "root",
+    rss: opts.rss,
+    ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
+  });
+  if (root.status !== 0) {
+    process.stderr.write(root.output);
+    process.exit(root.status);
+  }
+
+  printRunSummary("routed", routed);
+  printRunSummary("root", root);
+  console.log(
+    `[bench-test-changed] delta wall=${formatMs(root.elapsedMs - routed.elapsedMs)} rss=${
+      routed.maxRssBytes !== null && root.maxRssBytes !== null
+        ? formatRss(root.maxRssBytes - routed.maxRssBytes)
+        : "n/a"
+    }`,
+  );
 }
 
-console.log(
-  opts.mode === "worktree"
-    ? "[bench-test-changed] mode=worktree"
-    : `[bench-test-changed] ref=${opts.ref}`,
-);
-console.log("[bench-test-changed] changed paths:");
-for (const changedPath of changedPaths) {
-  console.log(`- ${changedPath}`);
+const isMain =
+  typeof process.argv[1] === "string" &&
+  process.argv[1].length > 0 &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMain) {
+  main();
 }
-
-const routedCommand =
-  opts.mode === "worktree"
-    ? [process.execPath, "scripts/test-projects.mjs", ...changedPaths]
-    : [process.execPath, "scripts/test-projects.mjs", "--changed", opts.ref];
-const rootCommand = [
-  process.execPath,
-  "scripts/run-vitest.mjs",
-  "run",
-  "--config",
-  "vitest.config.ts",
-  ...changedPaths,
-];
-
-console.log(`[bench-test-changed] routed: ${routedCommand.map(quoteArg).join(" ")}`);
-const routed = runBenchCommand({
-  command: routedCommand,
-  cwd: opts.cwd,
-  rss: opts.rss,
-  ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
-});
-if (routed.status !== 0) {
-  process.stderr.write(routed.output);
-  process.exit(routed.status);
-}
-
-console.log(`[bench-test-changed] root:   ${rootCommand.map(quoteArg).join(" ")}`);
-const root = runBenchCommand({
-  command: rootCommand,
-  cwd: opts.cwd,
-  rss: opts.rss,
-  ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
-});
-if (root.status !== 0) {
-  process.stderr.write(root.output);
-  process.exit(root.status);
-}
-
-printRunSummary("routed", routed);
-printRunSummary("root", root);
-console.log(
-  `[bench-test-changed] delta wall=${formatMs(root.elapsedMs - routed.elapsedMs)} rss=${
-    routed.maxRssKb !== null && root.maxRssKb !== null
-      ? formatRss(root.maxRssKb - routed.maxRssKb)
-      : "n/a"
-  }`,
-);

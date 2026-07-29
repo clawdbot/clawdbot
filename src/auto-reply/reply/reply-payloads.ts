@@ -1,3 +1,4 @@
+// Re-exports reply payload metadata helpers used by agent delivery code.
 export {
   applyReplyTagsToPayload,
   applyReplyThreading,
@@ -9,5 +10,4 @@ export {
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
-  shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads-dedupe.js";

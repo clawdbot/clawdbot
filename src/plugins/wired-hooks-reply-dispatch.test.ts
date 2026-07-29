@@ -1,6 +1,9 @@
+// Covers wired plugin hook dispatch before replies.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 const replyDispatchEvent = {
   ctx: buildTestCtx({ SessionKey: "agent:test:session", BodyForAgent: "hello" }),
@@ -25,6 +28,10 @@ const replyDispatchCtx = {
   recordProcessed: () => {},
   markIdle: () => {},
 };
+
+function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
+  return logger.error.mock.calls[0];
+}
 
 describe("reply_dispatch hook runner", () => {
   it("stops at the first handler that claims reply dispatch", async () => {
@@ -80,9 +87,10 @@ describe("reply_dispatch hook runner", () => {
       queuedFinal: false,
       counts: { tool: 1, block: 0, final: 0 },
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("reply_dispatch handler from test-plugin failed: boom"),
-    );
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorLog(logger)).toEqual([
+      "[hooks] reply_dispatch handler from test-plugin failed: boom",
+    ]);
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
@@ -106,7 +114,7 @@ describe("reply_dispatch hook runner", () => {
         ],
         { logger },
       );
-      registry.typedHooks[0].timeoutMs = 5;
+      expectDefined(registry.typedHooks[0], "registry.typedHooks[0] test invariant").timeoutMs = 5;
 
       const run = runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
       await vi.advanceTimersByTimeAsync(5);
@@ -116,11 +124,10 @@ describe("reply_dispatch hook runner", () => {
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
       });
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "reply_dispatch handler from test-plugin failed: timed out after 5ms",
-        ),
-      );
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(firstErrorLog(logger)).toEqual([
+        "[hooks] reply_dispatch handler from test-plugin failed: timed out after 5ms",
+      ]);
       expect(succeeding).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

@@ -1,6 +1,14 @@
+// Memory Core plugin module implements dreaming repair behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  clearMemoryCoreWorkspaceNamespace,
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+  readMemoryCoreWorkspaceEntries,
+} from "./dreaming-state.js";
 
 type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
@@ -87,8 +95,8 @@ function buildArchiveTimestamp(now: Date): string {
 }
 
 async function ensureArchivablePath(targetPath: string): Promise<"file" | "dir" | null> {
-  const stat = await fs.lstat(targetPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
+  const stat = await fs.lstat(targetPath).catch((err: unknown) => {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;
@@ -121,6 +129,19 @@ async function moveToArchive(params: {
   const destination = path.join(params.archiveDir, `${baseName}.${randomUUID()}`);
   await fs.rename(params.targetPath, destination);
   return destination;
+}
+
+async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
+  await Promise.all([
+    clearMemoryCoreWorkspaceNamespace({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    }),
+    clearMemoryCoreWorkspaceNamespace({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
 }
 
 export async function auditDreamingArtifacts(params: {
@@ -185,6 +206,30 @@ export async function auditDreamingArtifacts(params: {
         message: `Dreaming session-ingestion state could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
         fixable: false,
       });
+    }
+  }
+
+  // Fall back to SQLite plugin state when the legacy JSON file was archived by migration.
+  if (!sessionIngestionExists) {
+    try {
+      // Daily ingestion tracks memory/*.md independently; session repair must not
+      // report or clear that healthy bookkeeping when rebuilding the session corpus.
+      const ingestionNamespaces = [
+        DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      ] as const;
+      for (const namespace of ingestionNamespaces) {
+        const entries = await readMemoryCoreWorkspaceEntries({
+          namespace,
+          workspaceDir,
+        });
+        if (entries.length > 0) {
+          sessionIngestionExists = true;
+          break;
+        }
+      }
+    } catch {
+      // SQLite plugin state unavailable — keep filesystem-only result.
     }
   }
 
@@ -254,6 +299,18 @@ export async function repairDreamingArtifacts(params: {
   if (sessionIngestionDestination) {
     archivedSessionIngestion = true;
     archivedPaths.push(sessionIngestionDestination);
+  }
+
+  if (sessionCorpusDestination || sessionIngestionDestination) {
+    try {
+      await clearSessionIngestionState(workspaceDir);
+    } catch (err) {
+      warnings.push(
+        `Failed clearing dreaming session-ingestion SQLite state: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   if (params.archiveDiary) {

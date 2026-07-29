@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 
 type PluginSnapshotResult = {
@@ -24,21 +22,6 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   ),
 }));
 
-const envCandidateMocks = vi.hoisted(() => ({
-  resolveProviderEnvApiKeyCandidates: vi.fn(),
-}));
-
-vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/model-auth-env-vars.js")>();
-  envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockImplementation(
-    actual.resolveProviderEnvApiKeyCandidates,
-  );
-  return {
-    ...actual,
-    resolveProviderEnvApiKeyCandidates: envCandidateMocks.resolveProviderEnvApiKeyCandidates,
-  };
-});
-
 vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/plugin-registry.js")>();
   return {
@@ -48,231 +31,72 @@ vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
   };
 });
 
-const emptyStore: AuthProfileStore = {
-  version: 1,
-  profiles: {},
-};
+const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
 
-function modelConfig(id: string) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 4096,
-  };
-}
-
-async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
-  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-cloud");
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "workspace-cloud",
-      configSchema: { type: "object" },
-      setup: {
-        providers: [
-          {
-            id: "workspace-cloud",
-            authEvidence: [
-              {
-                type: "local-file-with-env",
-                fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-                credentialMarker: "workspace-cloud-local-credentials",
-                source: "workspace cloud credentials",
-              },
-            ],
-          },
-        ],
-      },
-    }),
-    "utf8",
-  );
-}
+const dualRouteResolverFactory = (() => () => ({
+  kind: "routes",
+  defaultRuntimeId: "codex",
+  routes: [
+    {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authRequirement: "api-key",
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    },
+    {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    },
+  ],
+})) as typeof createOpenAIModelRoutesResolver;
 
 describe("createModelListAuthIndex", () => {
   beforeEach(() => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockClear();
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockClear();
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: { plugins: [] },
+      diagnostics: [],
+    });
   });
 
-  it("normalizes auth aliases from profiles", () => {
+  it("forwards route-aware evaluation through the command adapter", () => {
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: {
         version: 1,
         profiles: {
-          "byteplus:default": {
+          "openai:platform": {
             type: "api_key",
-            provider: "byteplus",
-            key: "sk-test",
+            provider: "openai",
+            key: "platform-key",
           },
         },
       },
       env: {},
+      routeResolverFactory: dualRouteResolverFactory,
     });
 
-    expect(index.hasProviderAuth("byteplus")).toBe(true);
-    expect(index.hasProviderAuth("byteplus-plan")).toBe(true);
-  });
-
-  it("records env-backed providers without resolving env candidates per row", () => {
-    const index = createModelListAuthIndex({
-      cfg: {},
-      authStore: emptyStore,
-      env: {
-        MOONSHOT_API_KEY: "sk-test",
-      },
+    expect(index.evaluateModelAuth("openai", { modelId: "gpt-5.5" })).toMatchObject({
+      availability: true,
+      evidence: "profile",
+      selectedProfileId: "openai:platform",
+      selectedRoute: { authRequirement: "api-key" },
     });
-
-    expect(index.hasProviderAuth("moonshot")).toBe(true);
-    expect(index.hasProviderAuth("openai")).toBe(false);
   });
 
-  it("checks resolver-only env auth on demand", () => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
-    const index = createModelListAuthIndex({
-      cfg: {},
-      authStore: emptyStore,
-      env: {
-        GOOGLE_CLOUD_API_KEY: "gcp-test",
-      },
-    });
-
-    expect(index.hasProviderAuth("google-vertex")).toBe(true);
-  });
-
-  it("uses trusted workspace plugin auth evidence when workspace scope is supplied", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-list-auth-index-"));
-    const workspaceDir = path.join(tempRoot, "workspace");
-    const bundledDir = path.join(tempRoot, "bundled");
-    const stateDir = path.join(tempRoot, "state");
-    const credentialsPath = path.join(tempRoot, "credentials.json");
-    await fs.mkdir(bundledDir, { recursive: true });
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(credentialsPath, "{}", "utf8");
-    await writeWorkspaceAuthEvidencePlugin(workspaceDir);
-
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          WORKSPACE_CLOUD_CREDENTIALS: credentialsPath,
-        },
-        async () => {
-          const cfg = { plugins: { allow: ["workspace-cloud"] } };
-          const withoutWorkspace = createModelListAuthIndex({
-            cfg,
-            authStore: emptyStore,
-            env: process.env,
-          });
-          const withWorkspace = createModelListAuthIndex({
-            cfg,
-            authStore: emptyStore,
-            workspaceDir,
-            env: process.env,
-          });
-
-          expect(withoutWorkspace.hasProviderAuth("workspace-cloud")).toBe(false);
-          expect(withWorkspace.hasProviderAuth("workspace-cloud")).toBe(true);
-        },
-      );
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("records configured provider API keys", () => {
-    const index = createModelListAuthIndex({
-      cfg: {
-        models: {
-          providers: {
-            "custom-openai": {
-              api: "openai-completions",
-              apiKey: "sk-configured",
-              baseUrl: "https://custom.example/v1",
-              models: [modelConfig("local-model")],
-            },
-          },
-        },
-      },
-      authStore: emptyStore,
-      env: {},
-    });
-
-    expect(index.hasProviderAuth("custom-openai")).toBe(true);
-  });
-
-  it("records configured local custom provider markers", () => {
-    const index = createModelListAuthIndex({
-      cfg: {
-        models: {
-          providers: {
-            "local-openai": {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [modelConfig("local-model")],
-            },
-          },
-        },
-      },
-      authStore: emptyStore,
-      env: {},
-    });
-
-    expect(index.hasProviderAuth("local-openai")).toBe(true);
-  });
-
-  it("uses injected synthetic auth refs without loading provider runtime", () => {
-    const index = createModelListAuthIndex({
-      cfg: {},
-      authStore: emptyStore,
-      env: {},
-      syntheticAuthProviderRefs: ["codex"],
-    });
-
-    expect(index.hasProviderAuth("codex")).toBe(true);
-  });
-
-  it("keeps synthetic auth refs exact instead of applying auth-choice aliases", () => {
-    const index = createModelListAuthIndex({
-      cfg: {},
-      authStore: emptyStore,
-      env: {},
-      syntheticAuthProviderRefs: ["claude-cli"],
-    });
-
-    expect(index.hasProviderAuth("claude-cli")).toBe(true);
-    expect(index.hasProviderAuth("anthropic")).toBe(false);
-  });
-
-  it("ignores derived synthetic auth snapshots", () => {
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
-      source: "derived",
-      snapshot: {
-        plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
-      },
-      diagnostics: [],
-    });
-    const index = createModelListAuthIndex({
-      cfg: {},
-      authStore: emptyStore,
-      env: {},
-    });
-
-    expect(index.hasProviderAuth("codex")).toBe(false);
-  });
-
-  it("ignores disabled synthetic auth snapshot entries", () => {
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
+  it("uses enabled synthetic refs from a persisted plugin snapshot", () => {
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "persisted",
       snapshot: {
-        plugins: [{ enabled: false, syntheticAuthRefs: ["codex"] }],
+        plugins: [
+          { enabled: true, syntheticAuthRefs: ["codex"] },
+          { enabled: false, syntheticAuthRefs: ["disabled-provider"] },
+        ],
       },
       diagnostics: [],
     });
@@ -280,8 +104,102 @@ describe("createModelListAuthIndex", () => {
       cfg: {},
       authStore: emptyStore,
       env: {},
+      routeResolverFactory: dualRouteResolverFactory,
     });
 
-    expect(index.hasProviderAuth("codex")).toBe(false);
+    const evaluation = index.evaluateModelAuth("openai", { modelId: "gpt-5.5" });
+    expect(evaluation).toMatchObject({
+      availability: undefined,
+      evidence: "synthetic",
+    });
+    expect(evaluation).not.toHaveProperty("selectedRoute");
+    expect(index.evaluateModelAuth("disabled-provider").availability).toBeUndefined();
+  });
+
+  it("uses enabled synthetic refs from prepared metadata without reloading the registry", () => {
+    const metadataSnapshot = {
+      registrySource: "persisted",
+      registryDiagnostics: [],
+      plugins: [],
+      index: {
+        plugins: [
+          { enabled: true, syntheticAuthRefs: ["codex"] },
+          { enabled: false, syntheticAuthRefs: ["disabled-provider"] },
+        ],
+      },
+    } as unknown as PluginMetadataSnapshot;
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.evaluateModelAuth("openai", { modelId: "gpt-5.5" })).toMatchObject({
+      availability: undefined,
+      evidence: "synthetic",
+    });
+    expect(index.evaluateModelAuth("disabled-provider").availability).toBeUndefined();
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it.each(["derived" as const, "persisted" as const])(
+    "does not trust unusable synthetic refs from a %s snapshot",
+    (source) => {
+      pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source,
+        snapshot: {
+          plugins: [{ enabled: source === "derived", syntheticAuthRefs: ["codex"] }],
+        },
+        diagnostics: [],
+      });
+      const index = createModelListAuthIndex({
+        cfg: {},
+        authStore: emptyStore,
+        env: {},
+        routeResolverFactory: dualRouteResolverFactory,
+      });
+
+      expect(index.evaluateModelAuth("openai", { modelId: "gpt-5.5" })).toMatchObject({
+        availability: false,
+      });
+    },
+  );
+
+  it("uses explicit synthetic refs without loading plugin metadata", () => {
+    const metadataSnapshot = {
+      registrySource: "persisted",
+      plugins: [],
+    } as unknown as PluginMetadataSnapshot;
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+      syntheticAuthProviderRefs: ["codex"],
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.evaluateModelAuth("openai").evidence).toBe("synthetic");
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before loading refs from a diagnostic-bearing metadata snapshot", () => {
+    const metadataSnapshot = {
+      index: { plugins: [] },
+      plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+      registryDiagnostics: [{ level: "error", message: "invalid plugin metadata" }],
+    } as unknown as PluginMetadataSnapshot;
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.evaluateModelAuth("openai").availability).toBe(false);
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
   });
 });

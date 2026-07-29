@@ -1,3 +1,5 @@
+// Covers transport readiness polling.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transportReadyMocks = vi.hoisted(() => ({
@@ -35,6 +37,18 @@ vi.mock("./backoff.js", () => ({
 
 function createRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+}
+
+function runtimeErrorMessageAt(runtime: ReturnType<typeof createRuntime>, index: number): string {
+  const call = runtime.error.mock.calls[index];
+  if (!call || typeof call[0] !== "string") {
+    throw new Error(`expected runtime error call ${index + 1}`);
+  }
+  return call[0];
+}
+
+function latestRuntimeErrorMessage(runtime: ReturnType<typeof createRuntime>): string {
+  return runtimeErrorMessageAt(runtime, runtime.error.mock.calls.length - 1);
 }
 
 describe("waitForTransportReady", () => {
@@ -92,6 +106,31 @@ describe("waitForTransportReady", () => {
     await vi.advanceTimersByTimeAsync(200);
     await asserted;
     expect(runtime.error).toHaveBeenCalled();
+  });
+
+  it("caps oversized timeout values before computing the deadline", async () => {
+    vi.setSystemTime(1_000);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const runtime = createRuntime();
+    const waitPromise = waitForTransportReady({
+      label: "test transport",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      logAfterMs: Number.MAX_SAFE_INTEGER,
+      pollIntervalMs: Number.MAX_SAFE_INTEGER,
+      runtime,
+      check: async () => ({ ok: false, error: "still down" }),
+    });
+    const asserted = expect(waitPromise).rejects.toThrow("test transport not ready");
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    await vi.runOnlyPendingTimersAsync();
+    await asserted;
+    expect(latestRuntimeErrorMessage(runtime)).toContain(
+      `not ready after ${MAX_TIMER_TIMEOUT_MS}ms`,
+    );
   });
 
   it("returns early when aborted", async () => {
@@ -152,8 +191,8 @@ describe("waitForTransportReady", () => {
     await asserted;
 
     expect(runtime.error).toHaveBeenCalledTimes(2);
-    expect(runtime.error.mock.calls.at(0)?.[0]).toContain("unknown error");
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("not ready after 120ms");
+    expect(runtimeErrorMessageAt(runtime, 0)).toContain("unknown error");
+    expect(latestRuntimeErrorMessage(runtime)).toContain("not ready after 120ms");
   });
 
   it("rethrows non-abort sleep failures", async () => {

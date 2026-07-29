@@ -7,6 +7,12 @@
  * dispatcher needs. No decisions / gating.
  */
 
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ProcessedAttachments } from "../inbound-attachments.js";
 import type { InboundGroupInfo, InboundPipelineDeps, ReplyToInfo } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
@@ -24,16 +30,16 @@ interface BuildBodyInput {
 /** Format the inbound envelope (Web UI body). */
 export function buildBody(input: BuildBodyInput): string {
   const { event, deps, userContent, isGroupChat, imageUrls } = input;
-  const envelopeOptions = deps.runtime.channel.reply.resolveEnvelopeFormatOptions(deps.cfg);
-  return deps.runtime.channel.reply.formatInboundEnvelope({
+  const envelopeOptions = resolveEnvelopeFormatOptions(deps.cfg as OpenClawConfig);
+  return formatInboundEnvelope({
     channel: "qqbot",
     from: event.senderName ?? event.senderId,
     timestamp: new Date(event.timestamp).getTime(),
     body: userContent,
+    ...(imageUrls.length > 0 ? { imageUrls } : {}),
     chatType: isGroupChat ? "group" : "direct",
     sender: { id: event.senderId, name: event.senderName },
     envelope: envelopeOptions,
-    ...(imageUrls.length > 0 ? { imageUrls } : {}),
   });
 }
 
@@ -116,6 +122,9 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
   for (let i = 0; i < processed.imageUrls.length; i++) {
     const u = processed.imageUrls[i];
     const t = processed.imageMediaTypes[i] ?? "image/png";
+    if (u === undefined) {
+      continue;
+    }
     if (u.startsWith("http://") || u.startsWith("https://")) {
       remoteMediaUrls.push(u);
       remoteMediaTypes.push(t);
@@ -125,8 +134,8 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
     }
   }
 
-  const uniqueVoicePaths = [...new Set(processed.voiceAttachmentPaths)];
-  const uniqueVoiceUrls = [...new Set(processed.voiceAttachmentUrls)];
+  const uniqueVoicePaths = uniqueStrings(processed.voiceAttachmentPaths);
+  const uniqueVoiceUrls = uniqueStrings(processed.voiceAttachmentUrls);
   const voiceMediaTypes = [...uniqueVoicePaths, ...uniqueVoiceUrls].map(() => "audio/wav");
 
   return {
@@ -136,7 +145,7 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
     remoteMediaTypes,
     uniqueVoicePaths,
     uniqueVoiceUrls,
-    uniqueVoiceAsrReferTexts: [...new Set(processed.voiceAsrReferTexts)].filter(Boolean),
+    uniqueVoiceAsrReferTexts: uniqueStrings(processed.voiceAsrReferTexts).filter(Boolean),
     voiceMediaTypes,
     hasAsrReferFallback: processed.voiceTranscriptSources.includes("asr"),
     voiceTranscriptSources: processed.voiceTranscriptSources,

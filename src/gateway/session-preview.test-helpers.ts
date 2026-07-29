@@ -1,3 +1,6 @@
+/**
+ * Transcript preview fixtures shared by session preview tests.
+ */
 export function createToolSummaryPreviewTranscriptLines(sessionId: string): string[] {
   return [
     JSON.stringify({ type: "session", version: 1, id: sessionId }),

@@ -1,3 +1,4 @@
+// Registry retry tests cover plugin registry retry behavior after transient failures.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 
@@ -166,44 +167,6 @@ describe("plugin contract registry scoped retries", () => {
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses the single registered provider contract for paired manifest alias ids", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi.fn().mockReturnValue(
-      createMockRuntimeRegistry({
-        plugin: {
-          id: "byteplus",
-          status: "loaded",
-          providerIds: ["byteplus"],
-          webFetchProviderIds: [],
-          webSearchProviderIds: [],
-          migrationProviderIds: [],
-        },
-        providers: [
-          {
-            pluginId: "byteplus",
-            provider: {
-              id: "byteplus",
-              label: "BytePlus",
-              docsPath: "/providers/byteplus",
-              auth: [],
-            } as ProviderPlugin,
-          },
-        ],
-      }),
-    );
-
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
-    vi.doMock("../provider-contract-public-artifacts.js", () => ({
-      resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
-    }));
-
-    const { requireProviderContractProvider } = await import("./registry.js");
-
-    expect(requireProviderContractProvider("byteplus-plan").id).toBe("byteplus");
-    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
-  });
-
   it("uses provider public artifacts before falling back to the bundled runtime registry", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
       throw new Error("provider contract public artifact should not hit bundled runtime registry");
@@ -228,7 +191,7 @@ describe("plugin contract registry scoped retries", () => {
       {
         pluginId: "openai",
         provider: {
-          id: "openai-codex",
+          id: "openai",
           label: "OpenAI Codex",
           docsPath: "/providers/openai",
           auth: [
@@ -254,7 +217,7 @@ describe("plugin contract registry scoped retries", () => {
 
     expect(
       resolveProviderContractProvidersForPluginIds(["openai"]).map((provider) => provider.id),
-    ).toEqual(["openai", "openai-codex"]);
+    ).toEqual(["openai"]);
     expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });

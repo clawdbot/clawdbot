@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for channel feedback reactions, status reactions, and logging helpers.
+ */
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   createAckReactionHandle,
@@ -13,10 +16,13 @@ export {
 export { logAckFailure, logTypingFailure, type LogFn } from "../channels/logging.js";
 export { missingTargetError } from "../infra/outbound/target-errors.js";
 export {
+  BUILD_TOOL_TOKENS,
   CODING_TOOL_TOKENS,
+  CONCIERGE_TOOL_TOKENS,
   createStatusReactionController,
   DEFAULT_EMOJIS,
   DEFAULT_TIMING,
+  DEPLOY_TOOL_TOKENS,
   resolveToolEmoji,
   WEB_TOOL_TOKENS,
   type StatusReactionAdapter,

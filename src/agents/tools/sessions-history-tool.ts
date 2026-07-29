@@ -1,18 +1,34 @@
+/**
+ * sessions_history built-in tool.
+ *
+ * Reads bounded, redacted session transcript history after session visibility filtering.
+ */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
+import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
+import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -20,18 +36,60 @@ import {
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
+  limit: optionalPositiveIntegerSchema(),
+  offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  messageId: Type.Optional(Type.String({ minLength: 1 })),
+  sessionId: Type.Optional(Type.String({ minLength: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
+
+const SessionsHistoryOutputSchema = Type.Union([
+  Type.Object(
+    {
+      sessionKey: Type.String(),
+      messages: Type.Array(Type.Unknown()),
+      truncated: Type.Boolean(),
+      droppedMessages: Type.Boolean(),
+      contentTruncated: Type.Boolean(),
+      contentRedacted: Type.Boolean(),
+      bytes: Type.Number(),
+      offset: Type.Optional(Type.Number()),
+      nextOffset: Type.Optional(Type.Number()),
+      hasMore: Type.Optional(Type.Boolean()),
+      totalMessages: Type.Optional(Type.Number()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 type GatewayCaller = typeof callGateway;
+type ChatHistoryPaginationMetadata = {
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+};
+
+function readOffsetParam(params: Record<string, unknown>): number | undefined {
+  const offset = readNonNegativeIntegerParam(params, "offset");
+  if (params.offset !== undefined && offset === undefined) {
+    throw new ToolInputError("offset must be a non-negative integer");
+  }
+  return offset;
+}
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
@@ -81,6 +139,10 @@ function sanitizeHistoryContentBlock(block: unknown): {
       delete entry.thinkingSignature;
       truncated = true;
     }
+    if ("openclawReasoningReplay" in entry) {
+      delete entry.openclawReasoningReplay;
+      truncated = true;
+    }
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateHistoryText(entry.partialJson);
@@ -90,7 +152,8 @@ function sanitizeHistoryContentBlock(block: unknown): {
   }
   if (type === "image") {
     const data = readStringValue(entry.data);
-    const bytes = data ? data.length : undefined;
+    const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+    const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
     if ("data" in entry) {
       delete entry.data;
       truncated = true;
@@ -164,13 +227,150 @@ function enforceSessionsHistoryHardCap(params: {
     return { items: lastOnly, bytes: lastBytes, hardCapped: true };
   }
 
-  const placeholder = [
-    {
-      role: "assistant",
-      content: "[sessions_history omitted: message too large]",
-    },
-  ];
+  const placeholder = [buildSessionsHistoryOmittedPlaceholder(last)];
   return { items: placeholder, bytes: jsonUtf8Bytes(placeholder), hardCapped: true };
+}
+
+function readHistoryMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const seq = (meta as Record<string, unknown>).seq;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+}
+
+function readHistoryMessageId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const id = (meta as Record<string, unknown>).id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+function capSessionsHistoryAroundMessage(
+  items: unknown[],
+  messageId: string,
+  maxBytes: number,
+): { items: unknown[]; bytes: number } {
+  const anchorIndex = items.findIndex((item) => readHistoryMessageId(item) === messageId);
+  if (anchorIndex === -1) {
+    return capArrayByJsonBytes(items, maxBytes);
+  }
+
+  let start = anchorIndex;
+  let end = anchorIndex + 1;
+  let cappedItems = items.slice(start, end);
+  let bytes = jsonUtf8Bytes(cappedItems);
+  let canGrowOlder = start > 0;
+  let canGrowNewer = end < items.length;
+  while (canGrowOlder || canGrowNewer) {
+    if (canGrowOlder) {
+      const candidate = items.slice(start - 1, end);
+      const candidateBytes = jsonUtf8Bytes(candidate);
+      if (candidateBytes <= maxBytes) {
+        start -= 1;
+        cappedItems = candidate;
+        bytes = candidateBytes;
+      } else {
+        canGrowOlder = false;
+      }
+    }
+    canGrowOlder &&= start > 0;
+
+    if (canGrowNewer) {
+      const candidate = items.slice(start, end + 1);
+      const candidateBytes = jsonUtf8Bytes(candidate);
+      if (candidateBytes <= maxBytes) {
+        end += 1;
+        cappedItems = candidate;
+        bytes = candidateBytes;
+      } else {
+        canGrowNewer = false;
+      }
+    }
+    canGrowNewer &&= end < items.length;
+  }
+  return { items: cappedItems, bytes };
+}
+
+function buildSessionsHistoryOmittedPlaceholder(source: unknown): Record<string, unknown> {
+  const seq = readHistoryMessageSeq(source);
+  const id = readHistoryMessageId(source);
+  return {
+    role: "assistant",
+    content: "[sessions_history omitted: message too large]",
+    ...(seq !== undefined || id !== undefined
+      ? {
+          __openclaw: {
+            ...(seq !== undefined ? { seq } : {}),
+            ...(id !== undefined ? { id } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function resolveSessionsHistoryPaginationMetadata(params: {
+  messages: unknown[];
+  result: ChatHistoryPaginationMetadata | undefined;
+  requestedOffset: number | undefined;
+  requestedMessageId: string | undefined;
+}): ChatHistoryPaginationMetadata {
+  const result = params.result;
+  if (params.requestedMessageId) {
+    return typeof result?.totalMessages === "number" ? { totalMessages: result.totalMessages } : {};
+  }
+  const offset =
+    typeof result?.offset === "number"
+      ? result.offset
+      : params.requestedOffset !== undefined
+        ? params.requestedOffset
+        : undefined;
+  if (offset === undefined) {
+    return {};
+  }
+
+  const totalMessages =
+    typeof result?.totalMessages === "number" ? result.totalMessages : undefined;
+  if (totalMessages === undefined) {
+    return {
+      offset,
+      ...(typeof result?.nextOffset === "number" ? { nextOffset: result.nextOffset } : {}),
+      ...(typeof result?.hasMore === "boolean" ? { hasMore: result.hasMore } : {}),
+    };
+  }
+
+  // Gateway offsets count newest transcript rows already returned. Recompute
+  // from the oldest surviving seq after this tool's own filter/cap passes.
+  const oldestSeq = params.messages
+    .map((message) => readHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  const nextOffset =
+    oldestSeq !== undefined
+      ? Math.max(offset, totalMessages - oldestSeq + 1)
+      : typeof result?.nextOffset === "number"
+        ? result.nextOffset
+        : undefined;
+  const hasMore =
+    nextOffset !== undefined
+      ? nextOffset < totalMessages
+      : typeof result?.hasMore === "boolean"
+        ? result.hasMore
+        : undefined;
+  return {
+    offset,
+    ...(hasMore === true && nextOffset !== undefined ? { nextOffset } : {}),
+    ...(hasMore !== undefined ? { hasMore } : {}),
+    totalMessages,
+  };
 }
 
 export function createSessionsHistoryTool(opts?: {
@@ -185,6 +385,7 @@ export function createSessionsHistoryTool(opts?: {
     displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
+    outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -209,6 +410,7 @@ export function createSessionsHistoryTool(opts?: {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
       const visibleSession = await resolveVisibleSessionReference({
+        action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
@@ -231,6 +433,7 @@ export function createSessionsHistoryTool(opts?: {
       });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
@@ -243,29 +446,59 @@ export function createSessionsHistoryTool(opts?: {
         });
       }
 
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
-          : undefined;
+      const limit = readPositiveIntegerParam(params, "limit");
+      const offset = readOffsetParam(params);
+      const messageId = readStringParam(params, "messageId");
+      const sessionId = readStringParam(params, "sessionId");
+      if (offset !== undefined && messageId) {
+        throw new ToolInputError("offset and messageId cannot be used together");
+      }
+      if (sessionId && !messageId) {
+        throw new ToolInputError("sessionId requires messageId");
+      }
       const includeTools = Boolean(params.includeTools);
-      const result = await gatewayCall<{ messages: Array<unknown> }>({
-        method: "chat.history",
-        params: { sessionKey: resolvedKey, limit },
+      const result = await runWithScopedSessionAccess({
+        cfg,
+        expectedSessionId: access.expectedSessionId,
+        targetSessionKey: resolvedKey,
+        run: async () =>
+          await gatewayCall<{
+            messages: Array<unknown>;
+            offset?: number;
+            nextOffset?: number;
+            hasMore?: boolean;
+            totalMessages?: number;
+          }>({
+            method: "chat.history",
+            params: {
+              sessionKey: resolvedKey,
+              limit,
+              ...(offset !== undefined ? { offset } : {}),
+              ...(messageId ? { messageId } : {}),
+              ...(sessionId ? { sessionId } : {}),
+            },
+          }),
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
-      const cappedMessages = capArrayByJsonBytes(
-        sanitizedMessages.map((entry) => entry.message),
-        SESSIONS_HISTORY_MAX_BYTES,
-      );
+      const sanitizedItems = sanitizedMessages.map((entry) => entry.message);
+      const cappedMessages = messageId
+        ? capSessionsHistoryAroundMessage(sanitizedItems, messageId, SESSIONS_HISTORY_MAX_BYTES)
+        : capArrayByJsonBytes(sanitizedItems, SESSIONS_HISTORY_MAX_BYTES);
       const droppedMessages = cappedMessages.items.length < selectedMessages.length;
       const hardened = enforceSessionsHistoryHardCap({
         items: cappedMessages.items,
         bytes: cappedMessages.bytes,
         maxBytes: SESSIONS_HISTORY_MAX_BYTES,
+      });
+      const pagination = resolveSessionsHistoryPaginationMetadata({
+        messages: hardened.items,
+        result,
+        requestedOffset: offset,
+        requestedMessageId: messageId,
       });
       return jsonResult({
         sessionKey: displayKey,
@@ -275,6 +508,7 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes,
+        ...pagination,
       });
     },
   };

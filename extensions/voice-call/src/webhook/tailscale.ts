@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+// Voice Call plugin module implements tailscale behavior.
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { VoiceCallConfig } from "../config.js";
 
 type TailscaleSelfInfo = {
@@ -6,48 +7,31 @@ type TailscaleSelfInfo = {
   nodeId: string | null;
 };
 
-function runTailscaleCommand(
+const TAILSCALE_COMMAND_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
+
+async function runTailscaleCommand(
   args: string[],
   timeoutMs = 2500,
 ): Promise<{ code: number; stdout: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn("tailscale", args, {
-      stdio: ["ignore", "pipe", "pipe"],
+  try {
+    const result = await runCommandWithTimeout(["tailscale", ...args], {
+      killProcessTree: true,
+      maxOutputBytes: { stdout: TAILSCALE_COMMAND_STDOUT_MAX_BYTES, stderr: 1 },
+      outputCapture: "head",
+      terminateOnOutputLimit: { stdout: true },
+      timeoutMs,
     });
-
-    let stdout = "";
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const finish = (result: { code: number; stdout: string }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
-    proc.stdout.on("data", (data) => {
-      stdout += data;
-    });
-
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finish({ code: -1, stdout: "" });
-    }, timeoutMs);
-
-    proc.on("error", () => {
-      finish({ code: -1, stdout: "" });
-    });
-
-    proc.on("close", (code) => {
-      finish({ code: code ?? -1, stdout });
-    });
-  });
+    if (result.termination !== "exit" || result.outputLimitExceeded) {
+      return { code: -1, stdout: "" };
+    }
+    return { code: result.code ?? -1, stdout: result.stdout };
+  } catch {
+    return { code: -1, stdout: "" };
+  }
 }
 
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
-  const { code, stdout } = await runTailscaleCommand(["status", "--json"]);
+  const { code, stdout } = await runTailscaleCommand(["status", "--json", "--peers=false"]);
   if (code !== 0) {
     return null;
   }

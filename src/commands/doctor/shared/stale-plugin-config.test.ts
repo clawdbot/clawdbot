@@ -1,3 +1,4 @@
+// Stale plugin config tests cover doctor cleanup and warnings for obsolete plugin config.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
@@ -50,47 +51,56 @@ describe("doctor stale plugin config helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("finds stale plugins.allow and plugins.entries refs", () => {
+  it("finds stale plugin policy and entry refs", () => {
     const hits = scanStalePluginConfig({
       plugins: {
-        allow: ["discord", "acpx"],
+        allow: ["discord", "stale-plugin"],
+        deny: ["openai", "missing-deny"],
         entries: {
           "voice-call": { enabled: true },
-          acpx: { enabled: true },
+          "stale-plugin": { enabled: true },
         },
       },
     } as OpenClawConfig);
 
     expect(hits).toEqual([
       {
-        pluginId: "acpx",
+        pluginId: "stale-plugin",
         pathLabel: "plugins.allow",
         surface: "allow",
       },
       {
-        pluginId: "acpx",
-        pathLabel: "plugins.entries.acpx",
+        pluginId: "missing-deny",
+        pathLabel: "plugins.deny",
+        surface: "deny",
+      },
+      {
+        pluginId: "stale-plugin",
+        pathLabel: "plugins.entries.stale-plugin",
         surface: "entries",
       },
     ]);
   });
 
-  it("removes stale plugin ids from allow and entries without changing valid refs", () => {
+  it("removes stale plugin ids from policy lists and entries without changing valid refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["discord", "acpx", "voice-call"],
+        allow: ["discord", "stale-plugin", "voice-call"],
+        deny: ["openai", "missing-deny"],
         entries: {
           "voice-call": { enabled: true },
-          acpx: { enabled: true },
+          "stale-plugin": { enabled: true },
         },
       },
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (acpx)",
-      "- plugins.entries: removed 1 stale plugin entry (acpx)",
+      "- plugins.allow: removed 1 stale plugin id (stale-plugin)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
+      "- plugins.entries: removed 1 stale plugin entry (stale-plugin)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord", "voice-call"]);
+    expect(result.config.plugins?.deny).toEqual(["openai"]);
     expect(result.config.plugins?.entries).toEqual({
       "voice-call": { enabled: true },
     });
@@ -133,6 +143,86 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("preserves official external plugin config before installation", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["codex", "missing-plugin"],
+        deny: ["codex", "missing-deny"],
+        entries: {
+          codex: { enabled: true },
+          "missing-plugin": { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (missing-plugin)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
+      "- plugins.entries: removed 1 stale plugin entry (missing-plugin)",
+    ]);
+    expect(result.config.plugins?.allow).toEqual(["codex"]);
+    expect(result.config.plugins?.deny).toEqual(["codex"]);
+    expect(result.config.plugins?.entries).toEqual({ codex: { enabled: true } });
+  });
+
+  it("preserves codex in policy surfaces while the version-bound plugin is absent", () => {
+    const result = maybeRepairStalePluginConfig(
+      {
+        plugins: {
+          allow: ["codex", "discord"],
+          deny: ["codex"],
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      {
+        surfacePreservePluginIds: {
+          allow: ["codex"],
+          deny: ["codex"],
+          entries: ["codex"],
+        },
+      },
+    );
+
+    expect(result.config.plugins?.allow).toEqual(["codex", "discord"]);
+    expect(result.config.plugins?.deny).toEqual(["codex"]);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not preserve codex outside policy surfaces", () => {
+    const result = maybeRepairStalePluginConfig(
+      {
+        plugins: {
+          allow: ["codex"],
+          entries: {
+            codex: { enabled: false },
+          },
+          slots: {
+            memory: "codex",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      {
+        surfacePreservePluginIds: {
+          allow: ["codex"],
+          deny: ["codex"],
+          entries: ["codex"],
+        },
+      },
+    );
+
+    expect(result.config.plugins?.allow).toEqual(["codex"]);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.changes).toEqual([
+      "- plugins.slots: reset 1 stale plugin slot (memory: codex -> memory-core)",
+    ]);
+  });
+
   it("does not report slot defaults or none as stale plugin refs", () => {
     expect(
       scanStalePluginConfig({
@@ -143,35 +233,52 @@ describe("doctor stale plugin config helpers", () => {
           },
         },
       } as OpenClawConfig),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("formats stale plugin warnings with a doctor hint", () => {
     const warnings = collectStalePluginConfigWarnings({
       hits: [
         {
+          pluginId: "zeta",
+          pathLabel: "plugins.deny",
+          surface: "deny",
+        },
+        {
           pluginId: "acpx",
           pathLabel: "plugins.allow",
           surface: "allow",
+        },
+        {
+          pluginId: "acpx",
+          pathLabel: "plugins.entries.acpx",
+          surface: "entries",
+        },
+        {
+          pluginId: "missing-memory",
+          pathLabel: "plugins.slots.memory",
+          surface: "slot",
         },
       ],
       doctorFixCommand: "openclaw doctor --fix",
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      "- Stale plugin references (plugins.allow/deny/entries): acpx, zeta.",
+      '- plugins.slots.memory: slot references missing plugin "missing-memory".',
+      '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
     ]);
   });
 
   it("keeps built-in channel ids in restrictive plugin config", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["telegram", "whatsapp", "acpx"],
+        allow: ["telegram", "whatsapp", "stale-plugin"],
+        deny: ["openai", "missing-deny"],
         entries: {
           telegram: { enabled: true },
           whatsapp: { enabled: true },
-          acpx: { enabled: true },
+          "stale-plugin": { enabled: true },
         },
       },
       channels: {
@@ -183,10 +290,12 @@ describe("doctor stale plugin config helpers", () => {
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (acpx)",
-      "- plugins.entries: removed 1 stale plugin entry (acpx)",
+      "- plugins.allow: removed 1 stale plugin id (stale-plugin)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
+      "- plugins.entries: removed 1 stale plugin entry (stale-plugin)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(result.config.plugins?.deny).toEqual(["openai"]);
     expect(result.config.plugins?.entries).toEqual({
       telegram: { enabled: true },
       whatsapp: { enabled: true },
@@ -200,14 +309,14 @@ describe("doctor stale plugin config helpers", () => {
   it("removes stale third-party channel config and dependent channel refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["discord", "openclaw-weixin"],
+        allow: ["discord", "missing-chat-plugin"],
         entries: {
           discord: { enabled: true },
-          "openclaw-weixin": { enabled: true },
+          "missing-chat-plugin": { enabled: true },
         },
       },
       channels: {
-        "openclaw-weixin": {
+        "missing-chat-plugin": {
           enabled: true,
           token: "stale",
         },
@@ -216,7 +325,7 @@ describe("doctor stale plugin config helpers", () => {
         },
         modelByChannel: {
           openai: {
-            "openclaw-weixin": "openai/gpt-5.4",
+            "missing-chat-plugin": "openai/gpt-5.4",
             telegram: "openai/gpt-5.4",
           },
         },
@@ -224,15 +333,15 @@ describe("doctor stale plugin config helpers", () => {
       agents: {
         defaults: {
           heartbeat: {
-            target: "openclaw-weixin",
+            target: "missing-chat-plugin",
             every: "30m",
           },
         },
         list: [
           {
-            id: "pi",
+            id: "openclaw",
             heartbeat: {
-              target: "openclaw-weixin",
+              target: "missing-chat-plugin",
             },
           },
           {
@@ -246,17 +355,17 @@ describe("doctor stale plugin config helpers", () => {
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (openclaw-weixin)",
-      "- plugins.entries: removed 1 stale plugin entry (openclaw-weixin)",
-      "- channels: removed 1 stale channel config (openclaw-weixin)",
-      "- agents heartbeat: removed 2 stale heartbeat targets (openclaw-weixin)",
-      "- channels.modelByChannel: removed 1 stale channel model override (openclaw-weixin)",
+      "- plugins.allow: removed 1 stale plugin id (missing-chat-plugin)",
+      "- plugins.entries: removed 1 stale plugin entry (missing-chat-plugin)",
+      "- channels: removed 1 stale channel config (missing-chat-plugin)",
+      "- agents heartbeat: removed 2 stale heartbeat targets (missing-chat-plugin)",
+      "- channels.modelByChannel: removed 1 stale channel model override (missing-chat-plugin)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord"]);
     expect(result.config.plugins?.entries).toEqual({
       discord: { enabled: true },
     });
-    expect(result.config.channels?.["openclaw-weixin"]).toBeUndefined();
+    expect(result.config.channels?.["missing-chat-plugin"]).toBeUndefined();
     expect(result.config.channels?.telegram).toEqual({ botToken: "keep" });
     expect(result.config.channels?.modelByChannel).toEqual({
       openai: {
@@ -264,7 +373,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     });
     expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(result.config.agents?.list?.[0]?.heartbeat).toEqual({});
+    expect(result.config.agents?.list?.[0]?.heartbeat).toStrictEqual({});
     expect(result.config.agents?.list?.[1]?.heartbeat).toEqual({ target: "telegram" });
   });
 
@@ -277,7 +386,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
@@ -285,9 +394,9 @@ describe("doctor stale plugin config helpers", () => {
     const cfg = {
       plugins: {
         enabled: false,
-        allow: ["acpx"],
+        allow: ["stale-plugin"],
         entries: {
-          acpx: { enabled: true },
+          "stale-plugin": { enabled: true },
         },
       },
       channels: {
@@ -297,32 +406,32 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
     expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
   it("uses missing persisted install records as stale channel evidence", () => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({
-      "openclaw-weixin": {
+      "missing-chat-plugin": {
         source: "npm",
-        resolvedName: "@tencent-weixin/openclaw-weixin",
+        resolvedName: "@example/missing-chat-plugin",
         installedAt: "2026-04-12T00:00:00.000Z",
       },
     });
 
     const result = maybeRepairStalePluginConfig({
       channels: {
-        "openclaw-weixin": {
+        "missing-chat-plugin": {
           enabled: true,
         },
       },
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- channels: removed 1 stale channel config (openclaw-weixin)",
+      "- channels: removed 1 stale channel config (missing-chat-plugin)",
     ]);
-    expect(result.config.channels?.["openclaw-weixin"]).toBeUndefined();
+    expect(result.config.channels?.["missing-chat-plugin"]).toBeUndefined();
   });
 
   it("does not auto-repair stale refs while plugin discovery has errors", () => {
@@ -335,9 +444,9 @@ describe("doctor stale plugin config helpers", () => {
 
     const cfg = {
       plugins: {
-        allow: ["acpx"],
+        allow: ["stale-plugin"],
         entries: {
-          acpx: { enabled: true },
+          "stale-plugin": { enabled: true },
         },
       },
     } as OpenClawConfig;
@@ -345,19 +454,19 @@ describe("doctor stale plugin config helpers", () => {
     const hits = scanStalePluginConfig(cfg);
     expect(hits).toEqual([
       {
-        pluginId: "acpx",
+        pluginId: "stale-plugin",
         pathLabel: "plugins.allow",
         surface: "allow",
       },
       {
-        pluginId: "acpx",
-        pathLabel: "plugins.entries.acpx",
+        pluginId: "stale-plugin",
+        pathLabel: "plugins.entries.stale-plugin",
         surface: "entries",
       },
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(result.config).toEqual(cfg);
 
     const warnings = collectStalePluginConfigWarnings({
@@ -365,37 +474,92 @@ describe("doctor stale plugin config helpers", () => {
       doctorFixCommand: "openclaw doctor --fix",
       autoRepairBlocked: true,
     });
-    expect(warnings[2]).toContain("Auto-removal is paused");
+    expect(warnings.at(-1)).toContain("Auto-removal is paused");
   });
 
-  it("treats legacy plugin aliases as valid ids during scan and repair", () => {
+  it("keeps official allow ids out of actionable stale warnings", () => {
     const cfg = {
       plugins: {
-        allow: ["openai-codex", "acpx"],
+        allow: ["codex", "stale-plugin"],
+        entries: {
+          "stale-plugin": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const hits = scanStalePluginConfig(cfg);
+    expect(hits).toEqual([
+      {
+        pluginId: "stale-plugin",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
+      {
+        pluginId: "stale-plugin",
+        pathLabel: "plugins.entries.stale-plugin",
+        surface: "entries",
+      },
+    ]);
+    expect(
+      collectStalePluginConfigWarnings({
+        hits,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual([
+      "- Stale plugin references (plugins.allow/deny/entries): stale-plugin.",
+      '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
+    ]);
+  });
+
+  it("keeps an explicitly disabled Codex plugin entry out of stale diagnostics", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+  });
+
+  it("treats legacy OpenAI Codex plugin ids as stale during scan and repair", () => {
+    const cfg = {
+      plugins: {
+        allow: ["openai-codex", "stale-plugin"],
         entries: {
           "openai-codex": { enabled: true },
-          acpx: { enabled: true },
+          "stale-plugin": { enabled: true },
         },
       },
     } as OpenClawConfig;
 
     expect(scanStalePluginConfig(cfg)).toEqual([
       {
-        pluginId: "acpx",
+        pluginId: "openai-codex",
         pathLabel: "plugins.allow",
         surface: "allow",
       },
       {
-        pluginId: "acpx",
-        pathLabel: "plugins.entries.acpx",
+        pluginId: "stale-plugin",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
+      {
+        pluginId: "openai-codex",
+        pathLabel: "plugins.entries.openai-codex",
+        surface: "entries",
+      },
+      {
+        pluginId: "stale-plugin",
+        pathLabel: "plugins.entries.stale-plugin",
         surface: "entries",
       },
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.config.plugins?.allow).toEqual(["openai-codex"]);
-    expect(result.config.plugins?.entries).toEqual({
-      "openai-codex": { enabled: true },
-    });
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.config.plugins?.entries).toEqual({});
   });
 });

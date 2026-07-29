@@ -1,3 +1,4 @@
+// Telegram tests cover webhook status plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 

@@ -1,3 +1,4 @@
+// Zalouser tests cover channel plugin behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./zalo-js.test-mocks.js";
@@ -116,13 +117,74 @@ describe("zalouser outbound", () => {
         textMode: "markdown",
         textChunkMode: "newline",
         textChunkLimit: 10,
+        onDeliveryResult: expect.any(Function),
       }),
     );
-    expect(result).toEqual(
+    expect(result).toEqual({
+      channel: "zalouser",
+      messageId: "mid-1",
+      receipt: undefined,
+    });
+  });
+
+  it("uses the selected account profile for direct outbound messages", async () => {
+    const sendText = requireZalouserSendText();
+
+    const result = await sendText({
+      cfg: {
+        channels: {
+          zalouser: {
+            accounts: {
+              work: {
+                profile: "work-profile",
+              },
+            },
+          },
+        },
+      } as never,
+      to: "user:987654",
+      text: "hello user",
+      accountId: "work",
+    } as never);
+
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "987654",
+      "hello user",
       expect.objectContaining({
-        channel: "zalouser",
-        messageId: "mid-1",
-        ok: true,
+        profile: "work-profile",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textChunkLimit: 10,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
+    expect(result).toEqual({
+      channel: "zalouser",
+      messageId: "mid-1",
+      receipt: undefined,
+    });
+  });
+
+  it("keeps the default account profile for unscoped outbound messages", async () => {
+    const sendText = requireZalouserSendText();
+
+    await sendText({
+      cfg: { channels: { zalouser: { enabled: true } } } as never,
+      to: "user:111222",
+      text: "hello default",
+    } as never);
+
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "111222",
+      "hello default",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textChunkLimit: 10,
+        onDeliveryResult: expect.any(Function),
       }),
     );
   });
@@ -142,7 +204,7 @@ describe("zalouser outbound chunking", () => {
 describe("zalouser channel policies", () => {
   beforeEach(() => {
     mockSendReaction.mockClear();
-    mockSendReaction.mockResolvedValue({ ok: true });
+    mockSendReaction.mockResolvedValue({ ok: true } as never);
   });
 
   it("normalizes dm allowlist entries after trimming channel prefixes", () => {
@@ -249,7 +311,7 @@ describe("zalouser channel policies", () => {
       emoji: "👍",
       remove: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       content: [{ type: "text", text: "Reacted 👍 on 111" }],
       details: {
         messageId: "111",
@@ -322,12 +384,13 @@ describe("zalouser account resolution", () => {
 
     expect(listZaloFriendsMatchingMock).toHaveBeenCalledWith("work-profile", "Work User");
     expect(result).toEqual([
-      expect.objectContaining({
+      {
         input: "Work User",
         resolved: true,
         id: "42",
         name: "Work User",
-      }),
+        note: undefined,
+      },
     ]);
   });
 

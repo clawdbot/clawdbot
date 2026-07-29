@@ -1,7 +1,7 @@
 // Docker E2E CI helper.
 // Converts scheduler JSON into GitHub Actions outputs and compact markdown
 // summaries so the workflow does not duplicate Docker E2E planning logic.
-import fs from "node:fs";
+import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mjs";
 
 function usage() {
   return [
@@ -13,7 +13,7 @@ function usage() {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  return readDockerE2eJsonArtifact(file);
 }
 
 function boolOutput(value) {
@@ -108,21 +108,35 @@ function failedRerunCommands(summary) {
     .map((lane) => lane.rerunCommand);
 }
 
-const [command, file, ...args] = process.argv.slice(2);
-if (!command || !file) {
-  throw new Error(usage());
-}
-
-if (command === "github-outputs") {
-  process.stdout.write(`${githubOutputs(readJson(file)).join("\n")}\n`);
-} else if (command === "summary") {
-  const title = args.join(" ").trim();
-  if (!title) {
+function main(argv = process.argv.slice(2)) {
+  const [command, file, ...args] = argv;
+  if (command === "--help" || command === "-h") {
+    process.stdout.write(`${usage()}\n`);
+    return 0;
+  }
+  if (!command || !file) {
     throw new Error(usage());
   }
-  process.stdout.write(`${summaryMarkdown(readJson(file), title)}\n`);
-} else if (command === "failed-reruns") {
-  process.stdout.write(`${failedRerunCommands(readJson(file)).join("\n")}\n`);
-} else {
-  throw new Error(`unknown command: ${command}\n${usage()}`);
+
+  if (command === "github-outputs") {
+    process.stdout.write(`${githubOutputs(readJson(file)).join("\n")}\n`);
+  } else if (command === "summary") {
+    const title = args.join(" ").trim();
+    if (!title) {
+      throw new Error(usage());
+    }
+    process.stdout.write(`${summaryMarkdown(readJson(file), title)}\n`);
+  } else if (command === "failed-reruns") {
+    process.stdout.write(`${failedRerunCommands(readJson(file)).join("\n")}\n`);
+  } else {
+    throw new Error(`unknown command: ${command}\n${usage()}`);
+  }
+  return 0;
+}
+
+try {
+  process.exitCode = main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 }

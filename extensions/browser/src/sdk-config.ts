@@ -1,16 +1,18 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+/**
+ * Browser-local SDK config bridge plus Browser-specific default port helpers.
+ */
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export {
   getRuntimeConfig,
-  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-export { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+export { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 export {
   type BrowserConfig,
   type BrowserProfileConfig,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 export {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -21,7 +23,7 @@ export {
   escapeRegExp,
   resolveUserPath,
   shortenHomePath,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/text-utility-runtime";
 type PortRange = { start: number; end: number };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
@@ -29,6 +31,7 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
 const DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN =
   DEFAULT_BROWSER_CDP_PORT_RANGE_END - DEFAULT_BROWSER_CDP_PORT_RANGE_START;
 
+/** Default loopback port for the Browser control server. */
 export const DEFAULT_BROWSER_CONTROL_PORT = 18791;
 
 function isValidPort(port: number): boolean {
@@ -43,10 +46,12 @@ function derivePort(base: number, offset: number, fallback: number): number {
   return clampPort(base + offset, fallback);
 }
 
+/** Derives the Browser control port from the gateway port. */
 export function deriveDefaultBrowserControlPort(gatewayPort: number): number {
   return derivePort(gatewayPort, 2, DEFAULT_BROWSER_CONTROL_PORT);
 }
 
+/** Derives the managed Chrome CDP port range from the Browser control port. */
 export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): PortRange {
   const start = derivePort(browserControlPort, 9, DEFAULT_BROWSER_CDP_PORT_RANGE_START);
   const end = start + DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN;
@@ -66,9 +71,12 @@ type BooleanParseOptions = {
 
 const DEFAULT_TRUTHY = ["true", "1", "yes", "on"] as const;
 const DEFAULT_FALSY = ["false", "0", "no", "off"] as const;
-const DEFAULT_TRUTHY_SET = new Set<string>(DEFAULT_TRUTHY);
-const DEFAULT_FALSY_SET = new Set<string>(DEFAULT_FALSY);
 
+function matchesBooleanToken(value: string, tokens: readonly string[]): boolean {
+  return tokens.includes(value);
+}
+
+/** Parses common string booleans with optional custom truthy/falsy tokens. */
 export function parseBooleanValue(
   value: unknown,
   options: BooleanParseOptions = {},
@@ -83,15 +91,14 @@ export function parseBooleanValue(
   if (!normalized) {
     return undefined;
   }
-  const truthy = options.truthy ?? DEFAULT_TRUTHY;
-  const falsy = options.falsy ?? DEFAULT_FALSY;
-  const truthySet = truthy === DEFAULT_TRUTHY ? DEFAULT_TRUTHY_SET : new Set(truthy);
-  const falsySet = falsy === DEFAULT_FALSY ? DEFAULT_FALSY_SET : new Set(falsy);
-  if (truthySet.has(normalized)) {
-    return true;
-  }
-  if (falsySet.has(normalized)) {
-    return false;
+  const candidates: Array<[boolean, readonly string[]]> = [
+    [true, options.truthy ?? DEFAULT_TRUTHY],
+    [false, options.falsy ?? DEFAULT_FALSY],
+  ];
+  for (const [parsed, tokens] of candidates) {
+    if (matchesBooleanToken(normalized, tokens)) {
+      return parsed;
+    }
   }
   return undefined;
 }

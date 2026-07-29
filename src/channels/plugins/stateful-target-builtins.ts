@@ -1,14 +1,16 @@
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+/**
+ * Built-in stateful binding target registration.
+ *
+ * Lazily registers ACP target drivers so non-ACP channel flows avoid ACP runtime imports.
+ */
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
-type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
-
 let builtinsRegisteredPromise: Promise<void> | null = null;
-let acpDriverModulePromise: Promise<AcpStatefulTargetDriverModule> | undefined;
 
-function loadAcpStatefulTargetDriverModule(): Promise<AcpStatefulTargetDriverModule> {
-  acpDriverModulePromise ??= import("./acp-stateful-target-driver.js");
-  return acpDriverModulePromise;
-}
+const loadAcpStatefulTargetDriverModule = createLazyRuntimeModule(
+  () => import("./acp-stateful-target-driver.js"),
+);
 
 export function isStatefulTargetBuiltinDriverId(id: string): boolean {
   return id.trim() === "acp";
@@ -26,6 +28,8 @@ export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
   try {
     await builtinsRegisteredPromise;
   } catch (error) {
+    // Retry after failed dynamic import/registration; a rejected singleton would
+    // otherwise permanently disable later setup or binding attempts.
     builtinsRegisteredPromise = null;
     throw error;
   }

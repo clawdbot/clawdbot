@@ -1,3 +1,4 @@
+// Covers logging max-file-size config validation.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
@@ -19,7 +20,12 @@ describe("logging.maxFileBytes config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "logging.maxFileBytes")).toBe(true);
+      expect(res.issues).toEqual([
+        {
+          path: "logging.maxFileBytes",
+          message: "Too small: expected number to be >0 (must be greater than 0)",
+        },
+      ]);
     }
   });
 });

@@ -1,3 +1,4 @@
+// Tests directive verbosity levels and reply mode selection.
 import { describe, expect, it, vi } from "vitest";
 import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 

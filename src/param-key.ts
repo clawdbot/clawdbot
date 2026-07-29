@@ -1,4 +1,5 @@
-import { lowercasePreservingWhitespace } from "./shared/string-coerce.js";
+// Normalizes parameter keys while preserving user-visible whitespace where needed.
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 
 function toSnakeCaseKey(key: string): string {
   const snakeKey = key

@@ -1,5 +1,6 @@
-import { MarkdownConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
-import { z } from "openclaw/plugin-sdk/zod";
+// Twitch helper module supports config schema behavior.
+import { MarkdownConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
 
 /**
  * Twitch user roles that can be allowed to interact with the bot

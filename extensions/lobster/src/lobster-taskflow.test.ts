@@ -1,3 +1,4 @@
+// Lobster tests cover lobster taskflow plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { LobsterRunner } from "./lobster-runner.js";
 import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";

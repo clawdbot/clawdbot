@@ -1,4 +1,9 @@
-import { ErrorCodes, errorShape, validateNodeInvokeResultParams } from "../protocol/index.js";
+// Gateway RPC handler for asynchronous node invocation results.
+import {
+  ErrorCodes,
+  errorShape,
+  validateNodeInvokeResultParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
 
@@ -22,6 +27,7 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
   return normalized;
 }
 
+/** Handle a node's response to an earlier gateway `node.invoke` request. */
 export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   params,
   respond,
@@ -54,6 +60,7 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   const ok = context.nodeRegistry.handleInvokeResult({
     id: p.id,
     nodeId: p.nodeId,
+    connId: client?.connId,
     ok: p.ok,
     payload: p.payload,
     payloadJSON: p.payloadJSON ?? null,

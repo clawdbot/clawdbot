@@ -1,3 +1,4 @@
+// Covers skills entry config parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -51,19 +52,20 @@ describe("skills entries config schema", () => {
         defaults: {
           skills: ["github", "weather"],
         },
+        entries: { main: { default: true } },
       },
     });
 
     expect(res.success).toBe(true);
   });
 
-  it("accepts agents.list[].skills as explicit replacements", () => {
+  it("accepts agents.entries.*.skills as explicit replacements", () => {
     const res = OpenClawSchema.safeParse({
       agents: {
         defaults: {
           skills: ["github", "weather"],
         },
-        list: [{ id: "writer", skills: ["docs-search"] }],
+        entries: { writer: { default: true, skills: ["docs-search"] } },
       },
     });
 
@@ -76,7 +78,19 @@ describe("skills entries config schema", () => {
         defaults: {
           skills: [],
         },
-        list: [{ id: "writer", skills: [] }],
+        entries: { writer: { default: true, skills: [] } },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts uploaded skill archive install policy", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        install: {
+          allowUploadedArchives: true,
+        },
       },
     });
 

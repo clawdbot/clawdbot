@@ -1,14 +1,21 @@
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+// Detection helper for legacy `/models add` OpenAI Codex entries missing metadata markers.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 
 const LEGACY_MODELS_ADD_CODEX_MODEL_IDS = new Set(["gpt-5.5", "gpt-5.5-pro"]);
+const LEGACY_MODELS_ADD_CODEX_APIS = new Set([
+  "openai-codex-responses",
+  "openai-chatgpt-responses",
+]);
 
+/** Return true when a model entry matches the legacy Codex `/models add` default shape. */
 export function isLegacyModelsAddCodexMetadataModel(params: {
   provider: string;
   model: Partial<ModelDefinitionConfig> | undefined;
 }): boolean {
   const model = params.model;
-  if (normalizeProviderId(params.provider) !== "openai-codex" || !model) {
+  const provider = normalizeProviderId(params.provider);
+  if ((provider !== "codex" && provider !== "openai-codex") || !model) {
     return false;
   }
   const id = model.id?.trim().toLowerCase();
@@ -16,7 +23,8 @@ export function isLegacyModelsAddCodexMetadataModel(params: {
     return false;
   }
   return (
-    model.api === "openai-codex-responses" &&
+    typeof model.api === "string" &&
+    LEGACY_MODELS_ADD_CODEX_APIS.has(model.api) &&
     model.reasoning === true &&
     Array.isArray(model.input) &&
     model.input.length === 2 &&

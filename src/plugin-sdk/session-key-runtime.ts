@@ -1,5 +1,6 @@
-// Narrow session-key helpers for channel hot paths that should not import the
-// broader routing SDK barrel.
+/**
+ * Runtime SDK subpath for parsing agent ids from session keys.
+ */
 export {
   resolveAgentIdFromSessionKey,
   type ParsedAgentSessionKey,

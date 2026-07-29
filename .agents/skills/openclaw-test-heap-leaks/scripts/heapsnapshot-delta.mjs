@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/**
+ * Heap snapshot diff utility for OpenClaw test memory leak investigations.
+ */
 
 import fs from "node:fs";
 import path from "node:path";

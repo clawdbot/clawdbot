@@ -1,15 +1,21 @@
+/**
+ * Test fetch resolver that bypasses mocked global fetch when Browser tests need
+ * a real HTTP client.
+ */
 import { createRequire } from "node:module";
 
 type FetchLike = ((input: string | URL, init?: RequestInit) => Promise<Response>) & {
   mock?: unknown;
 };
 
+/** Fetch shape used by Browser integration test helpers. */
 export type BrowserTestFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 function isUsableFetch(value: unknown): value is FetchLike {
   return typeof value === "function" && !("mock" in (value as FetchLike));
 }
 
+/** Returns undici fetch when usable, falling back to an unmocked global fetch. */
 export function getBrowserTestFetch(): BrowserTestFetch {
   const require = createRequire(import.meta.url);
   const vitest = (globalThis as { vi?: { doUnmock?: (id: string) => void } }).vi;

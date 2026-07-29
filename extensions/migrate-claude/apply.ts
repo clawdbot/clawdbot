@@ -1,7 +1,9 @@
+// Migrate Claude plugin module implements apply behavior.
 import path from "node:path";
 import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
+  copyMemoryMigrationFileItem,
   copyMigrationFileItem,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
@@ -16,6 +18,7 @@ import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import { buildClaudePlan } from "./plan.js";
 import { applyGeneratedSkillItem } from "./skills.js";
+import { resolveTargets } from "./targets.js";
 
 export async function applyClaudePlan(params: {
   ctx: MigrationProviderContext;
@@ -28,6 +31,7 @@ export async function applyClaudePlan(params: {
     params.ctx.runtime ?? params.runtime,
     params.ctx.config,
   );
+  const targets = resolveTargets(params.ctx);
   const applyCtx = { ...params.ctx, runtime };
   const items: MigrationItem[] = [];
   for (const item of plan.items) {
@@ -45,6 +49,13 @@ export async function applyClaudePlan(params: {
       items.push(await appendItem(item));
     } else if (item.action === "create" && item.kind === "skill") {
       items.push(await applyGeneratedSkillItem(item, { overwrite: params.ctx.overwrite }));
+    } else if (item.kind === "memory") {
+      items.push(
+        await copyMemoryMigrationFileItem(item, reportDir, {
+          workspaceDir: targets.workspaceDir,
+          overwrite: params.ctx.overwrite,
+        }),
+      );
     } else {
       items.push(await copyMigrationFileItem(item, reportDir, { overwrite: params.ctx.overwrite }));
     }

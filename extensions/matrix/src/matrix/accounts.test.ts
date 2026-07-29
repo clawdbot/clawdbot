@@ -1,3 +1,4 @@
+// Matrix tests cover accounts plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig } from "../types.js";
@@ -290,6 +291,38 @@ describe("resolveMatrixAccount", () => {
 
     const account = resolveMatrixAccount({ cfg });
     expect(account.configured).toBe(true);
+  });
+
+  it("merges account bot loop protection over top-level defaults field-by-field", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "top-token",
+          botLoopProtection: {
+            maxEventsPerWindow: 8,
+            windowSeconds: 120,
+            cooldownSeconds: 240,
+          },
+          accounts: {
+            ops: {
+              accessToken: "ops-token",
+              botLoopProtection: {
+                maxEventsPerWindow: 3,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg, accountId: "ops" });
+    expect(account.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
   });
 
   it("normalizes and de-duplicates configured account ids", () => {

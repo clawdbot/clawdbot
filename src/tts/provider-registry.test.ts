@@ -1,3 +1,4 @@
+// TTS provider registry tests cover registration and provider resolution.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
@@ -71,7 +72,7 @@ describe("speech provider registry", () => {
   });
 
   it("returns empty results when the capability runtime has no speech providers", () => {
-    expect(registry.listSpeechProviders()).toEqual([]);
+    expect(registry.listSpeechProviders()).toStrictEqual([]);
     expect(registry.getSpeechProvider("demo-speech")).toBeUndefined();
     expect(registry.canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
   });

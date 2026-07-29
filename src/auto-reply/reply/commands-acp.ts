@@ -1,6 +1,7 @@
+// Implements ACP session commands and runtime status formatting.
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import { rejectNonOwnerCommand, requireGatewayClientScope } from "./command-gates.js";
 import {
   COMMAND,
   type AcpAction,
@@ -70,7 +71,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
   return diagnosticHandlers[action];
 }
 
-const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
+const ACP_OWNER_REQUIRED_ACTIONS = new Set<AcpAction>([
   "spawn",
   "cancel",
   "steer",
@@ -103,14 +104,20 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
     return stopWithText(resolveAcpHelpText());
   }
 
-  if (ACP_MUTATING_ACTIONS.has(action)) {
-    const scopeBlock = requireGatewayClientScopeForInternalChannel(params, {
+  if (ACP_OWNER_REQUIRED_ACTIONS.has(action)) {
+    const scopeBlock = requireGatewayClientScope(params, {
       label: "/acp",
       allowedScopes: ["operator.admin"],
       missingText: "This /acp action requires operator.admin on the internal channel.",
     });
     if (scopeBlock) {
       return scopeBlock;
+    }
+    // Command auth maps internal operator.admin scope to owner identity, so this
+    // second gate rejects external non-owners without blocking Gateway admins.
+    const nonOwner = rejectNonOwnerCommand(params, "/acp");
+    if (nonOwner) {
+      return nonOwner;
     }
   }
 

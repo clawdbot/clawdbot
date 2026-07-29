@@ -1,13 +1,22 @@
+// Vitest Shard Timings tests cover vitest shard timings script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createShardTimingSample,
   readShardTimings,
   resolveShardTimingKey,
   writeShardTimings,
 } from "../../scripts/lib/vitest-shard-timings.mjs";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("scripts/lib/vitest-shard-timings.mjs", () => {
   it("uses the config path as the timing key for whole-config runs", () => {
@@ -48,6 +57,7 @@ describe("scripts/lib/vitest-shard-timings.mjs", () => {
 
   it("persists include-pattern timing metadata", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
+    tempDirs.push(tempDir);
     const env = {
       OPENCLAW_TEST_PROJECTS_TIMINGS_PATH: path.join(tempDir, "timings.json"),
       OPENCLAW_VITEST_SHARD_NAME: "auto-reply-reply-agent-runner",
@@ -76,16 +86,18 @@ describe("scripts/lib/vitest-shard-timings.mjs", () => {
         ["test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-runner", 1234],
       ]),
     );
-    expect(
-      JSON.parse(fs.readFileSync(env.OPENCLAW_TEST_PROJECTS_TIMINGS_PATH, "utf8")).configs[
-        "test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-runner"
-      ],
-    ).toMatchObject({
+    const persistedTiming = JSON.parse(
+      fs.readFileSync(env.OPENCLAW_TEST_PROJECTS_TIMINGS_PATH, "utf8"),
+    ).configs["test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-runner"];
+    expect(typeof persistedTiming.updatedAt).toBe("string");
+    expect(persistedTiming.updatedAt.length).toBeGreaterThan(0);
+    expect({ ...persistedTiming, updatedAt: "<dynamic>" }).toStrictEqual({
       averageMs: 1234,
       baseConfig: "test/vitest/vitest.auto-reply-reply.config.ts",
       includePatternCount: 1,
       lastMs: 1234,
       sampleCount: 1,
+      updatedAt: "<dynamic>",
     });
   });
 });

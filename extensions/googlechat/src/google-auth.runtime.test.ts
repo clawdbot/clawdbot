@@ -1,7 +1,9 @@
+// Googlechat tests cover google auth plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
@@ -34,26 +36,19 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 
-vi.mock("gaxios", () => ({
-  Gaxios: mocks.gaxiosCtor,
+vi.mock("google-auth-library", () => ({
+  gaxios: { Gaxios: mocks.gaxiosCtor },
 }));
 
-let __testing: typeof import("./google-auth.runtime.js").__testing;
-let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogleAuthFetch;
 let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
 let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
 
 beforeAll(async () => {
-  ({
-    __testing,
-    createGoogleAuthFetch,
-    getGoogleAuthTransport,
-    resolveValidatedGoogleChatCredentials,
-  } = await import("./google-auth.runtime.js"));
+  ({ getGoogleAuthTransport, resolveValidatedGoogleChatCredentials } =
+    await import("./google-auth.runtime.js"));
 });
 
 beforeEach(() => {
-  __testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.gaxiosCtor.mockClear();
@@ -62,18 +57,45 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("google-auth-library");
+  vi.resetModules();
+});
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+type GoogleAuthFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+async function createGoogleAuthTransportFetch(): Promise<GoogleAuthFetch> {
+  const transport = await getGoogleAuthTransport();
+  const fetchImplementation = (transport.defaults as { fetchImplementation?: GoogleAuthFetch })
+    .fetchImplementation;
+  if (!fetchImplementation) {
+    throw new Error("Expected Google auth transport fetch implementation");
+  }
+  return fetchImplementation;
+}
 
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
-    const injectedFetch = vi.fn(globalThis.fetch);
+    const controller = new AbortController();
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch(injectedFetch);
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       agent: { proxy: new URL("http://proxy.example:8080") },
       cert: "CLIENT_CERT",
@@ -81,6 +103,7 @@ describe("googlechat google auth runtime", () => {
       key: "CLIENT_KEY",
       method: "POST",
       proxy: "http://proxy.example:8080",
+      signal: controller.signal,
     } as RequestInit);
 
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
@@ -94,14 +117,16 @@ describe("googlechat google auth runtime", () => {
         },
         proxyUrl: "http://proxy.example:8080",
       },
-      fetchImpl: injectedFetch,
       init: {
         headers: { "content-type": "application/json" },
         method: "POST",
+        signal: controller.signal,
       },
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      signal: controller.signal,
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -115,12 +140,12 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     await guardedFetch("https://oauth2.googleapis.com/token", {
       method: "POST",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -132,7 +157,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     (globalThis as Record<string, unknown>).fetch = vi.fn(async () => new Response("patched"));
 
     try {
@@ -143,7 +168,7 @@ describe("googlechat google auth runtime", () => {
       (globalThis as Record<string, unknown>).fetch = originalFetch;
     }
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -154,7 +179,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       cert: "CLIENT_CERT",
       key: "CLIENT_KEY",
@@ -178,6 +203,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -193,7 +219,7 @@ describe("googlechat google auth runtime", () => {
     vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
     vi.stubEnv("https_proxy", "http://lower-proxy.example:8080");
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       cert: "CLIENT_CERT",
       key: "CLIENT_KEY",
@@ -215,24 +241,11 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("matches gaxios proxy env precedence for Google auth requests", () => {
-    vi.stubEnv("HTTP_PROXY", "http://upper-http-proxy.example:8080");
-    vi.stubEnv("http_proxy", "http://lower-http-proxy.example:8080");
-    vi.stubEnv("HTTPS_PROXY", "http://upper-https-proxy.example:8080");
-    vi.stubEnv("https_proxy", "http://lower-https-proxy.example:8080");
-
-    expect(__testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
-      "http://upper-https-proxy.example:8080",
-    );
-    expect(__testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
-      "http://upper-http-proxy.example:8080",
-    );
   });
 
   it("releases guarded auth fetch resources even when callers do not consume the body", async () => {
@@ -242,7 +255,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       method: "POST",
     } as RequestInit);
@@ -258,7 +271,9 @@ describe("googlechat google auth runtime", () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         if (chunkIndex < chunks.length) {
-          controller.enqueue(chunks[chunkIndex++]);
+          controller.enqueue(
+            expectDefined(chunks[chunkIndex++], `Google auth chunk ${chunkIndex}`),
+          );
           return;
         }
         controller.close();
@@ -269,7 +284,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -293,7 +308,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -322,7 +337,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -333,24 +348,58 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects malformed auth content-length before reading the body", async () => {
+    const release = vi.fn();
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: {
+        arrayBuffer,
+        body: null,
+        headers: new Headers({
+          "content-length": "0x3",
+        }),
+        status: 200,
+        statusText: "OK",
+      } as unknown as Response,
+      release,
+    });
+
+    const guardedFetch = await createGoogleAuthTransportFetch();
+
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit),
+    ).rejects.toThrow("invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("builds a scoped Gaxios transport without mutating global window", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     Reflect.deleteProperty(globalThis as object, "window");
     try {
       const transport = await getGoogleAuthTransport();
+      const transportDefaults = transport.defaults as { fetchImplementation?: unknown };
+      const requestInterceptorAdd = transport.interceptors.request["add"] as unknown as ReturnType<
+        typeof vi.fn
+      >;
+      const responseInterceptorAdd = transport.interceptors.response[
+        "add"
+      ] as unknown as ReturnType<typeof vi.fn>;
+      const requestInterceptor = mockCallArg(requestInterceptorAdd) as
+        | { resolved?: unknown }
+        | undefined;
+      const responseInterceptor = mockCallArg(responseInterceptorAdd) as
+        | { resolved?: unknown }
+        | undefined;
 
       expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
-      expect(transport).toMatchObject({
-        defaults: {
-          fetchImplementation: expect.any(Function),
-        },
-      });
-      expect(transport.interceptors.request.add).toHaveBeenCalledWith({
-        resolved: expect.any(Function),
-      });
-      expect(transport.interceptors.response.add).toHaveBeenCalledWith({
-        resolved: expect.any(Function),
-      });
+      expect(typeof transportDefaults.fetchImplementation).toBe("function");
+      expect(requestInterceptorAdd).toHaveBeenCalledOnce();
+      expect(typeof requestInterceptor?.resolved).toBe("function");
+      expect(responseInterceptorAdd).toHaveBeenCalledOnce();
+      expect(typeof responseInterceptor?.resolved).toBe("function");
       expect("window" in globalThis).toBe(false);
     } finally {
       if (originalWindowDescriptor) {
@@ -365,26 +414,43 @@ describe("googlechat google auth runtime", () => {
 
     expect(first).not.toBe(second);
     expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
-    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(first.interceptors.request["add"]).toHaveBeenCalledOnce();
+    expect(first.interceptors.response["add"]).toHaveBeenCalledOnce();
+    expect(second.interceptors.request["add"]).toHaveBeenCalledOnce();
+    expect(second.interceptors.response["add"]).toHaveBeenCalledOnce();
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", async () => {
+    const transport = await getGoogleAuthTransport();
+    const requestInterceptorAdd = transport.interceptors.request["add"] as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    const requestInterceptor = mockCallArg(requestInterceptorAdd) as {
+      resolved: (config: RequestInit & { url: URL }) => Promise<RequestInit & { headers: Headers }>;
+    };
     const config = {
       headers: { "x-test": "1" },
       url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
     };
 
-    const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+    const normalized = await requestInterceptor.resolved(config);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.has("x-test")).toBe(true);
     expect(normalized.headers.get("x-test")).toBe("1");
   });
 
-  it("normalizes Google auth response headers before upstream cache-control reads", () => {
+  it("normalizes Google auth response headers before upstream cache-control reads", async () => {
+    const transport = await getGoogleAuthTransport();
+    const responseInterceptorAdd = transport.interceptors.response["add"] as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    const responseInterceptor = mockCallArg(responseInterceptorAdd) as {
+      resolved: (response: { data: object; headers: object }) => Promise<{
+        data: object;
+        headers: Headers;
+      }>;
+    };
     const response = {
       data: {},
       headers: {
@@ -392,7 +458,7 @@ describe("googlechat google auth runtime", () => {
       },
     };
 
-    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+    const normalized = await responseInterceptor.resolved(response);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.get("cache-control")).toBe("public, max-age=3600");
@@ -433,19 +499,19 @@ describe("googlechat google auth runtime", () => {
         "utf8",
       );
 
-      await expect(
-        resolveValidatedGoogleChatCredentials({
-          accountId: "default",
-          config: {},
-          credentialSource: "file",
-          credentialsFile: credentialsPath,
-          enabled: true,
-        }),
-      ).resolves.toMatchObject({
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-        type: "service_account",
+      const credentials = await resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: credentialsPath,
+        enabled: true,
       });
+      if (!credentials) {
+        throw new Error("expected validated credentials");
+      }
+      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
+      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
+      expect(credentials.type).toBe("service_account");
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
@@ -478,19 +544,19 @@ describe("googlechat google auth runtime", () => {
         throw error;
       }
 
-      await expect(
-        resolveValidatedGoogleChatCredentials({
-          accountId: "default",
-          config: {},
-          credentialSource: "file",
-          credentialsFile: symlinkPath,
-          enabled: true,
-        }),
-      ).resolves.toMatchObject({
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-        type: "service_account",
+      const credentials = await resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: symlinkPath,
+        enabled: true,
       });
+      if (!credentials) {
+        throw new Error("expected validated credentials");
+      }
+      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
+      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
+      expect(credentials.type).toBe("service_account");
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
@@ -499,24 +565,23 @@ describe("googlechat google auth runtime", () => {
   it("does not disclose raw credential paths or OS errors when file reads fail", async () => {
     const missingPath = path.join(os.tmpdir(), "googlechat-auth-missing", "service-account.json");
 
-    await expect(
-      resolveValidatedGoogleChatCredentials({
+    let thrown: unknown;
+    try {
+      await resolveValidatedGoogleChatCredentials({
         accountId: "default",
         config: {},
         credentialSource: "file",
         credentialsFile: missingPath,
         enabled: true,
-      }),
-    ).rejects.toThrow("Failed to load Google Chat service account file.");
+      });
+    } catch (error) {
+      thrown = error;
+    }
 
-    await expect(
-      resolveValidatedGoogleChatCredentials({
-        accountId: "default",
-        config: {},
-        credentialSource: "file",
-        credentialsFile: missingPath,
-        enabled: true,
-      }),
-    ).rejects.not.toThrow(/ENOENT|service-account\.json|googlechat-auth-missing/);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe("Failed to load Google Chat service account file.");
+    expect((thrown as Error).message).not.toMatch(
+      /ENOENT|service-account\.json|googlechat-auth-missing/,
+    );
   });
 });

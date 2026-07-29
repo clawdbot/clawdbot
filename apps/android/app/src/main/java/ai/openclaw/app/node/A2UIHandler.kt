@@ -6,47 +6,39 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/**
+ * Android bridge for applying gateway A2UI messages to the canvas WebView.
+ */
 class A2UIHandler(
   private val canvas: CanvasController,
   private val json: Json,
-  private val getNodeCanvasHostUrl: () -> String?,
-  private val getOperatorCanvasHostUrl: () -> String?,
 ) {
-  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean =
-    CanvasActionTrust.isTrustedCanvasActionUrl(
-      rawUrl = rawUrl,
-      trustedA2uiUrls = listOfNotNull(resolveA2uiHostUrl()),
-    )
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = CanvasActionTrust.isTrustedCanvasActionUrl(rawUrl)
 
-  fun resolveA2uiHostUrl(): String? {
-    val nodeRaw = getNodeCanvasHostUrl()?.trim().orEmpty()
-    val operatorRaw = getOperatorCanvasHostUrl()?.trim().orEmpty()
-    val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
-    if (raw.isBlank()) return null
-    val base = raw.trimEnd('/')
-    return "$base/__openclaw__/a2ui/?platform=android"
-  }
-
-  suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
-    try {
-      val already = canvas.eval(a2uiReadyCheckJS)
-      if (already == "true") return true
-    } catch (_: Throwable) {
-      // ignore
+  suspend fun ensureA2uiReady(): Boolean {
+    val alreadyOnA2uiHost = canvas.currentUrl()?.trim() == CanvasActionTrust.localA2uiAssetUrl
+    if (!canvas.showAndAwaitHost()) return false
+    if (!alreadyOnA2uiHost) {
+      canvas.showLocalA2ui()
+    }
+    if (alreadyOnA2uiHost && isA2uiReady()) {
+      return true
     }
 
-    canvas.navigate(a2uiUrl)
+    // The bundled A2UI host bootstraps asynchronously after navigation; poll briefly before failing the command.
     repeat(50) {
-      try {
-        val ready = canvas.eval(a2uiReadyCheckJS)
-        if (ready == "true") return true
-      } catch (_: Throwable) {
-        // ignore
-      }
+      if (isA2uiReady()) return true
       delay(120)
     }
     return false
   }
+
+  private suspend fun isA2uiReady(): Boolean =
+    try {
+      canvas.eval(a2uiReadyCheckJS) == "true"
+    } catch (_: Throwable) {
+      false
+    }
 
   fun decodeA2uiMessages(
     command: String,
@@ -65,6 +57,7 @@ class A2UIHandler(
     if (command == "canvas.a2ui.pushJSONL" || (!hasMessagesArray && jsonlField.isNotBlank())) {
       val jsonl = jsonlField
       if (jsonl.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: jsonl required")
+      // JSONL keeps large A2UI streams model-friendly while still validating each message.
       val messages =
         jsonl
           .lineSequence()
@@ -98,6 +91,7 @@ class A2UIHandler(
     lineNumber: Int,
   ) {
     if (msg.containsKey("createSurface")) {
+      // Android scaffold currently implements A2UI v0.8, not the v0.9 createSurface shape.
       throw IllegalArgumentException(
         "A2UI JSONL line $lineNumber: looks like A2UI v0.9 (`createSurface`). Canvas supports v0.8 messages only.",
       )

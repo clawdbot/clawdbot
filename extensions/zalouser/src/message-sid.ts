@@ -1,3 +1,4 @@
+// Zalouser plugin module implements message sid behavior.
 function toMessageSidPart(value?: string | number | null): string {
   if (typeof value === "string") {
     return value.trim();
@@ -8,7 +9,7 @@ function toMessageSidPart(value?: string | number | null): string {
   return "";
 }
 
-export function parseZalouserMessageSidFull(
+function parseZalouserMessageSidFull(
   value?: string | number | null,
 ): { msgId: string; cliMsgId: string } | null {
   const raw = toMessageSidPart(value);

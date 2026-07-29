@@ -1,3 +1,4 @@
+/** Prevents daemon write actions when the config belongs to a newer OpenClaw. */
 import { readConfigFileSnapshot } from "../config/config.js";
 import {
   formatFutureConfigActionBlock,
@@ -5,6 +6,7 @@ import {
   type FutureConfigActionBlock,
 } from "../config/future-version-guard.js";
 
+// Blocks daemon mutations when config was written by a newer OpenClaw.
 async function readFutureConfigActionBlock(
   action: string,
 ): Promise<FutureConfigActionBlock | null> {

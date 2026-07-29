@@ -72,7 +72,7 @@ final class CronJobsStore {
         do {
             if let status = try? await GatewayConnection.shared.cronStatus() {
                 self.schedulerEnabled = status.enabled
-                self.schedulerStorePath = status.storePath
+                self.schedulerStorePath = status.sqlitePath ?? status.storePath
                 self.schedulerNextWakeAtMs = status.nextWakeAtMs
             }
             self.jobs = try await GatewayConnection.shared.cronList(includeDisabled: true)

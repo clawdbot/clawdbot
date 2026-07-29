@@ -1,40 +1,16 @@
-import {
-  searchClawHubPackages,
-  type ClawHubPackageFamily,
-  type ClawHubPackageSearchResult,
-} from "../infra/clawhub.js";
+// ClawHub-backed plugin search command; queries installable plugin families and merges scores.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import type { ClawHubPackageSearchResult } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { theme } from "../terminal/theme.js";
 
-export type PluginsSearchOptions = {
+/** Options accepted by `openclaw plugins search`. */
+type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
-
-const INSTALLABLE_PLUGIN_FAMILIES: ClawHubPackageFamily[] = ["code-plugin", "bundle-plugin"];
-
-function clampSearchLimit(limit: number | undefined): number {
-  if (!Number.isFinite(limit) || !limit || limit <= 0) {
-    return 20;
-  }
-  return Math.min(Math.max(Math.trunc(limit), 1), 100);
-}
-
-function mergePackageSearchResults(
-  groups: readonly ClawHubPackageSearchResult[][],
-  limit: number,
-): ClawHubPackageSearchResult[] {
-  const byName = new Map<string, ClawHubPackageSearchResult>();
-  for (const entry of groups.flat()) {
-    const existing = byName.get(entry.package.name);
-    if (!existing || entry.score > existing.score) {
-      byName.set(entry.package.name, entry);
-    }
-  }
-  return [...byName.values()].toSorted((a, b) => b.score - a.score).slice(0, limit);
-}
 
 function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
   const pkg = entry.package;
@@ -48,6 +24,7 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
   return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: openclaw plugins install clawhub:${pkg.name}`)}`;
 }
 
+/** Search ClawHub for installable plugins and write JSON or terminal output. */
 export async function runPluginsSearchCommand(
   queryParts: string[] | string,
   opts: PluginsSearchOptions = {},
@@ -61,18 +38,8 @@ export async function runPluginsSearchCommand(
     return runtime.exit(1);
   }
 
-  const limit = clampSearchLimit(opts.limit);
   try {
-    const groups = await Promise.all(
-      INSTALLABLE_PLUGIN_FAMILIES.map((family) =>
-        searchClawHubPackages({
-          query,
-          family,
-          limit,
-        }),
-      ),
-    );
-    const results = mergePackageSearchResults(groups, limit);
+    const results = await searchInstallablePluginPackages({ query, limit: opts.limit });
 
     if (opts.json) {
       writeRuntimeJson(runtime, { results });

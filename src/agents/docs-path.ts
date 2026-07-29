@@ -1,3 +1,6 @@
+/**
+ * Locates local OpenClaw docs/source roots for references shown to agents.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -20,7 +23,8 @@ function isGitCheckout(rootDir: string): boolean {
   return fs.existsSync(path.join(rootDir, ".git"));
 }
 
-export async function resolveOpenClawDocsPath(params: {
+/** Resolve a usable local docs directory, preferring the active workspace. */
+async function resolveOpenClawDocsPath(params: {
   workspaceDir?: string;
   argv1?: string;
   cwd?: string;
@@ -47,7 +51,8 @@ export async function resolveOpenClawDocsPath(params: {
   return isUsableDocsDir(packageDocs) ? packageDocs : null;
 }
 
-export async function resolveOpenClawSourcePath(
+/** Resolve the package root only when it is a Git checkout. */
+async function resolveOpenClawSourcePath(
   params: ResolveOpenClawReferencePathParams,
 ): Promise<string | null> {
   const packageRoot = await resolveOpenClawPackageRoot({
@@ -61,6 +66,7 @@ export async function resolveOpenClawSourcePath(
   return packageRoot;
 }
 
+/** Resolve docs and source roots concurrently for prompt/reference injection. */
 export async function resolveOpenClawReferencePaths(
   params: ResolveOpenClawReferencePathParams,
 ): Promise<{

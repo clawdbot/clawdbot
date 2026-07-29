@@ -1,3 +1,6 @@
+/**
+ * Assertions for video and music provider media capability contracts.
+ */
 import { expect } from "vitest";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import type { MusicGenerationProviderPlugin } from "../../plugins/types.js";
@@ -16,6 +19,7 @@ function hasPositiveModeLimit(
   );
 }
 
+/** Verifies a video provider declares coherent generate/image/video capability flags. */
 export function expectExplicitVideoGenerationCapabilities(
   provider: VideoGenerationProviderPlugin,
 ): void {
@@ -52,6 +56,7 @@ export function expectExplicitVideoGenerationCapabilities(
   }
 }
 
+/** Verifies a music provider declares coherent generate/edit capability flags. */
 export function expectExplicitMusicGenerationCapabilities(
   provider: MusicGenerationProviderPlugin,
 ): void {

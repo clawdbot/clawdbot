@@ -1,12 +1,13 @@
+// Discord plugin module implements agent components context behavior.
 import { ChannelType } from "discord-api-types/v10";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
-import {
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type AgentComponentMessageInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  AgentComponentMessageInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
 } from "./agent-components.types.js";
 import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";

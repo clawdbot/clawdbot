@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime agent process.integration plugin behavior.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -58,8 +59,8 @@ describe("qa suite runtime CLI integration", () => {
               OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
             },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna",
           providerMode: "mock-openai",
         } as never,
         ["memory", "status", "--json"],

@@ -1,3 +1,4 @@
+// Legacy web-search config migration from tools.web.search to plugin-owned configs.
 import { mergeMissing } from "../../../config/legacy.shared.js";
 import {
   cloneRecord,
@@ -7,27 +8,61 @@ import {
   type JsonRecord,
 } from "./legacy-config-record-shared.js";
 
-const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
+const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["brave", "brave"],
   ["duckduckgo", "duckduckgo"],
   ["exa", "exa"],
   ["firecrawl", "firecrawl"],
+  ["firecrawl-free", "firecrawl"],
   ["gemini", "google"],
   ["grok", "xai"],
   ["kimi", "moonshot"],
   ["minimax", "minimax"],
   ["ollama", "ollama"],
+  ["parallel", "parallel"],
+  ["parallel-free", "parallel"],
   ["perplexity", "perplexity"],
   ["searxng", "searxng"],
   ["tavily", "tavily"],
 ]);
 
-// Tavily only ever used the plugin-owned config path, so there is no legacy
-// `tools.web.search.tavily.*` shape to migrate.
-const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
+// Tavily, Parallel (paid + free), and Firecrawl free only ever used the plugin-owned
+// config path, so there is no legacy `tools.web.search.<id>.*` shape to migrate for them.
+const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set([
+  "firecrawl-free",
+  "parallel",
+  "parallel-free",
+  "tavily",
+]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
+const RETIRED_GROK_WEB_SEARCH_MODELS = new Set([
+  "grok-4-1-fast",
+  "grok-4-1-fast-reasoning",
+  "grok-4-fast",
+  "grok-4-fast-reasoning",
+  "grok-4-0709",
+]);
+const RETIRED_GROK_CODE_MODELS = new Set([
+  "grok-code-fast-1",
+  "grok-code-fast",
+  "grok-code-fast-1-0825",
+]);
+
+function resolveLegacyGrokWebSearchModelTarget(model: unknown): string | undefined {
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const normalized = model.trim().toLowerCase();
+  if (RETIRED_GROK_WEB_SEARCH_MODELS.has(normalized)) {
+    return "grok-4.3";
+  }
+  if (RETIRED_GROK_CODE_MODELS.has(normalized)) {
+    return "grok-build-0.1";
+  }
+  return undefined;
+}
 
 function getBundledLegacyWebSearchOwners(): ReadonlyMap<string, string> {
   return BUNDLED_LEGACY_WEB_SEARCH_OWNERS;
@@ -148,6 +183,7 @@ function migratePluginWebSearchConfig(params: {
   params.changes.push(`Removed ${params.legacyPath} (${params.targetPath} already set).`);
 }
 
+/** List legacy tools.web.search provider config paths present in raw config. */
 export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   const owners = getBundledLegacyWebSearchOwners();
   const search = resolveLegacySearchConfig(raw);
@@ -170,6 +206,7 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   return paths;
 }
 
+/** Move legacy web-search provider config into provider plugin entries. */
 export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw)) {
     return { config: raw, changes: [] };
@@ -180,7 +217,7 @@ export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: s
     return { config: raw, changes: [] };
   }
 
-  return normalizeLegacyWebSearchConfigRecord(raw, owners);
+  return normalizeLegacyWebSearchConfigRecord(structuredClone(raw) as T & JsonRecord, owners);
 }
 
 function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
@@ -207,9 +244,10 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (getLegacyWebSearchProviderIdSet(owners).has(key) && isRecord(value)) {
       continue;
     }
-    if (MODERN_SCOPED_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
-      nextSearch[key] = value;
+    if (DANGEROUS_RECORD_KEYS.has(key)) {
+      continue;
     }
+    nextSearch[key] = value;
   }
   web.search = nextSearch;
 
@@ -236,6 +274,16 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     const pluginId = owners.get(providerId);
     if (!pluginId) {
       continue;
+    }
+    if (providerId === "grok") {
+      const targetModel = resolveLegacyGrokWebSearchModelTarget(scoped.model);
+      if (targetModel) {
+        const previousModel = scoped.model;
+        scoped.model = targetModel;
+        changes.push(
+          `Updated tools.web.search.grok.model from ${JSON.stringify(previousModel)} to ${JSON.stringify(targetModel)}.`,
+        );
+      }
     }
     migratePluginWebSearchConfig({
       root: nextRoot,

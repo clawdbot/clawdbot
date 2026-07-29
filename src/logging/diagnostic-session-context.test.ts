@@ -1,17 +1,20 @@
+// Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveCronStore } from "../cron/store.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   formatCronSessionDiagnosticFields,
   formatStoppedCronSessionDiagnosticFields,
-  parseCronRunSessionKey,
-  readLastAssistantFromSessionFile,
   resolveCronSessionDiagnosticContext,
 } from "./diagnostic-session-context.js";
 
 let tempDir: string | undefined;
-let previousStateDir: string | undefined;
+let testState: OpenClawTestState | undefined;
 
 function writeJsonl(filePath: string, rows: unknown[]) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -19,41 +22,47 @@ function writeJsonl(filePath: string, rows: unknown[]) {
 }
 
 describe("diagnostic session context", () => {
-  beforeEach(() => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diagnostic-session-"));
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-diagnostic-session-",
+    });
+    tempDir = testState.stateDir;
   });
 
-  afterEach(() => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (tempDir) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+  afterEach(async () => {
+    await testState?.cleanup();
+    testState = undefined;
     tempDir = undefined;
   });
 
   it("parses cron run session keys", () => {
-    expect(parseCronRunSessionKey("agent:clawblocker:cron:job-123:run:run-456")).toEqual({
-      agentId: "clawblocker",
-      cronJobId: "job-123",
-      cronRunId: "run-456",
-    });
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+      }),
+    ).toMatchObject({ agentId: "clawblocker", cronJobId: "job-123", cronRunId: "run-456" });
   });
 
-  it("formats cron job and last assistant context for stalled session logs", () => {
+  it("formats cron job and last assistant context for stalled session logs", async () => {
     const stateDir = tempDir!;
-    fs.mkdirSync(path.join(stateDir, "cron"), { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "cron", "jobs.json"),
-      JSON.stringify({
-        jobs: [{ id: "job-123", name: "Twitter Mention Moderation Agent" }],
-      }),
-    );
+    await saveCronStore(path.join(stateDir, "cron", "jobs.json"), {
+      version: 1,
+      jobs: [
+        {
+          id: "job-123",
+          name: "Twitter Mention Moderation Agent",
+          enabled: true,
+          createdAtMs: 1_700_000_000_000,
+          updatedAtMs: 1_700_000_000_000,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "tick" },
+          state: {},
+        },
+      ],
+    });
     writeJsonl(path.join(stateDir, "agents", "clawblocker", "sessions", "run-456.jsonl"), [
       { message: { role: "user", content: "run" } },
       {
@@ -82,17 +91,52 @@ describe("diagnostic session context", () => {
   });
 
   it("reads the latest assistant message from a transcript tail", () => {
-    const filePath = path.join(tempDir!, "session.jsonl");
+    const filePath = path.join(tempDir!, "agents", "clawblocker", "sessions", "run-456.jsonl");
     writeJsonl(filePath, [
       { message: { role: "assistant", content: "older" } },
       { message: { role: "user", content: "later user" } },
       { message: { role: "assistant", content: "newer" } },
     ]);
 
-    expect(readLastAssistantFromSessionFile(filePath)).toBe("newer");
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      shortReadCalls += 1;
+      return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+    }) as typeof fs.readSync);
+
+    try {
+      expect(
+        resolveCronSessionDiagnosticContext({
+          sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        }).lastAssistant,
+      ).toBe("newer");
+      expect(shortReadCalls).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("keeps bounded quoted fields UTF-16 safe", () => {
+    const prefix = "a".repeat(136);
+
+    expect(
+      formatCronSessionDiagnosticFields({ cronJobName: `${prefix}😀${"b".repeat(140)}` }),
+    ).toBe(`cronJob="${prefix}..."`);
   });
 
   it("ignores missing transcript tail files", () => {
-    expect(readLastAssistantFromSessionFile(path.join(tempDir!, "missing.jsonl"))).toBeUndefined();
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        activeSessionId: "missing",
+      }).lastAssistant,
+    ).toBeUndefined();
   });
 });

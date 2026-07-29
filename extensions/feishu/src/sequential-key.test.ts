@@ -1,3 +1,4 @@
+// Feishu tests cover sequential key plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -68,5 +69,26 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
+  });
+
+  it("keeps an empty group message with bot mentions on its normal chat lane", () => {
+    const event = createTextEvent({ text: "" });
+    event.message.chat_type = "group";
+    event.message.content = "";
+    event.message.mentions = [
+      {
+        key: "@_bot_1",
+        id: { open_id: "ou_bot_1" },
+        name: "OpenClaw",
+      },
+    ];
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot_1",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
   });
 });

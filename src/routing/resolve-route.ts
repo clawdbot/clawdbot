@@ -1,10 +1,11 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+// Route resolution helpers map user targets to configured channel routes.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   normalizeRouteBindingId,
   normalizeRouteBindingRoles,
@@ -35,6 +36,7 @@ export type ResolveAgentRouteInput = {
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
@@ -47,6 +49,8 @@ export type ResolvedAgentRoute = {
   agentId: string;
   channel: string;
   accountId: string;
+  /** Effective direct-message scope after a matching binding override. */
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   /** Internal session key used for persistence + concurrency. */
   sessionKey: string;
   /** Convenience alias for direct-chat collapse. */
@@ -65,8 +69,6 @@ export type ResolvedAgentRoute = {
     | "binding.channel"
     | "default";
 };
-
-export { DEFAULT_ACCOUNT_ID } from "./session-key.js";
 
 export function deriveLastRoutePolicy(params: {
   sessionKey: string;
@@ -92,6 +94,7 @@ function normalizeId(value: unknown): string {
 
 export function buildAgentSessionKey(params: {
   agentId: string;
+  mainKey?: string;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -103,7 +106,7 @@ export function buildAgentSessionKey(params: {
   const peer = params.peer;
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
-    mainKey: DEFAULT_MAIN_KEY,
+    mainKey: params.mainKey ?? DEFAULT_MAIN_KEY,
     channel,
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
@@ -114,8 +117,7 @@ export function buildAgentSessionKey(params: {
 }
 
 function listAgents(cfg: OpenClawConfig) {
-  const agents = cfg.agents?.list;
-  return Array.isArray(agents) ? agents : [];
+  return listAgentEntries(cfg);
 }
 
 type AgentLookupCache = {
@@ -545,22 +547,6 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
   return `${peer.kind}:${peer.id}`;
 }
 
-function formatRoleIdsCacheKey(roleIds: string[]): string {
-  const count = roleIds.length;
-  if (count === 0) {
-    return "-";
-  }
-  if (count === 1) {
-    return roleIds[0] ?? "-";
-  }
-  if (count === 2) {
-    const first = roleIds[0] ?? "";
-    const second = roleIds[1] ?? "";
-    return first <= second ? `${first},${second}` : `${second},${first}`;
-  }
-  return roleIds.toSorted().join(",");
-}
-
 function buildResolvedRouteCacheKey(params: {
   channel: string;
   accountId: string;
@@ -571,7 +557,16 @@ function buildResolvedRouteCacheKey(params: {
   memberRoleIds: string[];
   dmScope: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return JSON.stringify([
+    params.channel,
+    params.accountId,
+    formatRouteCachePeer(params.peer),
+    formatRouteCachePeer(params.parentPeer),
+    params.guildId ?? null,
+    params.teamId ?? null,
+    params.memberRoleIds.toSorted(),
+    params.dmScope,
+  ]);
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
@@ -620,7 +615,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
-  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -661,26 +656,26 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
-    const sessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentSessionKey({
-        agentId: resolvedAgentId,
-        channel,
-        accountId,
-        peer,
-        dmScope: effectiveDmScope,
-        identityLinks,
-      }),
-    );
+    const sessionKey = buildAgentSessionKey({
+      agentId: resolvedAgentId,
+      mainKey: input.cfg.session?.mainKey,
+      channel,
+      accountId,
+      peer,
+      dmScope: effectiveDmScope,
+      identityLinks,
+    });
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
       buildAgentMainSessionKey({
         agentId: resolvedAgentId,
-        mainKey: DEFAULT_MAIN_KEY,
+        mainKey: input.cfg.session?.mainKey,
       }),
     );
     const route = {
       agentId: resolvedAgentId,
       channel,
       accountId,
+      dmScope: effectiveDmScope,
       sessionKey,
       mainSessionKey,
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
@@ -817,3 +812,4 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

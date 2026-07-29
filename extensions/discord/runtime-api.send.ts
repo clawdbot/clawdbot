@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime api.send behavior.
 export {
   resolveDiscordOutboundSessionRoute,
   type ResolveDiscordOutboundSessionRouteParams,

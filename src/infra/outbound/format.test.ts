@@ -1,9 +1,6 @@
+// Covers direct/gateway outbound summary formatting.
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildOutboundDeliveryJson,
-  formatGatewaySummary,
-  formatOutboundDeliverySummary,
-} from "./format.js";
+import { formatGatewaySummary, formatOutboundDeliverySummary } from "./format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
   vi.fn((channel: string) => {
@@ -73,80 +70,6 @@ describe("formatOutboundDeliverySummary", () => {
     },
   ])("formats delivery summary for %j", ({ channel, result, expected }) => {
     expect(formatOutboundDeliverySummary(channel, result)).toBe(expected);
-  });
-});
-
-describe("buildOutboundDeliveryJson", () => {
-  it.each([
-    {
-      input: {
-        channel: "alpha" as const,
-        to: "123",
-        result: { channel: "alpha" as const, messageId: "m1", chatId: "c1" },
-        mediaUrl: "https://example.com/a.png",
-      },
-      expected: {
-        channel: "alpha",
-        via: "direct",
-        to: "123",
-        messageId: "m1",
-        mediaUrl: "https://example.com/a.png",
-        chatId: "c1",
-      },
-    },
-    {
-      input: {
-        channel: "directchat" as const,
-        to: "+1",
-        result: { channel: "directchat" as const, messageId: "w1", toJid: "jid" },
-      },
-      expected: {
-        channel: "directchat",
-        via: "direct",
-        to: "+1",
-        messageId: "w1",
-        mediaUrl: null,
-        toJid: "jid",
-      },
-    },
-    {
-      input: {
-        channel: "pager" as const,
-        to: "+1",
-        result: { channel: "pager" as const, messageId: "s1", timestamp: 123 },
-      },
-      expected: {
-        channel: "pager",
-        via: "direct",
-        to: "+1",
-        messageId: "s1",
-        mediaUrl: null,
-        timestamp: 123,
-      },
-    },
-    {
-      input: {
-        channel: "richchat" as const,
-        to: "channel:1",
-        via: "gateway" as const,
-        result: {
-          messageId: "g1",
-          channelId: "1",
-          meta: { thread: "2" },
-        },
-      },
-      expected: {
-        channel: "richchat",
-        via: "gateway",
-        to: "channel:1",
-        messageId: "g1",
-        mediaUrl: null,
-        channelId: "1",
-        meta: { thread: "2" },
-      },
-    },
-  ])("builds delivery JSON for %j", ({ input, expected }) => {
-    expect(buildOutboundDeliveryJson(input)).toEqual(expected);
   });
 });
 

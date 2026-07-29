@@ -1,3 +1,4 @@
+// Tests install shell script version references stay aligned with package metadata.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

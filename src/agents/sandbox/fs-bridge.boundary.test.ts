@@ -1,3 +1,5 @@
+// Sandbox filesystem bridge boundary tests cover host-side validation before
+// any Docker filesystem command can run.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -60,6 +62,8 @@ describe("sandbox fs bridge boundary validation", () => {
   });
 
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
+    // Host-visible symlink escapes are rejected locally so Docker never follows
+    // them inside a privileged bridge command.
     await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
       const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
       if (process.platform === "win32") {
@@ -80,6 +84,8 @@ describe("sandbox fs bridge boundary validation", () => {
   });
 
   it("rejects pre-existing host hardlink escapes before docker exec", async () => {
+    // Hardlinks can expose outside files without a symlink marker, so the bridge
+    // checks link metadata before reads enter the container.
     if (process.platform === "win32") {
       return;
     }

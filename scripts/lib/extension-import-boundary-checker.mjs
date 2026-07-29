@@ -1,4 +1,6 @@
+// Creates reusable import-boundary guards for bundled extension source trees.
 import { promises as fs } from "node:fs";
+import pMap from "p-map";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./bundled-plugin-paths.mjs";
 import {
   collectModuleReferencesFromSource,
@@ -15,6 +17,7 @@ import {
 } from "./ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
+const DEFAULT_BOUNDARY_SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 
 function compareEntries(left, right) {
   return (
@@ -63,8 +66,34 @@ function scanImportBoundaryViolations(source, filePath, boundaryLabel, allowReso
   return entries;
 }
 
+function normalizeMaxSourceBytes(value) {
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_BOUNDARY_SOURCE_MAX_BYTES;
+}
+
+function assertSourceFileWithinLimit(filePath, bytes, maxBytes) {
+  if (bytes <= maxBytes) {
+    return;
+  }
+  throw new Error(
+    `extension import boundary source file exceeds ${maxBytes} byte limit: ${normalizeRepoPath(
+      repoRoot,
+      filePath,
+    )} (${bytes} bytes)`,
+  );
+}
+
+async function readBoundedSourceFile(filePath, maxBytes) {
+  const stat = await fs.stat(filePath);
+  assertSourceFileWithinLimit(filePath, stat.size, maxBytes);
+  const source = await fs.readFile(filePath, "utf8");
+  assertSourceFileWithinLimit(filePath, Buffer.byteLength(source, "utf8"), maxBytes);
+  return source;
+}
+
+/** Create a boundary checker with cached inventory collection and a CLI-style main function. */
 export function createExtensionImportBoundaryChecker(params) {
   const scanRoots = resolveSourceRoots(repoRoot, params.roots);
+  const maxSourceBytes = normalizeMaxSourceBytes(params.maxSourceBytes);
 
   const collectInventory = createCachedAsync(async () => {
     const files = (await collectTypeScriptFilesFromRoots(scanRoots))
@@ -72,9 +101,10 @@ export function createExtensionImportBoundaryChecker(params) {
       .toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-    const entriesByFile = await Promise.all(
-      files.map(async (filePath) => {
-        const source = await fs.readFile(filePath, "utf8");
+    const entriesByFile = await pMap(
+      files,
+      async (filePath) => {
+        const source = await readBoundedSourceFile(filePath, maxSourceBytes);
         if (
           params.skipSourcesWithoutBundledPluginPrefix &&
           !source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
@@ -87,15 +117,17 @@ export function createExtensionImportBoundaryChecker(params) {
           params.boundaryLabel,
           params.allowResolvedPath,
         );
-      }),
+      },
+      { concurrency: 32, stopOnError: true },
     );
     const inventory = entriesByFile.flat();
     return inventory.toSorted(compareEntries);
   });
 
-  async function main(argv = process.argv.slice(2), io) {
+  async function main(argv, io) {
+    const args = argv ?? process.argv.slice(2);
     const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-    const json = argv.includes("--json");
+    const json = args.includes("--json");
     const inventory = await collectInventory();
 
     if (json) {

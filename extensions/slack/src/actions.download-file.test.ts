@@ -1,18 +1,18 @@
+// Slack tests cover actionsownload file plugin behavior.
 import type { WebClient } from "@slack/web-api";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSlackMedia = vi.fn();
-const createSlackWebClientMock = vi.hoisted(() => vi.fn());
+const createSlackLookupClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./monitor/media.js", () => ({
   resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
 }));
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: createSlackWebClientMock,
-  createSlackWriteClient: createSlackWebClientMock,
-  getSlackWriteClient: createSlackWebClientMock,
+  createSlackLookupClient: createSlackLookupClientMock,
+  getSlackWriteClient: vi.fn(),
 }));
 
 let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
@@ -83,7 +83,7 @@ describe("downloadSlackFile", () => {
 
   beforeEach(() => {
     resolveSlackMedia.mockReset();
-    createSlackWebClientMock.mockReset();
+    createSlackLookupClientMock.mockReset();
   });
 
   it("returns null when files.info has no private download URL", async () => {
@@ -227,7 +227,7 @@ describe("downloadSlackFile", () => {
     // from any caller (not only action-runtime.ts which always injects token).
     const client = createClient();
     mockSuccessfulMediaDownload(client);
-    createSlackWebClientMock.mockReturnValueOnce(client);
+    createSlackLookupClientMock.mockReturnValueOnce(client);
 
     const cfg = {
       channels: {
@@ -247,7 +247,7 @@ describe("downloadSlackFile", () => {
       maxBytes: 1024,
     });
 
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-from-cfg");
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-from-cfg");
     expect(resolveSlackMedia).toHaveBeenCalledWith({
       files: [
         {

@@ -1,3 +1,6 @@
+/**
+ * Plugin route runtime-scope regression tests for trusted-proxy headers.
+ */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
@@ -60,6 +63,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -77,6 +81,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);

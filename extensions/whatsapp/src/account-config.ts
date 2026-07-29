@@ -1,3 +1,4 @@
+// Whatsapp helper module supports account config behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   mergeAccountConfig,
@@ -5,10 +6,6 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
-import {
-  resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingChunkMode,
-} from "openclaw/plugin-sdk/channel-streaming";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 
 function resolveWhatsAppDefaultAccountSharedConfig(
@@ -28,7 +25,7 @@ function resolveWhatsAppDefaultAccountSharedConfig(
   return sharedDefaults;
 }
 
-function _resolveWhatsAppAccountConfig(
+function resolveWhatsAppAccountConfigForTest(
   cfg: OpenClawConfig,
   accountId: string,
 ): WhatsAppAccountConfig | undefined {
@@ -40,7 +37,7 @@ function resolveMergedNamedWhatsAppAccountConfig(params: {
   accountId: string;
 }): WhatsAppAccountConfig {
   const rootCfg = params.cfg.channels?.whatsapp;
-  const accountConfig = _resolveWhatsAppAccountConfig(params.cfg, params.accountId);
+  const accountConfig = resolveWhatsAppAccountConfigForTest(params.cfg, params.accountId);
   return {
     ...mergeAccountConfig<WhatsAppAccountConfig>({
       channelConfig: rootCfg as WhatsAppAccountConfig | undefined,
@@ -68,10 +65,5 @@ export function resolveMergedWhatsAppAccountConfig(params: {
     accountId === DEFAULT_ACCOUNT_ID
       ? base
       : resolveMergedNamedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
-  return {
-    accountId,
-    ...merged,
-    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
-    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
-  };
+  return { accountId, ...merged };
 }

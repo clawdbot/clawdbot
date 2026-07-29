@@ -1,3 +1,4 @@
+// Irc tests cover connect options plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildIrcConnectOptions } from "./connect-options.js";
 

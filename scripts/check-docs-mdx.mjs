@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+// Validates docs MDX files for syntax and repository-specific conventions.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
 import {
   checkMintlifyAccordionIndentation,
@@ -78,7 +80,30 @@ const POISON_TEXT_PATTERNS = [
   },
 ];
 
-function parseArgs(argv) {
+function parsePositiveIntegerArg(raw, label) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function readRequiredValue(argv, index, label) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${label} requires a value`);
+  }
+  return value;
+}
+
+/**
+ * Parses docs MDX check arguments.
+ */
+export function parseArgs(argv) {
   const roots = [];
   let jsonOut = "";
   let maxErrors = 50;
@@ -86,12 +111,15 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const part = argv[index];
     if (part === "--json-out") {
-      jsonOut = argv[index + 1] ?? "";
+      jsonOut = readRequiredValue(argv, index, "--json-out");
       index += 1;
       continue;
     }
     if (part === "--max-errors") {
-      maxErrors = Number.parseInt(argv[index + 1] ?? "", 10);
+      maxErrors = parsePositiveIntegerArg(
+        readRequiredValue(argv, index, "--max-errors"),
+        "--max-errors",
+      );
       index += 1;
       continue;
     }
@@ -104,7 +132,7 @@ function parseArgs(argv) {
   return {
     roots: roots.length ? roots : ["docs"],
     jsonOut,
-    maxErrors: Number.isFinite(maxErrors) && maxErrors > 0 ? maxErrors : 50,
+    maxErrors,
   };
 }
 
@@ -141,15 +169,11 @@ function stripFrontmatter(raw) {
 }
 
 function formatMdxError(filePath, error) {
-  const place = error?.place ?? error?.position;
-  const start = place?.start ?? place;
-  const line = typeof start?.line === "number" ? start.line : undefined;
-  const column = typeof start?.column === "number" ? start.column : undefined;
   return {
     type: "mdx",
     file: filePath,
-    line,
-    column,
+    line: error?.line,
+    column: error?.column,
     message: String(error?.reason ?? error?.message ?? error).split("\n")[0],
   };
 }
@@ -202,14 +226,7 @@ async function checkMdxFile(filePath) {
   if (structureErrors.length > 0) {
     return structureErrors;
   }
-  const value = stripFrontmatter(raw);
-  await compile(
-    { path: filePath, value },
-    {
-      development: false,
-      jsx: false,
-    },
-  );
+  await compile({ path: filePath, value: stripFrontmatter(raw) });
   return [];
 }
 
@@ -346,7 +363,13 @@ async function main() {
   process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error?.stack ?? error);
-  process.exit(1);
-});
+const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;
+
+if (isMain) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error?.stack ?? error);
+      process.exit(1);
+    },
+  );
+}

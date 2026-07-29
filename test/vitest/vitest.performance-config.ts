@@ -1,3 +1,4 @@
+// Vitest performance config helper normalizes performance test environment settings.
 type EnvMap = Record<string, string | undefined>;
 
 const isEnabled = (value: string | undefined): boolean => {

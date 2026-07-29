@@ -1,0 +1,35 @@
+title: ClawHub release candidate package install proof
+
+scenario:
+  id: clawhub-release-candidate-checklist
+  surface: clawhub
+  category: clawhub.plugin-lifecycle-and-health
+  coverage:
+    primary:
+      - clawhub.npm-pack-local-release-candidate-installs
+  objective: Verify a release-candidate npm pack installs and updates through real package semantics before publishing.
+  successCriteria:
+    - The producer resolves an explicit candidate .tgz or an explicitly requested checkout-built tarball.
+    - The candidate tarball has package metadata and build metadata before the install lane runs.
+    - The Parallels npm-update lane hosts the candidate tarball, runs fresh install proof, and runs same-guest update proof.
+    - Primary evidence is pass only when at least one selected platform passes fresh target install and at least one selected platform passes update.
+    - Missing candidate tarball or Parallels prerequisites are reported as blocked evidence, not false passing evidence.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts
+    - scripts/e2e/parallels-npm-update-smoke.sh
+    - scripts/e2e/parallels/npm-update-smoke.ts
+    - test/scripts/release-candidate-checklist.test.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts
+    summary: Runs the Parallels npm-update install proof against a candidate release tarball and emits QA Lab evidence.
+    allowBlockedEvidence: true
+    timeoutMs: 14400000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --tarball-env
+      - OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL

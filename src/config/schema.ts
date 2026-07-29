@@ -1,8 +1,11 @@
+// Builds and validates the canonical OpenClaw configuration schema.
 import crypto from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHANNEL_IDS } from "../channels/ids.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
@@ -12,10 +15,9 @@ import {
   schemaHasChildren,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "./schema.tiers.js";
 
-export type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-
-export type ConfigSchema = Record<string, unknown>;
+type ConfigSchema = Record<string, unknown>;
 
 type JsonSchemaNode = Record<string, unknown>;
 
@@ -25,6 +27,9 @@ type JsonSchemaObject = JsonSchemaNode & {
   required?: string[];
   additionalProperties?: JsonSchemaObject | boolean;
   items?: JsonSchemaObject | JsonSchemaObject[];
+  anyOf?: JsonSchemaObject[];
+  oneOf?: JsonSchemaObject[];
+  allOf?: JsonSchemaObject[];
 };
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
@@ -62,6 +67,8 @@ const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
   "writeOnly",
 ]);
 const MAX_LOOKUP_PATH_SEGMENTS = 32;
+const LOOKUP_SCHEMA_COMPOSITION_KEYS = ["anyOf", "oneOf", "allOf"] as const;
+const LOOKUP_SCHEMA_NESTED_FORM_DEPTH = 4;
 
 function isObjectSchema(schema: JsonSchemaObject): boolean {
   const type = schema.type;
@@ -101,19 +108,31 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type ConfigSchemaLookupChild = {
+type ConfigSchemaLookupChild = {
   key: string;
   path: string;
   type?: string | string[];
   required: boolean;
   hasChildren: boolean;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
 };
 
-export type ConfigSchemaLookupResult = {
+type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+
+type ConfigSchemaReloadMetadata = {
+  kind: ConfigSchemaReloadKind;
+};
+
+type ConfigSchemaReloadMetadataResolver = (
+  path: string,
+) => ConfigSchemaReloadMetadata | null | undefined;
+
+type ConfigSchemaLookupResult = {
   path: string;
   schema: JsonSchemaNode;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
   children: ConfigSchemaLookupChild[];
@@ -125,7 +144,10 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<ConfigUiHint, "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder">
+    Pick<
+      ConfigUiHint,
+      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+    >
   >;
   configSchema?: JsonSchemaNode;
 };
@@ -371,7 +393,7 @@ function applyHeartbeatTargetHints(
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
   const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.list.*.heartbeat.target"];
+  const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
@@ -521,11 +543,26 @@ function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   });
 }
 
+/**
+ * Materialize the presentation hints that need the merged schema: tiers resolve
+ * per path, then shared channel leaves get their help, then tags derive.
+ */
+function resolveMergedUiHints(schema: ConfigSchema, hints: ConfigUiHints): ConfigUiHints {
+  return applyDerivedTags(
+    applySharedChannelFieldHelp(
+      applyResolvedConfigTierHints(
+        schema,
+        applyConfigTierHints(hints, { includePluginOwnedChannels: true }),
+      ),
+    ),
+  );
+}
+
 function buildBaseConfigSchema(): ConfigSchemaResponse {
   if (cachedBase) {
     return cachedBase;
   }
-  const generated = GENERATED_BASE_CONFIG_SCHEMA as unknown as ConfigSchemaResponse;
+  const generated = computeBaseConfigSchemaResponse();
   const bundledChannels = getBundledChannelSchemaMetadata();
   const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
     applyChannelHints(generated.uiHints, bundledChannels),
@@ -537,10 +574,11 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
+  const mergedSchema = applyChannelSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
-    schema: applyChannelSchemas(generated.schema, bundledChannels),
-    uiHints: mergedHints,
+    schema: mergedSchema,
+    uiHints: resolveMergedUiHints(mergedSchema, mergedHints),
   };
   cachedBase = next;
   return next;
@@ -586,7 +624,7 @@ export function buildConfigSchema(params?: {
   const merged = {
     ...base,
     schema: mergedSchema,
-    uiHints: mergedHints,
+    uiHints: resolveMergedUiHints(mergedSchema, mergedHints),
   };
   if (cacheKey) {
     setMergedSchemaCache(cacheKey, merged);
@@ -642,7 +680,7 @@ function resolveLookupChildSchema(
     return asJsonSchemaObject(properties[segment]);
   }
 
-  const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
+  const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
   if ((segment === "*" || itemIndex !== undefined) && items) {
     return items;
@@ -655,7 +693,7 @@ function resolveLookupChildSchema(
   return null;
 }
 
-function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
+function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
   const next: JsonSchemaNode = {};
 
   for (const [key, value] of Object.entries(schema)) {
@@ -703,6 +741,41 @@ function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
     }
   }
 
+  if (
+    schema.properties &&
+    ((nestedFormDepth > 0 && nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) ||
+      (schema.additionalProperties && typeof schema.additionalProperties === "object"))
+  ) {
+    next.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, child]) => [
+        key,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
+    );
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    next.additionalProperties = stripSchemaForLookup(
+      schema.additionalProperties,
+      nestedFormDepth + 1,
+    );
+  }
+  if (Array.isArray(schema.items)) {
+    next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
+  } else if (schema.items && typeof schema.items === "object") {
+    next.items = stripSchemaForLookup(schema.items, nestedFormDepth + 1);
+  }
+  if (nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) {
+    for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+      const variants = schema[key];
+      if (!Array.isArray(variants)) {
+        continue;
+      }
+      next[key] = variants
+        .filter((variant) => variant && typeof variant === "object")
+        .map((variant) => stripSchemaForLookup(variant, nestedFormDepth + 1));
+    }
+  }
+
   return next;
 }
 
@@ -710,6 +783,7 @@ function buildLookupChildren(
   schema: JsonSchemaObject,
   path: string,
   uiHints: ConfigUiHints,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
   const required = new Set(schema.required ?? []);
@@ -717,12 +791,14 @@ function buildLookupChildren(
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
     const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
       path: childPath,
       type: childSchema.type,
       required: isRequired,
       hasChildren: schemaHasChildren(childSchema),
+      reloadKind: reloadMetadata?.kind,
       hint: resolvedHint?.hint,
       hintPath: resolvedHint?.path,
     });
@@ -748,13 +824,15 @@ function buildLookupChildren(
 export function lookupConfigSchema(
   response: ConfigSchemaResponse,
   path: string,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupResult | null {
+  const wantsRoot = path.trim() === ".";
   const normalizedPath = normalizeLookupPath(path);
-  if (!normalizedPath) {
+  if (!normalizedPath && !wantsRoot) {
     return null;
   }
   const parts = splitLookupPath(normalizedPath);
-  if (parts.length === 0 || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
+  if ((!wantsRoot && parts.length === 0) || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
     return null;
   }
 
@@ -771,11 +849,19 @@ export function lookupConfigSchema(
   }
 
   const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
-    path: normalizedPath,
+    path: wantsRoot ? "." : normalizedPath,
     schema: stripSchemaForLookup(current),
+    reloadKind: reloadMetadata?.kind,
     hint: resolvedHint?.hint,
     hintPath: resolvedHint?.path,
-    children: buildLookupChildren(current, normalizedPath, response.uiHints),
+    children: buildLookupChildren(
+      current,
+      wantsRoot ? "" : normalizedPath,
+      response.uiHints,
+      resolveReloadMetadata,
+    ),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

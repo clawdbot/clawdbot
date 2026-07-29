@@ -1,3 +1,4 @@
+// Slack plugin module implements members behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -12,17 +13,17 @@ export function registerSlackMemberEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const handleMemberChannelEvent = async (params: {
+  const handleMemberChannelEvent = async (paramsLocal: {
     verb: "joined" | "left";
     event: SlackMemberChannelEvent;
     body: unknown;
   }) => {
     try {
-      if (ctx.shouldDropMismatchedSlackEvent(params.body)) {
+      if (ctx.shouldDropMismatchedSlackEvent(paramsLocal.body)) {
         return;
       }
       trackEvent?.();
-      const payload = params.event;
+      const payload = paramsLocal.event;
       const channelId = payload.channel;
       const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
       const channelType = payload.channel_type ?? channelInfo?.type;
@@ -31,20 +32,23 @@ export function registerSlackMemberEvents(params: {
         senderId: payload.user,
         channelId,
         channelType,
-        eventKind: `member-${params.verb}`,
+        eventKind: `member-${paramsLocal.verb}`,
       });
       if (!ingressContext) {
         return;
       }
       const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
       const userLabel = userInfo?.name ?? payload.user ?? "someone";
-      enqueueSystemEvent(`Slack: ${userLabel} ${params.verb} ${ingressContext.channelLabel}.`, {
-        sessionKey: ingressContext.sessionKey,
-        contextKey: `slack:member:${params.verb}:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
-      });
+      enqueueSystemEvent(
+        `Slack: ${userLabel} ${paramsLocal.verb} ${ingressContext.channelLabel}.`,
+        {
+          sessionKey: ingressContext.sessionKey,
+          contextKey: `slack:member:${paramsLocal.verb}:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
+        },
+      );
     } catch (err) {
       ctx.runtime.error?.(
-        danger(`slack ${params.verb} handler failed: ${formatErrorMessage(err)}`),
+        danger(`slack ${paramsLocal.verb} handler failed: ${formatErrorMessage(err)}`),
       );
     }
   };

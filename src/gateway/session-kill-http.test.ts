@@ -1,17 +1,28 @@
+// Session kill HTTP tests cover subagent kill authorization, requester/admin
+// scope handling, local request checks, and error responses.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAuthResult } from "./auth.js";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
+const WORKER_SESSION_KEY = "agent:main:subagent:worker";
+const WORKER_KILL_PATH = "/sessions/agent%3Amain%3Asubagent%3Aworker/kill";
+const ADMIN_SCOPE_HEADERS = {
+  "x-openclaw-scopes": "operator.admin",
+};
+const REQUESTER_WRITE_HEADERS = {
+  "x-openclaw-scopes": "operator.write",
+  "x-openclaw-requester-session-key": "agent:main:main",
+};
+const REQUESTER_ADMIN_HEADERS = {
+  "x-openclaw-scopes": "operator.admin",
+  "x-openclaw-requester-session-key": "agent:other:main",
+};
 
 let cfg: Record<string, unknown> = {};
 const authMock = vi.fn(async (): Promise<GatewayAuthResult> => ({ ok: true }));
-const isLocalDirectRequestMock = vi.fn(() => true);
 const loadSessionEntryMock = vi.fn();
-const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
-const resolveSubagentControllerMock = vi.fn();
-const killControlledSubagentRunMock = vi.fn();
 const killSubagentRunAdminMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
@@ -24,21 +35,14 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: authMock,
-  isLocalDirectRequest: isLocalDirectRequestMock,
 }));
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: getLatestSubagentRunByChildSessionKeyMock,
-}));
-
 vi.mock("../agents/subagent-control.js", () => ({
-  killControlledSubagentRun: killControlledSubagentRunMock,
   killSubagentRunAdmin: killSubagentRunAdminMock,
-  resolveSubagentController: resolveSubagentControllerMock,
 }));
 
 const { handleSessionKillHttpRequest } = await import("./session-kill-http.js");
@@ -82,13 +86,7 @@ beforeEach(() => {
   cfg = {};
   authMock.mockReset();
   authMock.mockResolvedValue({ ok: true, method: "token" });
-  isLocalDirectRequestMock.mockReset();
-  isLocalDirectRequestMock.mockReturnValue(true);
   loadSessionEntryMock.mockReset();
-  getLatestSubagentRunByChildSessionKeyMock.mockReset();
-  resolveSubagentControllerMock.mockReset();
-  resolveSubagentControllerMock.mockReturnValue({ controllerSessionKey: "agent:main:main" });
-  killControlledSubagentRunMock.mockReset();
   killSubagentRunAdminMock.mockReset();
 });
 
@@ -108,38 +106,94 @@ async function post(
   });
 }
 
+function postWorkerKill(token = TEST_GATEWAY_TOKEN, extraHeaders?: Record<string, string>) {
+  return post(WORKER_KILL_PATH, token, extraHeaders);
+}
+
+function allowTrustedProxyAuth() {
+  authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
+}
+
+function mockWorkerSession() {
+  loadSessionEntryMock.mockReturnValue({
+    entry: { sessionId: "sess-worker", updatedAt: Date.now() },
+    canonicalKey: WORKER_SESSION_KEY,
+  });
+}
+
+async function expectForbiddenMissingScope(response: Response, message: string) {
+  expect(response.status).toBe(403);
+  expectErrorResponse(await response.json(), {
+    type: "forbidden",
+    message,
+  });
+}
+
+function expectErrorResponse(body: unknown, expected: { type: string; message?: string }) {
+  const response = body as {
+    ok?: unknown;
+    error?: { type?: unknown; message?: unknown };
+  };
+  if (Object.hasOwn(response, "ok")) {
+    expect(response.ok).toBe(false);
+  }
+  expect(response.error?.type).toBe(expected.type);
+  if (expected.message !== undefined) {
+    expect(response.error?.message).toBe(expected.message);
+  }
+}
+
 describe("POST /sessions/:sessionKey/kill", () => {
   it("returns 401 when auth fails", async () => {
     authMock.mockResolvedValueOnce({ ok: false, rateLimited: false });
 
-    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
+    const response = await postWorkerKill();
     expect(response.status).toBe(401);
   });
 
   it("returns 404 when the session key is not in the session store", async () => {
-    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
+    allowTrustedProxyAuth();
     loadSessionEntryMock.mockReturnValue({ entry: undefined });
 
-    const response = await post(
-      "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
-      TEST_GATEWAY_TOKEN,
-      {
-        "x-openclaw-scopes": "operator.admin",
-      },
-    );
+    const response = await postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: { type: "not_found" },
-    });
+    expectErrorResponse(await response.json(), { type: "not_found" });
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
+  it("matches kill paths without trusting malformed Host headers", async () => {
+    allowTrustedProxyAuth();
+    loadSessionEntryMock.mockReturnValue({ entry: undefined });
+
+    const response = await postWorkerKill(TEST_GATEWAY_TOKEN, {
+      Host: "[",
+      ...ADMIN_SCOPE_HEADERS,
+    });
+    expect(response.status).toBe(404);
+    expectErrorResponse(await response.json(), { type: "not_found" });
+    expect(loadSessionEntryMock).toHaveBeenCalled();
+  });
+
+  it.each(["/sessions/%zz/kill", "/sessions/%20/kill"])(
+    "rejects invalid encoded session key %s without falling through",
+    async (pathname) => {
+      const response = await post(pathname);
+      expect(response.status).toBe(400);
+      expectErrorResponse(await response.json(), {
+        message: "invalid session key",
+        type: "invalid_request_error",
+      });
+      expect(authMock).not.toHaveBeenCalled();
+      expect(loadSessionEntryMock).not.toHaveBeenCalled();
+      expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("kills a matching session via the admin kill helper using the canonical key", async () => {
-    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
+    allowTrustedProxyAuth();
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: "agent:main:subagent:worker",
+      canonicalKey: WORKER_SESSION_KEY,
     });
     killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
@@ -154,170 +208,77 @@ describe("POST /sessions/:sessionKey/kill", () => {
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
     expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
-      sessionKey: "agent:main:subagent:worker",
+      sessionKey: WORKER_SESSION_KEY,
     });
   });
 
   it("returns killed=false when the target exists but nothing was stopped", async () => {
-    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
-    loadSessionEntryMock.mockReturnValue({
-      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: "agent:main:subagent:worker",
-    });
+    allowTrustedProxyAuth();
+    mockWorkerSession();
     killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: false });
 
-    const response = await post(
-      "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
-      TEST_GATEWAY_TOKEN,
-      {
-        "x-openclaw-scopes": "operator.admin",
-      },
-    );
+    const response = await postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
   });
 
   it("rejects local bearer-auth kills without a trusted admin scope surface", async () => {
-    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.admin",
-      },
-    });
+    const response = await postWorkerKill();
+    await expectForbiddenMissingScope(response, "missing scope: operator.admin");
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
   it("does not trust x-openclaw-scopes on shared-secret bearer auth", async () => {
-    const response = await post(
-      "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
-      TEST_GATEWAY_TOKEN,
-      {
-        "x-openclaw-scopes": "operator.admin",
-      },
-    );
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.admin",
-      },
-    });
+    const response = await postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
+    await expectForbiddenMissingScope(response, "missing scope: operator.admin");
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
-  it("rejects remote bearer-auth kills without requester ownership", async () => {
-    isLocalDirectRequestMock.mockReturnValue(false);
-    loadSessionEntryMock.mockReturnValue({
-      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: "agent:main:subagent:worker",
-    });
+  it("rejects bearer-auth kills without a trusted admin scope surface", async () => {
+    mockWorkerSession();
 
-    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
+    const response = await postWorkerKill();
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: { type: "forbidden" },
-    });
+    expectErrorResponse(await response.json(), { type: "forbidden" });
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
-  it("rejects remote kills without requester ownership or an authorized token", async () => {
-    isLocalDirectRequestMock.mockReturnValue(false);
-    authMock.mockResolvedValueOnce({ ok: true });
-    loadSessionEntryMock.mockReturnValue({
-      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: "agent:main:subagent:worker",
-    });
-
-    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
-      authorization: "",
-    });
-    expect(response.status).toBe(403);
+  it("rejects trusted-proxy requester-session kills without admin scope", async () => {
+    allowTrustedProxyAuth();
+    const response = await postWorkerKill("", REQUESTER_WRITE_HEADERS);
+    await expectForbiddenMissingScope(response, "missing scope: operator.admin");
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
-  it("uses requester ownership checks when a requester session header is provided without admin bypass", async () => {
-    isLocalDirectRequestMock.mockReturnValue(false);
-    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
-    loadSessionEntryMock.mockReturnValue({
-      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: "agent:main:subagent:worker",
-    });
-    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:worker",
-    });
-    killControlledSubagentRunMock.mockResolvedValue({ status: "ok" });
+  it("uses the admin kill path even when the requester session header is present", async () => {
+    allowTrustedProxyAuth();
+    mockWorkerSession();
+    killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
-    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
-      "x-openclaw-scopes": "operator.write",
-      "x-openclaw-requester-session-key": "agent:main:main",
-    });
+    const response = await postWorkerKill("", REQUESTER_ADMIN_HEADERS);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(resolveSubagentControllerMock).toHaveBeenCalledWith({
+    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
-      agentSessionKey: "agent:main:main",
-    });
-    expect(getLatestSubagentRunByChildSessionKeyMock).toHaveBeenCalledWith(
-      "agent:main:subagent:worker",
-    );
-    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
-  });
-
-  it("uses the newest child-session row for requester-owned kills when stale rows still exist", async () => {
-    isLocalDirectRequestMock.mockReturnValue(false);
-    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
-    loadSessionEntryMock.mockReturnValue({
-      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: "agent:main:subagent:worker",
-    });
-    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
-      runId: "run-current-ended",
-      childSessionKey: "agent:main:subagent:worker",
-      endedAt: Date.now() - 1,
-    });
-    killControlledSubagentRunMock.mockResolvedValue({ status: "done" });
-
-    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
-      "x-openclaw-scopes": "operator.write",
-      "x-openclaw-requester-session-key": "agent:main:main",
-    });
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
-    expect(killControlledSubagentRunMock).toHaveBeenCalledWith({
-      cfg,
-      controller: { controllerSessionKey: "agent:main:main" },
-      entry: expect.objectContaining({
-        runId: "run-current-ended",
-        childSessionKey: "agent:main:subagent:worker",
-      }),
+      sessionKey: WORKER_SESSION_KEY,
     });
   });
 
-  it("rejects bearer-auth requester kills without a trusted write scope surface", async () => {
-    isLocalDirectRequestMock.mockReturnValue(false);
+  it("rejects bearer-auth requester kills without a trusted admin scope surface", async () => {
     const response = await post(
       "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
       TEST_GATEWAY_TOKEN,
       { "x-openclaw-requester-session-key": "agent:other:main" },
     );
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.write",
-      },
+    expectErrorResponse(await response.json(), {
+      type: "forbidden",
+      message: "missing scope: operator.admin",
     });
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
-    expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
   });
 });

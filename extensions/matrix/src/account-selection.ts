@@ -1,3 +1,4 @@
+// Matrix plugin module implements account selection behavior.
 import {
   listCombinedAccountIds,
   listConfiguredAccountIds,
@@ -9,7 +10,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {

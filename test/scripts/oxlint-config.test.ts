@@ -1,8 +1,15 @@
+// Oxlint Config tests cover oxlint config script behavior.
 import fs from "node:fs";
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
   ignorePatterns?: string[];
+  overrides?: Array<{
+    excludeFiles?: string[];
+    files?: string[];
+    rules?: Record<string, unknown>;
+  }>;
   rules?: Record<string, unknown>;
 };
 
@@ -22,24 +29,37 @@ const ZERO_BASELINE_RULES = [
   "eslint/no-sequences",
   "eslint/no-self-compare",
   "eslint/no-var",
+  "eslint/no-param-reassign",
+  "eslint/no-implicit-coercion",
+  "eslint/no-useless-rename",
+  "eslint/no-useless-return",
   "eslint/no-new-wrappers",
   "eslint/no-else-return",
+  "eslint/no-lonely-if",
   "eslint/no-case-declarations",
+  "eslint/object-shorthand",
   "eslint/prefer-exponentiation-operator",
+  "eslint/prefer-const",
   "eslint/prefer-numeric-literals",
+  "eslint/prefer-object-has-own",
   "eslint/radix",
   "eslint/unicode-bom",
   "eslint/yoda",
   "import/no-absolute-path",
+  "import/first",
   "import/no-empty-named-blocks",
+  "import/no-duplicates",
   "import/no-self-import",
   "node/no-exports-assign",
   "promise/no-new-statics",
   "typescript/adjacent-overload-signatures",
   "typescript/ban-tslint-comment",
+  "typescript/no-import-type-side-effects",
+  "typescript/no-inferrable-types",
   "typescript/no-non-null-asserted-nullish-coalescing",
   "typescript/no-unnecessary-qualifier",
   "typescript/prefer-find",
+  "typescript/prefer-for-of",
   "typescript/prefer-function-type",
   "typescript/prefer-includes",
   "typescript/prefer-reduce-type-parameter",
@@ -52,7 +72,10 @@ const ZERO_BASELINE_RULES = [
   "unicorn/no-negation-in-equality-check",
   "unicorn/no-new-buffer",
   "unicorn/no-typeof-undefined",
+  "unicorn/no-unreadable-array-destructuring",
   "unicorn/no-useless-error-capture-stack-trace",
+  "unicorn/no-zero-fractions",
+  "unicorn/prefer-array-flat",
   "unicorn/prefer-array-some",
   "unicorn/prefer-dom-node-text-content",
   "unicorn/prefer-keyboard-event-key",
@@ -63,6 +86,8 @@ const ZERO_BASELINE_RULES = [
   "unicorn/prefer-optional-catch-binding",
   "unicorn/prefer-prototype-methods",
   "unicorn/prefer-regexp-test",
+  "unicorn/prefer-set-has",
+  "unicorn/prefer-structured-clone",
   "unicorn/prefer-string-slice",
   "unicorn/require-array-join-separator",
   "unicorn/require-number-to-fixed-digits-argument",
@@ -75,7 +100,7 @@ const ZERO_BASELINE_RULES = [
 ];
 
 function readJson(path: string): unknown {
-  return JSON.parse(fs.readFileSync(path, "utf8")) as unknown;
+  return JSON5.parse(fs.readFileSync(path, "utf8"));
 }
 
 describe("oxlint config", () => {
@@ -116,13 +141,115 @@ describe("oxlint config", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const ignorePatterns = config.ignorePatterns ?? [];
 
-    expect(ignorePatterns).toContain("**/node_modules/**");
-    expect(ignorePatterns).toContain("**/dist/**");
-    expect(ignorePatterns).toContain("**/build/**");
-    expect(ignorePatterns).toContain("**/coverage/**");
-    expect(ignorePatterns).toContain("**/.cache/**");
-    expect(ignorePatterns).toContain("**/.openclaw-runtime-deps-copy-*/**");
-    expect(ignorePatterns).toContain("extensions/diffs/assets/viewer-runtime.js");
+    expect(ignorePatterns).toEqual([
+      "dist/",
+      "dist-runtime/",
+      "docs/_layouts/",
+      "**/a2ui.bundle.js",
+      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
+      "extensions/diffs/assets/viewer-runtime.js",
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+      "node_modules/",
+      "patches/",
+      "pnpm-lock.yaml",
+      "skills/**",
+      "src/auto-reply/reply/export-html/template.js",
+      "vendor/",
+      "**/.cache/**",
+      "**/.openclaw-runtime-deps-copy-*/**",
+      "**/build/**",
+      "**/coverage/**",
+      "**/dist/**",
+      "**/dist-runtime/**",
+      "**/node_modules/**",
+    ]);
+  });
+
+  it("preserves the indexed-access and test-file policies", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.overrides?.slice(0, 3)).toEqual([
+      {
+        files: ["extensions/browser/src/browser/routes/*.ts"],
+        rules: {
+          "oxc/no-async-endpoint-handlers": "off",
+        },
+      },
+      {
+        files: [
+          "packages/markdown-core/**/*.ts",
+          "packages/net-policy/**/*.ts",
+          "packages/media-understanding-common/**/*.ts",
+          "packages/terminal-core/**/*.ts",
+          "packages/normalization-core/**/*.ts",
+          "packages/model-catalog-core/**/*.ts",
+          "packages/agent-core/**/*.ts",
+          "packages/acp-core/**/*.ts",
+          "packages/ai/**/*.ts",
+          "packages/gateway-client/**/*.ts",
+          "packages/gateway-protocol/**/*.ts",
+          "packages/llm-core/**/*.ts",
+          "packages/media-core/**/*.ts",
+          "packages/media-generation-core/**/*.ts",
+          "packages/plugin-package-contract/**/*.ts",
+          "packages/sdk/**/*.ts",
+        ],
+        rules: {
+          "typescript/no-non-null-assertion": "error",
+        },
+      },
+      {
+        files: [
+          "**/*.test.ts",
+          "**/*.test.tsx",
+          "**/*.e2e.test.ts",
+          "**/*.live.test.ts",
+          "**/*test-harness.ts",
+          "**/*test-helpers.ts",
+          "**/*test-support.ts",
+        ],
+        rules: {
+          "typescript/no-explicit-any": "off",
+        },
+      },
+    ]);
+  });
+
+  it("enforces scoped max-lines budgets while excluding generated output", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+    const maxLinesOverrides = (config.overrides ?? []).filter(
+      (override) => override.rules?.["max-lines"],
+    );
+    const scopedBudgets = maxLinesOverrides.filter((override) => override.excludeFiles);
+    const exactExceptions = maxLinesOverrides.filter((override) => !override.excludeFiles);
+
+    expect(scopedBudgets).toHaveLength(4);
+    expect(scopedBudgets.map((override) => override.rules?.["max-lines"])).toEqual([
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 1000, skipBlankLines: true, skipComments: true }],
+    ]);
+    for (const override of scopedBudgets) {
+      expect(override.excludeFiles).toContain("**/protocol-gen/**");
+      expect(override.excludeFiles).toContain("**/*.generated.*");
+      expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
+      expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
+    }
+    expect(exactExceptions).toEqual([
+      {
+        files: ["extensions/copilot/src/event-bridge.ts"],
+        rules: {
+          "max-lines": ["error", { max: 950, skipBlankLines: true, skipComments: true }],
+        },
+      },
+      {
+        files: ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
+        rules: {
+          "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],
+        },
+      },
+    ]);
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for browser plugin configuration, CDP URL, and auth helpers.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,

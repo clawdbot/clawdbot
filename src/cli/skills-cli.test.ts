@@ -1,10 +1,11 @@
+// Skills CLI tests cover skill listing, install, and command output behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   loadSkillsFromDir: () => ({ skills: [] }),
   formatSkillsForPrompt: () => "",
 }));
@@ -25,6 +26,7 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: true,
+    platformIncompatible: false,
     modelVisible: true,
     userInvocable: true,
     commandVisible: true,
@@ -64,6 +66,7 @@ describe("skills-cli", () => {
           description: "Capture UI screenshots",
           emoji: "📸",
           eligible: true,
+          platformIncompatible: false,
         }),
       ]);
       const output = formatSkillsList(report, {});
@@ -78,6 +81,7 @@ describe("skills-cli", () => {
           name: "disabled-skill",
           disabled: true,
           eligible: false,
+          platformIncompatible: false,
         }),
       ]);
       const output = formatSkillsList(report, {});
@@ -90,6 +94,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "needs-stuff",
           eligible: false,
+          platformIncompatible: false,
           missing: {
             bins: ["ffmpeg"],
             anyBins: ["rg", "grep"],
@@ -112,6 +117,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "not-eligible",
           eligible: false,
+          platformIncompatible: false,
           disabled: true,
         }),
       ]);
@@ -126,6 +132,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "agent-excluded",
           eligible: true,
+          platformIncompatible: false,
           blockedByAgentFilter: true,
         }),
       ]);
@@ -180,46 +187,66 @@ describe("skills-cli", () => {
       expect(output).toContain("API_KEY");
     });
 
-    it("shows API key storage guidance for the active config path", () => {
+    it("resolves skill info case-insensitively", () => {
       const report = createMockReport([
         createMockSkill({
-          name: "env-aware-skill",
-          skillKey: "env-aware-skill",
-          primaryEnv: "API_KEY",
-          eligible: false,
-          requirements: {
-            bins: [],
-            anyBins: [],
-            env: ["API_KEY"],
-            config: [],
-            os: [],
-          },
-          missing: {
-            bins: [],
-            anyBins: [],
-            env: ["API_KEY"],
-            config: [],
-            os: [],
-          },
+          name: "Excel XLSX",
+          skillKey: "Excel-XLSX",
+          description: "Spreadsheet helpers",
         }),
       ]);
 
-      const output = formatSkillInfo(report, "env-aware-skill", {});
-      expect(output).toContain("OPENCLAW_CONFIG_PATH");
-      expect(output).toContain("default: ~/.openclaw/openclaw.json");
-      expect(output).toContain("skills.entries.env-aware-skill.apiKey");
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
     });
 
-    it("normalizes text-presentation emoji selectors in info output", () => {
+    it("resolves skill info across separator variants", () => {
       const report = createMockReport([
         createMockSkill({
-          name: "info-emoji",
-          emoji: "🎛\uFE0E",
+          name: "Excel XLSX",
+          skillKey: "excel_xlsx",
+          description: "Spreadsheet helpers",
         }),
       ]);
 
-      const output = formatSkillInfo(report, "info-emoji", {});
-      expect(output).toContain("🎛️");
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
+    });
+
+    it("returns not found for ambiguous case-insensitive matches", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "First Skill", skillKey: "Excel-XLSX", description: "first" }),
+        createMockSkill({ name: "Second Skill", skillKey: "excel-xlsx", description: "second" }),
+      ]);
+
+      const output = formatSkillInfo(report, "EXCEL-XLSX", {});
+      expect(output).toContain("not found");
+      expect(output).not.toContain("first");
+      expect(output).not.toContain("second");
+    });
+
+    it("returns not found for ambiguous normalized matches", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "Excel/XLSX", skillKey: "excel-slash", description: "first" }),
+        createMockSkill({
+          name: "Excel_XLSX",
+          skillKey: "excel-underscore",
+          description: "second",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("not found");
+      expect(output).not.toContain("first");
+      expect(output).not.toContain("second");
+    });
+
+    it("sanitizes user-supplied skill name in not-found text output", () => {
+      const report = createMockReport([]);
+      const output = formatSkillInfo(report, "evil\u001b[31m\u009f", {});
+
+      expect(output).toContain('Skill "evil" not found');
+      expect(output).not.toContain("\u001b");
     });
 
     it("shows agent exclusion and visibility details in skill info", () => {
@@ -227,6 +254,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "agent-excluded",
           eligible: true,
+          platformIncompatible: false,
           blockedByAgentFilter: true,
         }),
       ]);
@@ -247,6 +275,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "not-ready",
           eligible: false,
+          platformIncompatible: false,
           missing: { bins: ["go"], anyBins: [], env: [], config: [], os: [] },
         }),
         createMockSkill({ name: "disabled", eligible: false, disabled: true }),
@@ -267,6 +296,7 @@ describe("skills-cli", () => {
           name: "missing-emoji",
           emoji: "🎙\uFE0E",
           eligible: false,
+          platformIncompatible: false,
           missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
         }),
       ]);
@@ -283,12 +313,14 @@ describe("skills-cli", () => {
           createMockSkill({
             name: "prompt-hidden",
             eligible: true,
+            platformIncompatible: false,
             modelVisible: false,
             commandVisible: true,
           }),
           createMockSkill({
             name: "not-assigned",
             eligible: true,
+            platformIncompatible: false,
             blockedByAgentFilter: true,
           }),
         ]),
@@ -317,6 +349,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "internal-hidden",
           eligible: true,
+          platformIncompatible: false,
           modelVisible: false,
           commandVisible: false,
           userInvocable: false,
@@ -337,12 +370,14 @@ describe("skills-cli", () => {
             createMockSkill({
               name: "prompt-hidden",
               eligible: true,
+              platformIncompatible: false,
               modelVisible: false,
               commandVisible: true,
             }),
             createMockSkill({
               name: "slash-hidden",
               eligible: true,
+              platformIncompatible: false,
               modelVisible: true,
               userInvocable: false,
               commandVisible: false,
@@ -350,17 +385,20 @@ describe("skills-cli", () => {
             createMockSkill({
               name: "agent-filtered",
               eligible: true,
+              platformIncompatible: false,
               blockedByAgentFilter: true,
             }),
             createMockSkill({
               name: "missing-bin",
               eligible: false,
+              platformIncompatible: false,
               missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
             }),
             createMockSkill({ name: "disabled", eligible: false, disabled: true }),
             createMockSkill({
               name: "blocked-bundled",
               eligible: false,
+              platformIncompatible: false,
               blockedByAllowlist: true,
             }),
           ]),
@@ -378,17 +416,15 @@ describe("skills-cli", () => {
         notInjected: Array<{ name: string; reason: string }>;
         missingRequirements: Array<{ name: string }>;
       };
-      expect(parsed.summary).toMatchObject({
-        total: 7,
-        eligible: 4,
-        modelVisible: 2,
-        commandVisible: 2,
-        disabled: 1,
-        blocked: 1,
-        agentFiltered: 1,
-        notInjected: 1,
-        missingRequirements: 1,
-      });
+      expect(parsed.summary.total).toBe(7);
+      expect(parsed.summary.eligible).toBe(4);
+      expect(parsed.summary.modelVisible).toBe(2);
+      expect(parsed.summary.commandVisible).toBe(2);
+      expect(parsed.summary.disabled).toBe(1);
+      expect(parsed.summary.blocked).toBe(1);
+      expect(parsed.summary.agentFiltered).toBe(1);
+      expect(parsed.summary.notInjected).toBe(1);
+      expect(parsed.summary.missingRequirements).toBe(1);
       expect(parsed.modelVisible).toEqual(["ready", "slash-hidden"]);
       expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden"]);
       expect(parsed.agentFiltered).toEqual(["agent-filtered"]);
@@ -483,6 +519,16 @@ describe("skills-cli", () => {
       expect(parsed.emoji).toBe("🎙");
       expect(parsed.description).toBe("hi");
       expect(parsed.homepage).toBe("https://example.com/docs");
+    });
+
+    it("sanitizes user-supplied skill name in not-found JSON output", () => {
+      const report = createMockReport([]);
+      const output = formatSkillInfo(report, "evil\u001b[31m\u009f", { json: true });
+      const parsed = JSON.parse(output) as { error: string; skill: string };
+
+      expect(parsed.error).toBe("not found");
+      expect(parsed.skill).toBe("evil");
+      expect(output).not.toContain("\u001b");
     });
   });
 });

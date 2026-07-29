@@ -1,3 +1,4 @@
+// Discord plugin module implements agent components auth behavior.
 export { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
 export {
   ensureAgentComponentInteractionAllowed,

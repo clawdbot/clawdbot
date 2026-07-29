@@ -1,3 +1,4 @@
+// Discord plugin module implements subagent hooks behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   formatThreadBindingDisabledError,
@@ -7,7 +8,7 @@ import {
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
@@ -58,7 +59,16 @@ type DiscordSubagentDeliveryTargetEvent = {
 };
 
 type DiscordSubagentSpawningResult =
-  | { status: "ok"; threadBindingReady?: boolean }
+  | {
+      status: "ok";
+      threadBindingReady?: boolean;
+      deliveryOrigin?: {
+        channel: "discord";
+        accountId?: string;
+        to: string;
+        threadId?: string | number;
+      };
+    }
   | { status: "error"; error: string }
   | undefined;
 
@@ -142,7 +152,16 @@ export async function handleDiscordSubagentSpawning(
           "Unable to create or bind a Discord thread for this subagent session. Session mode is unavailable for this target.",
       };
     }
-    return { status: "ok" as const, threadBindingReady: true };
+    return {
+      status: "ok" as const,
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "discord",
+        accountId: account.accountId,
+        to: `channel:${binding.threadId}`,
+        threadId: binding.threadId,
+      },
+    };
   } catch (err) {
     return {
       status: "error" as const,

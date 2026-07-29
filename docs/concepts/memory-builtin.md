@@ -6,31 +6,33 @@ read_when:
   - You want to configure embedding providers or hybrid search
 ---
 
-The builtin engine is the default memory backend. It stores your memory index in
-a per-agent SQLite database and needs no extra dependencies to get started.
+The builtin engine is the default memory backend. It stores your memory index
+in a per-agent SQLite database and needs no extra dependencies to get
+started.
 
 ## What it provides
 
 - **Keyword search** via FTS5 full-text indexing (BM25 scoring).
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
+- **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, Mistral, or DeepInfra, the builtin
-engine auto-detects it and enables vector search. No config needed.
+By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
+`models.providers.openai.apiKey` is already configured, vector search works
+with no extra memory config.
 
 To set a provider explicitly:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-      },
+  memory: {
+    search: {
+      provider: "openai",
     },
   },
 }
@@ -38,20 +40,21 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force the built-in local embedding provider, install the optional
-`node-llama-cpp` runtime package next to OpenClaw, then point `local.modelPath`
-at a GGUF file:
+To force local GGUF embeddings, install the official llama.cpp provider
+plugin, then point `local.modelPath` at a GGUF file:
+
+```bash
+openclaw plugins install @openclaw/llama-cpp-provider
+```
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-        fallback: "none",
-        local: {
-          modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
-        },
+  memory: {
+    search: {
+      provider: "local",
+      fallback: "none",
+      local: {
+        modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -60,35 +63,51 @@ at a GGUF file:
 
 ## Supported embedding providers
 
-| Provider  | ID          | Auto-detected | Notes                               |
-| --------- | ----------- | ------------- | ----------------------------------- |
-| OpenAI    | `openai`    | Yes           | Default: `text-embedding-3-small`   |
-| Gemini    | `gemini`    | Yes           | Supports multimodal (image + audio) |
-| Voyage    | `voyage`    | Yes           |                                     |
-| Mistral   | `mistral`   | Yes           |                                     |
-| DeepInfra | `deepinfra` | Yes           | Default: `BAAI/bge-m3`              |
-| Ollama    | `ollama`    | No            | Local, set explicitly               |
-| Local     | `local`     | Yes (first)   | Optional `node-llama-cpp` runtime   |
+| Provider          | ID                  | Notes                               |
+| ----------------- | ------------------- | ----------------------------------- |
+| Bedrock           | `bedrock`           | Uses the AWS credential chain       |
+| DeepInfra         | `deepinfra`         | Default: `BAAI/bge-m3`              |
+| Gemini            | `gemini`            | Supports multimodal (image + audio) |
+| GitHub Copilot    | `github-copilot`    | Uses your Copilot subscription      |
+| LM Studio         | `lmstudio`          | Local/self-hosted                   |
+| Local             | `local`             | `@openclaw/llama-cpp-provider`      |
+| Mistral           | `mistral`           |                                     |
+| Ollama            | `ollama`            | Local/self-hosted                   |
+| OpenAI            | `openai`            | Default: `text-embedding-3-small`   |
+| OpenAI-compatible | `openai-compatible` | Generic `/v1/embeddings` endpoint   |
+| Voyage            | `voyage`            |                                     |
 
-Auto-detection picks the first provider whose API key can be resolved, in the
-order shown. Set `memorySearch.provider` to override.
+Set `memory.search.provider` to switch away from OpenAI.
 
 ## How indexing works
 
-OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
-80-token overlap) and stores them in a per-agent SQLite database.
+OpenClaw indexes `MEMORY.md`, an existing root `USER.md`, and `memory/*.md` into
+chunks (400 tokens with 80-token overlap by default) and stores them in a
+per-agent SQLite database. OpenClaw does not create `USER.md` automatically.
 
-- **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+Each chunk can carry nullable importance and trigger metadata. Null values are
+neutral, so older indexes remain usable. Search combines hybrid relevance,
+recency decay, and importance; trigger recall only injects curated or
+promoted-trusted entries.
+
+Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
+`agent`, `untrusted`, or `system`), session kind, observation time, and an
+optional supersession key. This metadata is stored separately from Markdown
+so recalled prose cannot rewrite its own trust classification.
+
+- **Index location:** the owning agent database at
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 - **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
   shutdown checkpoints.
-- **File watching:** changes to memory files trigger a debounced reindex (1.5s).
-- **Auto-reindex:** when the embedding provider, model, or chunking config
-  changes, the entire index is rebuilt automatically.
+- **File watching:** changes to memory files trigger a debounced reindex
+  (1.5s default).
+- **Auto-reindex:** the index rebuilds automatically when the embedding
+  provider, model, chunking config, configured sources, or scope change.
 - **Reindex on demand:** `openclaw memory index --force`
 
 <Info>
 You can also index Markdown files outside the workspace with
-`memorySearch.extraPaths`. See the
+`memory.search.extraPaths`. See the
 [configuration reference](/reference/memory-config#additional-memory-paths).
 </Info>
 
@@ -104,8 +123,8 @@ The builtin engine is the right choice for most users:
 Consider switching to [QMD](/concepts/memory-qmd) if you need reranking, query
 expansion, or want to index directories outside the workspace.
 
-Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory with
-automatic user modeling.
+Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
+with automatic user modeling.
 
 ## Troubleshooting
 
@@ -120,17 +139,17 @@ openclaw memory index --force --agent main
 ```
 
 Both standalone CLI commands and the Gateway use the same `local` provider id.
-If the provider is set to `auto`, local embeddings are considered first only
-when `memorySearch.local.modelPath` points to an existing local file.
+Set `memory.search.provider: "local"` when you want local embeddings.
 
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.
 
-**sqlite-vec not loading?** OpenClaw falls back to in-process cosine similarity
-automatically. `openclaw memory status --deep` reports the local vector store
-separately from the embedding provider, so `Vector store: unavailable` points
-at sqlite-vec loading while `Embeddings: unavailable` points at provider/auth
-or model readiness. Check logs for the specific load error.
+**sqlite-vec not loading?** OpenClaw falls back to in-process cosine
+similarity automatically. `openclaw memory status --deep` reports the local
+vector store separately from the embedding provider, so `Vector store:
+unavailable` points at sqlite-vec loading while `Embeddings: unavailable`
+points at provider/auth or model readiness. Check logs for the specific load
+error.
 
 ## Configuration
 

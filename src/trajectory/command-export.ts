@@ -1,7 +1,13 @@
+// Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import { pathExists } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 
+// CLI-facing trajectory export wrapper: resolves safe workspace-local paths,
+// writes the diagnostic bundle, and formats the terse success summary.
 export type TrajectoryCommandExportSummary = {
   outputDir: string;
   displayPath: string;
@@ -11,11 +17,6 @@ export type TrajectoryCommandExportSummary = {
   transcriptEventCount: number;
   files: string[];
 };
-
-function isPathInsideOrEqual(baseDir: string, candidate: string): boolean {
-  const relative = path.relative(baseDir, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
 
 async function validateExistingExportDirectory(params: {
   dir: string;
@@ -27,7 +28,7 @@ async function validateExistingExportDirectory(params: {
     throw new Error(`${params.label} must be a real directory inside the workspace`);
   }
   const realDir = await fsp.realpath(params.dir);
-  if (!isPathInsideOrEqual(params.realWorkspace, realDir)) {
+  if (!isPathInside(params.realWorkspace, realDir)) {
     throw new Error("Trajectory exports directory must stay inside the workspace");
   }
   return realDir;
@@ -69,16 +70,7 @@ async function resolveTrajectoryExportBaseDir(workspaceDir: string): Promise<{
   return { baseDir: path.resolve(baseDir), realBase };
 }
 
-async function pathExists(pathName: string): Promise<boolean> {
-  try {
-    await fsp.access(pathName);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function resolveTrajectoryCommandOutputDir(params: {
+async function resolveTrajectoryCommandOutputDir(params: {
   outputPath?: string;
   workspaceDir: string;
   sessionId: string;
@@ -110,7 +102,9 @@ export async function resolveTrajectoryCommandOutputDir(params: {
     existingParent = next;
   }
   const realExistingParent = await fsp.realpath(existingParent);
-  if (!isPathInsideOrEqual(realBase, realExistingParent)) {
+  // Validate the first existing ancestor by realpath so a missing child cannot
+  // be smuggled through a symlinked parent outside the export root.
+  if (!isPathInside(realBase, realExistingParent)) {
     throw new Error("Output path must stay inside the real trajectory exports directory");
   }
   return outputDir;
@@ -119,7 +113,8 @@ export async function resolveTrajectoryCommandOutputDir(params: {
 export async function exportTrajectoryForCommand(params: {
   outputDir?: string;
   outputPath?: string;
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
@@ -134,6 +129,7 @@ export async function exportTrajectoryForCommand(params: {
   const bundle = await exportTrajectoryBundle({
     outputDir,
     sessionFile: params.sessionFile,
+    sessionTarget: params.sessionTarget,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -159,6 +155,8 @@ export async function exportTrajectoryForCommand(params: {
   };
 }
 
+// Human CLI output contract. Keep this stable for docs/tests that snapshot the
+// command text, but keep raw paths in the structured summary above.
 export function formatTrajectoryCommandExportSummary(
   summary: TrajectoryCommandExportSummary,
 ): string {

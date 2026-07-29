@@ -1,4 +1,6 @@
+// Verifies task executor delivery policy and terminal message formatting.
 import { describe, expect, it } from "vitest";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -7,6 +9,7 @@ import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
+  shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
@@ -38,6 +41,12 @@ describe("task-executor-policy", () => {
   });
 
   it("formats terminal, followup, and progress messages", () => {
+    const succeededTask = createTask({
+      status: "succeeded",
+      terminalSummary: "Imported 12 rows.",
+      runId: "run-0234567890",
+      label: "ACP import",
+    });
     const blockedTask = createTask({
       status: "succeeded",
       terminalOutcome: "blocked",
@@ -51,12 +60,23 @@ describe("task-executor-policy", () => {
       summary: "No output for 60s.",
     };
 
+    expect(formatTaskTerminalMessage(succeededTask, { surface: "parent_session" })).toBe(
+      "Background task ready for review: ACP import (run run-0234). Imported 12 rows. Next: parent will review/verify before calling it done.",
+    );
+    expect(formatTaskTerminalMessage(succeededTask)).toBe(
+      "Background task done: ACP import (run run-0234). Imported 12 rows.",
+    );
     expect(formatTaskTerminalMessage(blockedTask)).toBe(
       "Background task blocked: ACP import (run run-1234). Needs login.",
     );
     expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
       "Task needs follow-up: ACP import (run run-1234). Needs login.",
     );
+    expect(
+      formatTaskTerminalMessage(
+        createTask({ runtime: "subagent", status: "cancelled", runId: "run-34567890" }),
+      ),
+    ).toBe("Background task cancellation requested: Subagent task (run run-3456).");
     expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBe(
       "Background task update: ACP import. No output for 60s.",
     );
@@ -139,6 +159,26 @@ describe("task-executor-policy", () => {
       ),
     ).toBe(false);
     expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "cancelled",
+          error: SUBAGENT_KILL_TASK_ERROR,
+          deliveryStatus: "pending",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "cancelled",
+          error: "Cancelled by operator.",
+          deliveryStatus: "pending",
+        }),
+      ),
+    ).toBe(true);
+    expect(
       shouldAutoDeliverTaskStateChange(
         createTask({
           status: "running",
@@ -168,6 +208,17 @@ describe("task-executor-policy", () => {
     expect(
       shouldSuppressDuplicateTerminalDelivery({
         task: createTask({
+          runtime: "subagent",
+          status: "cancelled",
+          runId: "run-duplicate",
+        }),
+        preferredTaskId: "task-1",
+        peerDeliveryCovered: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressDuplicateTerminalDelivery({
+        task: createTask({
           runtime: "acp",
           runId: "run-duplicate",
         }),
@@ -182,6 +233,34 @@ describe("task-executor-policy", () => {
         }),
         preferredTaskId: undefined,
       }),
+    ).toBe(false);
+    expect(
+      shouldSuppressDuplicateTerminalDelivery({
+        task: createTask({
+          runtime: "subagent",
+          status: "cancelled",
+          runId: "run-duplicate",
+        }),
+        preferredTaskId: "task-2",
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseParentReviewTaskTerminalMessage(
+        createTask({
+          runtime: "acp",
+          childSessionKey: "agent:main:acp:child",
+          status: "succeeded",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseParentReviewTaskTerminalMessage(
+        createTask({
+          runtime: "acp",
+          taskKind: "context_engine_turn_maintenance",
+          status: "succeeded",
+        }),
+      ),
     ).toBe(false);
   });
 });

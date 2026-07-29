@@ -1,8 +1,10 @@
+// Loads runtime sidecar path baselines for bundled plugin checks.
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
-const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 
 function buildBundledDistArtifactPath(dirName: string, artifact: string): string {
   return ["dist", "extensions", dirName, artifact].join("/");
@@ -13,10 +15,8 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
   if (!fs.existsSync(packageJsonPath)) {
     return new Set();
   }
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-    files?: unknown;
-  };
-  if (!Array.isArray(packageJson.files)) {
+  const packageJson = tryReadJsonSync<{ files?: unknown }>(packageJsonPath);
+  if (!Array.isArray(packageJson?.files)) {
     return new Set();
   }
   const excluded = new Set<string>();
@@ -36,9 +36,8 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
   return excluded;
 }
 
-export function collectBundledRuntimeSidecarPaths(params?: {
-  rootDir?: string;
-}): readonly string[] {
+/** Collects bundled runtime sidecar paths that should ship with the root package. */
+function collectBundledRuntimeSidecarPaths(params?: { rootDir?: string }): readonly string[] {
   const rootDir = params?.rootDir ?? process.cwd();
   const excludedRuntimeSidecarPluginDirs = new Set([
     ...NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS,
@@ -57,6 +56,7 @@ export function collectBundledRuntimeSidecarPaths(params?: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Writes or checks the bundled runtime sidecar path baseline JSON file. */
 export async function writeBundledRuntimeSidecarPathBaseline(params: {
   repoRoot: string;
   check: boolean;
@@ -67,7 +67,11 @@ export async function writeBundledRuntimeSidecarPathBaseline(params: {
     "lib",
     "bundled-runtime-sidecar-paths.json",
   );
-  const expectedJson = `${JSON.stringify(collectBundledRuntimeSidecarPaths(), null, 2)}\n`;
+  const expectedJson = `${JSON.stringify(
+    collectBundledRuntimeSidecarPaths({ rootDir: params.repoRoot }),
+    null,
+    2,
+  )}\n`;
   const currentJson = fs.existsSync(jsonPath) ? fs.readFileSync(jsonPath, "utf8") : "";
   const changed = currentJson !== expectedJson;
 

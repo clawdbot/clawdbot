@@ -1,8 +1,10 @@
-import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+// Conversation id helpers derive stable outbound conversation keys from
+// explicit thread ids or safe channel/group target shapes.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 
 function resolveExplicitConversationTargetId(target: string): string | undefined {
   for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
@@ -13,6 +15,9 @@ function resolveExplicitConversationTargetId(target: string): string | undefined
   return undefined;
 }
 
+/**
+ * Chooses the best conversation id from an explicit thread id or outbound targets.
+ */
 export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
@@ -32,6 +37,8 @@ export function resolveConversationIdFromTargets(params: {
       return explicitConversationId;
     }
     if (target.includes(":") && explicitConversationId === undefined) {
+      // Colon targets are usually provider-native ids. Only explicit target
+      // prefixes above are safe to collapse into a portable conversation id.
       continue;
     }
     const mentionMatch = target.match(/^<#(\d+)>$/);

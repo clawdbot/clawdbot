@@ -1,3 +1,4 @@
+/** Shared helpers for interactive plugin contract tests. */
 type ConversationBindingHelpers = {
   requestConversationBinding: (...args: unknown[]) => unknown;
   detachConversationBinding: (...args: unknown[]) => unknown;

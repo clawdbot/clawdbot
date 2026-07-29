@@ -1,3 +1,4 @@
+// Covers low-level raw config snapshot redaction transforms.
 import { describe, expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import { replaceSensitiveValuesInRaw } from "./redact-snapshot.raw.js";
@@ -24,10 +25,7 @@ describe("replaceSensitiveValuesInRaw", () => {
       redactedSentinel: REDACTED_SENTINEL,
     });
 
-    expect(result).toContain('"token": ""');
-    expect(result).toContain('"other": ""');
-    expect(result).not.toContain("abc123");
-    expect(result).toContain(REDACTED_SENTINEL);
+    expect(result).toBe(`{ "token": "", "secret": "${REDACTED_SENTINEL}", "other": "" }`);
   });
 
   it("replaces longest values first for overlapping matches", () => {

@@ -1,3 +1,4 @@
+// Mistral provider module implements model/runtime integration.
 import {
   createRemoteEmbeddingProvider,
   normalizeEmbeddingModelWithPrefixes,

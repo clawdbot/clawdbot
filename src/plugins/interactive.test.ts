@@ -1,3 +1,4 @@
+// Covers interactive plugin registry entries and lifecycle behavior.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as conversationBinding from "./conversation-binding.js";
 import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
@@ -9,11 +10,14 @@ import type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
 } from "./interactive-contract.test-helpers.js";
+import { registerRegistryPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   clearPluginInteractiveHandlers,
   dispatchPluginInteractiveHandler,
   registerPluginInteractiveHandler,
 } from "./interactive.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 let requestPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.requestPluginConversationBinding
@@ -31,6 +35,7 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
+      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
       ctx: Omit<
         TelegramInteractiveHandlerContext,
         | "callback"
@@ -53,6 +58,7 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
+      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
       ctx: Omit<
         DiscordInteractiveHandlerContext,
         | "interaction"
@@ -74,6 +80,7 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
+      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
       ctx: Omit<
         SlackInteractiveHandlerContext,
         | "interaction"
@@ -217,7 +224,7 @@ function createSlackDispatchParams(params: {
 async function expectDedupedInteractiveDispatch(params: {
   baseParams: InteractiveDispatchParams;
   handler: ReturnType<typeof vi.fn>;
-  expectedCall: unknown;
+  expectHandlerContext: (ctx: unknown) => void;
 }) {
   const first = await dispatchInteractive(params.baseParams);
   const duplicate = await dispatchInteractive(params.baseParams);
@@ -225,7 +232,7 @@ async function expectDedupedInteractiveDispatch(params: {
   expect(first).toEqual({ matched: true, handled: true, duplicate: false });
   expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
   expect(params.handler).toHaveBeenCalledTimes(1);
-  expect(params.handler).toHaveBeenCalledWith(expect.objectContaining(params.expectedCall));
+  params.expectHandlerContext(requireHandlerCall(params.handler));
 }
 
 async function dispatchInteractive(params: InteractiveDispatchParams) {
@@ -243,6 +250,7 @@ async function dispatchInteractiveWith(
         data: params.data,
         dedupeId: params.dedupeId,
         onMatched: params.onMatched,
+        afterInvoke: params.afterInvoke,
         invoke: ({ registration, namespace, payload }) => {
           const { callbackMessage, ...handlerContext } = params.ctx;
           return registration.handler({
@@ -280,6 +288,7 @@ async function dispatchInteractiveWith(
         data: params.data,
         dedupeId: params.dedupeId,
         onMatched: params.onMatched,
+        afterInvoke: params.afterInvoke,
         invoke: ({ registration, namespace, payload }) =>
           registration.handler({
             ...params.ctx,
@@ -311,6 +320,7 @@ async function dispatchInteractiveWith(
       data: params.data,
       dedupeId: params.dedupeId,
       onMatched: params.onMatched,
+      afterInvoke: params.afterInvoke,
       invoke: ({ registration, namespace, payload }) =>
         registration.handler({
           ...params.ctx,
@@ -348,6 +358,14 @@ function registerInteractiveHandler(params: {
     namespace: params.namespace,
     handler: params.handler as never,
   });
+}
+
+function requireHandlerCall(handler: ReturnType<typeof vi.fn>, index = 0): unknown {
+  const call = handler.mock.calls[index] as [unknown] | undefined;
+  if (!call) {
+    throw new Error(`handler call ${index} missing`);
+  }
+  return call[0];
 }
 
 type BindingHelperCase = {
@@ -474,6 +492,7 @@ describe("plugin interactive handlers", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetPluginRuntimeStateForTest();
   });
 
   it("hydrates legacy interactive state shapes before clearing handlers", async () => {
@@ -486,14 +505,17 @@ describe("plugin interactive handlers", () => {
     };
 
     try {
-      expect(() => clearPluginInteractiveHandlers()).not.toThrow();
+      clearPluginInteractiveHandlers();
       const hydrated = globalStore[stateKey] as {
         interactiveHandlers?: Map<string, unknown>;
         callbackDedupe?: { clear: () => void };
         inflightCallbackDedupe?: Set<string>;
       };
       expect(hydrated.interactiveHandlers).toBeInstanceOf(Map);
-      expect(hydrated.callbackDedupe?.clear).toEqual(expect.any(Function));
+      if (!hydrated.callbackDedupe) {
+        throw new Error("expected hydrated callback dedupe");
+      }
+      hydrated.callbackDedupe.clear();
       expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
 
       const handler = vi.fn(async () => ({ handled: true }));
@@ -539,15 +561,14 @@ describe("plugin interactive handlers", () => {
         data: "codex:resume:thread-1",
         callbackId: "cb-1",
       }),
-      expectedCall: {
-        channel: "telegram",
-        conversationId: "-10099:topic:77",
-        callback: expect.objectContaining({
-          namespace: "codex",
-          payload: "resume:thread-1",
-          chatId: "-10099",
-          messageId: 55,
-        }),
+      expectHandlerContext: (ctx: unknown) => {
+        const telegramCtx = ctx as TelegramInteractiveHandlerContext;
+        expect(telegramCtx.channel).toBe("telegram");
+        expect(telegramCtx.conversationId).toBe("-10099:topic:77");
+        expect(telegramCtx.callback.namespace).toBe("codex");
+        expect(telegramCtx.callback.payload).toBe("resume:thread-1");
+        expect(telegramCtx.callback.chatId).toBe("-10099");
+        expect(telegramCtx.callback.messageId).toBe(55);
       },
     },
     {
@@ -558,15 +579,14 @@ describe("plugin interactive handlers", () => {
         interactionId: "ix-1",
         interaction: { kind: "button", values: ["allow"] },
       }),
-      expectedCall: {
-        channel: "discord",
-        conversationId: "channel-1",
-        interaction: expect.objectContaining({
-          namespace: "codex",
-          payload: "approve:thread-1",
-          messageId: "message-1",
-          values: ["allow"],
-        }),
+      expectHandlerContext: (ctx: unknown) => {
+        const discordCtx = ctx as DiscordInteractiveHandlerContext;
+        expect(discordCtx.channel).toBe("discord");
+        expect(discordCtx.conversationId).toBe("channel-1");
+        expect(discordCtx.interaction.namespace).toBe("codex");
+        expect(discordCtx.interaction.payload).toBe("approve:thread-1");
+        expect(discordCtx.interaction.messageId).toBe("message-1");
+        expect(discordCtx.interaction.values).toEqual(["allow"]);
       },
     },
     {
@@ -577,19 +597,18 @@ describe("plugin interactive handlers", () => {
         interactionId: "slack-ix-1",
         interaction: { kind: "button" },
       }),
-      expectedCall: {
-        channel: "slack",
-        conversationId: "C123",
-        threadId: "1710000000.000100",
-        interaction: expect.objectContaining({
-          namespace: "codex",
-          payload: "approve:thread-1",
-          actionId: "codex",
-          messageTs: "1710000000.000200",
-        }),
+      expectHandlerContext: (ctx: unknown) => {
+        const slackCtx = ctx as SlackInteractiveHandlerContext;
+        expect(slackCtx.channel).toBe("slack");
+        expect(slackCtx.conversationId).toBe("C123");
+        expect(slackCtx.threadId).toBe("1710000000.000100");
+        expect(slackCtx.interaction.namespace).toBe("codex");
+        expect(slackCtx.interaction.payload).toBe("approve:thread-1");
+        expect(slackCtx.interaction.actionId).toBe("codex");
+        expect(slackCtx.interaction.messageTs).toBe("1710000000.000200");
       },
     },
-  ] as const)("$name", async ({ channel, baseParams, expectedCall }) => {
+  ] as const)("$name", async ({ channel, baseParams, expectHandlerContext }) => {
     const handler = vi.fn(async () => ({ handled: true }));
     expect(registerInteractiveHandler({ channel, namespace: "codex", handler })).toEqual({
       ok: true,
@@ -598,7 +617,7 @@ describe("plugin interactive handlers", () => {
     await expectDedupedInteractiveDispatch({
       baseParams,
       handler,
-      expectedCall,
+      expectHandlerContext,
     });
   });
 
@@ -627,17 +646,73 @@ describe("plugin interactive handlers", () => {
       ),
     ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        callback: expect.objectContaining({
-          namespace: "codexapp",
-          payload: "resume:thread-1",
-        }),
-      }),
-    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    const ctx = requireHandlerCall(handler) as TelegramInteractiveHandlerContext;
+    expect(ctx.channel).toBe("telegram");
+    expect(ctx.callback.namespace).toBe("codexapp");
+    expect(ctx.callback.payload).toBe("resume:thread-1");
 
     second.clearPluginInteractiveHandlers();
+  });
+
+  it("resolves active registry handlers without retaining them after retirement", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "openclaw-code-agent",
+      name: "OpenClaw Code Agent",
+      status: "loaded",
+    } as never);
+    registry.interactiveHandlers = [
+      {
+        channel: "telegram",
+        namespace: "code-agent",
+        pluginId: "openclaw-code-agent",
+        pluginName: "OpenClaw Code Agent",
+        pluginRoot: "/plugins/openclaw-code-agent",
+        handler: handler as never,
+      },
+    ];
+    expect(
+      registerRegistryPluginInteractiveHandler(
+        "openclaw-code-agent",
+        {
+          channel: "telegram",
+          namespace: "code-agent",
+          handler: handler as never,
+        },
+        {
+          pluginName: "OpenClaw Code Agent",
+          pluginRoot: "/plugins/openclaw-code-agent",
+        },
+      ),
+    ).toEqual({ ok: true });
+    setActivePluginRegistry(registry);
+
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
+          callbackId: "cb-code-agent-restored",
+        }),
+      ),
+    ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const ctx = requireHandlerCall(handler) as TelegramInteractiveHandlerContext;
+    expect(ctx.callback.namespace).toBe("code-agent");
+    expect(ctx.callback.payload).toBe("7506a349-84c8-4c56-8558-ce315bed2588");
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
+          callbackId: "cb-code-agent-retired",
+        }),
+      ),
+    ).resolves.toEqual({ matched: false, handled: false, duplicate: false });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("rejects duplicate namespace registrations", () => {
@@ -832,11 +907,47 @@ describe("plugin interactive handlers", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it("does not consume dedupe keys when post-handler processing throws", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    const afterInvoke = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(new Error("post-handler failure"))
+      .mockResolvedValueOnce(undefined);
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = {
+      ...createTelegramDispatchParams({
+        data: "codex:resume:thread-1",
+        callbackId: "cb-post-handler-failure",
+      }),
+      afterInvoke,
+    };
+
+    await expect(dispatchInteractive(baseParams)).rejects.toThrow("post-handler failure");
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(afterInvoke).toHaveBeenCalledTimes(2);
+    expect(afterInvoke).toHaveBeenLastCalledWith({ handled: true });
+  });
+
   it("dedupes concurrent interactive dispatches while a handler is still running", async () => {
-    let releaseHandler!: () => void;
+    let releaseHandler: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
       releaseHandler = resolve;
     });
+    if (!releaseHandler) {
+      throw new Error("Expected handler release callback to be initialized");
+    }
     const handler = vi.fn(async () => {
       await handlerGate;
       return { handled: true };
@@ -877,10 +988,13 @@ describe("plugin interactive handlers", () => {
   });
 
   it("releases inflight interactive dedupe keys after a handler failure", async () => {
-    let rejectHandler!: (error: Error) => void;
+    let rejectHandler: ((error: Error) => void) | undefined;
     const handlerGate = new Promise<never>((_, reject) => {
       rejectHandler = reject;
     });
+    if (!rejectHandler) {
+      throw new Error("Expected handler reject callback to be initialized");
+    }
     const handler = vi
       .fn(async () => ({ handled: true }))
       .mockImplementationOnce(async () => await handlerGate)

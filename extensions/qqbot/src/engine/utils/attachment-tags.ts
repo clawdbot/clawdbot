@@ -6,10 +6,10 @@
  *
  *   • Type labels: `image` / `voice` / `video` / `file` / `attachment`
  *   • Keyword for voice text: `transcript:` (never `content:`)
- *   • With source: `MEDIA:{source}` (no bracketed alias)
+ *   • With source: `[{type}: {source}]`
  *   • Without source: `[{type}]` or `[{type}: {filename}]`
  *
- * Both consumers (group history / current inbound turn, and the ref-index
+ * Both consumers (group history / current inbound event, and the ref-index
  * quoted-message block) call the same function with the same vocabulary.
  * They differ only on two orthogonal dimensions:
  *
@@ -33,7 +33,7 @@ import type { RefAttachmentSummary } from "../ref/types.js";
 // ============ Types ============
 
 /** Canonical attachment shape shared by history entries and ref entries. */
-export type AttachmentSummary = RefAttachmentSummary;
+type AttachmentSummary = RefAttachmentSummary;
 
 /**
  * Rendering mode.
@@ -47,7 +47,7 @@ export type AttachmentSummary = RefAttachmentSummary;
 type RenderMode = "inline" | "ref";
 
 /** Human-readable labels for transcript provenance (prompt contract). */
-export const TRANSCRIPT_SOURCE_LABELS: Record<
+const TRANSCRIPT_SOURCE_LABELS: Record<
   NonNullable<RefAttachmentSummary["transcriptSource"]>,
   string
 > = {
@@ -74,7 +74,7 @@ interface RenderOptions {
  * Shared grammar (both modes):
  *
  * ```
- * attachment_with_source  := "MEDIA:" SOURCE [voice_suffix]
+ * attachment_with_source  := "[" TYPE_LABEL ": " SOURCE "]" [voice_suffix]
  * voice_suffix            := ' (transcript: "' TEXT '")' [source_suffix]
  * attachment_no_source    := "[" TYPE_LABEL [": " FILENAME] [voice_suffix_bare] "]" [source_suffix_bare]
  * voice_suffix_bare       := ' (transcript: "' TEXT '")'
@@ -119,7 +119,7 @@ export function formatAttachmentTags(attachments?: readonly AttachmentSummary[])
  * Render a single attachment.
  *
  * The function is split into two orthogonal concerns:
- *   - `renderBody`: the shared "MEDIA:{source}…" or "[type…]" string.
+ *   - `renderBody`: the shared "[type: source]…" or "[type…]" string.
  *   - `renderSourceSuffix`: ref-mode-only `" [source: …]"` tail.
  *
  * Both consumers produce the same body; only the suffix differs.
@@ -135,12 +135,12 @@ function renderBody(att: AttachmentSummary): string {
   const source = att.localPath || att.url;
   const voiceSuffix =
     att.type === "voice" && att.transcript ? ` (transcript: "${att.transcript}")` : "";
+  const label = labelForType(att.type);
 
   if (source) {
-    return `MEDIA:${source}${voiceSuffix}`;
+    return `[${label}: ${source}]${voiceSuffix}`;
   }
 
-  const label = labelForType(att.type);
   const namePart = att.filename ? `: ${att.filename}` : "";
   return `[${label}${namePart}${voiceSuffix}]`;
 }

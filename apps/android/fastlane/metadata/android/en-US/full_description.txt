@@ -1,0 +1,18 @@
+OpenClaw is a personal AI assistant you run on your own devices.
+
+Pair this Android app with your OpenClaw Gateway to use your phone as a secure node for chat, voice, approvals, and device-aware automation.
+
+What you can do:
+- Pair with your private OpenClaw Gateway by QR code or setup code
+- Chat with your assistant from Android
+- Use realtime Talk mode and push-to-talk
+- Review Gateway action approvals from your phone
+- Enable device capabilities such as camera, screen, location, and notifications when you choose
+- Receive push wakes and node status updates for connected workflows
+
+OpenClaw is local-first: you control your gateway, keys, configuration, and permissions. Device access is managed by Android permissions and can be enabled only for the capabilities you want to use.
+
+Getting started:
+1) Set up your OpenClaw Gateway
+2) Open the Android app and pair with your gateway
+3) Start using chat, Talk mode, approvals, and automations from your phone

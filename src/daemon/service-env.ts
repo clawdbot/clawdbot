@@ -1,12 +1,9 @@
+/** Builds minimal, portable environment blocks for managed daemon services. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  isNodeVersionManagerRuntime,
-  resolveLinuxSystemCaBundle,
-} from "../bootstrap/node-extra-ca-certs.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -21,9 +18,8 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
-
-export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
 type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -65,6 +61,8 @@ export const SERVICE_PROXY_ENV_KEYS = [
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
+  // Service env intentionally preserves only the canonical OpenClaw proxy knob;
+  // generic shell proxy vars are audited but not frozen into services.
   const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
   return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
 }
@@ -90,6 +88,8 @@ function realpathServicePathDir(dir: string): string | undefined {
 function realpathExistingServicePathDir(dir: string): string | undefined {
   const parts: string[] = [];
   let current = dir;
+  // Resolve the nearest existing ancestor so future-created bin dirs can still
+  // be compared against the install workspace realpath.
   while (current && current !== path.posix.dirname(current)) {
     const realCurrent = realpathServicePathDir(current);
     if (realCurrent) {
@@ -189,6 +189,7 @@ function addCommonEnvConfiguredBinDirs(
   options: Pick<MinimalServicePathOptions, "cwd" | "home">,
 ): void {
   addEnvConfiguredBinDir(dirs, env?.PNPM_HOME, options);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env?.PNPM_HOME, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"), options);
@@ -222,7 +223,15 @@ function addNixProfileBinDirs(
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
-    return ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+    return [
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ];
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
@@ -261,7 +270,7 @@ function resolveDarwinUserBinDirs(
   addEnvConfiguredBinDir(dirs, env?.NVM_DIR, pathOptions);
   // fnm: use aliases/default (not current)
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
+  // pnpm 10 placed binaries directly in PNPM_HOME; pnpm 11 uses PNPM_HOME/bin.
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
@@ -275,7 +284,9 @@ function resolveDarwinUserBinDirs(
   addExistingDir(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`, existsSync); // fnm default
   addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
+  addExistingDir(dirs, `${home}/Library/pnpm/bin`, existsSync); // pnpm 11 default
   addExistingDir(dirs, `${home}/Library/pnpm`, existsSync); // pnpm default
+  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 XDG fallback
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm XDG fallback
 
   return dirs;
@@ -317,14 +328,17 @@ function resolveLinuxUserBinDirs(
   addExistingDir(dirs, `${home}/.local/share/fnm/current/bin`, existsSync); // fnm legacy current symlink
   addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
   addExistingDir(dirs, `${home}/.fnm/current/bin`, existsSync); // fnm legacy current symlink
+  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 global bin
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm global bin
 
   return dirs;
 }
 
-export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
+function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
+    // Windows scheduled tasks inherit PATH from the task host; generated cmd
+    // launchers should not freeze install-time PATH snapshots.
     return [];
   }
 
@@ -354,10 +368,10 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   for (const dir of extraDirs) {
     add(dir);
   }
-  for (const dir of userDirs) {
+  for (const dir of systemDirs) {
     add(dir);
   }
-  for (const dir of systemDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
 
@@ -373,7 +387,7 @@ export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptio
   });
 }
 
-export function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
+function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
@@ -383,9 +397,18 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
+function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): string {
+  const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+}
+
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
+  existingNodeOptions?: string;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
@@ -403,15 +426,17 @@ export function buildServiceEnvironment(params: {
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
-  const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
+  const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(params.existingNodeOptions),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: VERSION,
@@ -433,14 +458,17 @@ export function buildNodeServiceEnvironment(params: {
     params.execPath,
   );
   const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const gatewayPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
     OPENCLAW_LOG_PREFIX: "node",
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,

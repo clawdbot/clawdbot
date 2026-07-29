@@ -1,3 +1,4 @@
+// Matrix tests cover handler.strip mention plugin behavior.
 import { describe, expect, it } from "vitest";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 
@@ -33,6 +34,15 @@ describe("stripMatrixMentionPrefix", () => {
   it("strips @display name with comma separator", () => {
     const result = stripMatrixMentionPrefix({
       text: "@OpenClaw Bot, /model",
+      displayName: "OpenClaw Bot",
+      mentionRegexes: [],
+    });
+    expect(result).toBe("/model");
+  });
+
+  it("strips bracketed @display name syntax", () => {
+    const result = stripMatrixMentionPrefix({
+      text: "@[OpenClaw Bot] /model",
       displayName: "OpenClaw Bot",
       mentionRegexes: [],
     });

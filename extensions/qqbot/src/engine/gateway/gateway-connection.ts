@@ -1,11 +1,6 @@
-/**
- * GatewayConnection — WebSocket lifecycle, heartbeat, reconnect, and session persistence.
- *
- * Encapsulates all connection state as class fields (replaces 11 closure variables).
- * Event handling and message processing are delegated to injected handlers.
- */
-
+// Qqbot plugin module implements gateway connection behavior.
 import WebSocket from "ws";
+import type { EngineAdapters } from "../adapter/index.js";
 import {
   trySlashCommand,
   type SlashCommandHandlerContext,
@@ -25,11 +20,24 @@ import type { InteractionEvent } from "../types.js";
 import { decodeGatewayMessageData } from "./codec.js";
 import { FULL_INTENTS, RATE_LIMIT_DELAY, GatewayOp } from "./constants.js";
 import { dispatchEvent } from "./event-dispatcher.js";
+import { createQQBotIngressEffectOnce } from "./ingress-effects.js";
+import { isQQBotTurnEventType } from "./ingress-envelope.js";
+import {
+  createQQBotIngressMonitor,
+  QQBotIngressAdmissionError,
+  type QQBotIngressDispatchResult,
+  type QQBotIngressMonitor,
+} from "./ingress.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
-import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
-
-// ============ Connection context ============
+import type {
+  GatewayAccount,
+  EngineLogger,
+  GatewayPluginRuntime,
+  QQBotIngressLifecycle,
+  WSPayload,
+} from "./types.js";
+import { createQQWSClient } from "./ws-client.js";
 
 interface GatewayConnectionContext {
   account: GatewayAccount;
@@ -37,20 +45,17 @@ interface GatewayConnectionContext {
   cfg: unknown;
   log?: EngineLogger;
   runtime: GatewayPluginRuntime;
+  adapters: EngineAdapters;
   onReady?: (data: unknown) => void;
-  /** Called when a RESUMED event is received (reconnect success). */
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
-  /** Process a queued message (inbound pipeline → outbound dispatch). */
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   handleMessage: (event: QueuedMessage) => Promise<void>;
-  /** Called when an INTERACTION_CREATE event is received (e.g. approval button clicks). */
   onInteraction?: (event: InteractionEvent) => void;
+  createIngressMonitor?: typeof createQQBotIngressMonitor;
 }
 
-// ============ GatewayConnection ============
-
 export class GatewayConnection {
-  // ---- Connection state ----
   private isAborted = false;
   private currentWs: WebSocket | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -59,9 +64,14 @@ export class GatewayConnection {
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldRefreshToken = false;
+  private ingress: QQBotIngressMonitor | undefined;
+  private socketMessageTail: Promise<void> = Promise.resolve();
+  private shutdownTask: Promise<void> | undefined;
+  private readonly failedIngressSockets = new WeakSet<WebSocket>();
 
   private readonly reconnect: ReconnectState;
   private readonly msgQueue;
+  private readonly ingressEffectOnce;
   private readonly ctx: GatewayConnectionContext;
 
   constructor(ctx: GatewayConnectionContext) {
@@ -72,19 +82,45 @@ export class GatewayConnection {
       log: ctx.log,
       isAborted: () => this.isAborted,
     });
-  }
-
-  /** Start the connection loop. Resolves when abortSignal fires. */
-  async start(): Promise<void> {
-    this.restoreSession();
-    this.registerAbortHandler();
-    await this.connect();
-    return new Promise<void>((resolve) => {
-      this.ctx.abortSignal.addEventListener("abort", () => resolve());
+    this.ingressEffectOnce = createQQBotIngressEffectOnce({
+      accountId: ctx.account.accountId,
+      log: ctx.log,
     });
   }
 
-  // ============ Session persistence ============
+  async start(): Promise<void> {
+    this.restoreSession();
+    this.msgQueue.startProcessor(this.ctx.handleMessage);
+    const slashCtx = this.createSlashCommandContext();
+    const createIngressMonitor = this.ctx.createIngressMonitor ?? createQQBotIngressMonitor;
+    this.ingress = createIngressMonitor({
+      accountId: this.ctx.account.accountId,
+      runtime: this.ctx.runtime,
+      log: this.ctx.log,
+      dispatch: (message, lifecycle, eventId) =>
+        this.dispatchIngressMessage(message, lifecycle, eventId, slashCtx),
+    });
+    const stopped = new Promise<void>((resolve, reject) => {
+      const stop = () => void this.shutdown().then(resolve, reject);
+      if (this.ctx.abortSignal.aborted) {
+        stop();
+        return;
+      }
+      this.ctx.abortSignal.addEventListener("abort", stop, { once: true });
+    });
+    // Observe shutdown immediately: abort can reject while the initial connection is still pending.
+    const stoppedResult = stopped.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    if (!this.isAborted) {
+      await this.connect();
+    }
+    const result = await stoppedResult;
+    if (!result.ok) {
+      throw result.error;
+    }
+  }
 
   private restoreSession(): void {
     const { account, log } = this.ctx;
@@ -112,21 +148,98 @@ export class GatewayConnection {
     });
   }
 
-  // ============ Abort + cleanup ============
-
-  private registerAbortHandler(): void {
-    const { account, abortSignal, log: _log } = this.ctx;
-    abortSignal.addEventListener("abort", () => {
+  private shutdown(): Promise<void> {
+    this.shutdownTask ??= (async () => {
+      const { account } = this.ctx;
+      const errors: unknown[] = [];
+      const runCleanup = async (
+        label: string,
+        cleanup: () => void | Promise<void>,
+      ): Promise<void> => {
+        try {
+          await cleanup();
+        } catch (error) {
+          errors.push(error);
+          this.ctx.log?.error(`QQBot gateway shutdown ${label} failed: ${String(error)}`);
+        }
+      };
       this.isAborted = true;
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
-      this.cleanup();
-      stopBackgroundTokenRefresh(account.appId);
-      flushKnownUsers();
-      flushRefIndex();
+      await runCleanup("socket cleanup", () => this.cleanup());
+      await runCleanup("ingress stop", () => this.ingress?.stop());
+      await runCleanup("socket drain", () => this.socketMessageTail);
+      await runCleanup("message queue stop", () => this.msgQueue.stop());
+      await runCleanup("token refresh stop", () => stopBackgroundTokenRefresh(account.appId));
+      await runCleanup("known-user flush", () => flushKnownUsers());
+      await runCleanup("reference-index flush", () => flushRefIndex());
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "QQBot gateway shutdown failed.");
+      }
+    })();
+    return this.shutdownTask;
+  }
+
+  private createSlashCommandContext(): SlashCommandHandlerContext {
+    const { account, cfg, log, adapters } = this.ctx;
+    return {
+      account,
+      cfg,
+      log,
+      getMessagePeerId: (msg) => this.msgQueue.getMessagePeerId(msg),
+      getQueueSnapshot: (peerId) => this.msgQueue.getSnapshot(peerId),
+      resolveCommandAuthorized: (params) =>
+        adapters.access.resolveSlashCommandAuthorization({
+          cfg,
+          accountId: account.accountId,
+          ...params,
+        }),
+    };
+  }
+
+  private async dispatchIngressMessage(
+    msg: QueuedMessage,
+    lifecycle: QQBotIngressLifecycle,
+    eventId: string,
+    slashCtx: SlashCommandHandlerContext,
+  ): Promise<QQBotIngressDispatchResult> {
+    if (this.isAborted || lifecycle.abortSignal.aborted) {
+      return {
+        kind: "failed-retryable",
+        error:
+          lifecycle.abortSignal.reason ?? this.ctx.abortSignal.reason ?? new Error("QQBot stopped"),
+      };
+    }
+    msg.turnAdoptionLifecycle = lifecycle;
+    // Fleet at-least-once contract: a pre-tombstone crash can replay slash commands.
+    // Non-idempotent handlers opt into createIngressEffectOnce through this dispatch context.
+    const result = await trySlashCommand(msg, slashCtx, {
+      eventId,
+      effectOnce: this.ingressEffectOnce,
     });
+    if (result === "handled") {
+      return { kind: "completed" };
+    }
+    if (this.isAborted || lifecycle.abortSignal.aborted) {
+      return {
+        kind: "failed-retryable",
+        error:
+          lifecycle.abortSignal.reason ?? this.ctx.abortSignal.reason ?? new Error("QQBot stopped"),
+      };
+    }
+    if (result === "urgent") {
+      const peerId = this.msgQueue.getMessagePeerId(msg);
+      this.msgQueue.clearUserQueue(peerId);
+      this.msgQueue.executeImmediate(msg);
+    } else {
+      this.msgQueue.enqueue(msg);
+    }
+    return { kind: "deferred" };
   }
 
   private cleanup(): void {
@@ -144,12 +257,15 @@ export class GatewayConnection {
     this.currentWs = null;
   }
 
-  // ============ Reconnect ============
-
   private scheduleReconnect(customDelay?: number): void {
     const { account: _account, log } = this.ctx;
     if (this.isAborted || this.reconnect.isExhausted()) {
       log?.error(`Max reconnect attempts reached or aborted`);
+      // Exhaustion is a permanent give-up: report it as fatal so the
+      // channel status does not keep claiming a live connection.
+      if (!this.isAborted) {
+        this.ctx.onDisconnected?.({ reason: "reconnect attempts exhausted", fatal: true });
+      }
       return;
     }
     if (this.reconnectTimer) {
@@ -164,8 +280,6 @@ export class GatewayConnection {
       }
     }, delay);
   }
-
-  // ============ Connect ============
 
   private async connect(): Promise<void> {
     const { account, log } = this.ctx;
@@ -188,106 +302,50 @@ export class GatewayConnection {
       log?.info(`✅ Access token obtained successfully`);
       const gatewayUrl = await getGatewayUrl(accessToken, account.appId);
       log?.info(`Connecting to ${gatewayUrl}`);
-
-      const ws = new WebSocket(gatewayUrl, {
-        headers: { "User-Agent": getPluginUserAgent() },
+      const ws = await createQQWSClient({
+        gatewayUrl,
+        userAgent: getPluginUserAgent(),
       });
       this.currentWs = ws;
-
-      // ---- Slash command interception ----
-      const slashCtx: SlashCommandHandlerContext = {
-        account,
-        cfg: this.ctx.cfg,
-        log,
-        getMessagePeerId: (msg) => this.msgQueue.getMessagePeerId(msg),
-        getQueueSnapshot: (peerId) => this.msgQueue.getSnapshot(peerId),
-      };
-
-      const trySlashCommandOrEnqueue = async (msg: QueuedMessage): Promise<void> => {
-        const result = await trySlashCommand(msg, slashCtx);
-        if (result === "enqueue") {
-          this.msgQueue.enqueue(msg);
-        } else if (result === "urgent") {
-          const peerId = this.msgQueue.getMessagePeerId(msg);
-          this.msgQueue.clearUserQueue(peerId);
-          this.msgQueue.executeImmediate(msg);
-        }
-        // "handled" — command executed, nothing to queue.
-      };
 
       // ---- WebSocket: open ----
       ws.on("open", () => {
         log?.info(`WebSocket connected`);
         this.isConnecting = false;
         this.reconnect.onConnected();
-        this.msgQueue.startProcessor(this.ctx.handleMessage);
         startBackgroundTokenRefresh(account.appId, account.clientSecret, { log });
       });
 
       // ---- WebSocket: message ----
-      ws.on("message", async (data) => {
-        try {
-          const rawData = decodeGatewayMessageData(data);
-          const payload = JSON.parse(rawData) as WSPayload;
-          const { op, d, s, t } = payload;
-
-          if (s) {
-            this.lastSeq = s;
-            this.saveCurrentSession();
-          }
-
-          switch (op) {
-            case GatewayOp.HELLO:
-              this.handleHello(ws, d, accessToken);
-              break;
-
-            case GatewayOp.DISPATCH: {
-              log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
-              const result = dispatchEvent(t ?? "", d, account.accountId, log);
-              if (result.action === "ready") {
-                this.sessionId = result.sessionId;
-                this.saveCurrentSession();
-                this.ctx.onReady?.(result.data);
-              } else if (result.action === "resumed") {
-                (this.ctx.onResumed ?? this.ctx.onReady)?.(result.data);
-                this.saveCurrentSession();
-              } else if (result.action === "interaction") {
-                this.ctx.onInteraction?.(result.event);
-              } else if (result.action === "message") {
-                void trySlashCommandOrEnqueue(result.msg);
+      ws.on("message", (data) => {
+        this.socketMessageTail = this.socketMessageTail
+          .then(() => this.handleSocketMessage(ws, data, accessToken))
+          .catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            if (error instanceof QQBotIngressAdmissionError) {
+              log?.error(`Durable ingress failed; terminating gateway socket: ${message}`);
+              this.ctx.onError?.(error);
+              if (this.currentWs === ws) {
+                // Fence callbacks already queued behind the failed append before
+                // terminate emits close and starts the reconnect path.
+                this.failedIngressSockets.add(ws);
+                ws.terminate();
               }
-              break;
+              return;
             }
-
-            case GatewayOp.HEARTBEAT_ACK:
-              break;
-
-            case GatewayOp.RECONNECT:
-              this.cleanup();
-              this.scheduleReconnect();
-              break;
-
-            case GatewayOp.INVALID_SESSION: {
-              const canResume = d as boolean;
-              if (!canResume) {
-                this.sessionId = null;
-                this.lastSeq = null;
-                clearSession(account.accountId);
-                this.shouldRefreshToken = true;
-              }
-              this.cleanup();
-              this.scheduleReconnect(3000);
-              break;
-            }
-          }
-        } catch (err) {
-          log?.error(`Message parse error: ${err instanceof Error ? err.message : String(err)}`);
-        }
+            log?.error(`Message parse error: ${message}`);
+          });
       });
 
       // ---- WebSocket: close ----
       ws.on("close", (code, reason) => {
         log?.info(`WebSocket closed: ${code} ${reason.toString()}`);
+        // cleanup() clears currentWs before a server-driven reconnect. Ignore
+        // the old socket's delayed close both during that gap and after the
+        // replacement is live, or it can reschedule reconnect handling.
+        if (this.currentWs !== ws) {
+          return;
+        }
         this.isConnecting = false;
         this.handleClose(code);
       });
@@ -306,6 +364,84 @@ export class GatewayConnection {
       } else {
         this.scheduleReconnect();
       }
+    }
+  }
+
+  private async handleSocketMessage(
+    ws: WebSocket,
+    data: unknown,
+    accessToken: string,
+  ): Promise<void> {
+    if (this.isAborted || this.currentWs !== ws || this.failedIngressSockets.has(ws)) {
+      return;
+    }
+    const rawData = decodeGatewayMessageData(data);
+    const payload = JSON.parse(rawData) as WSPayload;
+    const { op, d, s, t } = payload;
+    let saveAfterDispatch = false;
+
+    switch (op) {
+      case GatewayOp.HELLO:
+        this.handleHello(ws, d, accessToken);
+        break;
+
+      case GatewayOp.DISPATCH: {
+        this.ctx.log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
+        if (isQQBotTurnEventType(t)) {
+          if (!this.ingress) {
+            throw new Error("QQBot ingress monitor is unavailable.");
+          }
+          // Resume sequence advances only after the raw turn is durable.
+          await this.ingress.receive(rawData);
+        } else {
+          const result = dispatchEvent(t ?? "", d, this.ctx.account.accountId, this.ctx.log);
+          if (result.action === "ready") {
+            this.sessionId = result.sessionId;
+            saveAfterDispatch = true;
+            this.ctx.onReady?.(result.data);
+          } else if (result.action === "resumed") {
+            (this.ctx.onResumed ?? this.ctx.onReady)?.(result.data);
+            saveAfterDispatch = true;
+          } else if (result.action === "interaction") {
+            this.ctx.onInteraction?.(result.event);
+          }
+        }
+        break;
+      }
+
+      case GatewayOp.HEARTBEAT_ACK:
+        break;
+
+      case GatewayOp.RECONNECT:
+        this.ctx.onDisconnected?.({ reason: "server requested reconnect", fatal: false });
+        this.cleanup();
+        this.scheduleReconnect();
+        break;
+
+      case GatewayOp.INVALID_SESSION: {
+        const canResume = d as boolean;
+        this.ctx.onDisconnected?.({
+          reason: canResume ? "session resume rejected" : "session invalidated",
+          fatal: false,
+        });
+        if (!canResume) {
+          this.sessionId = null;
+          this.lastSeq = null;
+          clearSession(this.ctx.account.accountId);
+          this.shouldRefreshToken = true;
+        }
+        this.cleanup();
+        this.scheduleReconnect(3000);
+        break;
+      }
+    }
+
+    if (typeof s === "number") {
+      this.lastSeq = s;
+      saveAfterDispatch = true;
+    }
+    if (saveAfterDispatch) {
+      this.saveCurrentSession();
     }
   }
 
@@ -361,6 +497,13 @@ export class GatewayConnection {
     }
 
     this.cleanup();
+
+    // Publish the disconnect so channel status stops claiming a live
+    // connection; a fatal close (bot banned / offline) never reconnects.
+    // Abort-driven closes are an intentional stop, not a status change.
+    if (!this.isAborted) {
+      this.ctx.onDisconnected?.({ reason: action.reason, fatal: action.fatal });
+    }
 
     if (action.fatal) {
       return;

@@ -1,16 +1,19 @@
+/** Normalizes isolated cron run output into summaries, delivery payloads, and error state. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
-  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError"
+  "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
 >;
 
-export type CronPayloadOutcome = {
+/** Normalized cron run payload state used for summaries, delivery, and failure classification. */
+type CronPayloadOutcome = {
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -18,13 +21,9 @@ export type CronPayloadOutcome = {
   deliveryPayloads: DeliveryPayload[];
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
+  hasFatalStructuredErrorPayload: boolean;
   embeddedRunError?: string;
   pendingPresentationWarningError?: string;
-};
-
-type CronDenialSignal = {
-  token: string;
-  field: string;
 };
 
 type CronFailureSignal = {
@@ -41,58 +40,11 @@ type NormalizedCronFailureSignal = CronFailureSignal & {
   fatalForCron: true;
 };
 
-const CRON_DENIAL_EXACT_TOKENS = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
-const CRON_DENIAL_CASE_INSENSITIVE_TOKENS = [
-  "approval cannot safely bind",
-  "runtime denied",
-  "could not run",
-  "did not run",
-  "was denied",
-] as const;
-
-export function detectCronDenialToken(text: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(text);
-  if (!normalized) {
-    return undefined;
-  }
-  for (const token of CRON_DENIAL_EXACT_TOKENS) {
-    if (normalized.includes(token)) {
-      return token;
-    }
-  }
-  const lowerText = normalized.toLowerCase();
-  for (const token of CRON_DENIAL_CASE_INSENSITIVE_TOKENS) {
-    if (lowerText.includes(token)) {
-      return token;
-    }
-  }
-  return undefined;
-}
-
-function resolveCronDenialSignal(
-  fields: Array<{ field: string; text?: string | undefined }>,
-): CronDenialSignal | undefined {
-  const seen = new Set<string>();
-  for (const { field, text } of fields) {
-    if (seen.has(field)) {
-      continue;
-    }
-    seen.add(field);
-    const token = detectCronDenialToken(text);
-    if (token) {
-      return { token, field };
-    }
-  }
-  return undefined;
-}
-
-function formatCronDenialSignal(signal: CronDenialSignal): string {
-  return `cron classifier: denial token "${signal.token}" detected in ${signal.field}`;
-}
-
 function normalizeCronFailureSignal(
   signal: CronFailureSignal | undefined,
 ): NormalizedCronFailureSignal | undefined {
+  // Only explicit fatal signals become cron failures; ordinary tool warnings
+  // still need payload/output evidence before failing the run.
   const message = normalizeOptionalString(signal?.message);
   if (signal?.fatalForCron !== true || !message) {
     return undefined;
@@ -129,6 +81,7 @@ function formatCronRunLevelError(error: unknown): string | undefined {
   return "cron isolated run failed";
 }
 
+/** Picks a bounded cron run summary from plain text output. */
 export function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
   if (!clean) {
@@ -138,7 +91,8 @@ export function pickSummaryFromOutput(text: string | undefined) {
   return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
 }
 
-export function pickSummaryFromPayloads(
+/** Picks the last non-error payload text suitable for cron run summaries. */
+function pickSummaryFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
   for (let i = payloads.length - 1; i >= 0; i--) {
@@ -151,6 +105,9 @@ export function pickSummaryFromPayloads(
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (isNonTerminalToolErrorWarning(payloads[i])) {
+      continue;
+    }
     const summary = pickSummaryFromOutput(payloads[i]?.text);
     if (summary) {
       return summary;
@@ -159,6 +116,7 @@ export function pickSummaryFromPayloads(
   return undefined;
 }
 
+/** Picks the last non-empty payload text while ignoring terminal error payloads first. */
 export function pickLastNonEmptyTextFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
@@ -172,6 +130,9 @@ export function pickLastNonEmptyTextFromPayloads(
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (isNonTerminalToolErrorWarning(payloads[i])) {
+      continue;
+    }
     const clean = (payloads[i]?.text ?? "").trim();
     if (clean) {
       return clean;
@@ -184,9 +145,7 @@ function isDeliverablePayload(payload: DeliveryPayload | null | undefined): bool
   if (!payload) {
     return false;
   }
-  const hasInteractive = (payload.interactive?.blocks?.length ?? 0) > 0;
-  const hasChannelData = Object.keys(payload.channelData ?? {}).length > 0;
-  return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
+  return hasOutboundReplyContent(payload, { trimText: true });
 }
 
 function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | undefined): boolean {
@@ -196,12 +155,14 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
   return (
     payload.mediaUrl !== undefined ||
     (payload.mediaUrls?.length ?? 0) > 0 ||
+    (payload.presentation?.blocks?.length ?? 0) > 0 ||
     (payload.interactive?.blocks?.length ?? 0) > 0 ||
     Object.keys(payload.channelData ?? {}).length > 0
   );
 }
 
-export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
+/** Picks the last payload with deliverable outbound content, preferring non-error payloads. */
+function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
     if (payloads[i]?.isError) {
       continue;
@@ -218,7 +179,8 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   return undefined;
 }
 
-export function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
+/** Selects deliverable cron payloads while preserving multi-payload successful responses. */
+function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
   const successfulDeliverablePayloads = payloads.filter(
     (payload) => payload != null && payload.isError !== true && isDeliverablePayload(payload),
   );
@@ -237,9 +199,9 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
   return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
 }
 
-export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
-  const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  return Math.max(0, raw);
+/** Resolves the non-negative heartbeat ack length used for heartbeat-only filtering. */
+export function resolveHeartbeatAckMaxChars(_agentCfg?: { heartbeat?: object }) {
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function isCronMessagePresentationWarning(text: string | undefined): boolean {
@@ -250,6 +212,22 @@ function isCronMessagePresentationWarning(text: string | undefined): boolean {
   );
 }
 
+function isCronToolWarning(text: string | undefined): boolean {
+  return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ ") === true;
+}
+
+function isNonTerminalToolErrorWarning(payload: object | undefined): boolean {
+  return Boolean(payload && getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning);
+}
+
+function isSuccessfulCronPayload(payload: DeliveryPayload | undefined): boolean {
+  return (
+    payload?.isError !== true &&
+    (isDeliverablePayload(payload) || payloadHasStructuredDeliveryContent(payload))
+  );
+}
+
+/** Resolves summary, output text, delivery payloads, and fatal-error state from cron run output. */
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
@@ -257,7 +235,8 @@ export function resolveCronPayloadOutcome(params: {
   finalAssistantVisibleText?: string | undefined;
   preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
-  const firstText = params.payloads[0]?.text ?? "";
+  const firstText =
+    params.payloads.find((payload) => !isNonTerminalToolErrorWarning(payload))?.text ?? "";
   const fallbackSummary =
     pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
   const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
@@ -272,36 +251,63 @@ export function resolveCronPayloadOutcome(params: {
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
+  const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
-    params.payloads
-      .slice(lastErrorPayloadIndex + 1)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+    params.payloads.slice(lastErrorPayloadIndex + 1).some(isSuccessfulCronPayload);
   const hasSuccessfulPayloadBeforeLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex > 0 &&
-    params.payloads
-      .slice(0, lastErrorPayloadIndex)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+    params.payloads.slice(0, lastErrorPayloadIndex).some(isSuccessfulCronPayload);
+  const lastErrorPayload =
+    lastErrorPayloadIndex >= 0 ? params.payloads[lastErrorPayloadIndex] : undefined;
+  const hasRecoveringTerminalOutput =
+    normalizedFinalAssistantVisibleText !== undefined ||
+    hasSuccessfulPayloadAfterLastError ||
+    hasSuccessfulPayloadBeforeLastError;
+  // Some tools emit warning/error payloads before a final answer. Treat those
+  // as non-terminal only when later visible output proves the run recovered.
+  const hasNonTerminalToolErrorWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    hasRecoveringTerminalOutput &&
+    isNonTerminalToolErrorWarning(lastErrorPayload);
   const hasPendingPresentationWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
     lastErrorPayloadIndex >= 0 &&
     isCronMessagePresentationWarning(lastErrorPayloadText) &&
     (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
-  const hasFatalStructuredErrorPayload =
-    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasPendingPresentationWarning;
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
   );
+  const hasRecoveredToolWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    !hasStructuredDeliveryPayloads &&
+    errorPayloads.length > 0 &&
+    errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  // Structured error payloads are fatal unless later successful output or a
+  // known non-terminal warning proves the agent recovered.
+  const hasFatalStructuredErrorPayload =
+    hasErrorPayload &&
+    !hasSuccessfulPayloadAfterLastError &&
+    !hasPendingPresentationWarning &&
+    !hasNonTerminalToolErrorWarning &&
+    !hasRecoveredToolWarning;
+  // Fatal structured errors own the final delivery payload unless later output
+  // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
+  // A final assistant answer can replace textual warning payloads, but never
+  // structured/media payloads that carry the actual delivery content.
   const shouldUseFinalAssistantVisibleText =
-    params.preferFinalAssistantVisibleText === true &&
+    (params.preferFinalAssistantVisibleText === true || hasRecoveredToolWarning) &&
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasFatalStructuredErrorPayload &&
     !hasStructuredDeliveryPayloads;
@@ -319,32 +325,15 @@ export function resolveCronPayloadOutcome(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  const denialSignal = resolveCronDenialSignal([
-    { field: "summary", text: summary },
-    { field: "outputText", text: outputText },
-    { field: "synthesizedText", text: synthesizedText },
-    { field: "fallbackSummary", text: fallbackSummary },
-    { field: "fallbackOutputText", text: fallbackOutputText },
-    ...params.payloads.map((payload, index) => ({
-      field: `payloads[${index}].text`,
-      text: payload?.text,
-    })),
-  ]);
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload ||
-    failureSignal !== undefined ||
-    denialSignal !== undefined ||
-    runLevelError !== undefined;
+    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
   const shouldUseRunLevelErrorPayload =
-    runLevelError !== undefined &&
-    structuredErrorText === undefined &&
-    failureSignal === undefined &&
-    denialSignal === undefined;
+    runLevelError !== undefined && structuredErrorText === undefined && failureSignal === undefined;
   const fatalDeliveryText =
     structuredErrorText ??
     failureSignal?.message ??
@@ -362,13 +351,12 @@ export function resolveCronPayloadOutcome(params: {
       ? false
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
+    hasFatalStructuredErrorPayload,
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
-        : denialSignal
-          ? formatCronDenialSignal(denialSignal)
-          : runLevelError,
+        : runLevelError,
     pendingPresentationWarningError: hasPendingPresentationWarning
       ? lastErrorPayloadText
       : undefined,

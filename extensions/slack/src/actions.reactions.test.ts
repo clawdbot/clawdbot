@@ -1,3 +1,4 @@
+// Slack tests cover actions.reactions plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { reactSlackMessage, removeOwnSlackReactions, removeSlackReaction } from "./actions.js";
@@ -60,15 +61,41 @@ describe("reactSlackMessage", () => {
     const client = createClient();
     client.reactions.add.mockRejectedValueOnce(slackPlatformError("invalid_name"));
 
-    await expect(
-      reactSlackMessage("C1", "123.456", "not-an-emoji", {
+    let error: unknown;
+    try {
+      await reactSlackMessage("C1", "123.456", "not-an-emoji", {
         client,
         token: "xoxb-test",
-      }),
-    ).rejects.toMatchObject({
-      data: {
-        error: "invalid_name",
-      },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("An API error occurred: invalid_name");
+    expect((error as { data?: unknown }).data).toEqual({
+      ok: false,
+      error: "invalid_name",
+    });
+  });
+});
+
+describe("reactSlackMessage emoji normalization", () => {
+  it.each([
+    { input: "✅", expected: "white_check_mark" },
+    { input: ":fire:", expected: "fire" },
+    { input: "rocket", expected: "rocket" },
+    { input: "🦄", expected: "🦄" },
+    { input: "👍🏽", expected: "thumbsup::skin-tone-4" },
+    { input: "⚠️", expected: "warning" },
+  ])("normalizes $input to $expected", async ({ input, expected }) => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", input, { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: expected,
     });
   });
 });
@@ -96,15 +123,20 @@ describe("removeSlackReaction", () => {
     const client = createClient();
     client.reactions.remove.mockRejectedValueOnce(slackPlatformError("invalid_name"));
 
-    await expect(
-      removeSlackReaction("C1", "123.456", "not-an-emoji", {
+    let error: unknown;
+    try {
+      await removeSlackReaction("C1", "123.456", "not-an-emoji", {
         client,
         token: "xoxb-test",
-      }),
-    ).rejects.toMatchObject({
-      data: {
-        error: "invalid_name",
-      },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("An API error occurred: invalid_name");
+    expect((error as { data?: unknown }).data).toEqual({
+      ok: false,
+      error: "invalid_name",
     });
   });
 });

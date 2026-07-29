@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { QQBOT_PLUGIN_VERSION_UNKNOWN, resolveQQBotPluginVersion } from "./plugin-version.js";
+import { resolveQQBotPluginVersion } from "./plugin-version.js";
 
 /** Create a temp directory tree for an individual test and return its root. */
 function createTempTree(): string {
@@ -97,7 +97,7 @@ describe("resolveQQBotPluginVersion", () => {
 
     const version = resolveQQBotPluginVersion(fakeEntryFileUrl(startDir));
 
-    expect(version).toBe(QQBOT_PLUGIN_VERSION_UNKNOWN);
+    expect(version).toBe("unknown");
   });
 
   it("returns unknown when no package.json exists above the start directory", () => {
@@ -107,7 +107,7 @@ describe("resolveQQBotPluginVersion", () => {
 
     const version = resolveQQBotPluginVersion(fakeEntryFileUrl(startDir));
 
-    expect(version).toBe(QQBOT_PLUGIN_VERSION_UNKNOWN);
+    expect(version).toBe("unknown");
   });
 
   it("returns unknown when the matching manifest lacks a version field", () => {
@@ -122,7 +122,7 @@ describe("resolveQQBotPluginVersion", () => {
 
     const version = resolveQQBotPluginVersion(fakeEntryFileUrl(bridgeDir));
 
-    expect(version).toBe(QQBOT_PLUGIN_VERSION_UNKNOWN);
+    expect(version).toBe("unknown");
   });
 
   it("tolerates a malformed package.json and keeps walking", () => {

@@ -1,9 +1,9 @@
+/** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
-  parseHeartbeatTasks,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -191,6 +191,38 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("returns true for comments only", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(
+        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
+      ),
+    ).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!--
+Heartbeat template.
+Keep this comment-only file quiet.
+-->`),
+    ).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!--
+tasks:
+  - name: inbox
+    interval: 30m
+    prompt: Check inbox
+-->`),
+    ).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
+  });
+
+  it("returns true for HTML comments only", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- runtime template note -->")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!-- runtime template note -->
+
+# HEARTBEAT.md
+`),
+    ).toBe(true);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
@@ -285,23 +317,5 @@ describe("resolveHeartbeatPromptForResponseTool", () => {
     expect(prompt).toContain("Check the deployment queue");
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
-  });
-});
-
-describe("parseHeartbeatTasks", () => {
-  it("does not bleed top-level interval/prompt fields into task parsing", () => {
-    const content = `tasks:
-  - name: email-check
-    interval: 30m
-    prompt: Check for urgent emails
-interval: should-not-bleed
-`;
-    expect(parseHeartbeatTasks(content)).toEqual([
-      {
-        name: "email-check",
-        interval: "30m",
-        prompt: "Check for urgent emails",
-      },
-    ]);
   });
 });

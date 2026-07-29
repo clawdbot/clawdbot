@@ -1,3 +1,6 @@
+/**
+ * Shared test helpers for browser facade delegation tests.
+ */
 import { expect, vi } from "vitest";
 
 type FacadeLoaderMock = ReturnType<typeof vi.fn>;
@@ -14,6 +17,7 @@ const BROWSER_HOST_INSPECTION_ARTIFACT = {
 
 const BROWSER_VERSION = "Google Chrome 144.0.7534.0";
 
+/** Installs a mocked browser host inspection public surface. */
 export function mockBrowserHostInspectionFacade(
   loadBundledPluginPublicSurfaceModuleSync: FacadeLoaderMock,
   executable: ChromeExecutableFixture,
@@ -29,6 +33,7 @@ export function mockBrowserHostInspectionFacade(
   });
 }
 
+/** Asserts browser host inspection calls delegate through the browser public facade. */
 export function expectBrowserHostInspectionDelegation(params: {
   executable: ChromeExecutableFixture;
   hostInspection: typeof import("./browser-host-inspection.js");
@@ -44,6 +49,7 @@ export function expectBrowserHostInspectionDelegation(params: {
   );
 }
 
+/** Asserts host inspection helpers surface facade load failures to callers. */
 export async function expectBrowserHostInspectionFacadeUnavailable(
   loadBundledPluginPublicSurfaceModuleSync: FacadeLoaderMock,
 ) {

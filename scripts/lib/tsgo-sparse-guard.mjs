@@ -1,7 +1,9 @@
+// Detects sparse-checkout gaps before tsgo runs core TypeScript projects.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { readFlagValue } from "./arg-utils.mjs";
+import { createManagedCommandInvocation } from "./managed-child-process.mjs";
 
 const CORE_TEST_CONFIGS = new Set([
   "tsconfig.core.test.json",
@@ -10,14 +12,13 @@ const CORE_TEST_CONFIGS = new Set([
 ]);
 
 const CORE_PROD_CONFIGS = new Set(["tsconfig.core.json"]);
+const UI_PROD_CONFIGS = new Set(["tsconfig.ui.json"]);
 const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
-const CORE_SPARSE_ROOTS = ["packages", "ui/src"];
+const CORE_PROD_SPARSE_ROOTS = ["packages"];
+const UI_PROD_SPARSE_ROOTS = ["packages", "src", "ui/config", "ui/src"];
+const CORE_TEST_SPARSE_ROOTS = ["packages", "ui/config", "ui/src"];
 
 const CORE_PROD_REQUIRED_PATHS = [
-  {
-    path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
-    whenPresent: "ui/src/ui/tool-display.ts",
-  },
   {
     path: "scripts/lib/bundled-runtime-sidecar-paths.json",
     whenPresent: "src/plugins/runtime-sidecar-paths.ts",
@@ -35,24 +36,42 @@ const CORE_PROD_REQUIRED_PATHS = [
     whenPresent: "src/plugins/official-external-plugin-catalog.ts",
   },
   {
+    path: "scripts/lib/recommended-tool-installs.json",
+    whenPresent: "src/plugins/recommended-tool-installs.ts",
+  },
+  {
     path: "scripts/lib/plugin-sdk-entrypoints.json",
     whenPresent: "src/plugin-sdk/entrypoints.ts",
   },
 ];
 
-const CORE_TEST_REQUIRED_PATHS = [
-  "packages/plugin-package-contract/src/index.ts",
-  "ui/src/i18n/lib/registry.ts",
-  "ui/src/i18n/lib/types.ts",
-  "ui/src/ui/app-settings.ts",
-  "ui/src/ui/gateway.ts",
+const UI_PROD_REQUIRED_PATHS = [
+  {
+    path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+    whenPresent: "ui/src/lib/chat/tool-display.ts",
+  },
 ];
 
+const CORE_TEST_REQUIRED_PATHS = [
+  "packages/plugin-package-contract/src/index.ts",
+  "ui/config/control-ui-chunking.ts",
+  "ui/src/i18n/lib/registry.ts",
+  "ui/src/i18n/lib/types.ts",
+  "ui/src/app/settings.ts",
+  "ui/src/api/gateway.ts",
+];
+
+/**
+ * Reports whether the caller explicitly opted out of sparse tsgo guard errors.
+ */
 export function shouldSkipSparseTsgoGuardError(env = process.env) {
   const value = env[TSGO_SPARSE_SKIP_ENV_KEY]?.trim().toLowerCase();
   return value === "1" || value === "true";
 }
 
+/**
+ * Creates an environment that suppresses recursive sparse tsgo guard checks.
+ */
 export function createSparseTsgoSkipEnv(baseEnv = process.env) {
   return {
     ...baseEnv,
@@ -60,6 +79,9 @@ export function createSparseTsgoSkipEnv(baseEnv = process.env) {
   };
 }
 
+/**
+ * Builds the sparse-checkout diagnostic for core tsgo projects, when needed.
+ */
 export function getSparseTsgoGuardError(
   args,
   {
@@ -73,7 +95,9 @@ export function getSparseTsgoGuardError(
   const projectName = projectPath ? path.basename(projectPath) : null;
   if (
     !projectName ||
-    (!CORE_PROD_CONFIGS.has(projectName) && !CORE_TEST_CONFIGS.has(projectName)) ||
+    (!CORE_PROD_CONFIGS.has(projectName) &&
+      !UI_PROD_CONFIGS.has(projectName) &&
+      !CORE_TEST_CONFIGS.has(projectName)) ||
     isMetadataOnlyCommand(args)
   ) {
     return null;
@@ -106,8 +130,14 @@ export function getSparseTsgoGuardError(
 }
 
 function getRequiredSparseRootsForProject(projectName) {
-  if (CORE_PROD_CONFIGS.has(projectName) || CORE_TEST_CONFIGS.has(projectName)) {
-    return CORE_SPARSE_ROOTS;
+  if (CORE_PROD_CONFIGS.has(projectName)) {
+    return CORE_PROD_SPARSE_ROOTS;
+  }
+  if (UI_PROD_CONFIGS.has(projectName)) {
+    return UI_PROD_SPARSE_ROOTS;
+  }
+  if (CORE_TEST_CONFIGS.has(projectName)) {
+    return CORE_TEST_SPARSE_ROOTS;
   }
   return [];
 }
@@ -116,6 +146,9 @@ function getRequiredPathsForProject(projectName, cwd, fileExists) {
   const requiredPaths = [];
   if (CORE_PROD_CONFIGS.has(projectName)) {
     requiredPaths.push(...conditionalRequiredPaths(CORE_PROD_REQUIRED_PATHS, cwd, fileExists));
+  }
+  if (UI_PROD_CONFIGS.has(projectName)) {
+    requiredPaths.push(...conditionalRequiredPaths(UI_PROD_REQUIRED_PATHS, cwd, fileExists));
   }
   if (CORE_TEST_CONFIGS.has(projectName)) {
     requiredPaths.push(...CORE_TEST_REQUIRED_PATHS);
@@ -130,11 +163,16 @@ function conditionalRequiredPaths(entries, cwd, fileExists) {
 }
 
 function getGitBooleanConfig(name, { cwd }) {
-  const result = spawnSync("git", ["config", "--get", "--bool", name], {
+  const git = createManagedCommandInvocation({
+    args: ["config", "--get", "--bool", name],
+    bin: "git",
+  });
+  const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
 
   if (result.error || (result.status ?? 1) !== 0) {
@@ -145,11 +183,16 @@ function getGitBooleanConfig(name, { cwd }) {
 }
 
 function getSparseCheckoutPatterns({ cwd }) {
-  const result = spawnSync("git", ["sparse-checkout", "list"], {
+  const git = createManagedCommandInvocation({
+    args: ["sparse-checkout", "list"],
+    bin: "git",
+  });
+  const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
 
   if (result.error || (result.status ?? 1) !== 0) {

@@ -1,3 +1,4 @@
+/** Tests /tools status output for compact and verbose tool inventory modes. */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildCommandsMessage, buildHelpMessage, buildToolsMessage } from "./status.js";

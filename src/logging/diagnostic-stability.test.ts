@@ -1,5 +1,10 @@
+// Diagnostic stability tests cover stable diagnostic output under repeated events.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
@@ -9,6 +14,16 @@ import {
   stopDiagnosticStabilityRecorder,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
 
 describe("diagnostic stability recorder", () => {
   beforeEach(() => {
@@ -22,7 +37,7 @@ describe("diagnostic stability recorder", () => {
     resetDiagnosticEventsForTest();
   });
 
-  it("records a bounded payload-free projection of diagnostic events", () => {
+  it("records a bounded payload-free projection of diagnostic events", async () => {
     startDiagnosticStabilityRecorder();
 
     emitDiagnosticEvent({
@@ -41,21 +56,39 @@ describe("diagnostic stability recorder", () => {
       count: 3,
       message: "message that should not be stored",
     });
+    emitDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-secret",
+      turnId: "talk-turn-secret",
+      captureId: "talk-capture-secret",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+      byteLength: 345,
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-    expect(snapshot.count).toBe(2);
-    expect(snapshot.summary.byType).toMatchObject({
+    expect(snapshot.count).toBe(3);
+    expectFields(snapshot.summary.byType, {
       "webhook.error": 1,
       "tool.loop": 1,
+      "talk.event": 1,
     });
-    expect(snapshot.events[0]).toMatchObject({
+    expectFields(snapshot.events[0], {
       type: "webhook.error",
       channel: "telegram",
     });
     expect(snapshot.events[0]).not.toHaveProperty("error");
     expect(snapshot.events[0]).not.toHaveProperty("chatId");
-    expect(snapshot.events[1]).toMatchObject({
+    expectFields(snapshot.events[1], {
       type: "tool.loop",
       toolName: "poll",
       level: "warning",
@@ -66,6 +99,20 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("message");
     expect(snapshot.events[1]).not.toHaveProperty("sessionId");
     expect(snapshot.events[1]).not.toHaveProperty("sessionKey");
+    expectFields(snapshot.events[2], {
+      type: "talk.event",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+      bytes: 345,
+    });
+    expect(snapshot.events[2]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[2]).not.toHaveProperty("turnId");
+    expect(snapshot.events[2]).not.toHaveProperty("captureId");
   });
 
   it("keeps stable reason codes but drops free-form reason text", () => {
@@ -86,15 +133,114 @@ describe("diagnostic stability recorder", () => {
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-    expect(snapshot.events[0]).toMatchObject({
+    expectFields(snapshot.events[0], {
       type: "payload.large",
       reason: "json_body_limit",
     });
-    expect(snapshot.events[1]).toMatchObject({
+    expectFields(snapshot.events[1], {
       type: "message.processed",
       outcome: "error",
     });
     expect(snapshot.events[1]).not.toHaveProperty("reason");
+  });
+
+  it("records exec approval followup suppression metadata", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
+
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+    expectFields(snapshot.summary.byType, {
+      "exec.approval.followup_suppressed": 1,
+    });
+    expectFields(snapshot.events[0], {
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
+  });
+
+  it("summarizes inbound delivery proof events without message content", () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "message.received",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      messageId: "msg-secret",
+      chatId: "chat-secret",
+      source: "dispatchInboundMessage",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.started",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      source: "replyResolver",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.completed",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      source: "replyResolver",
+      durationMs: 12,
+      outcome: "completed",
+    });
+    emitDiagnosticEvent({
+      type: "session.turn.created",
+      runId: "run-1",
+      sessionKey: "agent:main:signal:direct:u1",
+      sessionId: "session-secret",
+      agentId: "main",
+      channel: "signal",
+      trigger: "user",
+    });
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.byType).toMatchObject({
+      "message.received": 1,
+      "message.dispatch.started": 1,
+      "message.dispatch.completed": 1,
+      "session.turn.created": 1,
+    });
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        type: "message.received",
+        channel: "signal",
+        source: "dispatchInboundMessage",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch.started",
+        channel: "signal",
+        source: "replyResolver",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch.completed",
+        channel: "signal",
+        source: "replyResolver",
+        outcome: "completed",
+      }),
+      expect.objectContaining({
+        type: "session.turn.created",
+        channel: "signal",
+        source: "main",
+        outcome: "user",
+      }),
+    ]);
+    for (const event of snapshot.events) {
+      expect(event).not.toHaveProperty("messageId");
+      expect(event).not.toHaveProperty("chatId");
+      expect(event).not.toHaveProperty("sessionId");
+      expect(event).not.toHaveProperty("sessionKey");
+    }
   });
 
   it("summarizes assembled context diagnostics without prompt text", async () => {
@@ -118,11 +264,13 @@ describe("diagnostic stability recorder", () => {
       contextTokenBudget: 200_000,
       reserveTokens: 20_000,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-    expect(snapshot.events[0]).toMatchObject({
+    expectFields(snapshot.events[0], {
       type: "context.assembled",
       provider: "openai",
       model: "gpt-5.4",
@@ -134,6 +282,34 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[0]).not.toHaveProperty("sessionId");
     expect(snapshot.events[0]).not.toHaveProperty("promptChars");
     expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
+  });
+
+  it("projects run.execution_phase into the dedicated phase fields", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "run.execution_phase",
+      runId: "run-1",
+      sessionId: "sid-1",
+      sessionKey: "sk-1",
+      phase: "model_call_started",
+      provider: "anthropic",
+      model: "claude",
+      tool: "read",
+      firstModelCallStarted: true,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.events[0], {
+      type: "run.execution_phase",
+      phase: "model_call_started",
+      provider: "anthropic",
+      model: "claude",
+      toolName: "read",
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("reason");
   });
 
   it("sanitizes tool and model diagnostic error categories", async () => {
@@ -165,16 +341,18 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-    expect(snapshot.events[0]).toMatchObject({
+    expectFields(snapshot.events[0], {
       type: "tool.execution.error",
       toolName: "read",
     });
     expect(snapshot.events[0]).not.toHaveProperty("reason");
-    expect(snapshot.events[1]).toMatchObject({
+    expectFields(snapshot.events[1], {
       type: "model.call.error",
       provider: "openai",
       model: "gpt-5.4",
@@ -232,14 +410,14 @@ describe("diagnostic stability recorder", () => {
 
     const snapshot = getDiagnosticStabilitySnapshot();
 
-    expect(snapshot.summary.memory).toMatchObject({
-      latest: {
-        rssBytes: 120,
-        heapUsedBytes: 50,
-      },
+    expectFields(snapshot.summary.memory, {
       maxRssBytes: 120,
       maxHeapUsedBytes: 50,
       pressureCount: 1,
+    });
+    expectFields(snapshot.summary.memory?.latest, {
+      rssBytes: 120,
+      heapUsedBytes: 50,
     });
     expect(snapshot.summary.payloadLarge).toEqual({
       count: 1,
@@ -270,7 +448,7 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.dropped).toBe(5);
     expect(snapshot.firstSeq).toBe(6);
     expect(snapshot.lastSeq).toBe(1005);
-    expect(snapshot.events[0]).toMatchObject({ seq: 6, queueDepth: 5 });
+    expectFields(snapshot.events[0], { seq: 6, queueDepth: 5 });
   });
 
   it("filters snapshots by type, sequence, and limit", () => {
@@ -287,13 +465,58 @@ describe("diagnostic stability recorder", () => {
     });
 
     expect(snapshot.count).toBe(1);
-    expect(snapshot.events).toMatchObject([
-      {
-        seq: 3,
-        type: "payload.large",
-        action: "chunked",
-      },
-    ]);
+    expect(snapshot.events).toHaveLength(1);
+    expectFields(snapshot.events[0], {
+      seq: 3,
+      type: "payload.large",
+      action: "chunked",
+    });
+  });
+
+  it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {
+    startDiagnosticStabilityRecorder();
+
+    for (let index = 0; index < 10_001; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `overflow-run-${index}`,
+        callId: `overflow-call-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const midDrainSnapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
+    expect(midDrainSnapshot.lastSeq).toBe(100);
+    expect(
+      midDrainSnapshot.events.some((event) => event.type === "diagnostic.async_queue.dropped"),
+    ).toBe(false);
+
+    await waitForDiagnosticEventsDrained();
+
+    const sinceMidDrain = getDiagnosticStabilitySnapshot({
+      sinceSeq: midDrainSnapshot.lastSeq,
+      limit: 1000,
+    });
+    const dropSummary = sinceMidDrain.events.find(
+      (event) => event.type === "diagnostic.async_queue.dropped",
+    );
+    expectFields(dropSummary, {
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 1,
+      droppedUntrustedEvents: 1,
+      queueLength: 0,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
+    expect(
+      sinceMidDrain.events.filter((event) => event.type === "model.call.started"),
+    ).not.toHaveLength(0);
+    expect(sinceMidDrain.lastSeq).toBeGreaterThan(10_000);
   });
 
   it("applies query filters to persisted snapshots without mutating the source", () => {
@@ -322,21 +545,24 @@ describe("diagnostic stability recorder", () => {
       limit: 1,
     });
 
-    expect(selected).toMatchObject({
+    expectFields(selected, {
       count: 2,
       firstSeq: 2,
       lastSeq: 3,
-      events: [{ seq: 3, type: "payload.large", action: "chunked" }],
-      summary: {
-        byType: {
-          "payload.large": 2,
-        },
-        payloadLarge: {
-          count: 2,
-          rejected: 1,
-          chunked: 1,
-        },
-      },
+    });
+    expect(selected.events).toHaveLength(1);
+    expectFields(selected.events[0], {
+      seq: 3,
+      type: "payload.large",
+      action: "chunked",
+    });
+    expectFields(selected.summary.byType, {
+      "payload.large": 2,
+    });
+    expectFields(selected.summary.payloadLarge, {
+      count: 2,
+      rejected: 1,
+      chunked: 1,
     });
     expect(snapshot.events).toHaveLength(3);
   });

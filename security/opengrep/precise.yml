@@ -179,7 +179,7 @@ rules:
       - patterns:
           - pattern-either:
               - pattern: getChannelPluginCatalogEntry(...)
-              - pattern: listChannelPluginCatalogEntries(...)
+              - pattern: listRawChannelPluginCatalogEntries(...)
           - pattern-not-regex: \bexcludeWorkspace\s*:\s*true\b
     pattern-sanitizers:
       - patterns:
@@ -1121,7 +1121,7 @@ rules:
     languages:
       - typescript
     severity: WARNING
-    message: Untrusted channel metadata is being interpolated into trusted GroupSystemPrompt parts. Route it through UntrustedContext instead.
+    message: Untrusted channel metadata is being interpolated into trusted GroupSystemPrompt parts. Route it through ChannelPromptContext (or ChannelStructuredContext for structured entries) instead.
     pattern-either:
       - pattern: |
           const $SYSTEM_PROMPT_PARTS = [
@@ -2695,54 +2695,6 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: replay-key-derived-from-idempotency-header
-  - id: ghsa-gfmx-pph7-g46x.openclaw.system-event-missing-explicit-trust
-    languages:
-      - typescript
-      - javascript
-    severity: ERROR
-    message: |
-      enqueueSystemEvent() is called with interpolated or variable text without `trusted: false`. The default is `trusted: true`, which injects the text as a privileged `System:` prefix in the agent's context window. External content — channel messages, user IDs, event payloads, exec output — MUST be explicitly downgraded with `trusted: false` to prevent prompt injection. See GHSA-GFMX-PPH7-G46X.
-      TRIAGE NOTE: If ALL interpolated values in the template literal are boolean flags or enum/const expressions (e.g. `${x ? "on" : "off"}`), or if the variable text is formatted from fully-internal state (not external channel content), the finding may be low-risk. Add `trusted: true` explicitly to self-document that the text is intentionally trusted.
-    metadata:
-      category: security
-      cwe:
-        - CWE-74
-        - CWE-77
-      ghsas:
-        - GHSA-GFMX-PPH7-G46X
-      ghsa: GHSA-GFMX-PPH7-G46X
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-GFMX-PPH7-G46X
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: openclaw.system-event-missing-explicit-trust
-    paths:
-      exclude:
-        - "**/*.test.*"
-        - "**/*.spec.*"
-        - src/auto-reply/reply/directive-handling.impl.ts
-        - src/auto-reply/reply/directive-handling.persist.ts
-        - src/auto-reply/reply/get-reply-directives-apply.ts
-        - src/gateway/config-recovery-notice.ts
-        - src/gateway/server-restart-sentinel.ts
-        - src/infra/session-maintenance-warning.ts
-    pattern-either:
-      - patterns:
-          - pattern: |
-              enqueueSystemEvent(`...${$X}...`, $OPTS)
-          - pattern-not: |
-              enqueueSystemEvent(`...${$X}...`, { ..., trusted: $V, ... })
-          - pattern-not-inside: |
-              enqueueSystemEvent(`...${$X}...`, { ..., trusted: $V, ... })
-      - patterns:
-          - pattern: |
-              enqueueSystemEvent($TEXT, $OPTS)
-          - pattern-not: |
-              enqueueSystemEvent($TEXT, { ..., trusted: $V, ... })
-          - pattern-not-inside: |
-              enqueueSystemEvent($TEXT, { ..., trusted: $V, ... })
-          - metavariable-regex:
-              metavariable: $TEXT
-              regex: ^[a-zA-Z_$][a-zA-Z0-9_$]*$
   - id: ghsa-gg9v-mgcp-v6m7.openclaw-bootstrap-token-legacy-acceptance-without-profile-record
     languages:
       - typescript
@@ -3471,9 +3423,6 @@ rules:
         - src/plugins/web-fetch-providers*.ts
         - src/media/**
         - src/infra/net/**
-      exclude:
-        - src/media/read-response-with-limit.ts
-        - src/media/read-response-with-limit.test.ts
     patterns:
       - pattern-either:
           - pattern: $RESP.text()
@@ -4072,7 +4021,7 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: unresolved-discovery-routing-from-txt-hints
-  - id: ghsa-rwj8-p9vq-25gv.bluebubbles-media-read-without-root-allowlist
+  - id: ghsa-rwj8-p9vq-25gv.local-media-read-without-root-allowlist
     languages:
       - typescript
       - javascript
@@ -4086,7 +4035,7 @@ rules:
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-RWJ8-P9VQ-25GV
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
-      source-rule-id: bluebubbles-media-read-without-root-allowlist
+      source-rule-id: local-media-read-without-root-allowlist
     patterns:
       - pattern: |
           const $LOCAL = resolveLocalMediaPath(...);
@@ -4794,7 +4743,7 @@ rules:
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: gateway-http-json-endpoint-missing-required-operator-method
   - id: ghsa-x2m8-53h4-6hch.discord-voice-ingress-missing-authorize-review
-    message: Discord voice ingress forwards senderIsOwner to agentCommandFromIngress without calling authorizeDiscordVoiceIngress in the same file. See GHSA-X2M8-53H4-6HCH.
+    message: Discord voice ingress calls agentCommandFromIngress without calling authorizeDiscordVoiceIngress in the same file. See GHSA-X2M8-53H4-6HCH.
     severity: ERROR
     languages:
       - typescript

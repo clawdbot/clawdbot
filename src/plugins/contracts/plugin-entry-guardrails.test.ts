@@ -1,3 +1,4 @@
+// Plugin entry guardrail tests cover allowed plugin entrypoint imports and exports.
 import { existsSync, readFileSync } from "node:fs";
 import path, { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -255,7 +256,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("does not advertise runtime helper sidecars as bundled plugin entry extensions", () => {
@@ -280,7 +281,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
@@ -292,7 +293,7 @@ describe("plugin entry guardrails", () => {
         }).map((failure) => `${pluginId}: ${failure}`),
     );
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("follows relative import edges while scanning guarded contract graphs", () => {
@@ -304,7 +305,7 @@ describe("plugin entry guardrails", () => {
         import "./setup.js";
         export { x };
         export * from "./barrel.js";
-        import { y } from "openclaw/plugin-sdk/testing";
+        import { y } from "openclaw/plugin-sdk/core";
       `,
       }).relativeSpecifiers.toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);

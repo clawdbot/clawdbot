@@ -1,3 +1,5 @@
+// Web readability tests cover plugin extractor dispatch, per-config resolver
+// caching, and loader/extractor failure fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolvePluginWebContentExtractorsMock } = vi.hoisted(() => ({
@@ -34,14 +36,14 @@ describe("web fetch readability", () => {
       extractMode: "text",
       config: {},
     });
-    expect(result).toMatchObject({
-      extractor: "readability",
-      text: "extracted text",
-      title: "Extracted",
-    });
+    expect(result?.extractor).toBe("readability");
+    expect(result?.text).toBe("extracted text");
+    expect(result?.title).toBe("Extracted");
   });
 
   it("reuses extractor resolution for repeated calls with the same config object", async () => {
+    // Extractor manifests are process-stable for a config snapshot; repeated
+    // reads should not re-run plugin discovery on the fetch hot path.
     const config = {};
     resolvePluginWebContentExtractorsMock.mockReturnValue([
       {
@@ -114,10 +116,8 @@ describe("web fetch readability", () => {
       extractMode: "text",
       config: {},
     });
-    expect(result).toMatchObject({
-      extractor: "readability",
-      text: "fallback text",
-    });
+    expect(result?.extractor).toBe("readability");
+    expect(result?.text).toBe("fallback text");
   });
 
   it("returns null when extractor loading throws", async () => {

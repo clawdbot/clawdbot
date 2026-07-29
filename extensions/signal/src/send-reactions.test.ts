@@ -1,3 +1,4 @@
+// Signal tests cover send reactions plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const rpcMock = vi.fn();
@@ -17,12 +18,20 @@ vi.mock("./accounts.js", () => ({
     accountId: "default",
     enabled: true,
     baseUrl: "http://signal.local",
+    transport: {
+      kind: "managed-native",
+      baseUrl: "http://signal.local",
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      startupTimeoutMs: 30_000,
+    },
     configured: true,
     config: { account: "+15550001111" },
   }),
 }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => rpcMock(...args),
 }));
 
@@ -39,6 +48,18 @@ const SIGNAL_TEST_CFG = {
   },
 };
 
+function requireRpcParams(): Record<string, unknown> {
+  const [call] = rpcMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Signal RPC call");
+  }
+  const [, params] = call;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected Signal RPC params");
+  }
+  return params as Record<string, unknown>;
+}
+
 describe("sendReactionSignal", () => {
   beforeAll(async () => {
     ({ sendReactionSignal, removeReactionSignal } = await import("./send-reactions.js"));
@@ -53,8 +74,22 @@ describe("sendReactionSignal", () => {
       cfg: SIGNAL_TEST_CFG,
     });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(rpcMock).toHaveBeenCalledWith("sendReaction", expect.any(Object), expect.any(Object));
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      {
+        emoji: "🔥",
+        targetTimestamp: 123,
+        targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
+        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
+        account: "+15550001111",
+      },
+      {
+        baseUrl: "http://signal.local",
+        timeoutMs: undefined,
+        transportKind: "managed-native",
+      },
+    );
+    const params = requireRpcParams();
     expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
     expect(params.groupIds).toBeUndefined();
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
@@ -69,16 +104,33 @@ describe("sendReactionSignal", () => {
       targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    const params = requireRpcParams();
     expect(params.recipients).toBeUndefined();
     expect(params.groupIds).toEqual(["group-id"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
+  it("honors an explicit container endpoint override", async () => {
+    await sendReactionSignal("+15551230000", 123, "✅", {
+      cfg: SIGNAL_TEST_CFG,
+      baseUrl: "http://container:8080",
+      transportKind: "container",
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      expect.any(Object),
+      expect.objectContaining({
+        baseUrl: "http://container:8080",
+        transportKind: "container",
+      }),
+    );
+  });
+
   it("defaults targetAuthor to recipient for removals", async () => {
     await removeReactionSignal("+15551230000", 456, "❌", { cfg: SIGNAL_TEST_CFG });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    const params = requireRpcParams();
     expect(params.recipients).toEqual(["+15551230000"]);
     expect(params.targetAuthor).toBe("+15551230000");
     expect(params.remove).toBe(true);

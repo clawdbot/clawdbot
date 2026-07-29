@@ -1,3 +1,4 @@
+// Applies plugin middleware to agent tool results at runtime boundaries.
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -5,8 +6,8 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
-export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
-  "pi",
+const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
+  "openclaw",
   "codex",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
 
@@ -18,9 +19,6 @@ function normalizeAgentToolResultMiddlewareRuntime(
   runtime: string,
 ): AgentToolResultMiddlewareRuntime | undefined {
   const normalized = runtime.trim().toLowerCase();
-  if (normalized === "codex-app-server") {
-    return "codex";
-  }
   return AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET.has(normalized)
     ? (normalized as AgentToolResultMiddlewareRuntime)
     : undefined;
@@ -29,8 +27,8 @@ function normalizeAgentToolResultMiddlewareRuntime(
 export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
 ): AgentToolResultMiddlewareRuntime[] {
-  const requested = options?.runtimes ?? options?.harnesses;
-  if (!requested || requested.length === 0) {
+  const requested = options?.runtimes;
+  if (!requested) {
     return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
   }
   const normalized: AgentToolResultMiddlewareRuntime[] = [];
@@ -45,11 +43,6 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
   }
   return normalized;
 }
-
-/** @deprecated Use normalizeAgentToolResultMiddlewareRuntimes. */
-export const normalizeAgentToolResultMiddlewareHarnesses =
-  normalizeAgentToolResultMiddlewareRuntimes;
-
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
 ): AgentToolResultMiddlewareRuntime[] {

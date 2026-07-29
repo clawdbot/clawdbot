@@ -1,11 +1,13 @@
+// Gateway known-weak credential guard.
+// Rejects published placeholder auth values before the gateway starts.
 import type { ResolvedGatewayAuth } from "./auth.js";
 
-export const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
+const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
   "change-me-now",
 ] as const;
 
-export const KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS = ["change-me-to-a-strong-password"] as const;
+const KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS = ["change-me-to-a-strong-password"] as const;
 
 /**
  * Placeholder credentials that have ever shipped in `.env.example` or been
@@ -25,6 +27,8 @@ const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set(
 
 export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth): void {
   if (auth.mode === "token") {
+    // Token/password checks stay separate because auth mode is exclusive and
+    // error text should name the credential the operator must rotate.
     const token = auth.token?.trim() ?? "";
     if (token && KNOWN_WEAK_GATEWAY_TOKENS.has(token)) {
       throw new Error(

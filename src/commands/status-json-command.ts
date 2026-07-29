@@ -1,3 +1,6 @@
+// Shared command runner for `openclaw status --json`.
+// It keeps scan execution separate from JSON payload assembly so CLI variants can reuse the same output path.
+
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
@@ -8,6 +11,7 @@ type StatusJsonCommandOptions = {
   all?: boolean;
 };
 
+/** Runs the fast status scan, resolves optional deep fields, and writes JSON through the runtime. */
 export async function runStatusJsonCommand(params: {
   opts: StatusJsonCommandOptions;
   runtime: RuntimeEnv;

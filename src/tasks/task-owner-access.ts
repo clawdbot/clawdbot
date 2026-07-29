@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Normalizes task owner keys and checks requester access to task records.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   findTaskByRunId,
   getTaskById,

@@ -1,3 +1,4 @@
+// Matrix plugin module implements thread bindings shared behavior.
 import type {
   BindingTargetKind,
   SessionBindingRecord,
@@ -45,7 +46,7 @@ export type MatrixThreadBindingManager = {
 };
 
 type MatrixThreadBindingManagerCacheEntry = {
-  filePath: string;
+  storageKey: string;
   manager: MatrixThreadBindingManager;
 };
 

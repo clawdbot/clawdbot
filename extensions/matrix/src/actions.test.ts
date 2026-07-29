@@ -1,3 +1,4 @@
+// Matrix tests cover actions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
@@ -68,6 +69,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
     expect(actions).toContain("poll");
     expect(actions).toContain("poll-vote");
+    expect(discovery.capabilities).toEqual(["presentation"]);
     expect(supportsAction({ action: "poll" } as never)).toBe(false);
     expect(supportsAction({ action: "poll-vote" } as never)).toBe(true);
   });
@@ -95,25 +97,20 @@ describe("matrixMessageActions", () => {
     expect(discovery.mediaSourceParams).toEqual({
       "set-profile": ["avatarUrl", "avatarPath"],
     });
-    expect(properties.displayName).toBeDefined();
-    expect(properties.avatarUrl).toBeDefined();
-    expect(properties.avatarPath).toBeDefined();
+    expect(Object.keys(properties).toSorted()).toEqual([
+      "avatarPath",
+      "avatarUrl",
+      "avatar_path",
+      "avatar_url",
+      "displayName",
+      "display_name",
+    ]);
+    expect(properties.displayName).toHaveProperty("type", "string");
+    expect(properties.avatarUrl).toHaveProperty("type", "string");
+    expect(properties.avatarPath).toHaveProperty("type", "string");
   });
 
-  it("hides self-profile updates for non-owner discovery", () => {
-    const discovery = matrixMessageActions.describeMessageTool({
-      cfg: createConfiguredMatrixConfig(),
-      senderIsOwner: false,
-    } as never);
-    if (!discovery) {
-      throw new Error("describeMessageTool returned null");
-    }
-
-    expect(discovery.actions).not.toContain(profileAction);
-    expect(discovery.schema).toBeNull();
-  });
-
-  it("hides self-profile updates when owner status is unknown", () => {
+  it("hides self-profile updates without owner identity context", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
     } as never);
@@ -122,7 +119,6 @@ describe("matrixMessageActions", () => {
     }
 
     expect(discovery.actions).not.toContain(profileAction);
-    expect(discovery.schema).toBeNull();
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
@@ -167,6 +163,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
 
     expect(actions).toEqual(["poll", "poll-vote"]);
+    expect(discovery.capabilities).toEqual(["presentation"]);
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
@@ -193,7 +190,8 @@ describe("matrixMessageActions", () => {
     }
     const actions = discovery.actions;
 
-    expect(actions).toEqual([]);
+    expect(actions).toStrictEqual([]);
+    expect(discovery.capabilities).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {

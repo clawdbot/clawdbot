@@ -1,3 +1,4 @@
+// Discord plugin module implements sdk runtime behavior.
 import { createRequire } from "node:module";
 
 type DiscordVoiceSdk = typeof import("@discordjs/voice");

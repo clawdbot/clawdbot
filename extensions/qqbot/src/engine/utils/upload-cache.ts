@@ -4,6 +4,11 @@
  */
 
 import * as crypto from "node:crypto";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChatScope } from "../types.js";
 import { debugLog } from "./log.js";
 
@@ -46,12 +51,14 @@ export function getCachedFileInfo(
     return null;
   }
 
-  if (Date.now() >= entry.expiresAt) {
+  if (!isFutureDateTimestampMs(entry.expiresAt)) {
     cache.delete(key);
     return null;
   }
 
-  debugLog(`[upload-cache] Cache HIT: key=${key.slice(0, 40)}..., fileUuid=${entry.fileUuid}`);
+  debugLog(
+    `[upload-cache] Cache HIT: key=${truncateUtf16Safe(key, 40)}..., fileUuid=${entry.fileUuid}`,
+  );
   return entry.fileInfo;
 }
 
@@ -68,14 +75,14 @@ export function setCachedFileInfo(
   if (cache.size >= MAX_CACHE_SIZE) {
     const now = Date.now();
     for (const [k, v] of cache) {
-      if (now >= v.expiresAt) {
+      if (!isFutureDateTimestampMs(v.expiresAt, { nowMs: now })) {
         cache.delete(k);
       }
     }
     if (cache.size >= MAX_CACHE_SIZE) {
       const keys = Array.from(cache.keys());
-      for (let i = 0; i < keys.length / 2; i++) {
-        cache.delete(keys[i]);
+      for (const key of keys.slice(0, Math.ceil(keys.length / 2))) {
+        cache.delete(key);
       }
     }
   }
@@ -83,14 +90,19 @@ export function setCachedFileInfo(
   const key = buildCacheKey(contentHash, scope, targetId, fileType);
   const safetyMargin = 60;
   const effectiveTtl = Math.max(ttl - safetyMargin, 10);
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(effectiveTtl);
+  if (expiresAt === undefined) {
+    cache.delete(key);
+    return;
+  }
 
   cache.set(key, {
     fileInfo,
     fileUuid,
-    expiresAt: Date.now() + effectiveTtl * 1000,
+    expiresAt,
   });
 
   debugLog(
-    `[upload-cache] Cache SET: key=${key.slice(0, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
+    `[upload-cache] Cache SET: key=${truncateUtf16Safe(key, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
   );
 }

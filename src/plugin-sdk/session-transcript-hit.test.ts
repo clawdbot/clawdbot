@@ -1,10 +1,39 @@
-import { describe, expect, it } from "vitest";
+// Session transcript hit tests cover transcript match formatting and path resolution.
+import fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
+  formatSessionTranscriptMemoryHitKey,
+  loadCombinedSessionStoreForGateway,
+  parseSessionTranscriptMemoryHitKey,
+  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
+
+const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
+vi.mock("../config/sessions/combined-store-gateway.js", () => ({
+  loadCombinedSessionStoreForGateway: loadGatewaySessionStore,
+}));
+
+it("filters incognito rows from the plugin cross-session store view", () => {
+  loadGatewaySessionStore.mockReturnValue({
+    storePath: "(multiple)",
+    store: {
+      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+      "agent:main:dashboard:incognito-private": {
+        incognito: true,
+        sessionId: "private",
+        updatedAt: 2,
+      },
+    },
+  });
+
+  expect(loadCombinedSessionStoreForGateway({}).store).toEqual({
+    "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+  });
+});
 
 describe("extractTranscriptStemFromSessionsMemoryHit", () => {
   it("strips sessions/ and .jsonl for builtin paths", () => {
@@ -43,6 +72,95 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     ).toBe("ghi-thread");
   });
 
+  it("recognizes QMD-normalized archived reset transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("recognizes QMD-normalized archived deleted transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/def-uuid-jsonl-deleted-2026-02-16T22-27-33.000Z.md",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("recognizes real QMD-slugified archived reset transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("returns non-archived identity for QMD .md stems that are not archive patterns", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/normal-session.md",
+    );
+    expect(identity).toEqual({ stem: "normal-session", archived: false });
+  });
+
+  it("returns archived identity for QMD-normalized reset .md stems", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      liveStem: "abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z",
+      archived: true,
+    });
+  });
+
+  it("recognizes QMD-exported dot-form archived reset .md paths", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("recognizes QMD-exported dot-form archived deleted .md paths", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/def-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z.md",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("returns archived identity for QMD-exported dot-form reset .md paths", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      liveStem: "abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z",
+      archived: true,
+    });
+  });
+
+  it("does not treat QMD .md names with invalid archive timestamps as archives", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc.jsonl.reset.not-a-timestamp.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc.jsonl.reset.not-a-timestamp",
+      archived: false,
+    });
+  });
+
+  it("does not treat non-QMD .md names with archive-looking timestamps as archives", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z",
+      archived: false,
+    });
+  });
+
   it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
     // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
     expect(
@@ -64,9 +182,29 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
     });
   });
 
+  it("does not derive owner metadata from lossy QMD session collection names", () => {
+    expect(
+      extractTranscriptIdentityFromSessionsMemoryHit(
+        "qmd/sessions-main/deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z.md",
+      ),
+    ).toEqual({
+      stem: "deleted-uuid",
+      liveStem: "deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z",
+      archived: true,
+    });
+  });
+
   it("does not invent owner metadata for legacy basename-only paths", () => {
     expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toEqual({
       stem: "abc-uuid",
+      archived: false,
+    });
+  });
+
+  it("extracts owner metadata from agent-scoped live session paths", () => {
+    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/main/abc-uuid.jsonl")).toEqual({
+      stem: "abc-uuid",
+      ownerAgentId: "main",
       archived: false,
     });
   });
@@ -92,6 +230,25 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
   });
 
+  it("never resolves incognito transcript hits", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-private";
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:visible": baseEntry(),
+      [incognitoKey]: baseEntry({ incognito: true }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" })).toEqual([
+      "agent:main:dashboard:visible",
+    ]);
+    const memoryKey = formatSessionTranscriptMemoryHitKey({
+      agentId: "main",
+      sessionId: "stem-a",
+    });
+    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key: memoryKey, store })).toEqual([
+      "agent:main:dashboard:visible",
+    ]);
+  });
+
   it("falls back to archived owner metadata when deleted archives are gone from the live store", () => {
     const keys = resolveTranscriptStemToSessionKeys({
       store: {},
@@ -100,5 +257,105 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     });
 
     expect(keys).toEqual(["agent:main:deleted-stem"]);
+  });
+
+  it("matches QMD-slugified stems to unique session ids with safe punctuation", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar-v1",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:s1"]);
+  });
+
+  it("ignores store entries without session ids during QMD-slugified fallback", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:non-session": {
+        updatedAt: 1,
+      } as SessionEntry,
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar-v1",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:s1"]);
+  });
+
+  it("does not use QMD-slugified fallback unless requested", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar-v1" })).toEqual([]);
+  });
+
+  it("prefers exact stem matches before QMD-slugified fallback matches", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:exact": baseEntry({ sessionId: "foo-bar" }),
+      "agent:main:slug": baseEntry({ sessionId: "foo_bar" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:exact"]);
+  });
+
+  it("does not guess when QMD-slugified fallback matches multiple sessions", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dot": baseEntry({ sessionId: "foo.bar" }),
+      "agent:main:underscore": baseEntry({ sessionId: "foo_bar" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("session transcript memory hit key compatibility exports", () => {
+  it("keeps hit-subpath memory helpers off the runtime writer import path", () => {
+    const source = fs.readFileSync(new URL("./session-transcript-hit.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("session-transcript-runtime.js");
+  });
+
+  it("exports storage-neutral memory hit key helpers from the legacy hit subpath", () => {
+    const key = formatSessionTranscriptMemoryHitKey({
+      agentId: "main",
+      sessionId: "session:legacy",
+    });
+    const store: Record<string, SessionEntry> = {
+      "agent:main:discord:direct:42": {
+        sessionFile: "/tmp/not-the-identity.jsonl",
+        sessionId: "session:legacy",
+        updatedAt: 10,
+      },
+    };
+
+    expect(key).toBe("transcript:main:session%3Alegacy");
+    expect(parseSessionTranscriptMemoryHitKey(key)).toMatchObject({
+      agentId: "main",
+      sessionId: "session:legacy",
+    });
+    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key, store })).toEqual([
+      "agent:main:discord:direct:42",
+    ]);
   });
 });

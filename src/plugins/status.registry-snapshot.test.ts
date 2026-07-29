@@ -1,3 +1,4 @@
+// Covers plugin status snapshots built from registry state.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +13,7 @@ import {
   isColdPluginRuntimeLoaded,
 } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -19,65 +21,49 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-status", tempDirs);
 }
 
-function writeManagedNpmPlugin(params: {
-  stateDir: string;
-  packageName: string;
-  pluginId: string;
-  version: string;
-  dependencySpec?: string;
-}): string {
-  const npmRoot = path.join(params.stateDir, "npm");
-  const rootManifestPath = path.join(npmRoot, "package.json");
-  fs.mkdirSync(npmRoot, { recursive: true });
-  const rootManifest = fs.existsSync(rootManifestPath)
-    ? (JSON.parse(fs.readFileSync(rootManifestPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-      })
-    : {};
-  fs.writeFileSync(
-    rootManifestPath,
-    JSON.stringify(
-      {
-        ...rootManifest,
-        private: true,
-        dependencies: {
-          ...rootManifest.dependencies,
-          [params.packageName]: params.dependencySpec ?? params.version,
-        },
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-
-  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
-  fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: params.version,
-      openclaw: { extensions: ["./dist/index.js"] },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(packageDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId,
-      name: "WhatsApp",
-      configSchema: { type: "object" },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(packageDir, "dist", "index.js"), "export {};\n", "utf8");
-  return packageDir;
-}
-
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requirePlugin(
+  plugins: readonly Record<string, unknown>[],
+  id: string,
+): Record<string, unknown> {
+  const plugin = plugins.find((entry) => entry.id === id);
+  if (!plugin) {
+    throw new Error(`Expected plugin ${id}`);
+  }
+  return requireRecord(plugin);
+}
+
+function requireRecordArray(value: unknown): Record<string, unknown>[] {
+  expect(Array.isArray(value)).toBe(true);
+  return value as Record<string, unknown>[];
+}
+
+function requireNamedEntry(
+  entries: readonly Record<string, unknown>[],
+  name: string,
+): Record<string, unknown> {
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (!entry) {
+    throw new Error(`Expected entry ${name}`);
+  }
+  return requireRecord(entry);
+}
+
+function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+}
 
 describe("buildPluginRegistrySnapshotReport", () => {
   it("keeps recovered managed npm plugins visible when the persisted registry is stale", () => {
@@ -86,7 +72,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const env = {
       ...createColdPluginHermeticEnv(tempRoot, {
         bundledPluginsDir: makeTempDir(),
-        disablePersistedRegistry: false,
       }),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_STATE_DIR: stateDir,
@@ -103,13 +88,14 @@ describe("buildPluginRegistrySnapshotReport", () => {
       packageName: "@openclaw/whatsapp",
       pluginId: "whatsapp",
       version: "2026.5.2",
+      name: "WhatsApp",
     });
     const staleIndex = loadInstalledPluginIndex({
       config,
       env,
       installRecords: {},
     });
-    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
     writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
 
     const report = buildPluginRegistrySnapshotReport({
@@ -118,19 +104,17 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
 
     expect(report.registrySource).toBe("derived");
-    expect(report.registryDiagnostics).toContainEqual(
-      expect.objectContaining({ code: "persisted-registry-stale-source" }),
-    );
-    expect(report.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "whatsapp",
-          name: "WhatsApp",
-          source: fs.realpathSync(path.join(whatsappDir, "dist", "index.js")),
-          status: "loaded",
-        }),
-      ]),
-    );
+    expect(
+      report.registryDiagnostics.some(
+        (diagnostic) => diagnostic.code === "persisted-registry-stale-source",
+      ),
+    ).toBe(true);
+    expectFields(requirePlugin(report.plugins, "whatsapp"), {
+      id: "whatsapp",
+      name: "WhatsApp",
+      source: fs.realpathSync(path.join(whatsappDir, "dist", "index.js")),
+      status: "loaded",
+    });
   });
 
   it("reconstructs list metadata from indexed manifests without importing plugin runtime", () => {
@@ -146,9 +130,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
         version: "1.2.3",
         providers: ["indexed-provider"],
         contracts: {
+          agentToolResultMiddleware: ["openclaw", "codex"],
           speechProviders: ["indexed-speech-provider"],
           realtimeTranscriptionProviders: ["indexed-transcription-provider"],
           realtimeVoiceProviders: ["indexed-voice-provider"],
+          trustedToolPolicies: ["workflow-budget"],
         },
         commandAliases: [{ name: "indexed-demo" }],
         configSchema: {
@@ -167,8 +153,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       },
     });
 
-    const plugin = report.plugins.find((entry) => entry.id === "indexed-demo");
-    expect(plugin).toMatchObject({
+    expectFields(requirePlugin(report.plugins, "indexed-demo"), {
       id: "indexed-demo",
       name: "Indexed Demo",
       description: "Manifest-backed list metadata",
@@ -178,6 +163,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
       speechProviderIds: ["indexed-speech-provider"],
       realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
       realtimeVoiceProviderIds: ["indexed-voice-provider"],
+      contracts: {
+        agentToolResultMiddleware: ["openclaw", "codex"],
+        speechProviders: ["indexed-speech-provider"],
+        realtimeTranscriptionProviders: ["indexed-transcription-provider"],
+        realtimeVoiceProviders: ["indexed-voice-provider"],
+        trustedToolPolicies: ["workflow-budget"],
+      },
       commands: ["indexed-demo"],
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",
@@ -214,36 +206,37 @@ describe("buildPluginRegistrySnapshotReport", () => {
       },
     });
 
-    const plugin = report.plugins.find((entry) => entry.id === "dependency-demo");
-    expect(plugin?.dependencyStatus).toMatchObject({
+    const plugin = requirePlugin(report.plugins, "dependency-demo");
+    const dependencyStatus = requireRecord(plugin.dependencyStatus);
+    expectFields(dependencyStatus, {
       hasDependencies: true,
       installed: false,
       requiredInstalled: false,
       optionalInstalled: false,
       missing: ["missing-required"],
       missingOptional: ["missing-optional"],
-      dependencies: [
-        {
-          name: "missing-required",
-          spec: "1.0.0",
-          installed: false,
-          optional: false,
-        },
-        {
-          name: "present-required",
-          spec: "1.0.0",
-          installed: true,
-          optional: false,
-        },
-      ],
-      optionalDependencies: [
-        {
-          name: "missing-optional",
-          spec: "1.0.0",
-          installed: false,
-          optional: true,
-        },
-      ],
+    });
+    const dependencies = requireRecordArray(dependencyStatus.dependencies);
+    expect(dependencies).toHaveLength(2);
+    expectFields(requireNamedEntry(dependencies, "missing-required"), {
+      name: "missing-required",
+      spec: "1.0.0",
+      installed: false,
+      optional: false,
+    });
+    expectFields(requireNamedEntry(dependencies, "present-required"), {
+      name: "present-required",
+      spec: "1.0.0",
+      installed: true,
+      optional: false,
+    });
+    const optionalDependencies = requireRecordArray(dependencyStatus.optionalDependencies);
+    expect(optionalDependencies).toHaveLength(1);
+    expectFields(requireNamedEntry(optionalDependencies, "missing-optional"), {
+      name: "missing-optional",
+      spec: "1.0.0",
+      installed: false,
+      optional: true,
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
@@ -266,7 +259,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir, {
       bundledPluginsDir: makeTempDir(),
-      disablePersistedRegistry: false,
     });
 
     await refreshPluginRegistry({
@@ -284,20 +276,16 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
 
     expect(report.registrySource).toBe("persisted");
-    expect(report.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "persisted-demo",
-          name: "Persisted Demo",
-          description: "Persisted registry metadata",
-          version: "2.0.0",
-          providerIds: ["persisted-provider"],
-          commands: ["persisted-demo"],
-          source: fs.realpathSync(fixture.runtimeSource),
-          status: "loaded",
-        }),
-      ]),
-    );
+    expectFields(requirePlugin(report.plugins, "persisted-demo"), {
+      id: "persisted-demo",
+      name: "Persisted Demo",
+      description: "Persisted registry metadata",
+      version: "2.0.0",
+      providerIds: ["persisted-provider"],
+      commands: ["persisted-demo"],
+      source: fs.realpathSync(fixture.runtimeSource),
+      status: "loaded",
+    });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 
@@ -323,17 +311,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
       }),
     });
 
-    expect(report.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "snapshot-demo",
-          name: "Snapshot Demo",
-          source: fs.realpathSync(fixture.runtimeSource),
-          status: "loaded",
-          imported: false,
-        }),
-      ]),
-    );
+    expectFields(requirePlugin(report.plugins, "snapshot-demo"), {
+      id: "snapshot-demo",
+      name: "Snapshot Demo",
+      source: fs.realpathSync(fixture.runtimeSource),
+      status: "loaded",
+      imported: false,
+    });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 });

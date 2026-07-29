@@ -1,3 +1,6 @@
+/**
+ * Rate-limit message selection for Browser service providers.
+ */
 const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
   "Browser service rate limit reached. " +
   "Wait for the current session to complete, or retry later.";
@@ -22,6 +25,7 @@ function isBrowserbaseUrl(url: string): boolean {
   }
 }
 
+/** Returns the provider-specific rate-limit message for a browser service URL. */
 export function resolveBrowserRateLimitMessage(url: string): string {
   return isBrowserbaseUrl(url)
     ? BROWSERBASE_RATE_LIMIT_MESSAGE

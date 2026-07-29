@@ -1,3 +1,4 @@
+// Auth choice contract tests cover provider auth choice metadata and setup behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import { resolvePreferredProviderForAuthChoice } from "../../plugins/provider-auth-choice-preference.js";

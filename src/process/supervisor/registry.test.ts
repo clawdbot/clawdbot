@@ -1,3 +1,4 @@
+// Supervisor registry tests cover run registration, lookup, and pruning behavior.
 import { describe, expect, it } from "vitest";
 import { createRunRegistry } from "./registry.js";
 
@@ -31,28 +32,29 @@ describe("process supervisor run registry", () => {
     const registry = createRunRegistry();
     addRunningRecord(registry, { runId: "r1", sessionId: "s1", startedAtMs: 1 });
 
-    const first = registry.finalize("r1", {
+    registry.finalize("r1", {
       reason: "overall-timeout",
       exitCode: null,
       exitSignal: "SIGKILL",
     });
-    const second = registry.finalize("r1", {
+    expect(registry.get("r1")).toMatchObject({
+      state: "exited",
+      terminationReason: "overall-timeout",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+    });
+
+    registry.finalize("r1", {
       reason: "manual-cancel",
       exitCode: 0,
       exitSignal: null,
     });
-
-    expect(first).not.toBeNull();
-    expect(first?.firstFinalize).toBe(true);
-    expect(first?.record.terminationReason).toBe("overall-timeout");
-    expect(first?.record.exitCode).toBeNull();
-    expect(first?.record.exitSignal).toBe("SIGKILL");
-
-    expect(second).not.toBeNull();
-    expect(second?.firstFinalize).toBe(false);
-    expect(second?.record.terminationReason).toBe("overall-timeout");
-    expect(second?.record.exitCode).toBeNull();
-    expect(second?.record.exitSignal).toBe("SIGKILL");
+    expect(registry.get("r1")).toMatchObject({
+      state: "exited",
+      terminationReason: "overall-timeout",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+    });
   });
 
   it("prunes oldest exited records once retention cap is exceeded", () => {
@@ -68,33 +70,5 @@ describe("process supervisor run registry", () => {
     expect(registry.get("r1")).toBeUndefined();
     expect(registry.get("r2")?.state).toBe("exited");
     expect(registry.get("r3")?.state).toBe("exited");
-  });
-
-  it("filters listByScope and returns detached copies", () => {
-    const registry = createRunRegistry();
-    addRunningRecord(registry, {
-      runId: "r1",
-      sessionId: "s1",
-      scopeKey: "scope:a",
-      startedAtMs: 1,
-    });
-    addRunningRecord(registry, {
-      runId: "r2",
-      sessionId: "s2",
-      scopeKey: "scope:b",
-      startedAtMs: 2,
-    });
-
-    expect(registry.listByScope("   ")).toEqual([]);
-    const scoped = registry.listByScope("scope:a");
-    expect(scoped).toHaveLength(1);
-    const [firstScoped] = scoped;
-    expect(firstScoped?.runId).toBe("r1");
-
-    if (!firstScoped) {
-      throw new Error("missing scoped record");
-    }
-    firstScoped.state = "exited";
-    expect(registry.get("r1")?.state).toBe("running");
   });
 });

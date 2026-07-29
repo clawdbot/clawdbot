@@ -1,3 +1,4 @@
+// Vitest contracts channel config config wires the contracts channel config test shard.
 import {
   channelConfigContractPatterns,
   createContractsVitestConfig,

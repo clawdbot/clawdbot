@@ -1,9 +1,9 @@
+/** Covers plugin compaction provider registration and lookup behavior. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearCompactionProviders,
   getCompactionProvider,
   getRegisteredCompactionProvider,
-  listCompactionProviderIds,
   listRegisteredCompactionProviders,
   registerCompactionProvider,
   restoreRegisteredCompactionProviders,
@@ -28,10 +28,22 @@ function makeProvider(id: string, label?: string): CompactionProvider {
   };
 }
 
+function requireCompactionProvider(id: string): CompactionProvider {
+  const provider = getCompactionProvider(id);
+  if (!provider) {
+    throw new Error(`Expected compaction provider ${id}`);
+  }
+  return provider;
+}
+
+function listCompactionProviderIdsForTest(): string[] {
+  return listRegisteredCompactionProviders().map((entry) => entry.provider.id);
+}
+
 describe("compaction provider registry", () => {
   it("starts empty", () => {
-    expect(listCompactionProviderIds()).toEqual([]);
-    expect(listRegisteredCompactionProviders()).toEqual([]);
+    expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
+    expect(listRegisteredCompactionProviders()).toStrictEqual([]);
   });
 
   it("returns undefined for an unknown id", () => {
@@ -59,7 +71,7 @@ describe("compaction provider registry", () => {
     registerCompactionProvider(makeProvider("alpha"));
     registerCompactionProvider(makeProvider("beta"));
 
-    expect(listCompactionProviderIds()).toEqual(["alpha", "beta"]);
+    expect(listCompactionProviderIdsForTest()).toEqual(["alpha", "beta"]);
   });
 
   it("lists registered entries with owner metadata", () => {
@@ -82,14 +94,14 @@ describe("compaction provider registry", () => {
     expect(getCompactionProvider("a")?.id).toBe("a");
     expect(getCompactionProvider("b")?.id).toBe("b");
     expect(getCompactionProvider("c")?.id).toBe("c");
-    expect(listCompactionProviderIds()).toHaveLength(3);
+    expect(listCompactionProviderIdsForTest()).toHaveLength(3);
   });
 
   it("calls summarize and returns expected result", async () => {
     registerCompactionProvider(makeProvider("my-compactor"));
 
-    const provider = getCompactionProvider("my-compactor");
-    const result = await provider!.summarize({ messages: [] });
+    const provider = requireCompactionProvider("my-compactor");
+    const result = await provider.summarize({ messages: [] });
 
     expect(result).toBe("summary-from-my-compactor");
   });
@@ -103,17 +115,17 @@ describe("compaction provider registry", () => {
 
     expect(getCompactionProvider("dup")).toBe(second);
     expect(getCompactionProvider("dup")?.label).toBe("second-label");
-    expect(listCompactionProviderIds()).toEqual(["dup"]);
+    expect(listCompactionProviderIdsForTest()).toEqual(["dup"]);
   });
 
   describe("lifecycle (clear / restore)", () => {
     it("clear removes all providers", () => {
       registerCompactionProvider(makeProvider("a"));
       registerCompactionProvider(makeProvider("b"));
-      expect(listCompactionProviderIds()).toHaveLength(2);
+      expect(listCompactionProviderIdsForTest()).toHaveLength(2);
 
       clearCompactionProviders();
-      expect(listCompactionProviderIds()).toEqual([]);
+      expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
       expect(getCompactionProvider("a")).toBeUndefined();
     });
 
@@ -127,11 +139,11 @@ describe("compaction provider registry", () => {
 
       // Register a third provider to change state
       registerCompactionProvider(makeProvider("c"));
-      expect(listCompactionProviderIds()).toHaveLength(3);
+      expect(listCompactionProviderIdsForTest()).toHaveLength(3);
 
       // Restore from snapshot — should have only a and b
       restoreRegisteredCompactionProviders(snapshot);
-      expect(listCompactionProviderIds()).toEqual(["a", "b"]);
+      expect(listCompactionProviderIdsForTest()).toEqual(["a", "b"]);
       expect(getCompactionProvider("c")).toBeUndefined();
       expect(getRegisteredCompactionProvider("a")?.ownerPluginId).toBe("p-a");
     });
@@ -139,7 +151,7 @@ describe("compaction provider registry", () => {
     it("restore with empty array clears everything", () => {
       registerCompactionProvider(makeProvider("x"));
       restoreRegisteredCompactionProviders([]);
-      expect(listCompactionProviderIds()).toEqual([]);
+      expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
     });
   });
 });

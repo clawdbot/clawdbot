@@ -1,36 +1,112 @@
+/** Source-reply visibility and suppression policy for auto-reply delivery. */
 import { normalizeChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveCommandTurnContext, type CommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
+/** Minimal inbound context needed for source-reply delivery decisions. */
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  InboundEventKind?: InboundEventKind;
+  Provider?: string;
+  Surface?: string;
+  ExplicitDeliverRoute?: boolean;
+  CommandAuthorized?: boolean;
+  CommandBody?: string;
   CommandSource?: "text" | "native";
+  CommandTurn?: CommandTurnContext;
+  BotUsername?: string;
 };
 
+function toSessionStableDeliveryModeContext(
+  ctx: SourceReplyDeliveryModeContext,
+): SourceReplyDeliveryModeContext {
+  return {
+    ChatType: ctx.ChatType,
+    Provider: ctx.Provider,
+    Surface: ctx.Surface,
+    ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
+  };
+}
+
+/** Returns true when the turn explicitly invoked a source-visible command. */
+export function isExplicitSourceReplyCommand(
+  ctx: SourceReplyDeliveryModeContext,
+  cfg: OpenClawConfig,
+): boolean {
+  return isExplicitCommandTurnContext(ctx, cfg);
+}
+
+/** Returns true for text slash commands that lack authorization metadata. */
+export function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  return (
+    commandTurn.kind === "text-slash" &&
+    !commandTurn.authorized &&
+    (commandTurn.commandName !== undefined || commandTurn.body?.trim().startsWith("/") === true)
+  );
+}
+
+function isInternalRoomEvent(ctx: SourceReplyDeliveryModeContext): boolean {
+  return ctx.InboundEventKind === "room_event" && isInternalSourceReplyChannel(ctx);
+}
+
+/** Returns true for internal message-channel turns that should remain local. */
+export function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext): boolean {
+  const providerChannel = normalizeMessageChannel(ctx.Provider);
+  const surfaceChannel = normalizeMessageChannel(ctx.Surface);
+  const currentSurface = providerChannel ?? surfaceChannel;
+  return (
+    currentSurface === INTERNAL_MESSAGE_CHANNEL &&
+    (surfaceChannel === INTERNAL_MESSAGE_CHANNEL || !surfaceChannel) &&
+    ctx.ExplicitDeliverRoute !== true
+  );
+}
+
+/** Resolves whether normal final text should auto-deliver or require the message tool. */
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
-  if (params.requested) {
-    return params.messageToolAvailable === false && params.requested === "message_tool_only"
-      ? "automatic"
-      : params.requested;
+  if (params.strictMessageToolOnly === true) {
+    return "message_tool_only";
   }
-  if (params.ctx.CommandSource === "native") {
+  if (params.ctx.InboundEventKind === "room_event" && !isInternalRoomEvent(params.ctx)) {
+    return "message_tool_only";
+  }
+  if (
+    params.requested &&
+    (params.requested !== "message_tool_only" || params.messageToolAvailable !== false)
+  ) {
+    return params.requested;
+  }
+  if (isExplicitSourceReplyCommand(params.ctx, params.cfg)) {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
+  if (
+    (chatType === "group" || chatType === "channel") &&
+    isUnauthorizedTextSlashCommand(params.ctx)
+  ) {
+    return "message_tool_only";
+  }
   let mode: SourceReplyDeliveryMode;
   if (chatType === "group" || chatType === "channel") {
     const configuredMode =
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
-    mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   } else {
-    const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
+    const configuredMode =
+      params.cfg.messages?.visibleReplies ??
+      (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies);
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
@@ -39,8 +115,10 @@ export function resolveSourceReplyDeliveryMode(params: {
   return mode;
 }
 
-export type SourceReplyVisibilityPolicy = {
+/** Full source-reply suppression decision consumed by run and hook code. */
+type SourceReplyVisibilityPolicy = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
+  sessionStableSourceReplyDeliveryMode: SourceReplyDeliveryMode;
   sendPolicyDenied: boolean;
   suppressAutomaticSourceDelivery: boolean;
   suppressDelivery: boolean;
@@ -50,10 +128,12 @@ export type SourceReplyVisibilityPolicy = {
   deliverySuppressionReason: string;
 };
 
+/** Resolves source delivery, hooks, lifecycle, and typing suppression flags. */
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
   suppressAcpChildUserDelivery?: boolean;
   explicitSuppressTyping?: boolean;
@@ -65,9 +145,20 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
+    strictMessageToolOnly: params.strictMessageToolOnly,
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,
   });
+  const hasTurnDeliveryOverride =
+    params.requested !== undefined || isExplicitSourceReplyCommand(params.ctx, params.cfg);
+  const sessionStableSourceReplyDeliveryMode = hasTurnDeliveryOverride
+    ? sourceReplyDeliveryMode
+    : resolveSourceReplyDeliveryMode({
+        cfg: params.cfg,
+        ctx: toSessionStableDeliveryModeContext(params.ctx),
+        messageToolAvailable: params.messageToolAvailable,
+        defaultVisibleReplies: params.defaultVisibleReplies,
+      });
   const sendPolicyDenied = params.sendPolicy === "deny";
   const suppressAutomaticSourceDelivery = sourceReplyDeliveryMode === "message_tool_only";
   const suppressDelivery = sendPolicyDenied || suppressAutomaticSourceDelivery;
@@ -79,6 +170,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
 
   return {
     sourceReplyDeliveryMode,
+    sessionStableSourceReplyDeliveryMode,
     sendPolicyDenied,
     suppressAutomaticSourceDelivery,
     suppressDelivery,

@@ -1,10 +1,22 @@
+/**
+ * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
+ * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
+ */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
 
@@ -18,7 +30,30 @@ const DEFAULT_COST = {
 const DEFAULT_CONTEXT_WINDOW = 32000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
+const MANTLE_DISCOVERY_TIMEOUT_MS = 30_000;
+const MANTLE_DISCOVERY_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+// Bedrock's introductory Sonnet 5 rate expires at the documented UTC month boundary.
+const SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
+const SONNET_5_PROMOTIONAL_COST = {
+  input: 2,
+  output: 10,
+  cacheRead: 0.2,
+  cacheWrite: 2.5,
+};
+const SONNET_5_STANDARD_COST = {
+  input: 3,
+  output: 15,
+  cacheRead: 0.3,
+  cacheWrite: 3.75,
+};
+/** Config auth marker meaning Mantle should mint runtime bearer tokens from IAM. */
 export const MANTLE_IAM_TOKEN_MARKER = "__amazon_bedrock_mantle_iam__";
+
+export function resolveMantleSonnet5Cost(nowMs: number = Date.now()) {
+  return nowMs >= SONNET_5_STANDARD_PRICING_START_MS
+    ? SONNET_5_STANDARD_COST
+    : SONNET_5_PROMOTIONAL_COST;
+}
 
 // ---------------------------------------------------------------------------
 // Mantle region & endpoint helpers
@@ -84,7 +119,11 @@ const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
-  return env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  return (
+    normalizeOptionalString(env.AWS_REGION) ??
+    normalizeOptionalString(env.AWS_DEFAULT_REGION) ??
+    "us-east-1"
+  );
 }
 
 function getCachedIamTokenEntry(
@@ -92,9 +131,10 @@ function getCachedIamTokenEntry(
   now: number = Date.now(),
 ): { token: string; expiresAt: number } | undefined {
   const cached = iamTokenCache.get(region);
-  if (cached && cached.expiresAt > now) {
+  if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
     return cached;
   }
+  iamTokenCache.delete(region);
   return undefined;
 }
 
@@ -123,7 +163,10 @@ export async function generateBearerTokenFromIam(params: {
       region: params.region,
       expiresInSeconds: 7200, // 2 hours
     })();
-    iamTokenCache.set(params.region, { token, expiresAt: now + IAM_TOKEN_TTL_MS });
+    const expiresAt = resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
+    if (expiresAt !== undefined) {
+      iamTokenCache.set(params.region, { token, expiresAt });
+    }
     return token;
   } catch (error) {
     log.debug?.("Mantle IAM token generation unavailable", {
@@ -144,6 +187,7 @@ export function getCachedIamToken(region: string): string | undefined {
   return getCachedIamTokenEntry(region)?.token;
 }
 
+/** Resolve the actual runtime bearer token for Mantle, generating IAM tokens when needed. */
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
@@ -171,12 +215,14 @@ export async function resolveMantleRuntimeBearerToken(params: {
     return undefined;
   }
   const refreshed = getCachedIamTokenEntry(region, now);
+  const expiresAt =
+    refreshed?.expiresAt ?? resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
   return {
     apiKey: refreshed?.token ?? token,
-    expiresAt: refreshed?.expiresAt ?? now + IAM_TOKEN_TTL_MS,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-/** Reset the IAM token cache (for testing). */
+/** Clear the IAM token cache for tests. */
 export function resetIamTokenCacheForTest(): void {
   iamTokenCache.clear();
 }
@@ -216,6 +262,25 @@ function inferReasoningSupport(modelId: string): boolean {
   return REASONING_PATTERNS.some((p) => lower.includes(p));
 }
 
+async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIModelsResponse> {
+  const bytes = await readResponseWithLimit(response, MANTLE_DISCOVERY_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `Mantle model discovery response exceeded ${maxBytes} bytes (${size} bytes received)`,
+      ),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(
+        `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
+      ),
+  });
+  const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {};
+  }
+  return body as OpenAIModelsResponse;
+}
+
 // ---------------------------------------------------------------------------
 // Discovery cache
 // ---------------------------------------------------------------------------
@@ -225,9 +290,13 @@ interface MantleCacheEntry {
   fetchedAt: number;
 }
 
+type MantleDiscoveryConfig = {
+  enabled?: boolean;
+};
+
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
-/** Clear the discovery cache (for testing). */
+/** Clear the Mantle discovery cache for tests. */
 export function resetMantleDiscoveryCacheForTest(): void {
   discoveryCache.clear();
 }
@@ -247,6 +316,7 @@ export function resetMantleDiscoveryCacheForTest(): void {
  * Results are cached per region for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
  * Returns an empty array if the request fails (no permission, network error, etc.).
  */
+/** Discover Mantle models for one region/config. */
 export async function discoverMantleModels(params: {
   region: string;
   bearerToken: string;
@@ -267,6 +337,7 @@ export async function discoverMantleModels(params: {
   try {
     const response = await fetchFn(endpoint, {
       method: "GET",
+      signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
@@ -274,6 +345,7 @@ export async function discoverMantleModels(params: {
     });
 
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       log.debug?.("Mantle model discovery failed", {
         status: response.status,
         statusText: response.statusText,
@@ -281,7 +353,7 @@ export async function discoverMantleModels(params: {
       return cached?.models ?? [];
     }
 
-    const body = (await response.json()) as OpenAIModelsResponse;
+    const body = await readMantleModelDiscoveryJson(response);
     const rawModels = body.data ?? [];
 
     const models = rawModels
@@ -320,12 +392,17 @@ export async function discoverMantleModels(params: {
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
  */
+/** Resolve implicit Mantle provider config from env, IAM token support, and discovery. */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
+  pluginConfig?: { discovery?: MantleDiscoveryConfig };
   fetchFn?: typeof fetch;
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
+  if (params.pluginConfig?.discovery?.enabled === false) {
+    return null;
+  }
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
 
@@ -364,6 +441,36 @@ export async function resolveImplicitMantleProvider(params: {
   // adaptive thinking semantics.
   const claudeModels: ModelDefinitionConfig[] = [
     {
+      id: "anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-opus-5" },
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "anthropic.claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-sonnet-5" },
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: resolveMantleSonnet5Cost(),
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    },
+    {
       id: "anthropic.claude-opus-4-7",
       name: "Claude Opus 4.7",
       api: "anthropic-messages" as const,
@@ -378,8 +485,36 @@ export async function resolveImplicitMantleProvider(params: {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     },
+    {
+      id: "anthropic.claude-mythos-5",
+      name: "Claude Mythos 5",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-5" },
+      input: ["text", "image"],
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "anthropic.claude-mythos-preview",
+      name: "Claude Mythos Preview",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
   ];
-  const allModels = [...models, ...claudeModels];
+  // Replace generic discovery rows so first-match lookup sees exact Claude metadata.
+  const exactClaudeModelIds = new Set(claudeModels.map((model) => model.id));
+  const allModels = [
+    ...models.filter((model) => !exactClaudeModelIds.has(model.id)),
+    ...claudeModels,
+  ];
 
   return {
     baseUrl: `${mantleEndpoint(region)}/v1`,
@@ -390,6 +525,7 @@ export async function resolveImplicitMantleProvider(params: {
   };
 }
 
+/** Merge an implicit Mantle provider catalog with explicit user config. */
 export function mergeImplicitMantleProvider(params: {
   existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;

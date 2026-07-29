@@ -1,3 +1,4 @@
+// Slack API module exposes the plugin public contract.
 export {
   buildComputedAccountStatusSnapshot,
   PAIRING_APPROVED_MESSAGE,
@@ -12,8 +13,8 @@ export type {
   OpenClawPluginApi,
   PluginRuntime,
 } from "openclaw/plugin-sdk/channel-plugin-common";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-export type { SlackAccountConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 export {
   emptyPluginConfigSchema,
   formatPairingApproveHint,
@@ -26,6 +27,7 @@ export {
   imageResultFromFile,
   jsonResult,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
   withNormalizedTimestamp,

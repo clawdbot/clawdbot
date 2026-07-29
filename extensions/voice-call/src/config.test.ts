@@ -1,9 +1,10 @@
+// Voice Call tests cover config plugin behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
-  resolveVoiceCallNumberRouteKey,
+  resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   validateProviderConfig,
   normalizeVoiceCallConfig,
@@ -14,6 +15,19 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
+}
+
+function resolveVoiceCallAgentSessionKey(params: {
+  config: VoiceCallConfig;
+  sessionKey: string;
+  coreSession?: Parameters<typeof resolveVoiceCallSessionKey>[0]["coreSession"];
+}): string {
+  return resolveVoiceCallSessionKey({
+    config: params.config,
+    callId: "test-call",
+    explicitSessionKey: params.sessionKey,
+    coreSession: params.coreSession,
+  });
 }
 
 function envRef(id: string) {
@@ -40,6 +54,8 @@ describe("validateProviderConfig", () => {
     delete process.env.TELNYX_PUBLIC_KEY;
     delete process.env.PLIVO_AUTH_ID;
     delete process.env.PLIVO_AUTH_TOKEN;
+    delete process.env.NGROK_AUTHTOKEN;
+    delete process.env.NGROK_DOMAIN;
   };
 
   beforeEach(() => {
@@ -67,7 +83,7 @@ describe("validateProviderConfig", () => {
         } else {
           fromConfig.plivo = { authId: "MA123", authToken: "secret" };
         }
-        expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
+        expect(validateProviderConfig(fromConfig)).toEqual({ valid: true, errors: [] });
 
         clearProviderEnv();
         if (provider === "twilio") {
@@ -83,12 +99,96 @@ describe("validateProviderConfig", () => {
           process.env.PLIVO_AUTH_TOKEN = "secret";
         }
         const fromEnv = resolveVoiceCallConfig(createBaseConfig(provider));
-        expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
+        expect(validateProviderConfig(fromEnv)).toEqual({ valid: true, errors: [] });
+      }
+    });
+
+    it("ignores blank provider and tunnel environment values", () => {
+      for (const provider of ["twilio", "telnyx", "plivo"] as const) {
+        clearProviderEnv();
+        process.env.TWILIO_ACCOUNT_SID = "   ";
+        process.env.TWILIO_AUTH_TOKEN = "   ";
+        process.env.TWILIO_FROM_NUMBER = "   ";
+        process.env.TELNYX_API_KEY = "   ";
+        process.env.TELNYX_CONNECTION_ID = "   ";
+        process.env.TELNYX_PUBLIC_KEY = "   ";
+        process.env.PLIVO_AUTH_ID = "   ";
+        process.env.PLIVO_AUTH_TOKEN = "   ";
+        process.env.NGROK_AUTHTOKEN = "   ";
+        process.env.NGROK_DOMAIN = "   ";
+
+        const config = resolveVoiceCallConfig({
+          ...createBaseConfig(provider),
+          fromNumber: undefined,
+          tunnel: { provider: "ngrok" },
+        });
+        const result = validateProviderConfig(config);
+
+        expect(result.valid).toBe(false);
+        expect(config.tunnel.ngrokAuthToken).toBeUndefined();
+        expect(config.tunnel.ngrokDomain).toBeUndefined();
+        if (provider === "twilio") {
+          expect(config.fromNumber).toBeUndefined();
+          expect(config.twilio?.accountSid).toBeUndefined();
+          expect(config.twilio?.authToken).toBeUndefined();
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)",
+          );
+        } else if (provider === "telnyx") {
+          expect(config.telnyx?.apiKey).toBeUndefined();
+          expect(config.telnyx?.connectionId).toBeUndefined();
+          expect(config.telnyx?.publicKey).toBeUndefined();
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
+          );
+        } else {
+          expect(config.plivo?.authId).toBeUndefined();
+          expect(config.plivo?.authToken).toBeUndefined();
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
+          );
+          expect(result.errors).toContain(
+            "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
+          );
+        }
       }
     });
   });
 
   describe("twilio provider", () => {
+    it("accepts supported Twilio Regions and rejects unknown ones", () => {
+      const baseConfig = {
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550001234",
+        twilio: {
+          accountSid: "AC123",
+          authToken: "secret",
+        },
+      } as const;
+
+      const regional = VoiceCallConfigSchema.parse({
+        ...baseConfig,
+        twilio: { ...baseConfig.twilio, region: "ie1" },
+      });
+      expect(regional.twilio?.region).toBe("ie1");
+      expect(
+        VoiceCallConfigSchema.safeParse({
+          ...baseConfig,
+          twilio: { ...baseConfig.twilio, region: "de1" },
+        }).success,
+      ).toBe(false);
+    });
+
     it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
       const config = VoiceCallConfigSchema.parse({
         enabled: true,
@@ -101,7 +201,7 @@ describe("validateProviderConfig", () => {
       });
 
       expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
-      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
       expect(() => resolveTwilioAuthToken(config)).toThrow(
         'plugins.entries.voice-call.config.twilio.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"',
       );
@@ -116,7 +216,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      expect(result.errors).toStrictEqual([]);
     });
 
     it("resolves the Twilio from number from environment", () => {
@@ -130,7 +230,7 @@ describe("validateProviderConfig", () => {
       });
 
       expect(config.fromNumber).toBe("+15550001234");
-      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
     });
 
     it("fails validation when required twilio credentials are missing", () => {
@@ -184,12 +284,12 @@ describe("validateProviderConfig", () => {
         connectionId: "CONN456",
         publicKey: "public-key",
       };
-      expect(validateProviderConfig(withPublicKey)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(withPublicKey)).toEqual({ valid: true, errors: [] });
 
       const skippedVerification = createBaseConfig("telnyx");
       skippedVerification.skipSignatureVerification = true;
       skippedVerification.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
-      expect(validateProviderConfig(skippedVerification)).toMatchObject({
+      expect(validateProviderConfig(skippedVerification)).toEqual({
         valid: true,
         errors: [],
       });
@@ -219,7 +319,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      expect(result.errors).toStrictEqual([]);
     });
   });
 
@@ -250,10 +350,73 @@ describe("validateProviderConfig", () => {
         "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
       );
     });
+
+    it("accepts realtime.enabled with provider=telnyx", () => {
+      const config = createBaseConfig("telnyx");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.errors).not.toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
+      );
+    });
+
+    it("accepts realtime.enabled with provider=mock", () => {
+      const config = createBaseConfig("mock");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toEqual({ valid: true, errors: [] });
+    });
+
+    it("rejects realtime.enabled with providers that do not support it yet", () => {
+      const config = createBaseConfig("plivo");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
+      );
+    });
+  });
+
+  describe("streaming config", () => {
+    it.each(["telnyx", "plivo", "mock"] as const)(
+      "rejects streaming.enabled with provider=%s",
+      (provider) => {
+        const config = createBaseConfig(provider);
+        config.streaming.enabled = true;
+
+        const result = validateProviderConfig(config);
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain(
+          'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
+        );
+      },
+    );
+
+    it("accepts streaming.enabled with provider=twilio", () => {
+      const config = createBaseConfig("twilio");
+      config.streaming.enabled = true;
+      config.twilio = {
+        accountSid: "AC123",
+        authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+      };
+
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
+    });
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig session routing", () => {
   it("enables the pre-answer stale call reaper by default", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
 
@@ -270,7 +433,23 @@ describe("resolveVoiceCallConfig", () => {
         callId: "call-123",
         phone: "+1 (555) 000-1111",
       }),
-    ).toBe("voice:15550001111");
+    ).toBe("agent:main:voice:15550001111");
+  });
+
+  it("scopes generated voice session keys by configured agent", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "Voice",
+    });
+
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "CALL-123",
+        phone: "+1 (555) 000-1111",
+      }),
+    ).toBe("agent:voice:voice:15550001111");
   });
 
   it("can scope voice sessions to each call", () => {
@@ -287,10 +466,10 @@ describe("resolveVoiceCallConfig", () => {
         callId: "call-123",
         phone: "+1 (555) 000-1111",
       }),
-    ).toBe("voice:call:call-123");
+    ).toBe("agent:main:voice:call:call-123");
   });
 
-  it("preserves explicit voice session keys", () => {
+  it("scopes explicit voice session keys by configured agent", () => {
     const config = resolveVoiceCallConfig({
       enabled: true,
       provider: "mock",
@@ -302,9 +481,135 @@ describe("resolveVoiceCallConfig", () => {
         config,
         callId: "call-123",
         phone: "+1 (555) 000-1111",
-        explicitSessionKey: "meet-room-1",
+        explicitSessionKey: "Meet-Room-1",
       }),
-    ).toBe("meet-room-1");
+    ).toBe("agent:main:meet-room-1");
+  });
+
+  it("scopes persisted and explicit keys at the agent session boundary", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "Voice",
+    });
+
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "voice:call:legacy-call",
+      }),
+    ).toBe("agent:voice:voice:call:legacy-call");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "meet-room-1",
+      }),
+    ).toBe("agent:voice:meet-room-1");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:main:shared-room",
+      }),
+    ).toBe("agent:voice:agent:main:shared-room");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:other:Matrix:Channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent:other:matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent:other:matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "Signal:Group:AbC123=",
+      }),
+    ).toBe("agent:voice:signal:group:AbC123=");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:broken",
+      }),
+    ).toBe("agent:voice:agent:broken");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent::broken",
+      }),
+    ).toBe("agent:voice:agent::broken");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent::Matrix:Channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent::matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:other:room::part",
+      }),
+    ).toBe("agent:voice:agent:other:room::part");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:voice:room::part",
+      }),
+    ).toBe("agent:voice:room::part");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:voice::Matrix:Channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent:voice::matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:bad/id:room",
+      }),
+    ).toBe("agent:voice:agent:bad/id:room");
+  });
+
+  it("canonicalizes raw and scoped main aliases with the core session config", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "Voice",
+    });
+
+    for (const sessionKey of ["main", "agent:voice:main"]) {
+      expect(
+        resolveVoiceCallAgentSessionKey({
+          config,
+          sessionKey,
+          coreSession: { mainKey: "work" },
+        }),
+      ).toBe("agent:voice:work");
+    }
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "main",
+        coreSession: { scope: "global" },
+      }),
+    ).toBe("global");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:main:main",
+        coreSession: { mainKey: "work" },
+      }),
+    ).toBe("agent:voice:agent:main:main");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:main:main",
+        coreSession: { scope: "global" },
+      }),
+    ).toBe("agent:voice:agent:main:main");
   });
 
   it("resolves per-number inbound route overrides over global voice settings", () => {
@@ -338,7 +643,6 @@ describe("resolveVoiceCallConfig", () => {
       },
     });
 
-    expect(resolveVoiceCallNumberRouteKey(config, "+1 (555) 000-1111")).toBe("+15550001111");
     const effective = resolveVoiceCallEffectiveConfig(config, "+1 (555) 000-1111");
 
     expect(effective.numberRouteKey).toBe("+15550001111");
@@ -369,6 +673,35 @@ describe("resolveVoiceCallConfig", () => {
     expect(effective.config).toBe(config);
     expect(effective.config.inboundGreeting).toBe("Hello from global.");
   });
+
+  it("uses dialed-number fallback only for inbound calls", () => {
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "inbound",
+        to: "+15550001111",
+      }),
+    ).toBe("+15550001111");
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "outbound",
+        to: "+15550001111",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "inbound",
+        to: "+15550001111",
+        metadata: { numberRouteKey: "+15550002222" },
+      }),
+    ).toBe("+15550002222");
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "outbound",
+        to: "+15550001111",
+        metadata: { numberRouteKey: "+15550002222" },
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("normalizeVoiceCallConfig", () => {
@@ -385,9 +718,10 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
     expect(normalized.streaming.provider).toBeUndefined();
-    expect(normalized.streaming.providers).toEqual({});
+    expect(normalized.streaming.providers).toStrictEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.consultPolicy).toBe("auto");
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
@@ -395,9 +729,18 @@ describe("normalizeVoiceCallConfig", () => {
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
     });
+    expect(normalized.realtime.consultThinkingLevel).toBeUndefined();
+    expect(normalized.realtime.consultFastMode).toBeUndefined();
+    expect(normalized.realtime.agentContext).toEqual({
+      enabled: false,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeWorkspaceFiles: true,
+      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+    });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
-    expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+    expect(normalized.webhookSecurity.allowedHosts).toStrictEqual([]);
   });
 
   it("derives the realtime stream path from a custom webhook path", () => {
@@ -442,7 +785,7 @@ describe("normalizeVoiceCallConfig", () => {
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig realtime settings", () => {
   it("preserves configured realtime instructions without env indirection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,
@@ -455,7 +798,34 @@ describe("resolveVoiceCallConfig", () => {
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
     expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
+    expect(resolved.realtime.consultPolicy).toBe("auto");
     expect(resolved.realtime.provider).toBeUndefined();
+  });
+
+  it("preserves configured realtime consult overrides", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      realtime: {
+        consultThinkingLevel: "ultra",
+        consultFastMode: true,
+      },
+    });
+
+    expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
+    expect(resolved.realtime.consultFastMode).toBe(true);
+  });
+
+  it("rejects invalid realtime consult thinking levels", () => {
+    expect(() =>
+      resolveVoiceCallConfig({
+        enabled: true,
+        provider: "mock",
+        realtime: {
+          consultThinkingLevel: "turbo",
+        },
+      } as never),
+    ).toThrow(/Invalid option/);
   });
 
   it("leaves responseModel unset so voice responses can inherit runtime defaults", () => {

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements lab server ui behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
@@ -7,7 +8,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
 export function detectContentType(filePath: string): string {
@@ -54,8 +55,9 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
   if (overrideDir?.trim()) {
     return overrideDir;
   }
+  const sourceDistDir = path.resolve(repoRoot, "extensions/qa-lab/web/dist");
   const candidates = [
-    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
+    sourceDistDir,
     path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
     fileURLToPath(new URL("../web/dist", import.meta.url)),
   ];
@@ -66,7 +68,7 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
       }
       const indexPath = path.join(candidate, "index.html");
       return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
-    }) ?? candidates[0]
+    }) ?? sourceDistDir
   );
 }
 
@@ -89,9 +91,12 @@ function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
   return files;
 }
 
-export function resolveUiAssetVersion(overrideDir?: string | null): string | null {
+export function resolveUiAssetVersion(
+  overrideDir?: string | null,
+  repoRoot = process.cwd(),
+): string | null {
   try {
-    const distDir = resolveUiDistDir(overrideDir);
+    const distDir = resolveUiDistDir(overrideDir, repoRoot);
     const indexPath = path.join(distDir, "index.html");
     if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
       return null;
@@ -156,6 +161,7 @@ export async function proxyHttpRequest(params: {
   target: URL;
   pathname: string;
   search: string;
+  authorizationToken?: string | null;
 }) {
   const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
   const upstreamReq = client(
@@ -168,6 +174,9 @@ export async function proxyHttpRequest(params: {
       headers: {
         ...params.req.headers,
         host: params.target.host,
+        ...(params.authorizationToken
+          ? { authorization: `Bearer ${params.authorizationToken}` }
+          : {}),
       },
     },
     (upstreamRes) => {
@@ -199,6 +208,7 @@ export function proxyUpgradeRequest(params: {
   socket: Duplex;
   head: Buffer;
   target: URL;
+  authorizationToken?: string | null;
 }) {
   const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
   const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
@@ -218,7 +228,11 @@ export function proxyUpgradeRequest(params: {
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
     const value = params.req.rawHeaders[index + 1] ?? "";
-    if (normalizeLowercaseStringOrEmpty(name) === "host") {
+    const normalizedName = normalizeLowercaseStringOrEmpty(name);
+    if (
+      normalizedName === "host" ||
+      (params.authorizationToken && normalizedName === "authorization")
+    ) {
       continue;
     }
     headerLines.push(`${name}: ${value}`);
@@ -228,6 +242,7 @@ export function proxyUpgradeRequest(params: {
     const requestText = [
       `${params.req.method ?? "GET"} ${rewriteControlUiProxyPath(requestUrl.pathname, requestUrl.search)} HTTP/${params.req.httpVersion}`,
       `Host: ${params.target.host}`,
+      ...(params.authorizationToken ? [`Authorization: Bearer ${params.authorizationToken}`] : []),
       ...headerLines,
       "",
       "",

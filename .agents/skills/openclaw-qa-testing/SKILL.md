@@ -13,7 +13,7 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 - `docs/help/testing.md`
 - `docs/channels/qa-channel.md`
 - `qa/README.md`
-- `qa/scenarios/index.md`
+- `qa/scenarios/index.yaml`
 - `extensions/qa-lab/src/suite.ts`
 - `extensions/qa-lab/src/character-eval.ts`
 
@@ -61,24 +61,6 @@ This starts a local OTLP/HTTP trace receiver, runs the `otel-trace-smoke`
 scenario through qa-channel, decodes the emitted protobuf spans, and verifies
 the exported trace names and privacy contract. It does not require Opik,
 Langfuse, or external collector credentials.
-
-## Matrix live profiles
-
-`pnpm openclaw qa matrix` defaults to the full `all` profile. Use explicit
-profiles for faster CI/release proof:
-
-```bash
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-pnpm openclaw qa matrix --profile fast --fail-fast
-```
-
-- `fast`: release-critical transport contract, excluding generated image and
-  deep E2EE recovery inventory.
-- `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, `e2ee-cli`: sharded full
-  Matrix coverage.
-- `QA-Lab - All Lanes` uses explicit `fast` Matrix on scheduled runs. Manual
-  dispatch keeps `matrix_profile=all` as the default and always shards that full
-  Matrix selection.
 
 ## QA credentials and 1Password
 
@@ -154,6 +136,20 @@ gh workflow run "NPM Telegram Beta E2E" --repo openclaw/openclaw --ref main \
 gh api repos/openclaw/openclaw/actions/runs/<run-id>/artifacts
 ```
 
+## WhatsApp live credentials
+
+Use this when setting up or replacing Convex `kind=whatsapp` credentials.
+
+- Treat WhatsApp QA credentials as operator-owned live accounts, not generated fixtures.
+- Use two dedicated WhatsApp-capable test numbers: one driver account and one SUT account. Do not use personal numbers or personal OpenClaw WhatsApp accounts in the shared pool.
+- Register and link each account manually with WhatsApp or WhatsApp Business, storing Web auth only in isolated local auth dirs outside the repo.
+- For group coverage, create a dedicated test group that includes both QA accounts and store its JID as `groupJid`; otherwise the group mention-gating scenario should be skipped by default and fail when explicitly requested.
+- Package the two Baileys auth dirs into base64 `.tgz` payload fields and add a new active Convex credential row. Prefer adding a fresh row and disabling stale/broken rows over overwriting credentials in place.
+- Expected payload fields: `driverPhoneE164`, `sutPhoneE164`, `driverAuthArchiveBase64`, `sutAuthArchiveBase64`, and optional `groupJid`.
+- Keep credential material out of the repo, logs, PRs, and screenshots. Redact phone numbers unless the operator explicitly asks for local debugging.
+- Validate with `pnpm openclaw qa whatsapp --credential-source convex --credential-role maintainer --provider-mode mock-openai` and preserve artifact paths plus redacted pass/fail summaries.
+- If WhatsApp expires or invalidates a linked Web session, relink locally, package fresh auth archives, add a new Convex row, then disable the stale row.
+
 ## Character evals
 
 Use `qa character-eval` for style/persona/vibe checks across multiple live models.
@@ -184,7 +180,9 @@ pnpm openclaw qa character-eval \
 - Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
 - Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
 - Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
-- Scenario source should stay markdown-driven under `qa/scenarios/`.
+- Scenario source is YAML-only under `qa/scenarios/`: use `index.yaml` and
+  per-scenario `*.yaml` files with top-level `title`, `scenario`, and optional
+  `flow`. Never add fenced `qa-scenario` / `qa-flow` Markdown files.
 - For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
 - Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.
 - Prefer at least one real task, such as creating or editing a tiny workspace artifact, so the transcript captures character under normal tool use instead of pure roleplay.
@@ -213,12 +211,15 @@ pnpm openclaw qa manual \
 - Treat the concrete Codex model name as user/config input; do not hardcode it in source, docs examples, or scenarios.
 - Live QA preserves `CODEX_HOME` so Codex CLI auth/config works while keeping `HOME` and `OPENCLAW_HOME` sandboxed.
 - Mock QA should scrub `CODEX_HOME`.
-- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`, `~/.profile`, and gateway child logs before changing scenario assertions.
+- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`,
+  relevant secret-backed auth, and gateway child logs before changing
+  scenario assertions.
 - For model comparison, include `codex-cli/<codex-model>` as another candidate in `qa character-eval`; the report should label it as an opaque model name.
 
 ## Repo facts
 
-- Seed scenarios live in `qa/`.
+- Seed scenarios live in `qa/scenarios/index.yaml` and
+  `qa/scenarios/<theme>/*.yaml`.
 - Main live runner: `extensions/qa-lab/src/suite.ts`
 - QA lab server: `extensions/qa-lab/src/lab-server.ts`
 - Child gateway harness: `extensions/qa-lab/src/gateway-child.ts`
@@ -246,8 +247,9 @@ pnpm openclaw qa manual \
 
 ## When adding scenarios
 
-- Add or update scenario markdown under `qa/scenarios/`
-- Keep kickoff expectations in `qa/scenarios/index.md` aligned
+- Add or update scenario YAML under `qa/scenarios/`; do not add `.md` scenario
+  files or fenced YAML blocks.
+- Keep kickoff expectations in `qa/scenarios/index.yaml` aligned
 - Add executable coverage in `extensions/qa-lab/src/suite.ts`
 - Prefer end-to-end assertions over mock-only checks
 - Save outputs under `.artifacts/qa-e2e/`

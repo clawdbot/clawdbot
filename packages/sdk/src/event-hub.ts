@@ -1,19 +1,26 @@
+// OpenClaw SDK module implements event hub behavior.
 import type { GatewayEvent } from "./types.js";
 
+// Async event hub with bounded replay for SDK event streams.
 type Listener<T> = (event: T) => void;
 
-export type EventHubOptions = {
+/** Replay settings for EventHub streams. */
+type EventHubOptions = {
   replayLimit?: number;
 };
 
-export type EventStreamOptions = {
+/** Per-stream options for including replayed events. */
+type EventStreamOptions = {
   replay?: boolean;
 };
 
+/** Small publish/subscribe hub used by SDK transports and normalized events. */
 export class EventHub<T> {
   private readonly replayLimit: number;
   private readonly replayEvents: T[] = [];
   private closed = false;
+  private closeError: unknown;
+  private hasCloseError = false;
   private readonly listeners = new Set<Listener<T>>();
   private readonly waiters = new Set<() => void>();
 
@@ -37,7 +44,12 @@ export class EventHub<T> {
     }
   }
 
-  close(): void {
+  close(error?: unknown): void {
+    const hasError = arguments.length > 0;
+    if (hasError) {
+      this.closeError = error;
+      this.hasCloseError = true;
+    }
     this.closed = true;
     this.replayEvents.length = 0;
     this.listeners.clear();
@@ -108,6 +120,9 @@ export class EventHub<T> {
               });
             }
             cleanup();
+            if (this.hasCloseError) {
+              throw this.closeError;
+            }
             return { done: true, value: undefined as never };
           },
           return: async (): Promise<IteratorResult<T>> => {

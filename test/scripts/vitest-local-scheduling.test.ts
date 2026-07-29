@@ -1,9 +1,9 @@
+// Vitest Local Scheduling tests cover vitest local scheduling script behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
-  shouldUseLargeLocalFullSuiteProfile,
 } from "../../scripts/lib/vitest-local-scheduling.mjs";
 
 describe("vitest local full-suite profile", () => {
@@ -18,21 +18,26 @@ describe("vitest local full-suite profile", () => {
     });
   });
 
-  it("keeps local-check disablement for CI Vitest runs", () => {
+  it.each([
+    ["CI", "1"],
+    ["CI", "true"],
+    ["GITHUB_ACTIONS", "yes"],
+    ["GITHUB_ACTIONS", "on"],
+  ] as const)("keeps local-check disablement for %s=%s Vitest runs", (name, value) => {
     expect(
       resolveLocalVitestEnv({
-        CI: "true",
+        [name]: value,
         OPENCLAW_LOCAL_CHECK: "0",
         PATH: "/usr/bin",
       }),
     ).toEqual({
-      CI: "true",
+      [name]: value,
       OPENCLAW_LOCAL_CHECK: "0",
       PATH: "/usr/bin",
     });
   });
 
-  it("selects the large local profile on roomy hosts that are not throttled", () => {
+  it("spends the host worker budget once across full-suite shards", () => {
     const env = {};
     const hostInfo = {
       cpuCount: 14,
@@ -45,14 +50,13 @@ describe("vitest local full-suite profile", () => {
       fileParallelism: true,
       throttledBySystem: false,
     });
-    expect(shouldUseLargeLocalFullSuiteProfile(env, hostInfo)).toBe(true);
     expect(resolveLocalFullSuiteProfile(env, hostInfo)).toEqual({
-      shardParallelism: 10,
-      vitestMaxWorkers: 2,
+      shardParallelism: 6,
+      vitestMaxWorkers: 1,
     });
   });
 
-  it("keeps the smaller local profile when the host is already throttled", () => {
+  it("reduces full-suite shard concurrency when the host is already throttled", () => {
     const hostInfo = {
       cpuCount: 14,
       loadAverage1m: 14,
@@ -60,23 +64,21 @@ describe("vitest local full-suite profile", () => {
       freeMemoryBytes: 32 * 1024 ** 3,
     };
 
-    expect(shouldUseLargeLocalFullSuiteProfile({}, hostInfo)).toBe(false);
     expect(resolveLocalFullSuiteProfile({}, hostInfo)).toEqual({
-      shardParallelism: 4,
+      shardParallelism: 1,
       vitestMaxWorkers: 1,
     });
   });
 
-  it("never selects the large local profile in CI", () => {
+  it("caps full-suite process fanout on the largest hosts", () => {
     const hostInfo = {
-      cpuCount: 14,
+      cpuCount: 64,
       loadAverage1m: 0,
-      totalMemoryBytes: 48 * 1024 ** 3,
+      totalMemoryBytes: 512 * 1024 ** 3,
     };
 
-    expect(shouldUseLargeLocalFullSuiteProfile({ CI: "true" }, hostInfo)).toBe(false);
-    expect(resolveLocalFullSuiteProfile({ CI: "true" }, hostInfo)).toEqual({
-      shardParallelism: 4,
+    expect(resolveLocalFullSuiteProfile({}, hostInfo)).toEqual({
+      shardParallelism: 10,
       vitestMaxWorkers: 1,
     });
   });
@@ -137,5 +139,21 @@ describe("vitest local full-suite profile", () => {
       shardParallelism: 4,
       vitestMaxWorkers: 1,
     });
+  });
+
+  it("rejects malformed explicit worker limits", () => {
+    const hostInfo = {
+      cpuCount: 10,
+      loadAverage1m: 0,
+      totalMemoryBytes: 24 * 1024 ** 3,
+      freeMemoryBytes: 12 * 1024 ** 3,
+    };
+
+    expect(() =>
+      resolveLocalVitestScheduling({ OPENCLAW_VITEST_MAX_WORKERS: "8x" }, hostInfo, "threads"),
+    ).toThrow("OPENCLAW_VITEST_MAX_WORKERS must be a positive integer; got: 8x");
+    expect(() =>
+      resolveLocalVitestScheduling({ OPENCLAW_TEST_WORKERS: "1e0" }, hostInfo, "threads"),
+    ).toThrow("OPENCLAW_TEST_WORKERS must be a positive integer; got: 1e0");
   });
 });

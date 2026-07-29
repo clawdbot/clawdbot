@@ -1,9 +1,12 @@
+// Resolves package managers for update build steps.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
+// Update package-manager resolution chooses the package manager for update
+// builds and can bootstrap pnpm when a managed checkout requires it.
 type BuildManager = "pnpm" | "bun" | "npm";
 
 type UpdatePackageManagerRequirement = "allow-fallback" | "require-preferred";
@@ -14,7 +17,7 @@ export type UpdatePackageManagerFailureReason =
   | "pnpm-corepack-missing"
   | "pnpm-npm-bootstrap-failed";
 
-export type PackageManagerCommandRunner = (
+type PackageManagerCommandRunner = (
   argv: string[],
   options: { timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
@@ -33,6 +36,8 @@ type ResolvedBuildManager =
       preferred: BuildManager;
       reason: UpdatePackageManagerFailureReason;
     };
+
+const PNPM_NPM_FALLBACK_SPEC = "pnpm@11";
 
 async function detectBuildManager(root: string): Promise<BuildManager> {
   return (await detectPackageManagerImpl(root)) ?? "npm";
@@ -124,7 +129,7 @@ async function bootstrapPnpmViaNpm(params: {
   };
   try {
     const installResult = await params.runCommand(
-      ["npm", "install", "--prefix", tempRoot, "pnpm@10"],
+      ["npm", "install", "--prefix", tempRoot, PNPM_NPM_FALLBACK_SPEC],
       {
         timeoutMs: params.timeoutMs,
         env: params.baseEnv,
@@ -147,6 +152,7 @@ async function bootstrapPnpmViaNpm(params: {
   }
 }
 
+/** Resolve the package manager and environment to use for an update build. */
 export async function resolveUpdateBuildManager(
   runCommand: PackageManagerCommandRunner,
   root: string,
@@ -211,6 +217,7 @@ export async function resolveUpdateBuildManager(
   return { kind: "resolved", manager: "npm", preferred, fallback: preferred !== "npm" };
 }
 
+/** Build argv for running a package-manager script. */
 export function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
   if (manager === "pnpm") {
     return ["pnpm", script, ...args];
@@ -224,6 +231,7 @@ export function managerScriptArgs(manager: BuildManager, script: string, args: s
   return ["npm", "run", script];
 }
 
+/** Build argv for installing dependencies with a package manager. */
 export function managerInstallArgs(manager: BuildManager, opts?: { compatFallback?: boolean }) {
   if (manager === "pnpm") {
     return ["pnpm", "install"];
@@ -237,6 +245,7 @@ export function managerInstallArgs(manager: BuildManager, opts?: { compatFallbac
   return ["npm", "install"];
 }
 
+/** Build argv for installing dependencies while skipping lifecycle scripts. */
 export function managerInstallIgnoreScriptsArgs(manager: BuildManager): string[] | null {
   if (manager === "pnpm") {
     return ["pnpm", "install", "--ignore-scripts"];

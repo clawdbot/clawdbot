@@ -14,6 +14,9 @@ import kotlinx.coroutines.withTimeout
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
+/**
+ * Android LocationManager-backed capture used by gateway location commands.
+ */
 class LocationCaptureManager(
   private val context: Context,
 ) {
@@ -35,6 +38,7 @@ class LocationCaptureManager(
         throw IllegalStateException("LOCATION_UNAVAILABLE: no location providers enabled")
       }
 
+      // Prefer a recent cached fix before waking GPS/network providers.
       val cached = bestLastKnown(manager, desiredProviders, maxAgeMs)
       val location =
         cached ?: requestCurrent(manager, desiredProviders, timeoutMs)
@@ -81,6 +85,7 @@ class LocationCaptureManager(
     val candidates =
       providers.mapNotNull { provider -> manager.getLastKnownLocation(provider) }
     val freshest = candidates.maxByOrNull { it.time } ?: return null
+    // maxAgeMs is a caller contract; stale cached fixes force a live provider request.
     if (maxAgeMs != null && now - freshest.time > maxAgeMs) return null
     return freshest
   }
@@ -102,6 +107,7 @@ class LocationCaptureManager(
     val resolved =
       providers.firstOrNull { manager.isProviderEnabled(it) }
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")
+    // getCurrentLocation can return null; the handler maps timeout/null fixes to gateway error shapes.
     val location =
       withTimeout(timeoutMs.coerceAtLeast(1)) {
         suspendCancellableCoroutine<Location?> { cont ->

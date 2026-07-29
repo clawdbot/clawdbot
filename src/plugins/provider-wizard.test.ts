@@ -1,3 +1,4 @@
+// Covers provider setup wizard prompts supplied by plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildProviderPluginMethodChoice,

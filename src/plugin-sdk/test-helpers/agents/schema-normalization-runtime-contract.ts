@@ -1,3 +1,4 @@
+// Schema normalization runtime contract helpers create tools for provider schema tests.
 export function createParameterFreeTool(name = "ping") {
   return {
     name,
@@ -56,8 +57,8 @@ export function createNativeOpenAICodexResponsesModel() {
   return {
     id: "gpt-5.4",
     name: "GPT-5.4",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     baseUrl: "https://chatgpt.com/backend-api",
     reasoning: true,
     input: ["text"],

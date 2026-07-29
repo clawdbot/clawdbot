@@ -1,25 +1,28 @@
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+/**
+ * sessions_yield transcript detectors.
+ *
+ * Accepts provider-specific tool-call and tool-result shapes used by transcript repair and announce capture.
+ */
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
 function readToolName(value: unknown): string | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
-  for (const key of ["name", "toolName", "tool_name", "functionName", "function_name"]) {
-    const candidate = record[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(record, [
+    "name",
+    "toolName",
+    "tool_name",
+    "functionName",
+    "function_name",
+  ]);
 }
 
 function isToolCallBlock(value: unknown): boolean {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return false;
   }
@@ -32,8 +35,9 @@ function isToolCallBlock(value: unknown): boolean {
   );
 }
 
+/** Returns true when an assistant message requested the sessions_yield tool. */
 export function assistantCallsSessionsYield(message: unknown): boolean {
-  const record = asRecord(message);
+  const record = asOptionalRecord(message);
   if (!record || record.role !== "assistant" || !Array.isArray(record.content)) {
     return false;
   }
@@ -47,15 +51,11 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   if (!trimmed.startsWith("{")) {
     return undefined;
   }
-  try {
-    return asRecord(JSON.parse(trimmed));
-  } catch {
-    return undefined;
-  }
+  return asOptionalRecord(safeParseJson(trimmed));
 }
 
 function readStructuredToolPayload(content: unknown): Record<string, unknown> | undefined {
-  const record = asRecord(content);
+  const record = asOptionalRecord(content);
   if (record) {
     return record;
   }
@@ -66,7 +66,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
     return undefined;
   }
   for (const block of content) {
-    const blockRecord = asRecord(block);
+    const blockRecord = asOptionalRecord(block);
     if (!blockRecord) {
       continue;
     }
@@ -82,11 +82,12 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
   return undefined;
 }
 
+/** Returns true when a tool result represents a completed sessions_yield handoff. */
 export function isSessionsYieldToolResult(
   message: unknown,
   previousAssistantCalledYield: boolean,
 ): boolean {
-  const record = asRecord(message);
+  const record = asOptionalRecord(message);
   if (!record || (record.role !== "toolResult" && record.role !== "tool")) {
     return false;
   }
@@ -97,7 +98,8 @@ export function isSessionsYieldToolResult(
   if (!previousAssistantCalledYield) {
     return false;
   }
-  const details = asRecord(record.details);
+  // Some providers omit the tool name on results; use adjacency plus yielded status as fallback.
+  const details = asOptionalRecord(record.details);
   if (details?.status === "yielded") {
     return true;
   }

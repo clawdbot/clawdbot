@@ -1,7 +1,8 @@
+// Feishu plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
@@ -55,7 +56,10 @@ function resolveFeishuRequesterConversation(params: {
   if (requesterSessionKey) {
     const existingBindings = manager.listBySessionKey(requesterSessionKey);
     if (existingBindings.length === 1) {
-      const existing = existingBindings[0];
+      const existing = existingBindings.at(0);
+      if (existing === undefined) {
+        return null;
+      }
       return {
         accountId: existing.accountId,
         conversationId: existing.conversationId,
@@ -71,7 +75,10 @@ function resolveFeishuRequesterConversation(params: {
             !entry.parentConversationId,
         );
         if (directMatches.length === 1) {
-          const existing = directMatches[0];
+          const existing = directMatches.at(0);
+          if (existing === undefined) {
+            return null;
+          }
           return {
             accountId: existing.accountId,
             conversationId: existing.conversationId,
@@ -92,7 +99,10 @@ function resolveFeishuRequesterConversation(params: {
           );
         });
         if (matchingTopicBindings.length === 1) {
-          const existing = matchingTopicBindings[0];
+          const existing = matchingTopicBindings.at(0);
+          if (existing === undefined) {
+            return null;
+          }
           return {
             accountId: existing.accountId,
             conversationId: existing.conversationId,
@@ -110,7 +120,10 @@ function resolveFeishuRequesterConversation(params: {
           senderScopedTopicBindings.length === 1 &&
           matchingTopicBindings.length === senderScopedTopicBindings.length
         ) {
-          const existing = senderScopedTopicBindings[0];
+          const existing = senderScopedTopicBindings.at(0);
+          if (existing === undefined) {
+            return null;
+          }
           return {
             accountId: existing.accountId,
             conversationId: existing.conversationId,
@@ -270,7 +283,16 @@ type FeishuSubagentEndedEvent = {
 };
 
 type FeishuSubagentSpawningResult =
-  | { status: "ok"; threadBindingReady?: boolean }
+  | {
+      status: "ok";
+      threadBindingReady?: boolean;
+      deliveryOrigin?: {
+        channel: "feishu";
+        accountId?: string;
+        to?: string;
+        threadId?: string | number;
+      };
+    }
   | { status: "error"; error: string }
   | undefined;
 
@@ -347,6 +369,13 @@ export async function handleFeishuSubagentSpawning(
     return {
       status: "ok" as const,
       threadBindingReady: true,
+      deliveryOrigin: resolveFeishuDeliveryOrigin({
+        conversationId: binding.conversationId,
+        parentConversationId: binding.parentConversationId,
+        accountId: binding.accountId,
+        deliveryTo: binding.deliveryTo,
+        deliveryThreadId: binding.deliveryThreadId,
+      }),
     };
   } catch (err) {
     return {

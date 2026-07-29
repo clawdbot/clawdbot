@@ -1,9 +1,15 @@
+// Voice Call plugin module implements manager harness behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
+import { persistCallRecord } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
+import { CallRecordSchema } from "./types.js";
 import type {
   GetCallStatusInput,
   GetCallStatusResult,
@@ -72,6 +78,27 @@ export function createTestStorePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
 }
 
+function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
+  return {
+    resolveStateDir: () => "",
+    openKeyedStore: (() => {
+      throw new Error("openKeyedStore is not used by voice-call manager tests");
+    }) as VoiceCallStateRuntime["state"]["openKeyedStore"],
+    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStoreForTests<T>("voice-call", options),
+    openChannelIngressQueue: (() => {
+      throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
+    }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
+    openChannelIngressDrain: (() => {
+      throw new Error("openChannelIngressDrain is not used by voice-call manager tests");
+    }) as VoiceCallStateRuntime["state"]["openChannelIngressDrain"],
+  };
+}
+
+function installVoiceCallStateRuntimeForTests(): void {
+  setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
+}
+
 export async function createManagerHarness(
   configOverrides: Record<string, unknown> = {},
   provider = new FakeProvider(),
@@ -85,6 +112,7 @@ export async function createManagerHarness(
     fromNumber: "+15550000000",
     ...configOverrides,
   });
+  installVoiceCallStateRuntimeForTests();
   const manager = new CallManager(config, createTestStorePath());
   await manager.initialize(provider, "https://example.com/voice/webhook");
   return { manager, provider };
@@ -101,6 +129,13 @@ export function markCallAnswered(manager: CallManager, callId: string, eventId: 
 }
 
 export function writeCallsToStore(storePath: string, calls: Record<string, unknown>[]): void {
+  fs.mkdirSync(storePath, { recursive: true });
+  for (const call of calls) {
+    persistCallRecord(storePath, CallRecordSchema.parse(call));
+  }
+}
+
+export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
   fs.mkdirSync(storePath, { recursive: true });
   const logPath = path.join(storePath, "calls.jsonl");
   const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";

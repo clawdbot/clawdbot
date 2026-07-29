@@ -1,3 +1,4 @@
+// Config assertions for onboard E2E scenarios.
 import fs from "node:fs";
 import JSON5 from "json5";
 
@@ -18,6 +19,14 @@ const expectEqual = (label, actual, expected) => {
 const assertLocalWizard = () => {
   expectEqual("gateway.mode", cfg?.gateway?.mode, "local");
   expectEqual("wizard.lastRunMode", cfg?.wizard?.lastRunMode, "local");
+};
+
+const assertSectionScopedConfigure = () => {
+  expectEqual("wizard.lastRunCommand", cfg?.wizard?.lastRunCommand, "configure");
+  expectEqual("wizard.lastRunMode", cfg?.wizard?.lastRunMode, "local");
+  if (cfg?.gateway?.mode) {
+    errors.push(`gateway.mode should stay unset (got ${cfg.gateway.mode})`);
+  }
 };
 
 switch (scenario) {
@@ -59,14 +68,14 @@ switch (scenario) {
         `slack tokens should be unset (got bot=${got(cfg?.slack?.botToken)}, app=${got(cfg?.slack?.appToken)})`,
       );
     }
-    expectEqual("wizard.lastRunCommand", cfg?.wizard?.lastRunCommand, "configure");
+    assertSectionScopedConfigure();
     break;
   case "skills":
     expectEqual("skills.install.nodeManager", cfg?.skills?.install?.nodeManager, "bun");
     if (!Array.isArray(cfg?.skills?.allowBundled) || cfg.skills.allowBundled[0] !== "__none__") {
       errors.push("skills.allowBundled missing");
     }
-    assertLocalWizard();
+    assertSectionScopedConfigure();
     break;
   default:
     throw new Error(`unknown onboard assertion scenario: ${scenario}`);

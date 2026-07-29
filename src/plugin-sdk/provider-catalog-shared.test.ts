@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
-import type { ModelCatalogProvider } from "../model-catalog/types.js";
+// Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyProviderNativeStreamingUsageCompat,
+  buildManifestModelDefinition,
   buildManifestModelProviderConfig,
+  clearLiveCatalogCacheForTests,
+  getCachedLiveCatalogValue,
   readConfiguredProviderCatalogEntries,
+  readManifestProviderDefaultModelRef,
   supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
@@ -20,6 +25,161 @@ function buildModel(id: string, supportsUsageInStreaming?: boolean): ModelDefini
     ...(supportsUsageInStreaming === undefined ? {} : { compat: { supportsUsageInStreaming } }),
   };
 }
+
+describe("provider-catalog-shared live catalog cache", () => {
+  beforeEach(() => {
+    clearLiveCatalogCacheForTests();
+  });
+
+  it("reuses in-flight and fresh live catalog loads for matching keys", async () => {
+    let now = 1_000;
+    const load = vi.fn(async () => ({ models: ["a"] }));
+
+    const first = getCachedLiveCatalogValue({
+      keyParts: ["provider", "models", "secret-token"],
+      load,
+      ttlMs: 100,
+      now: () => now,
+    });
+    const second = getCachedLiveCatalogValue({
+      keyParts: ["provider", "models", "secret-token"],
+      load,
+      ttlMs: 100,
+      now: () => now,
+    });
+
+    await expect(first).resolves.toEqual({ models: ["a"] });
+    await expect(second).resolves.toEqual({ models: ["a"] });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    now = 1_050;
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "secret-token"],
+        load,
+        ttlMs: 100,
+        now: () => now,
+      }),
+    ).resolves.toEqual({ models: ["a"] });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    now = 1_101;
+    await getCachedLiveCatalogValue({
+      keyParts: ["provider", "models", "secret-token"],
+      load,
+      ttlMs: 100,
+      now: () => now,
+    });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache failed live catalog loads", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+      }),
+    ).rejects.toThrow("boom");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+      }),
+    ).resolves.toBe("ok");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retain resolved live catalog values rejected by the cache predicate", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("empty")
+      .mockResolvedValueOnce("usable");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("empty");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("usable");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("usable");
+
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts the oldest live catalog cache entry when the cache is full", async () => {
+    const load = vi.fn(async (id: number) => `value-${id}`);
+
+    for (let i = 0; i < 100; i += 1) {
+      await expect(
+        getCachedLiveCatalogValue({
+          keyParts: ["provider", "models", i],
+          load: () => load(i),
+          ttlMs: 60_000,
+        }),
+      ).resolves.toBe(`value-${i}`);
+    }
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", 100],
+        load: () => load(100),
+        ttlMs: 60_000,
+      }),
+    ).resolves.toBe("value-100");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", 0],
+        load: () => load(0),
+        ttlMs: 60_000,
+      }),
+    ).resolves.toBe("value-0");
+
+    expect(load).toHaveBeenCalledTimes(102);
+  });
+
+  it("does not cache live catalog loads when the expiry would exceed Date range", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("first")
+      .mockResolvedValueOnce("second");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "overflow"],
+        load,
+        ttlMs: 1,
+        now: () => 8_640_000_000_000_000,
+      }),
+    ).resolves.toBe("first");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "overflow"],
+        load,
+        ttlMs: 1,
+        now: () => 8_640_000_000_000_000,
+      }),
+    ).resolves.toBe("second");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("provider-catalog-shared native streaming usage compat", () => {
   it("detects native streaming usage compat from the endpoint capabilities", () => {
@@ -59,7 +219,44 @@ describe("provider-catalog-shared native streaming usage compat", () => {
 });
 
 describe("provider-catalog-shared configured catalog entries", () => {
-  it("preserves configured audio and video input modalities", () => {
+  it("normalizes bare retired Gemini ids for Google-owned configured providers", () => {
+    expect(
+      readConfiguredProviderCatalogEntries({
+        providerId: "google",
+        config: {
+          models: {
+            providers: {
+              google: {
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [
+                  {
+                    id: "gemini-3-pro-preview",
+                    name: "Gemini 3 Pro Preview",
+                    input: ["text", "image"],
+                    reasoning: true,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1048576,
+                    maxTokens: 65536,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        provider: "google",
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 1048576,
+      },
+    ]);
+  });
+
+  it("preserves configured audio and video input modalities while normalizing nested Gemini ids", () => {
     expect(
       readConfiguredProviderCatalogEntries({
         providerId: "kilocode",
@@ -88,7 +285,7 @@ describe("provider-catalog-shared configured catalog entries", () => {
     ).toEqual([
       {
         provider: "kilocode",
-        id: "google/gemini-3-pro-preview",
+        id: "google/gemini-3.1-pro-preview",
         name: "Gemini 3 Pro Preview",
         input: ["text", "image", "video", "audio"],
         reasoning: true,
@@ -103,6 +300,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
+      defaultModel: " example-model ",
       headers: { "x-provider": "example" },
       models: [
         {
@@ -113,6 +311,10 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+          mediaInput: {
+            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
+          },
           cost: {
             input: 1,
             output: 2,
@@ -161,7 +363,64 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+          mediaInput: {
+            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
+          },
           compat: { supportsUsageInStreaming: true },
+        },
+      ],
+    });
+    expect(
+      readManifestProviderDefaultModelRef(
+        { modelCatalog: { providers: { example: catalog } } },
+        "example",
+      ),
+    ).toBe("example/example-model");
+
+    expect(
+      buildManifestModelDefinition({
+        providerId: "example",
+        catalog,
+        decorate: (model) => ({
+          ...model,
+          compat: { ...model.compat, supportsUsageInStreaming: false },
+        }),
+      })(catalog.models[0]),
+    ).toEqual({
+      ...buildManifestModelProviderConfig({ providerId: "example", catalog }).models[0],
+      compat: { supportsUsageInStreaming: false },
+    });
+  });
+
+  it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {
+    const catalog: ModelCatalogProvider = {
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      api: "openai-completions",
+      models: [
+        {
+          id: "google/gemini-3-pro-preview",
+          name: "Gemini 3 Pro Preview",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      ],
+    };
+
+    expect(buildManifestModelProviderConfig({ providerId: "kilocode", catalog })).toEqual({
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      api: "openai-completions",
+      models: [
+        {
+          id: "google/gemini-3.1-pro-preview",
+          name: "Gemini 3 Pro Preview",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
         },
       ],
     });

@@ -1,7 +1,15 @@
+/**
+ * Browser doctor report builder.
+ *
+ * Turns BrowserStatus into profile-aware diagnostic checks and fix hints for
+ * CLI, tool, and HTTP doctor responses.
+ */
+import { formatBrowserGraphicsSummary } from "./chrome.graphics.js";
 import type { BrowserStatus, BrowserTransport } from "./client.types.js";
 
 type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
 
+/** One browser doctor check result. */
 export type BrowserDoctorCheck = {
   id: string;
   label: string;
@@ -10,6 +18,7 @@ export type BrowserDoctorCheck = {
   fixHint?: string;
 };
 
+/** Browser doctor report returned by browser-control clients. */
 export type BrowserDoctorReport = {
   ok: boolean;
   profile: string;
@@ -18,6 +27,7 @@ export type BrowserDoctorReport = {
   status: BrowserStatus;
 };
 
+/** Build a browser doctor report from a status response and environment facts. */
 export function buildBrowserDoctorReport(params: {
   status: BrowserStatus;
   platform?: NodeJS.Platform;
@@ -26,7 +36,12 @@ export function buildBrowserDoctorReport(params: {
 }): BrowserDoctorReport {
   const status = params.status;
   const checks: BrowserDoctorCheck[] = [];
-  const transport: BrowserTransport = status.transport === "chrome-mcp" ? "chrome-mcp" : "cdp";
+  const transport: BrowserTransport =
+    status.transport === "chrome-mcp"
+      ? "chrome-mcp"
+      : status.transport === "extension"
+        ? "extension"
+        : "cdp";
 
   checks.push({
     id: "plugin-enabled",
@@ -56,6 +71,21 @@ export function buildBrowserDoctorReport(params: {
         : {
             fixHint:
               "Keep the matching Chromium browser running, enable remote debugging in chrome://inspect, and accept the attach prompt.",
+          }),
+    });
+  } else if (transport === "extension") {
+    checks.push({
+      id: "extension-relay",
+      label: "Chrome extension relay",
+      status: status.running ? "pass" : "fail",
+      summary: status.running
+        ? "OpenClaw Chrome extension is connected"
+        : "OpenClaw Chrome extension is not connected",
+      ...(status.running
+        ? {}
+        : {
+            fixHint:
+              "Install the OpenClaw Chrome extension (openclaw browser extension path), run openclaw browser extension pair, and paste the pairing string into the extension popup.",
           }),
     });
   } else {
@@ -135,6 +165,21 @@ export function buildBrowserDoctorReport(params: {
         ? {}
         : { fixHint: "Check Chrome launch logs, stale locks, proxy env, and port conflicts." }),
     });
+
+    if (status.graphics) {
+      const graphicsStatus =
+        status.graphics.status === "unavailable"
+          ? "warn"
+          : status.graphics.acceleration === "hardware"
+            ? "pass"
+            : "info";
+      checks.push({
+        id: "graphics",
+        label: "Graphics",
+        status: graphicsStatus,
+        summary: formatBrowserGraphicsSummary(status.graphics),
+      });
+    }
   }
 
   return {

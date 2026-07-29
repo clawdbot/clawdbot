@@ -1,24 +1,70 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+// Github Copilot plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
-  buildCopilotDynamicHeaders,
-  hasCopilotVisionInput,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
+import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
-type _StreamContext = Parameters<StreamFn>[1];
 type StreamOptions = Parameters<StreamFn>[2];
+
+function containsCopilotContentType(value: unknown, type: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => containsCopilotContentType(item, type));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as { type?: unknown; content?: unknown };
+  return entry.type === type || containsCopilotContentType(entry.content, type);
+}
+
+function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
+  const last = messages[messages.length - 1];
+  if (!last) {
+    return "user";
+  }
+  if (last.role === "user" && containsCopilotContentType(last.content, "tool_result")) {
+    return "agent";
+  }
+  return last.role === "user" ? "user" : "agent";
+}
+
+function hasCopilotVisionInput(messages: Context["messages"]): boolean {
+  return messages.some((message) => {
+    if (message.role === "user" && Array.isArray(message.content)) {
+      return message.content.some((item) => containsCopilotContentType(item, "image"));
+    }
+    if (message.role === "toolResult" && Array.isArray(message.content)) {
+      return message.content.some((item) => containsCopilotContentType(item, "image"));
+    }
+    return false;
+  });
+}
+
+function buildCopilotDynamicHeaders(params: {
+  messages: Context["messages"];
+  hasImages: boolean;
+}): Record<string, string> {
+  return {
+    ...buildCopilotRuntimeHeaders(),
+    "x-initiator": inferCopilotInitiator(params.messages),
+    ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
+  };
+}
 
 function patchOnPayloadResult(result: unknown): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      rewriteCopilotResponsePayloadConnectionBoundIds(next);
+      sanitizeCopilotReplayResponsePayload(next);
       return next;
     });
   }
-  rewriteCopilotResponsePayloadConnectionBoundIds(result);
+  sanitizeCopilotReplayResponsePayload(result);
   return result;
 }
 
@@ -33,6 +79,13 @@ function buildCopilotRequestHeaders(
     }),
     ...headers,
   };
+}
+
+function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
+  if (Array.isArray(payload.messages)) {
+    payload.messages = stripCopilotAssistantThinkingMessages(payload.messages);
+  }
+  applyAnthropicEphemeralCacheControlMarkers(payload);
 }
 
 export function wrapCopilotAnthropicStream(
@@ -55,12 +108,12 @@ export function wrapCopilotAnthropicStream(
         ...options,
         headers: buildCopilotRequestHeaders(context, options?.headers),
       },
-      applyAnthropicEphemeralCacheControlMarkers,
+      patchCopilotAnthropicPayload,
     );
   };
 }
 
-export function wrapCopilotOpenAIResponsesStream(
+function wrapCopilotOpenAIResponsesStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {
@@ -77,7 +130,7 @@ export function wrapCopilotOpenAIResponsesStream(
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        rewriteCopilotResponsePayloadConnectionBoundIds(payload);
+        sanitizeCopilotReplayResponsePayload(payload);
         return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
       },
     };
@@ -85,6 +138,27 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
+function wrapCopilotOpenAICompletionsStream(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn | undefined {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  const underlying = baseStreamFn;
+  return (model, context, options) => {
+    if (model.provider !== "github-copilot" || model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    return underlying(model, context, {
+      ...options,
+      headers: buildCopilotRequestHeaders(context, options?.headers),
+    });
+  };
+}
+
 export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  return wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
+  return wrapCopilotOpenAICompletionsStream(
+    wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn)),
+  );
 }

@@ -1,3 +1,4 @@
+// Twitch plugin module implements probe behavior.
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
@@ -50,9 +51,6 @@ export async function probeTwitch(
     // Create a promise that resolves when connected
     const connectionPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
-      let connectListener: ReturnType<ChatClient["onConnect"]> | undefined;
-      let disconnectListener: ReturnType<ChatClient["onDisconnect"]> | undefined;
-      let authFailListener: ReturnType<ChatClient["onAuthenticationFailure"]> | undefined;
 
       const cleanup = () => {
         if (settled) {
@@ -65,22 +63,26 @@ export async function probeTwitch(
       };
 
       // Success: connection established
-      connectListener = client?.onConnect(() => {
-        cleanup();
-        resolve();
-      });
+      const connectListener: ReturnType<ChatClient["onConnect"]> | undefined = client?.onConnect(
+        () => {
+          cleanup();
+          resolve();
+        },
+      );
 
       // Failure: disconnected (e.g., auth failed)
-      disconnectListener = client?.onDisconnect((_manually, reason) => {
-        cleanup();
-        reject(reason || new Error("Disconnected"));
-      });
+      const disconnectListener: ReturnType<ChatClient["onDisconnect"]> | undefined =
+        client?.onDisconnect((_manually, reason) => {
+          cleanup();
+          reject(reason || new Error("Disconnected"));
+        });
 
       // Failure: authentication failed
-      authFailListener = client?.onAuthenticationFailure(() => {
-        cleanup();
-        reject(new Error("Authentication failed"));
-      });
+      const authFailListener: ReturnType<ChatClient["onAuthenticationFailure"]> | undefined =
+        client?.onAuthenticationFailure(() => {
+          cleanup();
+          reject(new Error("Authentication failed"));
+        });
     });
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;

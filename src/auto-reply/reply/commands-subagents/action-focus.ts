@@ -1,7 +1,9 @@
+// Focuses an existing subagent run for follow-up routing.
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
-} from "../../../acp/runtime/session-identifiers.js";
+} from "@openclaw/acp-core/runtime/session-identifiers";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import {
@@ -18,7 +20,6 @@ import {
 } from "../../../channels/thread-bindings-policy.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
 import {

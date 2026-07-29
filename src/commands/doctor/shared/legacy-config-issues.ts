@@ -1,7 +1,8 @@
+// Doctor legacy config issue finder that combines core, channel, and plugin rules.
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
-import type { LegacyConfigIssue } from "../../../config/types.js";
+import type { LegacyConfigIssue, OpenClawConfig } from "../../../config/types.js";
 import {
   collectRelevantDoctorPluginIds,
   collectRelevantDoctorPluginIdsForTouchedPaths,
@@ -32,9 +33,10 @@ function collectPluginLegacyConfigRules(
   if (pluginIds.length === 0) {
     return [];
   }
-  return listPluginDoctorLegacyConfigRules({ pluginIds });
+  return listPluginDoctorLegacyConfigRules({ config: raw as OpenClawConfig, pluginIds });
 }
 
+/** Find legacy config issues using core rules plus relevant channel/plugin doctor contracts. */
 export function findDoctorLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Prevents runtime action paths from loading global config directly.
 import { collectRuntimeActionLoadConfigViolations } from "./lib/config-boundary-guard.mjs";
 
 function main() {

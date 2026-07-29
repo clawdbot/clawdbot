@@ -5,11 +5,11 @@
  * like command processing, session lifecycle, etc.
  */
 
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionsPatchParams } from "../gateway/protocol/schema/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -18,6 +18,7 @@ import type {
   InternalHookEventType,
   InternalHookHandler,
 } from "./internal-hook-types.js";
+import type { MessageHookMediaFact } from "./message-hook-media.js";
 export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
 
 export type AgentBootstrapHookContext = {
@@ -66,6 +67,12 @@ export type MessageReceivedHookContext = {
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
+  /** Staged, locally usable attachments in stable source order. */
+  media?: MessageHookMediaFact[];
+  /** Original attachment facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
   /** Additional provider-specific metadata */
   metadata?: Record<string, unknown>;
 };
@@ -132,9 +139,15 @@ type MessageEnrichedBodyHookContext = {
   provider?: string;
   /** Surface name */
   surface?: string;
-  /** Path to the media file that was transcribed */
+  /** Ordered media facts available to preprocessing/transcription hooks. */
+  media?: MessageHookMediaFact[];
+  /** Original facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
+  /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
-  /** MIME type of the media */
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   mediaType?: string;
 };
 
@@ -392,7 +405,11 @@ export function isMessageReceivedEvent(
   if (!context) {
     return false;
   }
-  return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
+  return (
+    hasStringContextField(context, "from") &&
+    hasStringContextField(context, "content") &&
+    hasStringContextField(context, "channelId")
+  );
 }
 
 export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
@@ -405,6 +422,7 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
   }
   return (
     hasStringContextField(context, "to") &&
+    hasStringContextField(context, "content") &&
     hasStringContextField(context, "channelId") &&
     hasBooleanContextField(context, "success")
   );

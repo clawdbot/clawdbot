@@ -1,12 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Subsystem logger helpers create scoped loggers with subsystem-specific filters.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
-import { normalizeChatChannelId } from "../channels/ids.js";
+import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
+  formatJsonConsoleLine,
   getConsoleSettings,
   shouldLogSubsystemToConsole,
 } from "./console.js";
@@ -114,13 +116,41 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
+const CHANNEL_SUBSYSTEM_PREFIXES = new Set([
+  "clickclack",
+  "discord",
+  "feishu",
+  "googlechat",
+  "imessage",
+  "irc",
+  "line",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "openclaw-weixin",
+  "qqbot",
+  "signal",
+  "slack",
+  "synology-chat",
+  "telegram",
+  "tlon",
+  "twitch",
+  "webchat",
+  "wecom",
+  "whatsapp",
+  "yuanbao",
+  "zalo",
+  "zalouser",
+]);
 
 function isChannelSubsystemPrefix(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized) {
     return false;
   }
-  return normalizeChatChannelId(normalized) === normalized || normalized === "webchat";
+  return CHANNEL_SUBSYSTEM_PREFIXES.has(normalized);
 }
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
@@ -133,24 +163,29 @@ function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInsta
     hash = (hash * 31 + subsystem.charCodeAt(i)) | 0;
   }
   const idx = Math.abs(hash) % SUBSYSTEM_COLORS.length;
-  const name = SUBSYSTEM_COLORS[idx];
+  const name = expectDefined(SUBSYSTEM_COLORS[idx], "subsystem colors entry at idx");
   return color[name];
 }
 
 function formatSubsystemForConsole(subsystem: string): string {
   const parts = subsystem.split("/").filter(Boolean);
   const original = parts.join("/") || subsystem;
-  while (
-    parts.length > 0 &&
-    SUBSYSTEM_PREFIXES_TO_DROP.includes(parts[0] as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number])
-  ) {
+  while (parts.length > 0) {
+    const first = parts.at(0);
+    if (
+      first === undefined ||
+      !SUBSYSTEM_PREFIXES_TO_DROP.includes(first as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number])
+    ) {
+      break;
+    }
     parts.shift();
   }
-  if (parts.length === 0) {
+  const first = parts.at(0);
+  if (first === undefined) {
     return original;
   }
-  if (isChannelSubsystemPrefix(parts[0])) {
-    return parts[0];
+  if (isChannelSubsystemPrefix(first)) {
+    return first;
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
     return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
@@ -219,15 +254,12 @@ function formatConsoleLine(opts: {
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
-    return redactSensitiveText(
-      JSON.stringify({
-        time: formatConsoleTimestamp("json"),
-        level: opts.level,
-        subsystem: displaySubsystem,
-        message: opts.message,
-        ...opts.meta,
-      }),
-    );
+    return formatJsonConsoleLine({
+      level: opts.level,
+      subsystem: displaySubsystem,
+      message: opts.message,
+      meta: opts.meta,
+    });
   }
   const color = getColorForConsole();
   const prefix = `[${displaySubsystem}]`;
@@ -424,8 +456,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       if (isFileLogLevelEnabled("info")) {
         logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
       }
+      const consoleSettings = getConsoleSettings();
       if (
-        shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
+        shouldLogToConsole("info", { level: consoleSettings.level }) &&
         shouldLogSubsystemToConsole(resolvedSubsystem)
       ) {
         if (
@@ -437,7 +470,17 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         ) {
           return;
         }
-        writeConsoleLine("info", message);
+        writeConsoleLine(
+          "info",
+          consoleSettings.style === "json"
+            ? formatJsonConsoleLine({
+                level: "info",
+                subsystem: resolvedSubsystem,
+                message,
+              })
+            : message,
+          { redacted: consoleSettings.style === "json" },
+        );
       }
     },
     child(name) {

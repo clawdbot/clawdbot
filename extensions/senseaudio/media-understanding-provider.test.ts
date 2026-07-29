@@ -1,3 +1,4 @@
+// Senseaudio tests cover media understanding provider plugin behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -7,11 +8,16 @@ import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { transcribeSenseAudioAudio } from "./media-understanding-provider.js";
+import { senseaudioMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
+
+const transcribeSenseAudioAudio = senseaudioMediaUnderstandingProvider.transcribeAudio;
+if (!transcribeSenseAudioAudio) {
+  throw new Error("expected SenseAudio transcription capability");
+}
 
 describe("transcribeSenseAudioAudio", () => {
   it("uses SenseAudio base URL by default", async () => {
@@ -78,12 +84,12 @@ describe("transcribeSenseAudioAudio", () => {
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
     const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    expect(file).not.toBeNull();
-    if (file) {
-      expect(file.type).toBe("audio/wav");
-      if ("name" in file && typeof file.name === "string") {
-        expect(file.name).toBe("voice.wav");
-      }
+    if (!file) {
+      throw new Error("expected SenseAudio audio file");
+    }
+    expect(file.type).toBe("audio/wav");
+    if (file && "name" in file && typeof file.name === "string") {
+      expect(file.name).toBe("voice.wav");
     }
   });
 

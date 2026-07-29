@@ -1,3 +1,5 @@
+// Telegram API module exposes the plugin public contract.
+export type { Message as TelegramBotMessage, Update as TelegramBotUpdate } from "grammy/types";
 export { telegramPlugin } from "./src/channel.js";
 export { telegramSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -42,7 +44,6 @@ export {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
-  expandTextLinks,
   extractTelegramForumFlag,
   extractTelegramLocation,
   getTelegramTextParts,
@@ -54,7 +55,6 @@ export {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
-  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   resolveTelegramStreamMode,
   resolveTelegramThreadSpec,
@@ -93,7 +93,6 @@ export {
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalConfig,
   resolveTelegramExecApprovalTarget,
-  shouldEnableTelegramExecApprovalButtons,
   shouldHandleTelegramExecApprovalRequest,
   shouldInjectTelegramExecApprovalButtons,
   shouldSuppressLocalTelegramExecApprovalPrompt,
@@ -105,6 +104,7 @@ export {
 export type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
+  TelegramInteractiveHandlerResult,
 } from "./src/interactive-dispatch.js";
 export {
   isTelegramInlineButtonsEnabled,
@@ -182,3 +182,11 @@ export {
 export type { TelegramButtonStyle, TelegramInlineButtons } from "./src/button-types.js";
 export type { StickerMetadata } from "./src/bot/types.js";
 export type { TelegramTokenResolution } from "./src/token.js";
+export {
+  escapeTelegramHtml,
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
+  splitTelegramHtmlChunks,
+  type TelegramFormattedChunk,
+} from "./src/format.js";

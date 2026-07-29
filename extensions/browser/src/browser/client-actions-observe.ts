@@ -1,6 +1,13 @@
+/**
+ * Browser client observation helpers.
+ *
+ * Wraps browser-control endpoints that read console/debug data or save page
+ * output without directly mutating page state.
+ */
 import type { BrowserActionPathResult } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import type { BrowserPageContentResult } from "./client.types.js";
 import type { BrowserConsoleMessage } from "./pw-session.js";
 
 function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
@@ -18,6 +25,7 @@ function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>)
   return encoded.length > 0 ? `?${encoded}` : "";
 }
 
+/** Read browser console messages for a tab. */
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
   opts: { level?: string; targetId?: string; profile?: string } = {},
@@ -35,6 +43,7 @@ export async function browserConsoleMessages(
   }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
+/** Save the current page as PDF through browser control. */
 export async function browserPdfSave(
   baseUrl: string | undefined,
   opts: { targetId?: string; profile?: string } = {},
@@ -45,5 +54,32 @@ export async function browserPdfSave(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId }),
     timeoutMs: 20000,
+  });
+}
+
+/** Capture the selected page HTML for private extraction processing. */
+export async function browserPageContent(
+  baseUrl: string | undefined,
+  opts: {
+    targetId?: string;
+    profile?: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+    selector?: string;
+    ignoreSelectors?: string[];
+  },
+): Promise<BrowserPageContentResult> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<BrowserPageContentResult>(withBaseUrl(baseUrl, `/extract${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      timeoutMs: opts.timeoutMs,
+      selector: opts.selector,
+      ignoreSelectors: opts.ignoreSelectors,
+    }),
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
   });
 }

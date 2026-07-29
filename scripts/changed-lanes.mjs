@@ -1,40 +1,67 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
+const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
+const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
+// Source files knip's production scan reads. Any edit to one of these can orphan
+// an export -- including an import-only edit that drops a barrel re-export's last
+// consumer -- so the scan is selected by path, not by inspecting changed lines.
+const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 
-const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
-const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
-const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
-const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
-const TOOLING_PATH_RE =
-  /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
-const ROOT_GLOBAL_PATH_RE =
-  /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
-const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
-const LIVE_DOCKER_TOOLING_PATH_RE =
-  /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
+/** Returns whether any changed path is production source knip scans. */
+export function hasDeadcodeScannedSource(changedPaths) {
+  return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
+}
+
+const SCRIPTS_TYPECHECK_PATH_RE =
+  /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
+const TEST_ROOT_TYPECHECK_PATH_RE =
+  /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
+/** @internal Shared repository-script contract. */
+export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
+  "scripts/lib/live-docker-auth.sh",
+  "scripts/test-live-acp-bind-docker.sh",
+  "scripts/test-live-cli-backend-docker.sh",
+  "scripts/test-live-codex-harness-docker.sh",
+  "scripts/test-live-gateway-models-docker.sh",
+  "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
+];
+const LIVE_DOCKER_TOOLING_PATHS = new Set([
+  ...LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  "scripts/test-docker-all.mjs",
+  "src/gateway/gateway-acp-bind.live.test.ts",
+  "src/gateway/live-agent-probes.test.ts",
+]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
-const TEST_PATH_RE =
-  /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+const BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE =
+  /^(?:src\/config\/(?:bundled-channel-config-metadata\.generated|zod-schema\.[^/]+)\.ts|src\/channels\/plugins\/config-schema\.ts|src\/plugin-sdk\/(?:bundled-channel-config-schema|channel-config-schema)\.ts|src\/plugins\/(?:bundled-dir|public-surface-loader|public-surface-runtime|sdk-alias)\.ts|scripts\/(?:generate-bundled-channel-config-metadata\.ts|load-channel-config-surface\.ts|lib\/(?:bundled-plugin-source-utils|format-generated-module|generated-output-utils)\.mjs)|extensions\/[^/]+\/(?:openclaw\.plugin\.json|package\.json|(?:config|security-contract)-api\.[cm]?[jt]sx?|src\/config-(?:schema(?:-[^/]+)?|surface|ui-hints)\.[cm]?[jt]sx?))$/u;
+/**
+ * Files whose changes are treated as release metadata only.
+ * @internal Shared repository-script contract.
+ */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
-  "apps/android/app/build.gradle.kts",
+  "apps/android/CHANGELOG.md",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
-  "apps/ios/Config/Version.xcconfig",
-  "apps/ios/fastlane/metadata/en-US/release_notes.txt",
-  "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "docs/.generated/config-baseline.counts.json",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
   "package.json",
-  "src/config/schema.base.generated.ts",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "bundledChannelConfigMetadata" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -46,32 +73,36 @@ export const RELEASE_METADATA_PATHS = new Set([
  * }} ChangedLaneResult
  */
 
-export function normalizeChangedPath(inputPath) {
-  return String(inputPath ?? "")
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
-}
-
+/**
+ * Creates the default changed-lanes result object.
+ * @internal Directly tested script implementation detail.
+ */
 export function createEmptyChangedLanes() {
   return {
     core: false,
     coreTests: false,
+    ui: false,
     extensions: false,
     extensionTests: false,
+    scripts: false,
+    testRoot: false,
     apps: false,
     docs: false,
     tooling: false,
     liveDockerTooling: false,
+    bundledChannelConfigMetadata: false,
     releaseMetadata: false,
     all: false,
   };
 }
 
+export function isChangedLaneTestPath(changedPath) {
+  return getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest;
+}
+
 /**
- * @param {string[]} changedPaths
- * @param {{ packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null }} [options]
- * @returns {ChangedLaneResult}
+ * Classifies a list of changed paths into docs, app, extension, core, and tooling lanes.
+ * @internal Shared repository-script contract.
  */
 export function detectChangedLanes(changedPaths, options = {}) {
   const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
@@ -98,7 +129,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
   ) {
     lanes.releaseMetadata = true;
-    lanes.docs = paths.some((changedPath) => DOCS_PATH_RE.test(changedPath));
+    lanes.docs = paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "docs");
     for (const changedPath of paths) {
       reasons.push(`${changedPath}: release metadata`);
     }
@@ -106,7 +137,19 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
-    if (DOCS_PATH_RE.test(changedPath)) {
+    const facts = getChangedPathFacts(changedPath);
+    if (BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)) {
+      lanes.bundledChannelConfigMetadata = true;
+      reasons.push(`${changedPath}: bundled channel config metadata input`);
+    }
+    if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.scripts = true;
+    }
+    if (TEST_ROOT_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.testRoot = true;
+    }
+
+    if (facts.surface === "docs") {
       lanes.docs = true;
       continue;
     }
@@ -125,13 +168,13 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (LIVE_DOCKER_TOOLING_PATH_RE.test(changedPath)) {
+    if (LIVE_DOCKER_TOOLING_PATHS.has(changedPath)) {
       lanes.liveDockerTooling = true;
       reasons.push(`${changedPath}: live Docker tooling surface`);
       continue;
     }
 
-    if (ROOT_GLOBAL_PATH_RE.test(changedPath)) {
+    if (facts.surface === "rootGlobal") {
       lanes.all = true;
       extensionImpactFromCore = true;
       reasons.push(`${changedPath}: root config/package surface`);
@@ -148,8 +191,8 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (EXTENSION_PATH_RE.test(changedPath)) {
-      if (TEST_PATH_RE.test(changedPath)) {
+    if (facts.surface === "extension") {
+      if (facts.isChangedLaneTest) {
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension test`);
       } else {
@@ -160,8 +203,8 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (CORE_PATH_RE.test(changedPath)) {
-      if (TEST_PATH_RE.test(changedPath)) {
+    if (facts.surface === "source" || facts.surface === "package") {
+      if (facts.isChangedLaneTest) {
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core test`);
       } else {
@@ -172,25 +215,37 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (APP_PATH_RE.test(changedPath)) {
+    if (facts.surface === "ui") {
+      if (facts.isChangedLaneTest) {
+        lanes.coreTests = true;
+        reasons.push(`${changedPath}: UI test`);
+      } else {
+        lanes.ui = true;
+        lanes.coreTests = true;
+        reasons.push(`${changedPath}: UI production`);
+      }
+      continue;
+    }
+
+    if (facts.surface === "app") {
       lanes.apps = true;
       reasons.push(`${changedPath}: app surface`);
       continue;
     }
 
-    if (changedPath.startsWith("test/") || changedPath.startsWith("test-fixtures/")) {
+    if (facts.surface === "rootTest" || facts.surface === "testFixture") {
       lanes.tooling = true;
       reasons.push(`${changedPath}: root test/support surface`);
       continue;
     }
 
-    if (TOOLING_PATH_RE.test(changedPath)) {
+    if (facts.surface === "rootTooling") {
       lanes.tooling = true;
       reasons.push(`${changedPath}: tooling surface`);
       continue;
     }
 
-    if (LEGACY_ROOT_ASSET_PATH_RE.test(changedPath)) {
+    if (facts.surface === "legacyRootAsset") {
       lanes.tooling = true;
       reasons.push(`${changedPath}: legacy root asset cleanup`);
       continue;
@@ -211,13 +266,21 @@ export function detectChangedLanes(changedPaths, options = {}) {
 }
 
 /**
- * @param {{ paths: string[]; base: string; head?: string; staged?: boolean }} params
- * @returns {ChangedLaneResult}
+ * Classifies changed paths with optional package.json before/after contents.
+ * @internal Shared repository-script contract.
  */
 export function detectChangedLanesForPaths(params) {
+  const base = params.staged
+    ? params.base
+    : resolveMergeHeadDiffBase({
+        base: params.base,
+        head: params.head ?? "HEAD",
+        maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+        preferFirstParent: params.mergeHeadFirstParent === true,
+      });
   const packageJsonChangeKind = params.paths.includes("package.json")
     ? classifyPackageJsonChangeFromGit({
-        base: params.base,
+        base,
         head: params.head,
         staged: params.staged,
       })
@@ -226,28 +289,55 @@ export function detectChangedLanesForPaths(params) {
 }
 
 /**
- * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string }} params
- * @returns {string[]}
+ * Lists changed paths from git for a base/head comparison.
  */
 export function listChangedPathsFromGit(params) {
-  const base = params.base;
   const head = params.head ?? "HEAD";
   const cwd = params.cwd ?? process.cwd();
+  const base = resolveMergeHeadDiffBase({
+    base: params.base,
+    head,
+    cwd,
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    preferFirstParent: params.mergeHeadFirstParent === true,
+  });
   if (!base) {
     return [];
   }
-  const rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+  let rangePaths;
+  let noMergeBase = false;
+  try {
+    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- resolveMergeHeadDiffBase returns a git ref string when present.
+    rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+  } catch (error) {
+    if (!isGitNoMergeBaseError(error)) {
+      throw error;
+    }
+    noMergeBase = true;
+    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- resolveMergeHeadDiffBase returns a git ref string when present.
+    rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);
+  }
   if (params.includeWorktree === false) {
     return rangePaths;
   }
-  return [
-    ...new Set([
-      ...rangePaths,
-      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
-      ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
-      ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const worktreePaths = [
+    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
+    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
+    ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
+  ];
+  // Raw Crabbox syncs can have unrelated synthetic refs; prefer the synced
+  // worktree delta instead of turning that into an accidental whole-repo gate.
+  if (
+    noMergeBase &&
+    process.env[RAW_SYNC_CHANGED_LANES_ENV] === "1" &&
+    worktreePaths.length > 0 &&
+    rangePaths.length > IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS
+  ) {
+    rangePaths = [];
+  }
+  return [...new Set([...rangePaths, ...worktreePaths])].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
@@ -260,6 +350,17 @@ function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
+function isGitNoMergeBaseError(error) {
+  const text = [
+    error?.message,
+    error?.stderr?.toString?.("utf8"),
+    Array.isArray(error?.output)
+      ? error.output.map((value) => value?.toString?.("utf8")).join("\n")
+      : "",
+  ].join("\n");
+  return text.includes("no merge base");
+}
+
 function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   const output = execFileSync("git", ["ls-files", ...extraArgs], {
     cwd,
@@ -270,8 +371,12 @@ function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
-export function listStagedChangedPaths() {
+/**
+ * Lists staged changed paths for pre-commit checks.
+ */
+export function listStagedChangedPaths(cwd = process.cwd()) {
   const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
@@ -279,7 +384,10 @@ export function listStagedChangedPaths() {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
-export function classifyPackageJsonChangeFromGit(params) {
+/**
+ * Classifies package.json script-only changes from git content.
+ */
+function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
     if (isLiveDockerPackageScriptOnlyChange(before, after)) {
@@ -291,6 +399,10 @@ export function classifyPackageJsonChangeFromGit(params) {
   }
 }
 
+/**
+ * Checks whether package scripts changed only live Docker script entries.
+ * @internal Directly tested script implementation detail.
+ */
 export function isLiveDockerPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
   const afterPackage = JSON.parse(after);
@@ -305,6 +417,10 @@ export function isLiveDockerPackageScriptOnlyChange(before, after) {
   );
 }
 
+/**
+ * Checks whether package.json changes are limited to scripts.
+ * @internal Directly tested script implementation detail.
+ */
 export function isPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
   const afterPackage = JSON.parse(after);
@@ -358,7 +474,7 @@ function extractLiveDockerPackageScripts(packageJson) {
 }
 
 function stripLiveDockerPackageScripts(packageJson) {
-  const clone = JSON.parse(JSON.stringify(packageJson));
+  const clone = structuredClone(packageJson);
   const scripts = clone.scripts;
   if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) {
     return clone;
@@ -377,7 +493,7 @@ function extractPackageScripts(packageJson) {
 }
 
 function stripPackageScripts(packageJson) {
-  const clone = JSON.parse(JSON.stringify(packageJson));
+  const clone = structuredClone(packageJson);
   delete clone.scripts;
   return clone;
 }
@@ -395,7 +511,10 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
+/**
+ * Writes changed-lane booleans to the GitHub Actions output file.
+ */
+function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
@@ -415,39 +534,64 @@ function toSnakeCase(value) {
 }
 
 function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const args = {
     base: "origin/main",
     head: "HEAD",
     staged: false,
+    mergeHeadFirstParent: false,
     json: false,
     githubOutput: false,
+    help: false,
     paths: [],
   };
-  return parseFlagArgs(
-    argv,
+  const parsed = parseFlagArgs(
+    flagArgv,
     args,
     [
       stringFlag("--base", "base"),
       stringFlag("--head", "head"),
       booleanFlag("--staged", "staged"),
+      booleanFlag("--merge-head-first-parent", "mergeHeadFirstParent"),
       booleanFlag("--json", "json"),
       booleanFlag("--github-output", "githubOutput"),
+      booleanFlag("--help", "help"),
+      booleanFlag("-h", "help"),
     ],
     {
       onUnhandledArg(arg, target) {
-        if (arg === "--") {
-          return "handled";
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
         }
         target.paths.push(arg);
         return "handled";
       },
     },
   );
+  parsed.paths.push(...explicitPaths);
+  return parsed;
+}
+
+function printUsage() {
+  console.log(
+    [
+      "Usage: node scripts/changed-lanes.mjs [options] [-- <paths...>]",
+      "",
+      "Options:",
+      "  --base <ref>          Base ref for changed paths (default: origin/main)",
+      "  --head <ref>          Head ref for changed paths (default: HEAD)",
+      "  --staged              Inspect staged changes",
+      "  --json                Print JSON result",
+      "  --github-output       Append GitHub output variables",
+      "  -h, --help            Show this help",
+    ].join("\n"),
+  );
 }
 
 function isDirectRun() {
-  const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 function printHuman(result) {
@@ -476,18 +620,33 @@ function printHuman(result) {
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  if (args.help) {
+    printUsage();
+    process.exit(0);
+  }
   const paths =
     args.paths.length > 0
       ? args.paths
       : args.staged
         ? listStagedChangedPaths()
-        : listChangedPathsFromGit({ base: args.base, head: args.head });
+        : listChangedPathsFromGit({
+            base: args.base,
+            head: args.head,
+            mergeHeadFirstParent: args.mergeHeadFirstParent,
+          });
   const result = detectChangedLanesForPaths({
     paths,
     base: args.base,
     head: args.head,
     staged: args.staged,
+    mergeHeadFirstParent: args.mergeHeadFirstParent,
   });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);

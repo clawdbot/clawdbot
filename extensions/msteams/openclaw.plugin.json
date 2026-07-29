@@ -1,12 +1,11 @@
 {
   "id": "msteams",
+  "name": "Microsoft Teams",
+  "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "activation": {
     "onStartup": false
   },
   "channels": ["msteams"],
-  "channelEnvVars": {
-    "msteams": ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,3 +1,4 @@
+// Voice Call tests cover lookup plugin behavior.
 import { describe, expect, it } from "vitest";
 import { findCall, getCallByProviderCallId } from "./lookup.js";
 

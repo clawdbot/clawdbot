@@ -1,9 +1,5 @@
+// Browser facade tests cover browser plugin facade loading and runtime API shape.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  expectBrowserHostInspectionDelegation,
-  expectBrowserHostInspectionFacadeUnavailable,
-  mockBrowserHostInspectionFacade,
-} from "./browser-facade-test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 
@@ -103,25 +99,5 @@ describe("plugin-sdk browser facades", () => {
     expect(() => controlAuth.resolveBrowserControlAuth(undefined, {} as NodeJS.ProcessEnv)).toThrow(
       "missing browser control auth facade",
     );
-  });
-
-  it("delegates browser host inspection helpers to the browser facade", async () => {
-    const executable: import("./browser-host-inspection.js").BrowserExecutable = {
-      kind: "chrome",
-      path: "/usr/bin/google-chrome",
-    };
-    mockBrowserHostInspectionFacade(loadBundledPluginPublicSurfaceModuleSync, executable);
-
-    const hostInspection = await import("./browser-host-inspection.js");
-
-    expectBrowserHostInspectionDelegation({
-      executable,
-      hostInspection,
-      loadBundledPluginPublicSurfaceModuleSync,
-    });
-  });
-
-  it("hard-fails when browser host inspection facade is unavailable", async () => {
-    await expectBrowserHostInspectionFacadeUnavailable(loadBundledPluginPublicSurfaceModuleSync);
   });
 });

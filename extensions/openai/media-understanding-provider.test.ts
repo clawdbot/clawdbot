@@ -1,26 +1,23 @@
+// Openai tests cover media understanding provider plugin behavior.
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import {
-  openaiCodexMediaUnderstandingProvider,
-  transcribeOpenAiAudio,
-  transcribeOpenAiCodexAudio,
-} from "./media-understanding-provider.js";
+import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
-describe("openaiCodexMediaUnderstandingProvider", () => {
+describe("openaiMediaUnderstandingProvider", () => {
   it("declares audio support with the transcription default", () => {
-    expect(openaiCodexMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
-    expect(openaiCodexMediaUnderstandingProvider.defaultModels).toEqual({
-      image: "gpt-5.5",
+    expect(openaiMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
+    expect(openaiMediaUnderstandingProvider.defaultModels).toEqual({
+      image: "gpt-5.6-sol",
       audio: "gpt-4o-transcribe",
     });
-    expect(openaiCodexMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
-    expect(openaiCodexMediaUnderstandingProvider.transcribeAudio).toBe(transcribeOpenAiCodexAudio);
+    expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
+    expect(openaiMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
   });
 });
 
@@ -28,7 +25,7 @@ describe("transcribeOpenAiAudio", () => {
   it("respects lowercase authorization header overrides", async () => {
     const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({ text: "ok" });
 
-    const result = await transcribeOpenAiAudio({
+    const result = await openaiMediaUnderstandingProvider.transcribeAudio!({
       buffer: Buffer.from("audio"),
       fileName: "note.mp3",
       apiKey: "test-key",
@@ -44,7 +41,7 @@ describe("transcribeOpenAiAudio", () => {
   it("builds the expected request payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
 
-    const result = await transcribeOpenAiAudio({
+    const result = await openaiMediaUnderstandingProvider.transcribeAudio!({
       buffer: Buffer.from("audio-bytes"),
       fileName: "voice.wav",
       apiKey: "test-key",
@@ -75,12 +72,12 @@ describe("transcribeOpenAiAudio", () => {
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
     const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    expect(file).not.toBeNull();
-    if (file) {
-      expect(file.type).toBe("audio/wav");
-      if ("name" in file && typeof file.name === "string") {
-        expect(file.name).toBe("voice.wav");
-      }
+    if (!file) {
+      throw new Error("expected OpenAI audio file");
+    }
+    expect(file.type).toBe("audio/wav");
+    if (file && "name" in file && typeof file.name === "string") {
+      expect(file.name).toBe("voice.wav");
     }
   });
 
@@ -88,7 +85,7 @@ describe("transcribeOpenAiAudio", () => {
     const { fetchFn } = createRequestCaptureJsonFetch({});
 
     await expect(
-      transcribeOpenAiAudio({
+      openaiMediaUnderstandingProvider.transcribeAudio!({
         buffer: Buffer.from("audio-bytes"),
         fileName: "voice.wav",
         apiKey: "test-key",
@@ -96,24 +93,5 @@ describe("transcribeOpenAiAudio", () => {
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription response missing text");
-  });
-});
-
-describe("transcribeOpenAiCodexAudio", () => {
-  it("uses the OpenAI transcription default through the Codex provider id", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
-
-    const result = await transcribeOpenAiCodexAudio({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "voice.wav",
-      apiKey: "test-key",
-      timeoutMs: 1234,
-      model: " ",
-      fetchFn,
-    });
-
-    const form = getRequest().init?.body as FormData;
-    expect(result.model).toBe("gpt-4o-transcribe");
-    expect(form.get("model")).toBe("gpt-4o-transcribe");
   });
 });

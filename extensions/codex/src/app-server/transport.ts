@@ -1,6 +1,11 @@
+/**
+ * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
+ * connections.
+ */
+/** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   stdin: {
-    write: (data: string, callback?: (error?: Error | null) => void) => unknown;
+    write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;
     destroy?: () => unknown;
     unref?: () => unknown;
@@ -24,15 +29,13 @@ export type CodexAppServerTransport = {
   off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
+/** Starts graceful transport shutdown and schedules a force kill fallback. */
 export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
   options: { forceKillDelayMs?: number } = {},
 ): void {
-  child.stdout.destroy?.();
-  child.stderr.destroy?.();
   child.stdin.end?.();
   child.stdin.destroy?.();
-  signalCodexAppServerTransport(child, "SIGTERM");
   const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
   const forceKill = setTimeout(
     () => {
@@ -44,13 +47,18 @@ export function closeCodexAppServerTransport(
     Math.max(1, forceKillDelayMs),
   );
   forceKill.unref?.();
-  child.once("exit", () => clearTimeout(forceKill));
+  child.once("exit", () => {
+    clearTimeout(forceKill);
+    child.stdout.destroy?.();
+    child.stderr.destroy?.();
+  });
   child.unref?.();
   child.stdout.unref?.();
   child.stderr.unref?.();
   child.stdin.unref?.();
 }
 
+/** Closes a transport and waits briefly for an exit event. */
 export async function closeCodexAppServerTransportAndWait(
   child: CodexAppServerTransport,
   options: { exitTimeoutMs?: number; forceKillDelayMs?: number } = {},
@@ -95,7 +103,6 @@ async function waitForCodexAppServerTransportExit(
       },
       Math.max(1, timeoutMs),
     );
-    timeout.unref?.();
     child.once("exit", onExit);
   });
 }

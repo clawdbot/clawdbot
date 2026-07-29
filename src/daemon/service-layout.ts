@@ -1,8 +1,11 @@
+/** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
+/** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
   execStart: string;
   sourcePath?: string;
@@ -44,12 +47,29 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-function findGatewayEntrypoint(programArguments: readonly string[]): string | undefined {
-  const gatewayIndex = programArguments.indexOf("gateway");
+function resolveGatewayServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
+  const gatewayIndex = command.programArguments.indexOf("gateway");
   if (gatewayIndex <= 0) {
     return undefined;
   }
-  return programArguments[gatewayIndex - 1];
+  const entrypoint = command.programArguments[gatewayIndex - 1];
+  if (!entrypoint) {
+    return undefined;
+  }
+  if (path.isAbsolute(entrypoint) || path.win32.isAbsolute(entrypoint)) {
+    return entrypoint;
+  }
+  const workingDirectory = command.workingDirectory?.trim();
+  if (!workingDirectory) {
+    return undefined;
+  }
+  if (path.isAbsolute(workingDirectory)) {
+    return path.resolve(workingDirectory, entrypoint);
+  }
+  if (path.win32.isAbsolute(workingDirectory)) {
+    return path.win32.resolve(workingDirectory, entrypoint);
+  }
+  return undefined;
 }
 
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
@@ -61,15 +81,6 @@ async function tryRealpath(value: string | undefined): Promise<string | undefine
     return await fs.realpath(resolved);
   } catch {
     return resolved;
-  }
-}
-
-async function pathExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -88,6 +99,8 @@ async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
 
 async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | undefined> {
   let current = path.dirname(path.resolve(entrypoint));
+  // Installed dist entrypoints can sit several levels below package root in
+  // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.
   for (let depth = 0; depth < 8; depth += 1) {
     const packageJson = path.join(current, "package.json");
     if (await pathExists(packageJson)) {
@@ -112,7 +125,9 @@ export async function summarizeGatewayServiceLayout(
     return undefined;
   }
   const sourcePath = command.sourcePath?.trim() || undefined;
-  const entrypoint = findGatewayEntrypoint(command.programArguments);
+  // Service managers resolve relative commands against their configured
+  // working directory; without an absolute base, ownership is ambiguous.
+  const entrypoint = resolveGatewayServiceEntrypoint(command);
   const [sourcePathReal, entrypointReal] = await Promise.all([
     tryRealpath(sourcePath),
     tryRealpath(entrypoint),

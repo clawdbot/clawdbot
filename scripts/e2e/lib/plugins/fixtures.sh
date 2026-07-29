@@ -1,3 +1,145 @@
+OPENCLAW_PLUGINS_FIXTURE_PID_FILES=()
+OPENCLAW_PLUGINS_FIXTURE_EXIT_TRAP_INSTALLED=0
+OPENCLAW_PLUGINS_FIXTURE_PREVIOUS_EXIT_ACTION=""
+
+openclaw_plugins_read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$((10#$value))"
+}
+
+openclaw_plugins_read_nonnegative_decimal_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$value"
+}
+
+openclaw_plugins_cleanup_fixture_servers() {
+  local pid_file
+  local pid
+  for pid_file in "${OPENCLAW_PLUGINS_FIXTURE_PID_FILES[@]:-}"; do
+    [[ -f "$pid_file" ]] || continue
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      openclaw_plugins_stop_fixture_process "$pid"
+    fi
+    rm -f "$pid_file"
+  done
+}
+
+openclaw_plugins_signal_fixture_process() {
+  local pid="$1"
+  local signal="$2"
+  if kill -0 -- "-$pid" >/dev/null 2>&1; then
+    kill "-$signal" -- "-$pid" >/dev/null 2>&1 || true
+    return
+  fi
+  kill "-$signal" "$pid" >/dev/null 2>&1 || true
+}
+
+openclaw_plugins_fixture_process_alive() {
+  local pid="$1"
+  kill -0 "$pid" >/dev/null 2>&1 || kill -0 -- "-$pid" >/dev/null 2>&1
+}
+
+openclaw_plugins_stop_fixture_process() {
+  local pid="$1"
+  local _
+  local attempts interval
+  attempts="$(openclaw_plugins_read_positive_int_env OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS 40)" || return $?
+  interval="$(openclaw_plugins_read_nonnegative_decimal_env OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS 0.25)" || return $?
+  if declare -F openclaw_e2e_stop_process >/dev/null 2>&1; then
+    openclaw_e2e_stop_process "$pid"
+    return
+  fi
+  openclaw_plugins_signal_fixture_process "$pid" TERM
+  for _ in $(seq 1 "$attempts"); do
+    ! openclaw_plugins_fixture_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return; }
+    sleep "$interval"
+  done
+  openclaw_plugins_signal_fixture_process "$pid" KILL
+  wait "$pid" >/dev/null 2>&1 || true
+}
+
+openclaw_plugins_print_fixture_log() {
+  local log_file="$1"
+  if declare -F docker_e2e_print_log >/dev/null 2>&1; then
+    docker_e2e_print_log "$log_file"
+    return
+  fi
+  if [ ! -f "$log_file" ]; then
+    return
+  fi
+
+  local max_bytes
+  max_bytes="$(openclaw_plugins_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536)" || return $?
+
+  local log_bytes
+  log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+  log_bytes="${log_bytes//[[:space:]]/}"
+  if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
+    log_bytes="0"
+  fi
+  if [ "$log_bytes" -le "$max_bytes" ]; then
+    cat "$log_file"
+    return
+  fi
+  echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
+  tail -c "$max_bytes" "$log_file"
+}
+
+openclaw_plugins_validate_fixture_log_print_bytes() {
+  openclaw_plugins_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null
+}
+
+openclaw_plugins_register_fixture_pid_file() {
+  local pid_file="$1"
+  OPENCLAW_PLUGINS_FIXTURE_PID_FILES+=("$pid_file")
+  openclaw_plugins_install_fixture_cleanup_trap
+}
+
+openclaw_plugins_install_fixture_cleanup_trap() {
+  if [[ "${OPENCLAW_PLUGINS_FIXTURE_EXIT_TRAP_INSTALLED:-0}" = "1" ]]; then
+    return
+  fi
+
+  local existing_trap
+  existing_trap="$(trap -p EXIT || true)"
+  if [[ -n "$existing_trap" && "$existing_trap" != *openclaw_plugins_fixture_exit_trap* ]]; then
+    local existing_action="${existing_trap#trap -- }"
+    existing_action="${existing_action% EXIT}"
+    eval "OPENCLAW_PLUGINS_FIXTURE_PREVIOUS_EXIT_ACTION=$existing_action"
+  fi
+
+  OPENCLAW_PLUGINS_FIXTURE_EXIT_TRAP_INSTALLED=1
+  trap openclaw_plugins_fixture_exit_trap EXIT
+}
+
+openclaw_plugins_fixture_exit_trap() {
+  local status="$?"
+  openclaw_plugins_cleanup_fixture_servers
+  if [[ -n "${OPENCLAW_PLUGINS_FIXTURE_PREVIOUS_EXIT_ACTION:-}" ]]; then
+    eval "$OPENCLAW_PLUGINS_FIXTURE_PREVIOUS_EXIT_ACTION"
+  fi
+  exit "$status"
+}
+
 record_fixture_plugin_trust() {
   local plugin_id="$1"
   local plugin_root="$2"
@@ -66,13 +208,6 @@ write_fixture_plugin_with_vendored_dependency() {
   node scripts/e2e/lib/fixture.mjs plugin-vendored-dep "$dir" "$id" "$version" "$method" "$name"
 }
 
-write_fixture_manifest() {
-  local file="$1"
-  local id="$2"
-
-  node scripts/e2e/lib/fixture.mjs plugin-manifest "$file" "$id"
-}
-
 pack_fixture_plugin() {
   local pack_dir="$1"
   local output_tgz="$2"
@@ -83,6 +218,27 @@ pack_fixture_plugin() {
 
   mkdir -p "$pack_dir/package"
   write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  tar -czf "$output_tgz" -C "$pack_dir" package
+}
+
+pack_fixture_plugin_with_invalid_extension_entry() {
+  local pack_dir="$1"
+  local output_tgz="$2"
+  local id="$3"
+  local version="$4"
+  local method="$5"
+  local name="$6"
+
+  mkdir -p "$pack_dir/package"
+  write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  node --input-type=module - "$pack_dir/package/package.json" <<'NODE'
+import fs from "node:fs";
+
+const packageJsonPath = process.argv[2];
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+packageJson.openclaw.extensions = ["./index.js", " "];
+fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+NODE
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
@@ -97,24 +253,26 @@ start_npm_fixture_registry() {
 
   shift 4
 
+  openclaw_plugins_validate_fixture_log_print_bytes || return $?
+
   node scripts/e2e/lib/plugins/npm-registry-server.mjs "$server_port_file" "$package_name" "$version" "$tarball" "$@" >"$server_log" 2>&1 &
   local server_pid="$!"
   echo "$server_pid" >"$server_pid_file"
+  openclaw_plugins_register_fixture_pid_file "$server_pid_file"
 
   for _ in $(seq 1 100); do
     if [[ -s "$server_port_file" ]]; then
       export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
-      trap 'if [[ -f "'"$server_pid_file"'" ]]; then kill "$(cat "'"$server_pid_file"'")" 2>/dev/null || true; fi' EXIT
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
-      cat "$server_log"
+      openclaw_plugins_print_fixture_log "$server_log"
       return 1
     fi
     sleep 0.1
   done
 
-  cat "$server_log"
+  openclaw_plugins_print_fixture_log "$server_log"
   echo "Timed out waiting for npm fixture registry." >&2
   return 1
 }

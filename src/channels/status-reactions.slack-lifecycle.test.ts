@@ -1,3 +1,4 @@
+// Slack lifecycle status reaction tests cover reaction updates around channel session state changes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createStatusReactionController,

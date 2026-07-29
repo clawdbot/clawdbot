@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
@@ -14,19 +15,16 @@ export {
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
-export {
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripRegexes,
-} from "./group-intro.js";
+export { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 export { createWhatsAppOutboundBase } from "./outbound-base.js";
 export {
   isWhatsAppGroupJid,
@@ -44,16 +42,9 @@ export type { WhatsAppAccountConfig } from "./account-types.js";
 
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
-let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
-
-function loadChannelRuntime() {
-  channelRuntimePromise ??= import("./channel.runtime.js");
-  return channelRuntimePromise;
-}
-
 export async function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  const { monitorWebChannel } = await loadChannelRuntime();
-  return await monitorWebChannel(...args);
+  const { monitorWebChannel: monitorWebChannelLocal } = await loadWhatsAppChannelRuntime();
+  return await monitorWebChannelLocal(...args);
 }

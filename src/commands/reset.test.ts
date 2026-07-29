@@ -1,6 +1,10 @@
+// Reset command tests cover cleanup runtime behavior, workspace state, and reset prompts.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  cleanupCommandLogMessages,
   createCleanupCommandRuntime,
+  removeStateAndLinkedPaths,
+  removeWorkspaceDirs,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
@@ -26,7 +30,11 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
+    ).toBe(true);
   });
 
   it("does not recommend backup for config-only reset", async () => {
@@ -37,6 +45,39 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not reopen workspace state after full state removal", async () => {
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+      dryRun: true,
+    });
+
+    expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
+      dryRun: true,
+      removeStateRows: false,
+    });
+  });
+
+  it("removes workspace rows when full state removal fails", async () => {
+    removeStateAndLinkedPaths.mockResolvedValueOnce(false);
+
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
+      dryRun: false,
+      removeStateRows: true,
+    });
   });
 });

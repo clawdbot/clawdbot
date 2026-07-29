@@ -1,13 +1,20 @@
+/**
+ * PTY fallback runtime tests.
+ * Verifies PTY-requested exec sessions can fall back through the supervisor
+ * path while still emitting diagnostics and registry state.
+ */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticExecProcessCompletedEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import type { ManagedRun, SpawnInput } from "../process/supervisor/index.js";
+import type { ManagedRun } from "../process/supervisor/index.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 
 let listRunningSessions: typeof import("./bash-process-registry.js").listRunningSessions;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 
 const { supervisorSpawnMock } = vi.hoisted(() => ({
@@ -19,7 +26,6 @@ vi.mock("../process/supervisor/index.js", () => ({
     spawn: supervisorSpawnMock,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
 }));
@@ -50,8 +56,8 @@ function createSuccessfulRun(input: SpawnInput): ManagedRun {
 }
 
 beforeAll(async () => {
-  ({ listRunningSessions, resetProcessRegistryForTests } =
-    await import("./bash-process-registry.js"));
+  ({ listRunningSessions } = await import("./bash-process-registry.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
   ({ runExecProcess } = await import("./bash-tools.exec-runtime.js"));
 });
 
@@ -79,6 +85,14 @@ function runPtyFallback(warnings: string[] = []) {
   });
 }
 
+function spawnInput(index: number): SpawnInput {
+  const call = supervisorSpawnMock.mock.calls[index] as [SpawnInput] | undefined;
+  if (!call) {
+    throw new Error(`expected supervisor spawn call ${index}`);
+  }
+  return call[0];
+}
+
 test("exec falls back when PTY spawn fails", async () => {
   supervisorSpawnMock
     .mockRejectedValueOnce(new Error("pty spawn failed"))
@@ -91,11 +105,8 @@ test("exec falls back when PTY spawn fails", async () => {
   expect(outcome.status).toBe("completed");
   expect(outcome.aggregated).toContain("ok");
   expect(warnings.join("\n")).toContain("PTY spawn failed");
-  expect(supervisorSpawnMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ mode: "pty" }));
-  expect(supervisorSpawnMock).toHaveBeenNthCalledWith(
-    2,
-    expect.objectContaining({ mode: "child" }),
-  );
+  expect(spawnInput(0).mode).toBe("pty");
+  expect(spawnInput(1).mode).toBe("child");
 });
 
 test("exec cleans session state when PTY fallback spawn also fails", async () => {
@@ -109,7 +120,9 @@ test("exec cleans session state when PTY fallback spawn also fails", async () =>
 });
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 test("exec emits bounded process diagnostics without command text", async () => {
@@ -138,17 +151,20 @@ test("exec emits bounded process diagnostics without command text", async () => 
     await handle.promise;
     await flushDiagnosticEvents();
 
-    const event = events.find((item) => item.type === "exec.process.completed");
-    expect(event).toMatchObject({
-      type: "exec.process.completed",
-      target: "host",
-      mode: "child",
-      outcome: "completed",
-      durationMs: expect.any(Number),
-      commandLength: command.length,
-      exitCode: 0,
-      sessionKey: "session-1",
-    });
+    const event = events.find(
+      (item): item is DiagnosticExecProcessCompletedEvent => item.type === "exec.process.completed",
+    );
+    if (!event) {
+      throw new Error("Expected exec process completed event");
+    }
+    expect(event.type).toBe("exec.process.completed");
+    expect(event.target).toBe("host");
+    expect(event.mode).toBe("child");
+    expect(event.outcome).toBe("completed");
+    expect(typeof event?.durationMs).toBe("number");
+    expect(event?.commandLength).toBe(command.length);
+    expect(event?.exitCode).toBe(0);
+    expect(event?.sessionKey).toBe("session-1");
     const serialized = JSON.stringify(event);
     expect(serialized).not.toContain("printf");
     expect(serialized).not.toContain("super-secret-value");

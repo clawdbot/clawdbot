@@ -1,3 +1,6 @@
+/**
+ * Chutes provider plugin entrypoint with OAuth and API-key auth methods.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveOAuthApiKeyMarker,
@@ -6,8 +9,11 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { loginChutes } from "openclaw/plugin-sdk/provider-auth-login";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { loginChutes } from "./oauth.js";
 import {
   CHUTES_DEFAULT_MODEL_REF,
   applyChutesApiKeyConfig,
@@ -73,6 +79,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       onAuth,
       onPrompt,
       onProgress: (message) => progress.update(message),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
 
     progress.stop("Chutes OAuth complete");

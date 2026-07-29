@@ -1,3 +1,4 @@
+/** Resolves enabled bundled plugins that advertise a specific manifest contract list. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveBundledPluginCompatibleLoadValues,
@@ -11,17 +12,15 @@ import {
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { loadManifestContractSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginIdScopeSet } from "./plugin-scope.js";
 
-function createPluginIdSet(pluginIds: readonly string[] | undefined): Set<string> | null {
-  return pluginIds && pluginIds.length > 0 ? new Set(pluginIds) : null;
-}
-
-export function listBundledManifestContractPluginIds(params: {
+/** Lists bundled plugin ids with a non-empty contract contribution in a manifest snapshot. */
+function listBundledManifestContractPluginIds(params: {
   plugins: readonly PluginManifestRecord[];
   contract: PluginManifestContractListKey;
   onlyPluginIds?: readonly string[];
 }): string[] {
-  const onlyPluginIdSet = createPluginIdSet(params.onlyPluginIds);
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   return params.plugins
     .filter(
       (plugin) =>
@@ -33,6 +32,7 @@ export function listBundledManifestContractPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Applies config activation and compatibility rules before returning bundled contract owners. */
 export function resolveEnabledBundledManifestContractPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -72,7 +72,7 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
   const activationSource = createPluginActivationSource({
     config: activation.activationSourceConfig,
   });
-  const onlyPluginIdSet = createPluginIdSet(params.onlyPluginIds);
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   return loadManifestRecords(activation.config).filter((plugin) => {
     if (
       plugin.origin !== "bundled" ||

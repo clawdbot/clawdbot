@@ -1,14 +1,17 @@
+// Verifies provider-owned Google Antigravity and Vertex model id normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 vi.mock("../plugins/provider-runtime.js", () => {
   function normalizeGoogleModelIdForProvider(provider: string, modelId: string): string {
+    // Mirrors the provider plugin normalization contract used by config
+    // planning without importing the bundled plugin runtime.
     if (provider === "google-antigravity") {
       return /^(gemini-3(?:[.-]1)?-pro)$/.test(modelId) ? `${modelId}-low` : modelId;
     }
-    if (provider === "google-vertex" && modelId === "gemini-3.1-flash-lite") {
-      return "gemini-3.1-flash-lite-preview";
+    if (provider === "google-vertex" && modelId === "gemini-3.1-flash-lite-preview") {
+      return "gemini-3.1-flash-lite";
     }
     return modelId;
   }
@@ -65,6 +68,8 @@ function buildProvider(
 function normalizeProviderMap(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
+  // Normalization should preserve object identity when no provider changed so
+  // callers can cheaply detect no-op config planning.
   let changed = false;
   const next: Record<string, ProviderConfig> = {};
   for (const [providerKey, provider] of Object.entries(providers)) {
@@ -113,9 +118,9 @@ describe("google-antigravity provider normalization", () => {
 });
 
 describe("google-vertex provider normalization", () => {
-  it("normalizes gemini flash-lite IDs for google-vertex providers", () => {
+  it("normalizes deprecated flash-lite-preview to GA flash-lite for google-vertex", () => {
     const providers = {
-      "google-vertex": buildProvider(["gemini-3.1-flash-lite", "gemini-3-flash-preview"], {
+      "google-vertex": buildProvider(["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], {
         api: undefined,
       }),
       openai: buildProvider(["gpt-5"]),
@@ -125,7 +130,7 @@ describe("google-vertex provider normalization", () => {
 
     expect(normalized).not.toBe(providers);
     expect(normalized?.["google-vertex"]?.models.map((model) => model.id)).toEqual([
-      "gemini-3.1-flash-lite-preview",
+      "gemini-3.1-flash-lite",
       "gemini-3-flash-preview",
     ]);
     expect(normalized?.openai).toBe(providers.openai);
@@ -133,7 +138,7 @@ describe("google-vertex provider normalization", () => {
 
   it("returns original providers object when no google-vertex IDs need normalization", () => {
     const providers = {
-      "google-vertex": buildProvider(["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], {
+      "google-vertex": buildProvider(["gemini-3.1-flash-lite", "gemini-3-flash-preview"], {
         api: undefined,
       }),
     };

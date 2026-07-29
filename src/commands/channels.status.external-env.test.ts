@@ -1,3 +1,4 @@
+// Channels status external-env tests cover env-backed credentials and config-only status rendering.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +60,10 @@ function writeExternalEnvChannelPlugin() {
         version: "1.0.0",
         openclaw: {
           extensions: ["./index.cjs"],
+          channel: {
+            id: "external-env-channel",
+            configuredState: { env: { anyOf: ["EXTERNAL_ENV_CHANNEL_TOKEN"] } },
+          },
         },
       },
       null,
@@ -73,9 +78,6 @@ function writeExternalEnvChannelPlugin() {
         id: "external-env-channel-plugin",
         configSchema: EMPTY_PLUGIN_SCHEMA,
         channels: ["external-env-channel"],
-        channelEnvVars: {
-          "external-env-channel": ["EXTERNAL_ENV_CHANNEL_TOKEN"],
-        },
       },
       null,
       2,
@@ -125,13 +127,9 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
 
     expect(fs.existsSync(fullMarker)).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
-    expect(payload).toEqual(
-      expect.objectContaining({
-        gatewayReachable: false,
-        configOnly: true,
-        configuredChannels: ["external-env-channel"],
-      }),
-    );
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toEqual(["external-env-channel"]);
   });
 });
 

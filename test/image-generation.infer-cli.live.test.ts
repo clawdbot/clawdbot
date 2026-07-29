@@ -1,3 +1,4 @@
+// Live image generation CLI tests validate inferred CLI image generation.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -56,8 +57,10 @@ describeLive("image generation infer CLI live", () => {
     const outputs = payload.outputs as Array<{ path?: string; mimeType?: string; size?: number }>;
     expect(outputs).toHaveLength(1);
     const outputPath = outputs[0]?.path;
-    expect(outputPath).toBeTruthy();
-    expect(fs.existsSync(outputPath ?? "")).toBe(true);
+    if (!outputPath) {
+      throw new Error("expected generated image output path");
+    }
+    expect(fs.existsSync(outputPath)).toBe(true);
     expect(outputs[0]?.mimeType?.startsWith("image/")).toBe(true);
     expect(outputs[0]?.size ?? 0).toBeGreaterThan(512);
   }, 240_000);

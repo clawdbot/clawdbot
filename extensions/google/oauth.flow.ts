@@ -1,3 +1,4 @@
+// Google plugin module implements oauth.flow behavior.
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
   generateOAuthState,
@@ -47,6 +48,7 @@ export async function waitForLocalCallback(params: {
   expectedState: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }): Promise<{ code: string; state: string }> {
   return await waitForLocalOAuthCallback({
     expectedState: params.expectedState,
@@ -57,5 +59,6 @@ export async function waitForLocalCallback(params: {
     successTitle: "Gemini CLI OAuth complete",
     progressMessage: `Waiting for OAuth callback on ${REDIRECT_URI}…`,
     onProgress: params.onProgress,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }

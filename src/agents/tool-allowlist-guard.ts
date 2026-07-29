@@ -1,4 +1,10 @@
-import { normalizeToolName } from "./tool-policy.js";
+/**
+ * Explicit tool allowlist guard.
+ *
+ * Collects operator/user allowlist sources and explains when no callable tools remain.
+ */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
   label: string;
@@ -6,11 +12,12 @@ type ExplicitToolAllowlistSource = {
   enforceWhenToolsDisabled?: boolean;
 };
 
+/** Normalize explicit allowlist sources, dropping empty source entries. */
 export function collectExplicitToolAllowlistSources(
   sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
 ): ExplicitToolAllowlistSource[] {
   return sources.flatMap((source) => {
-    const entries = (source.allow ?? []).map((entry) => entry.trim()).filter(Boolean);
+    const entries = normalizeStringEntries(source.allow);
     if (entries.length === 0) {
       return [];
     }
@@ -24,6 +31,7 @@ export function collectExplicitToolAllowlistSources(
   });
 }
 
+/** Build an actionable error when explicit allowlists remove every callable tool. */
 export function buildEmptyExplicitToolAllowlistError(params: {
   sources: ExplicitToolAllowlistSource[];
   callableToolNames: string[];
@@ -34,7 +42,7 @@ export function buildEmptyExplicitToolAllowlistError(params: {
     params.disableTools === true
       ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
       : params.sources;
-  const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
+  const callableToolNames = normalizeToolList(params.callableToolNames);
   if (sources.length === 0 || callableToolNames.length > 0) {
     return null;
   }

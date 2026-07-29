@@ -1,10 +1,13 @@
+// Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
 import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+import { containsAuthoredInclude } from "./include-migration-ownership.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
+/** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
   snapshot: DoctorConfigPreflightResult["snapshot"];
   state: DoctorConfigMutationState;
@@ -25,7 +28,16 @@ export function applyLegacyCompatibilityStep(params: {
   }
 
   const issueLines = formatConfigIssueLines(params.snapshot.legacyIssues, "-");
-  const { config: migrated, changes, partiallyValid } = migrateLegacyConfig(params.snapshot.parsed);
+  const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
+  const migrationInput = hasAuthoredIncludes
+    ? params.snapshot.sourceConfig
+    : params.snapshot.parsed;
+  const {
+    config: migrated,
+    sourceConfig: migratedSource,
+    changes,
+    partiallyValid,
+  } = migrateLegacyConfig(migrationInput);
   if (!migrated) {
     return {
       state: {
@@ -43,6 +55,8 @@ export function applyLegacyCompatibilityStep(params: {
     };
   }
 
+  const migrationCandidate = hasAuthoredIncludes && migratedSource ? migratedSource : migrated;
+
   return {
     state: {
       // Doctor should keep using the best-effort migrated shape in memory even
@@ -50,8 +64,8 @@ export function applyLegacyCompatibilityStep(params: {
       // When partiallyValid, the migration succeeded but unrelated validation issues
       // remain — still commit the migration so doctor --fix always applies safe migrations
       // even when other problems prevent full validation from passing.
-      cfg: migrated,
-      candidate: migrated,
+      cfg: migrationCandidate,
+      candidate: migrationCandidate,
       // The read path can normalize legacy config into the snapshot before
       // migrateLegacyConfig emits concrete mutations. Legacy issues still mean
       // the on-disk config needs a doctor --fix path.
@@ -69,6 +83,7 @@ export function applyLegacyCompatibilityStep(params: {
   };
 }
 
+/** Strip unknown config keys while preserving active auth profile settings. */
 export function applyUnknownConfigKeyStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;

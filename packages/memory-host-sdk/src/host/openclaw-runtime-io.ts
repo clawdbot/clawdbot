@@ -1,9 +1,10 @@
+// Narrow IO/runtime facade re-exported for memory host helpers.
+
 export {
   CHARS_PER_TOKEN_ESTIMATE,
-  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
-  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
-  applyWindowsSpawnProgramPolicy,
+  configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
+  root,
   createSubsystemLogger,
   detectMime,
   estimateStringChars,
@@ -12,27 +13,16 @@ export {
   redactSensitiveText,
   resolveGlobalSingleton,
   resolveUserPath,
-  resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
   runTasksWithConcurrency,
   shortenHomeInString,
   shortenHomePath,
-  shouldIgnoreWarning,
   splitShellArgs,
   truncateUtf16Safe,
-  writeFileWithinRoot,
 } from "./openclaw-runtime.js";
 
 export type {
-  ProcessWarning,
-  ResolveWindowsSpawnProgramCandidateParams,
-  ResolveWindowsSpawnProgramParams,
+  SqliteConnectionPragmaOptions,
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
-  WindowsSpawnCandidateResolution,
-  WindowsSpawnInvocation,
-  WindowsSpawnProgram,
-  WindowsSpawnProgramCandidate,
-  WindowsSpawnResolution,
 } from "./openclaw-runtime.js";

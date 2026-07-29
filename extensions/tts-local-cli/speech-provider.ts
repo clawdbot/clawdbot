@@ -1,15 +1,21 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Tts Local Cli provider module implements model/runtime integration.
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  readRegularFileSync,
+  writeExternalFileWithinRoot,
+} from "openclaw/plugin-sdk/security-runtime";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const log = createSubsystemLogger("tts-local-cli");
 
@@ -27,6 +33,8 @@ type CliConfig = {
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
+const MAX_CLI_STDERR_BYTES = 1024 * 1024;
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -169,6 +177,10 @@ function getFileExt(format: string): string {
   return ".mp3";
 }
 
+function readAudioFile(filePath: string): Buffer {
+  return readRegularFileSync({ filePath, maxBytes: MAX_AUDIO_OUTPUT_BYTES }).buffer;
+}
+
 async function runCli(params: {
   command: string;
   args: string[];
@@ -200,69 +212,76 @@ async function runCli(params: {
 
   const baseArgs = [...initialArgs, ...params.args];
   const args = baseArgs.map((a) => applyTemplate(a, ctx));
-
-  return new Promise((resolve, reject) => {
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill();
-      // Escalate to SIGKILL if child ignores SIGTERM
-      setTimeout(() => proc.kill("SIGKILL"), 5000).unref();
-    }, params.timeoutMs);
-
-    const env = params.env ? { ...process.env, ...params.env } : process.env;
-    const proc = spawn(cmd, args, { cwd: params.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    proc.stdout.on("data", (c) => stdoutChunks.push(c));
-    proc.stderr.on("data", (c) => stderrChunks.push(c));
-
-    proc.on("error", (e) => {
-      clearTimeout(timer);
-      reject(new Error(`CLI TTS failed: ${e.message}`));
-    });
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return reject(new Error(`CLI TTS timed out after ${params.timeoutMs}ms`));
-      }
-      if (code !== 0) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf8");
-        return reject(new Error(`CLI TTS exit ${code}: ${stderr}`));
-      }
-
-      const audioFile = findAudioFile(params.outputDir, params.filePrefix);
-      if (audioFile) {
-        if (!existsSync(audioFile)) {
-          return reject(new Error(`CLI TTS: output file not found at ${audioFile}`));
-        }
-        const format = detectFormat(audioFile);
-        if (!format) {
-          return reject(new Error(`CLI TTS: unknown format for ${audioFile}`));
-        }
-        return resolve({
-          buffer: readFileSync(audioFile),
-          actualFormat: format,
-          audioPath: audioFile,
-        });
-      }
-
-      const stdout = Buffer.concat(stdoutChunks);
-      if (stdout.length > 0) {
-        // Assume WAV for stdout output; could be MP3 but caller should convert if needed
-        return resolve({ buffer: stdout, actualFormat: "wav" });
-      }
-      reject(new Error("CLI TTS produced no output"));
-    });
-
-    proc.stdin?.on("error", () => {}); // suppress EPIPE if child ignores stdin
-    if (!baseArgs.some((a) => /{{\s*text\s*}}/i.test(a))) {
-      proc.stdin?.write(cleanText);
-    }
-    proc.stdin?.end();
+  const input = baseArgs.some((a) => /{{\s*text\s*}}/i.test(a)) ? "" : cleanText;
+  const result = await runCommandBuffered([cmd, ...args], {
+    cwd: params.cwd,
+    env: params.env,
+    input,
+    maxOutputBytes: {
+      stdout: MAX_AUDIO_OUTPUT_BYTES,
+      stderr: MAX_CLI_STDERR_BYTES,
+    },
+    timeoutMs: params.timeoutMs,
   });
+  if (result.termination === "timeout") {
+    throw new Error(`CLI TTS timed out after ${params.timeoutMs}ms`);
+  }
+  if (result.termination === "output-limit") {
+    const stream = result.outputLimitStream ?? "stdout";
+    const maxBytes = stream === "stderr" ? MAX_CLI_STDERR_BYTES : MAX_AUDIO_OUTPUT_BYTES;
+    throw new Error(`CLI TTS ${stream} exceeded ${maxBytes} bytes`);
+  }
+  if (result.code !== null && result.code !== 0) {
+    throw new Error(`CLI TTS exit ${result.code}: ${result.stderr.toString("utf8")}`);
+  }
+  if (result.termination !== "exit" && result.termination !== "error") {
+    throw new Error(`CLI TTS failed: ${result.error?.message ?? result.termination}`);
+  }
+  if (result.termination === "error" && result.code !== 0) {
+    throw new Error(`CLI TTS failed: ${result.error?.message ?? result.termination}`);
+  }
+
+  const audioFile = findAudioFile(params.outputDir, params.filePrefix);
+  if (audioFile) {
+    const format = detectFormat(audioFile);
+    if (!format) {
+      throw new Error(`CLI TTS: unknown format for ${audioFile}`);
+    }
+    return {
+      buffer: readAudioFile(audioFile),
+      actualFormat: format,
+      audioPath: audioFile,
+    };
+  }
+  if (result.termination === "error" && result.errorStream !== "stderr") {
+    throw new Error(`CLI TTS failed: ${result.error?.message ?? result.termination}`);
+  }
+
+  const stdout = result.stdout;
+  if (stdout.length > 0) {
+    // Assume WAV for stdout output; could be MP3 but caller should convert if needed
+    return { buffer: stdout, actualFormat: "wav" };
+  }
+  if (result.termination === "error") {
+    throw new Error(`CLI TTS failed: ${result.error?.message ?? result.termination}`);
+  }
+  throw new Error("CLI TTS produced no output");
+}
+
+async function runFfmpegToBuffer(params: {
+  args: string[];
+  outputDir: string;
+  outputFileName: string;
+}): Promise<Buffer> {
+  const outputPath = path.join(params.outputDir, params.outputFileName);
+  await writeExternalFileWithinRoot({
+    rootDir: params.outputDir,
+    path: params.outputFileName,
+    write: async (tempPath) => {
+      await runFfmpeg([...params.args, tempPath]);
+    },
+  });
+  return readAudioFile(outputPath);
 }
 
 async function convertAudio(
@@ -270,23 +289,22 @@ async function convertAudio(
   outputDir: string,
   target: OutputFormat,
 ): Promise<Buffer> {
-  const outputPath = path.join(outputDir, `converted${getFileExt(target)}`);
+  const outputFileName = `converted${getFileExt(target)}`;
   const args = ["-y", "-i", inputPath];
   if (target === "opus") {
-    args.push("-c:a", "libopus", "-b:a", "64k", outputPath);
+    args.push("-c:a", "libopus", "-b:a", "64k", "-f", "opus");
   } else if (target === "wav") {
-    args.push("-c:a", "pcm_s16le", outputPath);
+    args.push("-c:a", "pcm_s16le", "-f", "wav");
   } else {
-    args.push("-c:a", "libmp3lame", "-b:a", "128k", outputPath);
+    args.push("-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3");
   }
-  await runFfmpeg(args);
-  return readFileSync(outputPath);
+  return await runFfmpegToBuffer({ args, outputDir, outputFileName });
 }
 
 async function convertToRawPcm(inputPath: string, outputDir: string): Promise<Buffer> {
   // Output raw 16kHz mono 16-bit little-endian PCM (no WAV headers)
-  const outputPath = path.join(outputDir, "telephony.pcm");
-  await runFfmpeg([
+  const outputFileName = "telephony.pcm";
+  const args = [
     "-y",
     "-i",
     inputPath,
@@ -298,9 +316,8 @@ async function convertToRawPcm(inputPath: string, outputDir: string): Promise<Bu
     "1",
     "-f",
     "s16le",
-    outputPath,
-  ]);
-  return readFileSync(outputPath);
+  ];
+  return await runFfmpegToBuffer({ args, outputDir, outputFileName });
 }
 
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
@@ -324,9 +341,13 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         throw new Error("CLI TTS not configured");
       }
 
-      log.debug(`synthesize: text=${req.text.slice(0, 50)}...`);
+      log.debug(`synthesize: text=${truncateUtf16Safe(req.text, 50)}...`);
 
-      const tempDir = mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-tts-"));
+      const temp = await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-cli-tts-",
+      });
+      const tempDir = temp.dir;
 
       try {
         const result = await runCli({
@@ -351,7 +372,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
             if (!result.audioPath) {
-              writeFileSync(inputFile, result.buffer);
+              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
             }
             buffer = await convertAudio(inputFile, tempDir, "opus");
             format = "opus";
@@ -365,7 +386,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
             if (!result.audioPath) {
-              writeFileSync(inputFile, result.buffer);
+              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
             }
             buffer = await convertAudio(inputFile, tempDir, desired);
             format = desired;
@@ -383,9 +404,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           voiceCompatible: req.target === "voice-note" && format === "opus",
         };
       } finally {
-        try {
-          rmSync(tempDir, { recursive: true, force: true });
-        } catch {}
+        await temp.cleanup();
       }
     },
 
@@ -395,9 +414,13 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         throw new Error("CLI TTS not configured");
       }
 
-      log.debug(`synthesizeTelephony: text=${req.text.slice(0, 50)}...`);
+      log.debug(`synthesizeTelephony: text=${truncateUtf16Safe(req.text, 50)}...`);
 
-      const tempDir = mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-tts-"));
+      const temp = await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-cli-tts-",
+      });
+      const tempDir = temp.dir;
 
       try {
         const result = await runCli({
@@ -415,7 +438,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         const inputFile =
           result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
         if (!result.audioPath) {
-          writeFileSync(inputFile, result.buffer);
+          await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
         }
 
         // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
@@ -427,9 +450,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           sampleRate: 16000,
         };
       } finally {
-        try {
-          rmSync(tempDir, { recursive: true, force: true });
-        } catch {}
+        await temp.cleanup();
       }
     },
   };

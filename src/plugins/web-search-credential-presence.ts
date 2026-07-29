@@ -1,3 +1,4 @@
+// Checks web-search credential presence from config and plugin metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -52,13 +53,8 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
       return false;
     }
-    const providerAuthEnvVars = plugin.providerAuthEnvVars;
-    if (!providerAuthEnvVars) {
-      return false;
-    }
-    return Object.values(providerAuthEnvVars)
-      .flat()
-      .some((envVar) => hasConfiguredCredentialValue(env[envVar]));
+    const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
+    return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
   });
 }
 
@@ -67,7 +63,6 @@ export function hasConfiguredWebSearchCredential(params: {
   env?: NodeJS.ProcessEnv;
   searchConfig?: Record<string, unknown>;
   origin?: PluginManifestRecord["origin"];
-  bundledAllowlistCompat?: boolean;
 }): boolean {
   const searchConfig =
     params.searchConfig ??

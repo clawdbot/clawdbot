@@ -2,89 +2,68 @@
 summary: "How active-run steering queues messages at runtime boundaries"
 read_when:
   - Explaining how steer behaves while an agent is using tools
+  - Explaining why steering does not cancel an in-flight tool-call batch
   - Changing active-run queue behavior or runtime steering integration
-  - Comparing steer, queue, collect, and followup modes
+  - Comparing steering with followup, collect, and interrupt queue modes
 title: "Steering queue"
 ---
 
-When a message arrives while a session run is already streaming, OpenClaw can
-send that message into the active runtime instead of starting another run for
-the same session. The public modes are runtime-neutral; Pi and the native Codex
-app-server harness implement the delivery details differently.
+When a normal prompt arrives while a session run is already streaming and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime. OpenClaw and the native Codex app-server harness implement the delivery details differently.
+
+This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. Pi checks for
-queued steering messages at model boundaries:
+Steering does not interrupt a tool call that is already running. OpenClaw checks for queued steering messages at model boundaries:
 
 1. The assistant asks for tool calls.
-2. Pi executes the current assistant message's tool-call batch.
-3. Pi emits the turn end event.
-4. Pi drains queued steering messages.
-5. Pi appends those messages as user messages before the next LLM call.
+2. OpenClaw executes the current assistant message's tool-call batch.
+3. OpenClaw emits the turn end event.
+4. OpenClaw drains queued steering messages.
+5. OpenClaw appends those messages as user messages before the next LLM call.
 
-This keeps tool results paired with the assistant message that requested them,
-then lets the next model call see the latest user input.
+This keeps tool results paired with the assistant message that requested them, then lets the next model call see the latest user input.
 
-The native Codex app-server harness exposes `turn/steer` instead of Pi's
-internal steering queue. OpenClaw adapts the same modes there:
+The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order.
 
-- `steer` batches queued messages for the configured quiet window, then sends a
-  single `turn/steer` request with all collected user input in arrival order.
-- `queue` keeps the legacy serialized shape by sending separate `turn/steer`
-  requests.
-- `followup`, `collect`, `steer-backlog`, and `interrupt` stay OpenClaw-owned
-  queue behavior around the active Codex turn.
+Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
 
-Codex review and manual compaction turns reject same-turn steering. When a
-runtime cannot accept steering, OpenClaw falls back to the followup queue where
-that mode allows it.
+## Why steering waits for the current batch
 
-This page explains queue-mode steering for normal inbound messages. For the
-explicit `/steer <message>` command, see [Steer](/tools/steer).
+Steering applies corrections at the next model step instead of cancelling tool calls the assistant already requested. This is a deliberate design decision, not a missing feature:
+
+- A tool-call batch is one unit of work. When the model requests several tool calls in one assistant message, they usually depend on each other, for example edits across multiple files. Cancelling the not-yet-started calls leaves that work half applied, and the next model step typically has to redo the whole batch to get back to a consistent state.
+- Every tool call keeps a real result. Dropping requested calls means fabricating aborted results for them, and models routinely misread synthetic failures as real ones, then retry or route around tools that never actually failed.
+- The context stays append-only. Steered messages are appended at the tail, so nothing already sent to the model is rewritten and provider prompt caches stay valid.
+
+The wait is bounded by the current tool-call batch, not by the run: a steered correction is visible to the model at its next reasoning step. Stopping the current work is a different intent than redirecting it; use `/queue interrupt` (or `/stop`) when the newest message should abort the active run instead of steering it.
 
 ## Modes
 
-| Mode            | Active-run behavior                                                                                                          | Later followup behavior                                                             |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `steer`         | Injects all queued steering messages together at the next runtime boundary. This is the default.                             | Falls back to followup only when steering is unavailable.                           |
-| `queue`         | Legacy one-at-a-time steering. Pi injects one queued message per model boundary; Codex sends separate `turn/steer` requests. | Falls back to followup only when steering is unavailable.                           |
-| `steer-backlog` | Same active-run steering behavior as `steer`.                                                                                | Also keeps the same message for a later followup turn.                              |
-| `followup`      | Does not steer the current run.                                                                                              | Runs queued messages later.                                                         |
-| `collect`       | Does not steer the current run.                                                                                              | Coalesces compatible queued messages into one later turn after the debounce window. |
-| `interrupt`     | Aborts the active run, then starts the newest message.                                                                       | None.                                                                               |
+| Mode        | Active-run behavior                                    | Later behavior                                                                      |
+| ----------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `steer`     | Steers the prompt into the active runtime when it can. | Waits for the active run to finish if steering is unavailable.                      |
+| `followup`  | Does not steer.                                        | Runs queued messages later after the active run ends.                               |
+| `collect`   | Does not steer.                                        | Coalesces compatible queued messages into one later turn after the debounce window. |
+| `interrupt` | Aborts the active run instead of steering it.          | Starts the newest message after aborting.                                           |
 
 ## Burst example
 
 If four users send messages while the agent is executing a tool call:
 
-- `steer`: the active runtime receives all four messages in arrival order before
-  its next model decision. Pi drains them at the next model boundary; Codex
-  receives them as one batched `turn/steer`.
-- `queue`: legacy serialized steering. Pi injects one queued message at a time;
-  Codex receives separate `turn/steer` requests.
-- `collect`: OpenClaw waits until the active run ends, then creates a followup
-  turn with compatible queued messages after the debounce window.
+- With default behavior, the active runtime receives all four messages in arrival order before its next model decision. OpenClaw drains them at the next model boundary; Codex receives them as one batched `turn/steer`.
+- With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates a followup turn with compatible queued messages after the debounce window.
+- With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
 
-Steering always targets the current active session run. It does not create a new
-session, change the active run's tool policy, or split messages by sender. In
-multi-user channels, inbound prompts already include sender and route context, so
-the next model call can see who sent each message.
+Steering always targets the current active session run. It does not create a new session, change the active run's tool policy, or split messages by sender. In multi-user channels, inbound prompts already include sender and route context, so the next model call can see who sent each message.
 
-Use `collect` when you want OpenClaw to build a later followup turn that can
-coalesce compatible messages and preserve followup queue drop policy. Use
-`queue` only when you need the older one-at-a-time steering behavior.
+Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
 ## Debounce
 
-`messages.queue.debounceMs` applies to followup delivery, including `collect`,
-`followup`, `steer-backlog`, and `steer` fallback when active-run steering is not
-available. For Pi, active `steer` itself does not use the debounce timer because
-Pi naturally batches messages until the next model boundary. For the native
-Codex harness, OpenClaw uses the same debounce value as the quiet window before
-sending the batched `turn/steer`.
+The built-in queue debounce applies to queued `followup` and `collect` delivery. In `steer` mode with the native Codex harness, it also sets the quiet window before sending batched `turn/steer`. For OpenClaw, active steering itself does not use the debounce timer because OpenClaw naturally batches messages until the next model boundary.
 
 ## Related
 

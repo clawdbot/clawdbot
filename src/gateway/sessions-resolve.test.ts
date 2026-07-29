@@ -1,13 +1,14 @@
+// Session resolve tests cover canonical/legacy key lookup, store migration,
+// agent scoping, listed-session selection, and protocol error mapping.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { ErrorCodes } from "./protocol/index.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionStoreMock: vi.fn(),
-  updateSessionStoreMock: vi.fn(),
+  canonicalizeSessionEntryAliasesMock: vi.fn(),
   listSessionsFromStoreMock: vi.fn(),
-  migrateAndPruneGatewaySessionStoreKeyMock: vi.fn(),
-  resolveGatewaySessionStoreTargetMock: vi.fn(),
+  resolveGatewaySessionStoreTargetWithStoreMock: vi.fn(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
   listAgentIdsMock: vi.fn(),
 }));
@@ -27,8 +28,7 @@ vi.mock("../config/sessions.js", async () => {
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
-    loadSessionStore: hoisted.loadSessionStoreMock,
-    updateSessionStore: hoisted.updateSessionStoreMock,
+    canonicalizeSessionEntryAliases: hoisted.canonicalizeSessionEntryAliasesMock,
   };
 });
 
@@ -37,8 +37,8 @@ vi.mock("./session-utils.js", async () => {
   return {
     ...actual,
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
-    migrateAndPruneGatewaySessionStoreKey: hoisted.migrateAndPruneGatewaySessionStoreKeyMock,
-    resolveGatewaySessionStoreTarget: hoisted.resolveGatewaySessionStoreTargetMock,
+    resolveGatewaySessionStoreTargetWithStore:
+      hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
     loadCombinedSessionStoreForGateway: hoisted.loadCombinedSessionStoreForGatewayMock,
   };
 });
@@ -49,39 +49,53 @@ describe("resolveSessionKeyFromResolveParams", () => {
   const canonicalKey = "agent:main:canon";
   const legacyKey = "agent:main:legacy";
   const storePath = "/tmp/sessions.json";
+  let targetStore: Record<string, SessionEntry>;
+
+  const expectResolveToCanonicalKey = async (
+    p: Parameters<typeof resolveSessionKeyFromResolveParams>[0]["p"],
+  ) => {
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: canonicalKey,
+    });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+  };
 
   beforeEach(() => {
-    hoisted.loadSessionStoreMock.mockReset();
-    hoisted.updateSessionStoreMock.mockReset();
+    hoisted.canonicalizeSessionEntryAliasesMock.mockReset();
     hoisted.listSessionsFromStoreMock.mockReset();
-    hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReset();
-    hoisted.resolveGatewaySessionStoreTargetMock.mockReset();
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
+    targetStore = {};
     // Default: all agents are known (main is always present).
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
-    hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockImplementation(() => ({
       canonicalKey,
       storeKeys: [canonicalKey, legacyKey],
       storePath,
+      store: targetStore,
+    }));
+    hoisted.canonicalizeSessionEntryAliasesMock.mockImplementation(async () => {
+      const entry = expectDefined(
+        targetStore[legacyKey] ?? targetStore[canonicalKey],
+        "canonical session entry",
+      );
+      targetStore[canonicalKey] = entry;
+      delete targetStore[legacyKey];
+      return { canonicalKey, entry };
     });
-    hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReturnValue({ primaryKey: canonicalKey });
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (_path: string, updater: (store: Record<string, SessionEntry>) => void) => {
-        const store = hoisted.loadSessionStoreMock.mock.results[0]?.value as
-          | Record<string, SessionEntry>
-          | undefined;
-        if (store) {
-          updater(store);
-        }
-      },
-    );
   });
 
   it("hides canonical keys that fail the spawnedBy visibility filter", async () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    targetStore = {
       [canonicalKey]: { sessionId: "sess-1", updatedAt: 1 },
-    });
+    };
     hoisted.listSessionsFromStoreMock.mockReturnValue({ sessions: [] });
 
     await expect(
@@ -98,55 +112,62 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("does not page-limit exact key spawnedBy visibility checks", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-target",
+        spawnedBy: "controller-1",
+        updatedAt: now - 10_000,
+      },
+    };
+    for (let i = 0; i < 120; i += 1) {
+      store[`agent:main:sibling-${i}`] = {
+        sessionId: `sess-sibling-${i}`,
+        spawnedBy: "controller-1",
+        updatedAt: now - i,
+      };
+    }
+    targetStore = store;
+
+    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
+  });
+
   it("re-checks migrated legacy keys through the same visibility filter", async () => {
     const store = {
-      [legacyKey]: { sessionId: "sess-legacy", updatedAt: 1 },
+      [legacyKey]: { sessionId: "sess-legacy", spawnedBy: "controller-1", updatedAt: Date.now() },
     } satisfies Record<string, SessionEntry>;
-    hoisted.loadSessionStoreMock.mockImplementation(() => store);
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: canonicalKey }],
-    });
+    targetStore = store;
 
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      key: canonicalKey,
-    });
+    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
 
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledWith(storePath, expect.any(Function));
-    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith({
-      cfg: {},
+    expect(hoisted.canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.canonicalizeSessionEntryAliasesMock).toHaveBeenCalledWith({
       storePath,
-      store,
-      opts: {
-        includeGlobal: false,
-        includeUnknown: false,
-        spawnedBy: "controller-1",
-        agentId: undefined,
+      target: {
+        canonicalKey,
+        storeKeys: [canonicalKey, legacyKey],
       },
     });
   });
 
-  it("rejects sessions belonging to a deleted agent (key-based lookup)", async () => {
+  it("does not let allowMissing mask a deleted-agent error", async () => {
     const deletedAgentKey = "agent:deleted-agent:main";
-    hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
+    targetStore = {
+      [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 },
+    };
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReturnValue({
       canonicalKey: deletedAgentKey,
       storeKeys: [deletedAgentKey],
       storePath,
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 },
+      store: targetStore,
     });
     // "deleted-agent" is not in the known agents list.
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
     const result = await resolveSessionKeyFromResolveParams({
       cfg: {},
-      p: { key: deletedAgentKey },
+      p: { key: deletedAgentKey, allowMissing: true },
     });
 
     expect(result).toEqual({
@@ -158,15 +179,52 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("resolves ACP harness session keys even when harness id is not in agents.list", async () => {
+    const acpKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
+    targetStore = {
+      [acpKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 1,
+        label: "claude-delegate-test",
+        acp: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: acpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      },
+    };
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReturnValue({
+      canonicalKey: acpKey,
+      storeKeys: [acpKey],
+      storePath,
+      store: targetStore,
+    });
+    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: acpKey },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: acpKey,
+    });
+  });
+
   it("rejects non-alias agent:main sessions when main is no longer configured", async () => {
     const staleMainKey = "agent:main:guildchat:direct:u1";
-    hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
+    targetStore = {
+      [staleMainKey]: { sessionId: "sess-stale-main", updatedAt: 1 },
+    };
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReturnValue({
       canonicalKey: staleMainKey,
       storeKeys: [staleMainKey],
       storePath,
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      [staleMainKey]: { sessionId: "sess-stale-main", updatedAt: 1 },
+      store: targetStore,
     });
     hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
 
@@ -218,12 +276,16 @@ describe("resolveSessionKeyFromResolveParams", () => {
       throw new Error("session rows should not be materialized for exact sessionId lookup");
     });
 
+    const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { sessionId: "sess-target" },
+      cfg,
+      p: { sessionId: "sess-target", agentId: "main" },
     });
 
     expect(result).toEqual({ ok: true, key: "agent:main:target" });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -238,11 +300,15 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
+    const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { label: "my-label" },
+      cfg,
+      p: { label: "my-label", agentId: "main" },
     });
 
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
     expect(result).toEqual({
       ok: false,
       error: {

@@ -1,5 +1,8 @@
+// Builds memory flush prompts when conversation context exceeds model budget.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { legacyModelKey, modelKey } from "../../agents/model-ref-shared.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,11 +25,9 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const compaction = cfg?.agents?.defaults?.compaction;
-  if (compaction?.truncateAfterCompaction !== true) {
-    return undefined;
-  }
-  const parsed = parseNonNegativeByteSize(compaction.maxActiveTranscriptBytes);
+  const parsed = parseNonNegativeByteSize(
+    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
+  );
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
@@ -34,6 +35,60 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
+}
+
+function resolveBooleanParam(sources: Array<Record<string, unknown> | undefined>, key: string) {
+  for (const source of sources.toReversed()) {
+    const value = source?.[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function resolvePositiveIntegerParam(
+  sources: Array<Record<string, unknown> | undefined>,
+  key: string,
+): number | undefined {
+  for (const source of sources.toReversed()) {
+    const value = source?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+  }
+  return undefined;
+}
+
+export function resolveResponsesServerCompactionThreshold(params: {
+  cfg?: OpenClawConfig;
+  provider?: string;
+  modelId?: string;
+}): number | undefined {
+  const provider = params.provider?.trim();
+  const modelId = params.modelId?.trim();
+  if (!provider || !modelId) {
+    return undefined;
+  }
+  const legacyKey = legacyModelKey(provider, modelId);
+  const providerConfig = params.cfg?.models?.providers?.[provider];
+  const modelConfig =
+    params.cfg?.agents?.defaults?.models?.[modelKey(provider, modelId)] ??
+    (legacyKey ? params.cfg?.agents?.defaults?.models?.[legacyKey] : undefined);
+  const providerModelConfig = providerConfig?.models?.find((entry) => entry.id === modelId);
+  const sources = [
+    asRecord(providerConfig?.params),
+    asRecord(providerModelConfig?.params),
+    asRecord(params.cfg?.agents?.defaults?.params),
+    asRecord(modelConfig?.params),
+  ];
+  const serverCompaction = resolveBooleanParam(sources, "responsesServerCompaction");
+  const serverCompactionEnabled =
+    provider === "openai" ? serverCompaction !== false : serverCompaction === true;
+  if (!serverCompactionEnabled) {
+    return undefined;
+  }
+  return resolvePositiveIntegerParam(sources, "responsesCompactThreshold");
 }
 
 function resolveMemoryFlushGateState<
@@ -44,6 +99,7 @@ function resolveMemoryFlushGateState<
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
+  minimumThresholdTokens?: number;
 }): { entry: TEntry; totalTokens: number; threshold: number } | null {
   if (!params.entry) {
     return null;
@@ -58,7 +114,11 @@ function resolveMemoryFlushGateState<
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
+  const threshold = Math.max(
+    0,
+    contextWindow - reserveTokens - softThreshold,
+    Math.floor(params.minimumThresholdTokens ?? 0),
+  );
   if (threshold <= 0) {
     return null;
   }
@@ -69,7 +129,7 @@ function resolveMemoryFlushGateState<
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlush"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -104,6 +164,7 @@ export function shouldRunPreflightCompaction(params: {
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
+  minimumThresholdTokens?: number;
 }): boolean {
   const state = resolveMemoryFlushGateState(params);
   return Boolean(state && state.totalTokens >= state.threshold);
@@ -115,9 +176,9 @@ export function shouldRunPreflightCompaction(params: {
  * important for both the token-based and transcript-size–based trigger paths.
  */
 export function hasAlreadyFlushedForCurrentCompaction(
-  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
+  entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlushCompactionCount;
+  const lastFlushAt = entry.memoryFlush?.compactionCount;
   return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
 }

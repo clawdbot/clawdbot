@@ -1,9 +1,17 @@
-import { spawn } from "node:child_process";
+// Runs child commands with process-group signal forwarding and Windows shell normalization.
+import { spawn, spawnSync } from "node:child_process";
+import { constants as osConstants } from "node:os";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
+import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
+const managedChildren = new Set();
+const signalHandlers = new Map();
 
 /**
+ * Return conventional shell exit code for a signal.
+ *
  * @param {NodeJS.Signals} signal
  * @returns {number}
  */
@@ -15,14 +23,19 @@ export function signalExitCode(signal) {
 /**
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
+ * @param {{ platform?: NodeJS.Platform; runTaskkill?: typeof spawnSync }} [options]
  */
-function terminateManagedChild(child, signal = "SIGTERM") {
+export function terminateManagedChild(
+  child,
+  signal = "SIGTERM",
+  { platform = process.platform, runTaskkill = spawnSync } = {},
+) {
   if (!child.pid) {
     return;
   }
 
   try {
-    if (process.platform !== "win32") {
+    if (platform !== "win32") {
       process.kill(-child.pid, signal);
       return;
     }
@@ -37,10 +50,30 @@ function terminateManagedChild(child, signal = "SIGTERM") {
     return;
   }
 
+  if (platform === "win32") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+
   child.kill(signal);
 }
 
 /**
+ * Run a child command while forwarding termination signals to the managed process group.
+ *
  * @param {{
  *   bin: string;
  *   args?: string[];
@@ -48,6 +81,9 @@ function terminateManagedChild(child, signal = "SIGTERM") {
  *   env?: NodeJS.ProcessEnv;
  *   stdio?: import("node:child_process").StdioOptions;
  *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -58,48 +94,200 @@ export async function runManagedCommand({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
+  platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
+  comSpec,
   onReady,
 }) {
-  const child = spawn(bin, args, {
+  const spawnSpec = createManagedCommandSpawnSpec({
+    bin,
+    args,
     cwd,
     env,
     stdio,
     shell,
-    detached: process.platform !== "win32",
+    windowsVerbatimArguments,
+    platform,
+    comSpec,
   });
-
-  let receivedSignal = null;
-  let forceKillTimer = null;
-
-  const forwardSignal = (signal) => {
-    receivedSignal ??= signal;
-    terminateManagedChild(child, signal);
-    forceKillTimer ??= setTimeout(() => {
-      terminateManagedChild(child, "SIGKILL");
-    }, FORCE_KILL_DELAY_MS);
+  const child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
+  const managedChild = {
+    child,
+    forceKillTimer: null,
+    receivedSignal: null,
   };
-
-  for (const signal of FORWARDED_SIGNALS) {
-    process.once(signal, forwardSignal);
-  }
+  addManagedChild(managedChild);
   onReady?.(child);
 
   try {
     return await new Promise((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (status) => {
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
+      child.once("close", (status, signal) => {
+        if (managedChild.forceKillTimer) {
+          clearTimeout(managedChild.forceKillTimer);
         }
-        resolve(receivedSignal ? signalExitCode(receivedSignal) : (status ?? 1));
+        if (managedChild.receivedSignal) {
+          terminateManagedChild(child, "SIGKILL");
+        }
+        resolve(
+          managedChild.receivedSignal
+            ? signalExitCode(managedChild.receivedSignal)
+            : signal
+              ? signalExitCode(signal)
+              : (status ?? 1),
+        );
       });
     });
   } finally {
-    for (const signal of FORWARDED_SIGNALS) {
-      process.off(signal, forwardSignal);
-    }
+    removeManagedChild(managedChild);
   }
+}
+
+/**
+ * Build the spawn command, args, and options used by managed command execution.
+ *
+ * @param {{
+ *   child: import("node:child_process").ChildProcess;
+ *   forceKillTimer: ReturnType<typeof setTimeout> | null;
+ *   receivedSignal: string | null;
+ * }} managedChild
+ */
+function addManagedChild(managedChild) {
+  managedChildren.add(managedChild);
+  installSignalHandlers();
+}
+
+/**
+ * Build a normalized command invocation, including cmd.exe wrapping on Windows.
+ *
+ * @param {{
+ *   child: import("node:child_process").ChildProcess;
+ *   forceKillTimer: ReturnType<typeof setTimeout> | null;
+ *   receivedSignal: string | null;
+ * }} managedChild
+ */
+function removeManagedChild(managedChild) {
+  managedChildren.delete(managedChild);
+  if (managedChildren.size === 0) {
+    removeSignalHandlers();
+  }
+}
+
+function installSignalHandlers() {
+  for (const signal of FORWARDED_SIGNALS) {
+    if (signalHandlers.has(signal)) {
+      continue;
+    }
+    const handler = () => forwardSignalToManagedChildren(signal);
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
+
+function removeSignalHandlers() {
+  for (const [signal, handler] of signalHandlers) {
+    process.off(signal, handler);
+  }
+  signalHandlers.clear();
+}
+
+/**
+ * @param {NodeJS.Signals} signal
+ */
+function forwardSignalToManagedChildren(signal) {
+  for (const managedChild of managedChildren) {
+    managedChild.receivedSignal ??= signal;
+    terminateManagedChild(managedChild.child, signal);
+    managedChild.forceKillTimer ??= setTimeout(() => {
+      terminateManagedChild(managedChild.child, "SIGKILL");
+    }, FORCE_KILL_DELAY_MS);
+  }
+}
+
+/**
+ * @param {{
+ *   bin: string;
+ *   args?: string[];
+ *   cwd?: string;
+ *   env?: NodeJS.ProcessEnv;
+ *   stdio?: import("node:child_process").StdioOptions;
+ *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
+ * }} options
+ */
+export function createManagedCommandSpawnSpec({
+  bin,
+  args = [],
+  cwd,
+  env,
+  stdio = "inherit",
+  platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
+  comSpec,
+}) {
+  const invocation = createManagedCommandInvocation({
+    bin,
+    args,
+    env,
+    shell,
+    windowsVerbatimArguments,
+    platform,
+    comSpec,
+  });
+
+  return {
+    args: invocation.args,
+    command: invocation.command,
+    options: {
+      cwd,
+      env,
+      stdio,
+      shell: invocation.shell,
+      detached: platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+  };
+}
+
+/**
+ * @param {{
+ *   bin: string;
+ *   args?: string[];
+ *   env?: NodeJS.ProcessEnv;
+ *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
+ * }} options
+ */
+export function createManagedCommandInvocation({
+  bin,
+  args = [],
+  env,
+  platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
+  comSpec,
+}) {
+  if (platform === "win32" && shell && args.length > 0) {
+    return {
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(bin, args)],
+      command: comSpec ?? resolveWindowsCmdExePath(env ?? process.env),
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    args,
+    command: bin,
+    shell,
+    windowsVerbatimArguments,
+  };
 }
 
 function signalNumberFor(signal) {
@@ -111,7 +299,7 @@ function signalNumberFor(signal) {
     case "SIGTERM":
       return 15;
     default:
-      return 0;
+      return osConstants.signals?.[signal] ?? 0;
   }
 }
 

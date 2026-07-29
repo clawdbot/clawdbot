@@ -1,3 +1,4 @@
+// Discovers git repository roots by walking ancestor directories.
 import fs from "node:fs";
 import path from "node:path";
 

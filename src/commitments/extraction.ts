@@ -1,5 +1,12 @@
+// Extracts user commitments from conversation text through model prompts.
+import {
+  asFiniteNumber,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString as asString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
@@ -22,12 +29,8 @@ const KIND_VALUES = new Set<CommitmentKind>([
 const SENSITIVITY_VALUES = new Set<CommitmentSensitivity>(["routine", "personal", "care"]);
 const SOURCE_VALUES = new Set<CommitmentSource>(["inferred_user_context", "agent_promise"]);
 
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function parseCandidate(raw: unknown): CommitmentCandidate | undefined {
@@ -181,13 +184,30 @@ export async function hydrateCommitmentExtractionItem(params: {
 }
 
 function formatExistingPending(item: CommitmentExtractionItem) {
-  return item.existingPending.map((commitment) => ({
-    kind: commitment.kind,
-    reason: commitment.reason,
-    dedupeKey: commitment.dedupeKey,
-    earliest: new Date(commitment.earliestMs).toISOString(),
-    latest: new Date(commitment.latestMs).toISOString(),
-  }));
+  return item.existingPending.flatMap((commitment) => {
+    const earliest = timestampMsToIsoString(commitment.earliestMs);
+    const latest = timestampMsToIsoString(commitment.latestMs);
+    if (!earliest || !latest) {
+      return [];
+    }
+    return [
+      {
+        kind: commitment.kind,
+        reason: commitment.reason,
+        dedupeKey: commitment.dedupeKey,
+        earliest,
+        latest,
+      },
+    ];
+  });
+}
+
+function formatExtractionNow(valueMs: unknown): string {
+  return (
+    timestampMsToIsoString(valueMs) ??
+    timestampMsToIsoString(Date.now()) ??
+    "1970-01-01T00:00:00.000Z"
+  );
 }
 
 export function buildCommitmentExtractionPrompt(params: {
@@ -196,7 +216,7 @@ export function buildCommitmentExtractionPrompt(params: {
 }): string {
   const items = params.items.map((item) => ({
     itemId: item.itemId,
-    now: new Date(item.nowMs).toISOString(),
+    now: formatExtractionNow(item.nowMs),
     timezone: item.timezone,
     latestUserMessage: item.userText,
     assistantResponse: item.assistantText ?? "",
@@ -225,7 +245,7 @@ Rules:
 - Dedupe keys should be stable within a session, like "interview:2026-04-29" or "sleep:2026-04-29".
 
 Items:
-${JSON.stringify(items, null, 2)}`;
+${JSON.stringify(items)}`;
 }
 
 function parseDueMs(raw: string | undefined): number | undefined {
@@ -233,7 +253,11 @@ function parseDueMs(raw: string | undefined): number | undefined {
     return undefined;
   }
   const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parseAbsoluteTimeMs(raw) === null) {
+    return undefined;
+  }
+  // The cron parser validates the ISO shape and calendar; preserve Date.parse's existing interpretation.
+  return parsed;
 }
 
 function resolveMinimumDueMs(params: {
@@ -249,7 +273,7 @@ function resolveMinimumDueMs(params: {
   return params.nowMs + intervalMs;
 }
 
-export function validateCommitmentCandidates(params: {
+function validateCommitmentCandidates(params: {
   cfg?: OpenClawConfig;
   items: CommitmentExtractionItem[];
   result: CommitmentExtractionBatchResult;
@@ -345,4 +369,9 @@ export async function persistCommitmentExtractionResult(params: {
     );
   }
   return created;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commitmentExtractionTestApi")] =
+    { validateCommitmentCandidates };
 }

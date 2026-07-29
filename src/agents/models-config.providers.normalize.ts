@@ -1,5 +1,10 @@
+/**
+ * Normalizes configured provider model rows for runtime/discovery use.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
@@ -15,6 +20,100 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+type ProviderModelConfig = NonNullable<
+  NonNullable<ModelsConfig["providers"]>[string]["models"]
+>[number];
+type ProviderModelNormalizationOptions = {
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+};
+
+function getProviderModelId(model: ProviderModelConfig): string | undefined {
+  return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
+}
+
+function mergeNormalizedProviderModel(
+  existing: ProviderModelConfig,
+  incoming: ProviderModelConfig,
+): ProviderModelConfig {
+  return {
+    ...incoming,
+    ...existing,
+    ...(existing.cost || incoming.cost
+      ? {
+          cost: {
+            ...incoming.cost,
+            ...existing.cost,
+          },
+        }
+      : undefined),
+  };
+}
+
+function normalizeProviderModelsForConfig(
+  providerKey: string,
+  provider: ProviderConfig,
+  options: ProviderModelNormalizationOptions = {},
+): { provider: ProviderConfig; mutated: boolean } {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return { provider, mutated: false };
+  }
+
+  let mutated = false;
+  const nextModels: ProviderModelConfig[] = [];
+  const seenById = new Map<string, number>();
+  for (const model of provider.models) {
+    const rawId = getProviderModelId(model);
+    const normalizedId = rawId
+      ? normalizeConfiguredProviderCatalogModelId(providerKey, rawId, {
+          manifestPlugins: options.manifestPlugins,
+        })
+      : rawId;
+    const normalizedModel =
+      normalizedId && normalizedId !== rawId ? { ...model, id: normalizedId } : model;
+    if (normalizedModel !== model) {
+      mutated = true;
+    }
+    const id = getProviderModelId(normalizedModel);
+    if (id) {
+      const existingIndex = seenById.get(id);
+      if (existingIndex !== undefined) {
+        mutated = true;
+        const existing = nextModels.at(existingIndex);
+        if (existing) {
+          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, normalizedModel);
+        }
+        continue;
+      }
+      seenById.set(id, nextModels.length);
+    }
+    nextModels.push(normalizedModel);
+  }
+
+  return mutated
+    ? { provider: { ...provider, models: nextModels }, mutated }
+    : { provider, mutated };
+}
+
+export function normalizeProviderCatalogModelsForConfig(
+  providers: ModelsConfig["providers"],
+  options: ProviderModelNormalizationOptions = {},
+): ModelsConfig["providers"] {
+  if (!providers) {
+    return providers;
+  }
+
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    const normalized = normalizeProviderModelsForConfig(providerKey, provider, options);
+    if (normalized.mutated) {
+      mutated = true;
+    }
+    next[providerKey] = normalized.provider;
+  }
+
+  return mutated ? next : providers;
+}
 
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
@@ -24,6 +123,7 @@ export function normalizeProviders(params: {
   sourceProviders?: ModelsConfig["providers"];
   sourceSecretDefaults?: SecretDefaults;
   secretRefManagedProviders?: Set<string>;
+  manifestPlugins?: ProviderModelNormalizationOptions["manifestPlugins"];
 }): ModelsConfig["providers"] {
   const { providers } = params;
   if (!providers) {
@@ -120,6 +220,18 @@ export function normalizeProviders(params: {
     if (providerSpecificNormalized !== normalizedProvider) {
       mutated = true;
       normalizedProvider = providerSpecificNormalized;
+    }
+
+    const providerWithNormalizedModels = normalizeProviderModelsForConfig(
+      normalizedKey,
+      normalizedProvider,
+      {
+        manifestPlugins: params.manifestPlugins,
+      },
+    );
+    if (providerWithNormalizedModels.mutated) {
+      mutated = true;
+      normalizedProvider = providerWithNormalizedModels.provider;
     }
 
     const existing = next[normalizedKey];

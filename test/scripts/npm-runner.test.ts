@@ -1,3 +1,4 @@
+// Npm Runner tests cover npm runner script behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mjs";
@@ -20,6 +21,28 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      shell: false,
+    });
+  });
+
+  it("uses the active node executable when its basename is not node", () => {
+    const execPath = "/Users/test/.toolchains/node-24/bin/node24";
+    const expectedNpmCliPath = path.posix.resolve(
+      path.posix.dirname(execPath),
+      "../lib/node_modules/npm/bin/npm-cli.js",
+    );
+
+    const runner = resolveNpmRunner({
+      execPath,
+      env: {},
+      existsSync: (candidate) => candidate === expectedNpmCliPath,
+      npmArgs: ["pack", "openclaw@beta"],
+      platform: "darwin",
+    });
+
+    expect(runner).toEqual({
+      command: execPath,
+      args: [expectedNpmCliPath, "pack", "openclaw@beta"],
       shell: false,
     });
   });
@@ -104,6 +127,24 @@ describe("resolveNpmRunner", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("ignores ambient ComSpec when wrapping an adjacent npm.cmd on Windows", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const runner = resolveNpmRunner({
+      env: {
+        ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+        SystemRoot: "D:\\Windows",
+      },
+      execPath,
+      existsSync: (candidate) => candidate === npmCmdPath,
+      npmArgs: ["install"],
+      platform: "win32",
+    });
+
+    expect(runner.command).toBe("D:\\Windows\\System32\\cmd.exe");
   });
 
   it("prefixes PATH with the active node dir when falling back to bare npm", () => {

@@ -1,22 +1,30 @@
 #!/usr/bin/env node
 
+// Profiles selected tsgo graphs and writes diagnostics/trace artifacts for
+// TypeScript graph size and performance investigations.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const artifactRoot = path.resolve(repoRoot, ".artifacts/tsgo-profile");
-const tsgoPath = path.resolve(repoRoot, "node_modules", ".bin", "tsgo");
+const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 
 const GRAPH_DEFINITIONS = {
   core: {
     config: "tsconfig.core.json",
     description: "core production graph",
+  },
+  ui: {
+    config: "tsconfig.ui.json",
+    description: "UI production graph",
   },
   "core-test": {
     config: "test/tsconfig/tsconfig.core.test.json",
@@ -139,12 +147,18 @@ function runTsgo(label, args, params = {}) {
 
   const startedAt = Date.now();
   try {
-    const result = spawnSync(tsgoPath, finalArgs, {
+    const tsgo = createManagedCommandInvocation({
+      args: finalArgs,
+      bin: tsgoPath,
+      env,
+    });
+    const result = spawnSync(tsgo.command, tsgo.args, {
       cwd: repoRoot,
       env,
       encoding: "utf8",
       maxBuffer: params.maxBuffer ?? 128 * 1024 * 1024,
-      shell: process.platform === "win32",
+      shell: tsgo.shell,
+      windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
     });
     const elapsedMs = Date.now() - startedAt;
     const stdout = result.stdout ?? "";

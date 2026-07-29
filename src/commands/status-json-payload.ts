@@ -1,9 +1,13 @@
+// Builds the stable JSON payload for `openclaw status --json`.
+// Optional deep fields are included only when their upstream probes actually ran.
+
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
   buildStatusGatewayJsonPayloadFromSurface,
   type StatusOverviewSurface,
 } from "./status-overview-surface.ts";
 
+/** Combines scan summary, overview surface, services, agents, diagnostics, and optional deep probes. */
 export function buildStatusJsonPayload(params: {
   summary: Record<string, unknown>;
   surface: StatusOverviewSurface;
@@ -38,6 +42,7 @@ export function buildStatusJsonPayload(params: {
     ...(params.securityAudit ? { securityAudit: params.securityAudit } : {}),
     ...(params.pluginCompatibility
       ? {
+          // Keep warnings grouped with a count so consumers can test compatibility status cheaply.
           pluginCompatibility: {
             count: params.pluginCompatibility.length,
             warnings: params.pluginCompatibility,
@@ -46,6 +51,7 @@ export function buildStatusJsonPayload(params: {
       : {}),
     ...(params.health || params.usage || params.lastHeartbeat
       ? {
+          // Deep/usage fields stay absent in fast mode instead of appearing as null placeholders.
           health: params.health,
           usage: params.usage,
           lastHeartbeat: params.lastHeartbeat,

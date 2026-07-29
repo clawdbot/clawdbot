@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Checks channel-agnostic core surfaces for channel-specific coupling.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -38,7 +39,6 @@ const systemMarkLiteralGuardSources = [
 ];
 
 const channelIds = [
-  "bluebubbles",
   "discord",
   "googlechat",
   "imessage",
@@ -103,7 +103,7 @@ function matchesChannelModuleSpecifier(specifier) {
 }
 
 const userFacingChannelNameRe =
-  /\b(?:discord|telegram|slack|signal|imessage|whatsapp|google\s*chat|irc|line|zalo|matrix|msteams|bluebubbles)\b/i;
+  /\b(?:discord|telegram|slack|signal|imessage|whatsapp|google\s*chat|irc|line|zalo|matrix|msteams)\b/i;
 const systemMarkLiteral = "⚙️";
 
 function isModuleSpecifierStringNode(node) {
@@ -118,6 +118,9 @@ function isModuleSpecifierStringNode(node) {
   );
 }
 
+/**
+ * Finds channel-specific references inside channel-agnostic protected sources.
+ */
 export function findChannelAgnosticBoundaryViolations(
   content,
   fileName = "source.ts",
@@ -237,6 +240,9 @@ export function findChannelAgnosticBoundaryViolations(
   return violations;
 }
 
+/**
+ * Finds reverse dependencies from channel core into plugin/runtime surfaces.
+ */
 export function findChannelCoreReverseDependencyViolations(content, fileName = "source.ts") {
   return findChannelAgnosticBoundaryViolations(content, fileName, {
     checkModuleSpecifiers: true,
@@ -247,6 +253,9 @@ export function findChannelCoreReverseDependencyViolations(content, fileName = "
   });
 }
 
+/**
+ * Finds user-facing channel names in ACP-owned text sources.
+ */
 export function findAcpUserFacingChannelNameViolations(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
@@ -266,6 +275,9 @@ export function findAcpUserFacingChannelNameViolations(content, fileName = "sour
   return violations;
 }
 
+/**
+ * Finds raw system mark literals where shared constants should be used.
+ */
 export function findSystemMarkLiteralViolations(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
@@ -308,6 +320,9 @@ const boundaryRuleSets = [
   },
 ];
 
+/**
+ * Runs all channel-agnostic boundary checks.
+ */
 export async function main() {
   const violations = [];
   for (const ruleSet of boundaryRuleSets) {

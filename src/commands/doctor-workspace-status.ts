@@ -1,47 +1,73 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+/** Doctor status summary for workspace skills, plugins, and task-flow recovery hints. */
+import { note } from "../../packages/terminal-core/src/note.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
+import {
+  resolvePluginVersionDriftUpdateCommand,
+  type PluginVersionDriftReport,
+} from "../plugins/plugin-version-drift.js";
 import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
-import { note } from "../terminal/note.js";
-import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
-function noteFlowRecoveryHints() {
-  const suspicious = listTaskFlowRecords().flatMap((flow) => {
+type NoteWorkspaceStatusOptions = {
+  pluginVersionDrift?: PluginVersionDriftReport;
+};
+
+const WORKSPACE_STATUS_CHECK_ID = "core/doctor/workspace-status";
+
+type TaskFlowRecoveryFinding = {
+  flowId: string;
+  message: string;
+};
+
+function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
+  return listTaskFlowRecords().flatMap((flow) => {
     const tasks = listTasksForFlowId(flow.flowId);
-    const findings: string[] = [];
+    const findings: TaskFlowRecoveryFinding[] = [];
     if (
       flow.syncMode === "managed" &&
       flow.status === "running" &&
       tasks.length === 0 &&
       flow.waitJson === undefined
     ) {
-      findings.push(
-        `${flow.flowId}: running managed TaskFlow has no linked tasks or wait state; inspect or cancel it manually.`,
-      );
+      findings.push({
+        flowId: flow.flowId,
+        message: `${flow.flowId}: running managed TaskFlow has no linked tasks or wait state; inspect or cancel it manually.`,
+      });
     }
     if (
+      flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
       !tasks.some((task) => task.taskId === flow.blockedTaskId)
     ) {
-      findings.push(
-        `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
-      );
+      findings.push({
+        flowId: flow.flowId,
+        message: `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
+      });
     }
     return findings;
   });
+}
+
+function noteFlowRecoveryHints() {
+  const suspicious = collectTaskFlowRecoveryFindings();
   if (suspicious.length === 0) {
     return;
   }
   note(
     [
-      ...suspicious.slice(0, 5),
+      ...suspicious.slice(0, 5).map((finding) => finding.message),
       suspicious.length > 5 ? `...and ${suspicious.length - 5} more.` : null,
       `Inspect: ${formatCliCommand("openclaw tasks flow show <flow-id>")}`,
       `Cancel: ${formatCliCommand("openclaw tasks flow cancel <flow-id>")}`,
@@ -52,78 +78,180 @@ function noteFlowRecoveryHints() {
   );
 }
 
-export function noteWorkspaceStatus(cfg: OpenClawConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
-  if (legacyWorkspace.legacyDirs.length > 0) {
-    note(formatLegacyWorkspaceWarning(legacyWorkspace), "Extra workspace");
+function pluginVersionDriftToHealthFindings(
+  drift: PluginVersionDriftReport | undefined,
+): HealthFinding[] {
+  if (!drift || drift.drifts.length === 0) {
+    return [];
   }
-
-  const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
-  note(
-    [
-      `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
-      `Missing requirements: ${
-        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
-          .length
-      }`,
-      `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
-    ].join("\n"),
-    "Skills status",
-  );
-
-  const pluginRegistry = buildPluginRegistrySnapshotReport({
-    config: cfg,
-    workspaceDir,
+  return drift.drifts.map((entry) => {
+    const updateCommand = formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry));
+    return {
+      checkId: WORKSPACE_STATUS_CHECK_ID,
+      severity: "warning",
+      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but the Gateway is ${drift.gatewayVersion}.`,
+      path: `plugins.entries.${entry.pluginId}`,
+      target: entry.pluginId,
+      requirement: "plugin-version-drift",
+      fixHint: `${updateCommand} && ${formatCliCommand("openclaw gateway restart")}`,
+    };
   });
-  if (pluginRegistry.plugins.length > 0) {
-    const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
-    const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
-    const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
-    const imported = pluginRegistry.plugins.filter((p) => p.imported);
+}
 
-    const lines = [
-      `Loaded: ${loaded.length}`,
-      `Imported: ${imported.length}`,
-      `Disabled: ${disabled.length}`,
-      `Errors: ${errored.length}`,
-      errored.length > 0
-        ? `- ${errored
-            .slice(0, 10)
-            .map((p) => p.id)
-            .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`
-        : null,
-    ].filter((line): line is string => Boolean(line));
+function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
+  return {
+    checkId: WORKSPACE_STATUS_CHECK_ID,
+    severity: "warning",
+    message,
+    path: "plugins",
+    requirement: "plugin-compatibility",
+    fixHint: "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
+  };
+}
 
-    const bundlePlugins = loaded.filter(
-      (p) => p.format === "bundle" && (p.bundleCapabilities?.length ?? 0) > 0,
-    );
-    if (bundlePlugins.length > 0) {
-      const allCaps = new Set(bundlePlugins.flatMap((p) => p.bundleCapabilities ?? []));
-      lines.push(`Bundle plugins: ${bundlePlugins.length} (${[...allCaps].toSorted().join(", ")})`);
-    }
+function pluginDiagnosticToHealthFinding(
+  diagnostic: ReturnType<typeof buildPluginRegistrySnapshotReport>["diagnostics"][number],
+  message = diagnostic.message,
+): HealthFinding {
+  return {
+    checkId: WORKSPACE_STATUS_CHECK_ID,
+    severity: diagnostic.level === "error" ? "error" : "warning",
+    message,
+    ...(diagnostic.pluginId ? { path: `plugins.entries.${diagnostic.pluginId}` } : {}),
+    ...(diagnostic.pluginId ? { target: diagnostic.pluginId } : {}),
+    ...(diagnostic.source ? { source: diagnostic.source } : {}),
+    ...(diagnostic.code ? { requirement: diagnostic.code } : { requirement: "plugin-diagnostic" }),
+  };
+}
 
-    note(lines.join("\n"), "Plugins");
-  }
-  const compatibilityWarnings = buildPluginCompatibilityWarnings({
-    config: cfg,
-    workspaceDir,
-    report: pluginRegistry,
-  });
-  if (compatibilityWarnings.length > 0) {
-    note(compatibilityWarnings.map((line) => `- ${line}`).join("\n"), "Plugin compatibility");
-  }
-  if (pluginRegistry.diagnostics.length > 0) {
-    const lines = pluginRegistry.diagnostics.map((diag) => {
-      const prefix = diag.level.toUpperCase();
-      const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
-      const source = diag.source ? ` (${diag.source})` : "";
-      return `- ${prefix}${plugin}: ${diag.message}${source}`;
+function taskFlowRecoveryToHealthFinding(finding: TaskFlowRecoveryFinding): HealthFinding {
+  return {
+    checkId: WORKSPACE_STATUS_CHECK_ID,
+    severity: "warning",
+    message: finding.message,
+    path: "tasks.flows",
+    target: finding.flowId,
+    requirement: "taskflow-recovery",
+    fixHint: [
+      formatCliCommand(`openclaw tasks flow show ${finding.flowId}`),
+      formatCliCommand(`openclaw tasks flow cancel ${finding.flowId}`),
+    ].join(" or "),
+  };
+}
+
+export function collectWorkspaceStatusHealthFindings(
+  cfg: OpenClawConfig,
+  options: NoteWorkspaceStatusOptions = {},
+): HealthFinding[] {
+  const agentIds = listAgentIds(cfg);
+  const scopes = agentIds.map((agentId) => ({
+    agentId,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  }));
+  const workspaceFindings: HealthFinding[] = [];
+  for (const { agentId, workspaceDir } of scopes) {
+    const prefix = agentIds.length > 1 ? `Agent "${agentId}": ` : "";
+    const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
+    const compatibilityWarnings = buildPluginCompatibilityWarnings({
+      config: cfg,
+      workspaceDir,
+      report: pluginRegistry,
     });
-    note(lines.join("\n"), "Plugin diagnostics");
+    for (const message of compatibilityWarnings) {
+      workspaceFindings.push(pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`));
+    }
+    for (const diagnostic of pluginRegistry.diagnostics) {
+      workspaceFindings.push(
+        pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
+      );
+    }
   }
 
+  return [
+    ...pluginVersionDriftToHealthFindings(options.pluginVersionDrift),
+    ...workspaceFindings,
+    ...collectTaskFlowRecoveryFindings().map(taskFlowRecoveryToHealthFinding),
+  ];
+}
+
+function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
+  if (!drift || drift.drifts.length === 0) {
+    return;
+  }
+  const singleDrift = drift.drifts.length === 1 ? drift.drifts[0] : undefined;
+  const updateCommands = drift.drifts.map((entry) =>
+    formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
+  );
+  const lines = [
+    `${drift.drifts.length} active official plugin${
+      drift.drifts.length === 1 ? "" : "s"
+    } not on OpenClaw ${drift.gatewayVersion}`,
+    ...drift.drifts.map((entry) => {
+      const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+      return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
+    }),
+    singleDrift
+      ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
+      : [
+          "Fix each drifted plugin:",
+          ...updateCommands.map((command) => `- ${command}`),
+          `Then run ${formatCliCommand("openclaw gateway restart")}.`,
+        ].join("\n"),
+  ];
+  note(lines.join("\n"), "Plugin version drift");
+}
+
+/** Emits plugin and TaskFlow recovery problem notes for doctor. */
+export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const agentIds = listAgentIds(cfg);
+  const scopes = agentIds.map((agentId) => ({
+    agentId,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  }));
+  for (const { agentId, workspaceDir } of scopes) {
+    const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
+    const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
+    const errored = pluginRegistry.plugins
+      .filter((plugin) => plugin.status === "error")
+      .toSorted((a, b) => a.id.localeCompare(b.id));
+    if (errored.length > 0) {
+      const lines = [
+        `${prefix}Errors: ${errored.length}`,
+        `- ${errored
+          .slice(0, 10)
+          .map((plugin) => plugin.id)
+          .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`,
+      ];
+      note(lines.join("\n"), "Plugins");
+    }
+    const compatibilityWarnings = buildPluginCompatibilityWarnings({
+      config: cfg,
+      workspaceDir,
+      report: pluginRegistry,
+    });
+    if (compatibilityWarnings.length > 0) {
+      note(
+        `${prefix}${compatibilityWarnings.map((line) => `- ${line}`).join("\n")}`,
+        "Plugin compatibility",
+      );
+    }
+    if (pluginRegistry.diagnostics.length > 0) {
+      const lines = pluginRegistry.diagnostics.map((diag) => {
+        const level = diag.level.toUpperCase();
+        const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
+        const source = diag.source ? ` (${diag.source})` : "";
+        return `- ${level}${plugin}: ${diag.message}${source}`;
+      });
+      note(`${prefix}${lines.join("\n")}`, "Plugin diagnostics");
+    }
+  }
+  notePluginVersionDrift(options.pluginVersionDrift);
   noteFlowRecoveryHints();
 
-  return { workspaceDir };
+  return {
+    workspaceDir:
+      scopes.find((scope) => scope.agentId === defaultAgentId)?.workspaceDir ??
+      scopes[0]?.workspaceDir,
+  };
 }

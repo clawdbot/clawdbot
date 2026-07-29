@@ -1,3 +1,4 @@
+/** Shared Vitest mocks for get-reply tests that need agent/session/runtime isolation. */
 import { vi } from "vitest";
 import { createMockTypingController } from "./reply.test-helpers.js";
 
@@ -61,9 +62,14 @@ vi.mock("./get-reply-run.js", () => ({
   runPreparedReply: vi.fn(async () => undefined),
 }));
 
-vi.mock("./inbound-context.js", () => ({
-  finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
-}));
+vi.mock("./inbound-context.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./inbound-context.js")>("./inbound-context.js");
+  return {
+    ...actual,
+    finalizeInboundContext: vi.fn(actual.finalizeInboundContext),
+  };
+});
 
 vi.mock("./session-reset-model.runtime.js", () => ({
   applyResetModelOverride: vi.fn(async () => undefined),
@@ -76,5 +82,3 @@ vi.mock("./stage-sandbox-media.runtime.js", () => ({
 vi.mock("./typing.js", () => ({
   createTypingController: vi.fn(() => createMockTypingController()),
 }));
-
-export function registerGetReplyCommonMocks(): void {}

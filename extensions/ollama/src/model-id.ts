@@ -1,4 +1,6 @@
+// Ollama plugin module implements model id behavior.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OLLAMA_PROVIDER_ID = "ollama";
 
@@ -6,7 +8,7 @@ function uniqueModelPrefixCandidates(providerId?: string): string[] {
   const candidates = [providerId, normalizeProviderId(providerId ?? ""), OLLAMA_PROVIDER_ID]
     .map((candidate) => candidate?.trim())
     .filter((candidate): candidate is string => Boolean(candidate));
-  return [...new Set(candidates)];
+  return uniqueStrings(candidates);
 }
 
 export function normalizeOllamaWireModelId(modelId: string, providerId?: string): string {

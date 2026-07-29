@@ -1,3 +1,4 @@
+// Optional bundled plugin cluster policy used by build and package scripts.
 const optionalBundledClusters = [
   "acpx",
   "diagnostics-otel",
@@ -6,6 +7,7 @@ const optionalBundledClusters = [
   "memory-lancedb",
   "msteams",
   "nostr",
+  "raft",
   "tlon",
   "twitch",
   "ui",
@@ -13,6 +15,10 @@ const optionalBundledClusters = [
   "zalouser",
 ];
 
+/**
+ * Bundled plugin clusters that may be excluded from size-sensitive build lanes.
+ * @internal Shared repository-script contract.
+ */
 export const optionalBundledClusterSet = new Set(optionalBundledClusters);
 
 const OPTIONAL_BUNDLED_BUILD_ENV = "OPENCLAW_INCLUDE_OPTIONAL_BUNDLED";
@@ -34,6 +40,7 @@ function hasReleasedBundledInstall(packageJson) {
   );
 }
 
+/** Decide whether a bundled plugin cluster should be included in the current build. */
 export function shouldBuildBundledCluster(cluster, env = process.env, options = {}) {
   if (hasReleasedBundledInstall(options.packageJson)) {
     return true;

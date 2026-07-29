@@ -1,10 +1,12 @@
+// TTS directive helpers parse inline speech directives from text.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
+  SpeechProviderOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "./provider-types.js";
@@ -21,7 +23,8 @@ type TextRange = {
   end: number;
 };
 
-export type TtsDirectiveTextStreamCleaner = {
+/** Streaming cleaner used to strip TTS tags before final text parsing is available. */
+type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
   flush: () => string;
   hasBufferedDirectiveText: () => boolean;
@@ -57,11 +60,14 @@ function prioritizeProvider(
   if (!providerId) {
     return [...providers];
   }
-  const preferredProvider = providers.find((provider) => provider.id === providerId);
+  const preferredProvider = resolveDirectiveProvider(providers, providerId);
   if (!preferredProvider) {
     return [...providers];
   }
-  return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
+  return [
+    preferredProvider,
+    ...providers.filter((provider) => provider.id !== preferredProvider.id),
+  ];
 }
 
 function resolveDirectiveProvider(
@@ -77,6 +83,36 @@ function resolveDirectiveProvider(
       provider.id === normalized ||
       provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
   );
+}
+
+function parseGenericSpeakerDirective(params: {
+  key: string;
+  value: string;
+  policy: SpeechModelOverridePolicy;
+  currentOverrides?: SpeechProviderOverrides;
+}): SpeechProviderOverrides | undefined {
+  if (!params.policy.allowVoice) {
+    return undefined;
+  }
+  switch (params.key) {
+    case "speakervoice":
+    case "speaker_voice":
+      return {
+        ...params.currentOverrides,
+        speakerVoice: params.value,
+        voice: params.value,
+        voiceName: params.value,
+      };
+    case "speakervoiceid":
+    case "speaker_voice_id":
+      return {
+        ...params.currentOverrides,
+        speakerVoiceId: params.value,
+        voiceId: params.value,
+      };
+    default:
+      return undefined;
+  }
 }
 
 function collectMarkdownCodeRanges(text: string): TextRange[] {
@@ -114,6 +150,8 @@ function replaceOutsideMarkdownCode(
     if (typeof offset === "number" && isInsideRange(offset, codeRanges)) {
       return match;
     }
+    // String.replace passes captures before offset/input; keep the callback
+    // typed without depending on the exact regexp arity for each directive.
     const captures = args.slice(1, -2).map((capture) => String(capture));
     return replace(match, captures);
   });
@@ -142,6 +180,7 @@ function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | 
   return "other";
 }
 
+/** Create an incremental cleaner for hiding [[tts:*]] directive text while streaming. */
 export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
   let pending = "";
   let insideHiddenTextBlock = false;
@@ -168,6 +207,8 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
 
         const tagEnd = input.indexOf("]]", tagStart + 2);
         if (tagEnd === -1) {
+          // Directive delimiters can cross chunk boundaries; buffer from the
+          // opener so a partial tag never leaks to a streamed client.
           pending = input.slice(tagStart);
           break;
         }
@@ -198,6 +239,7 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
   };
 }
 
+/** Parse TTS directives from final message text, leaving markdown code spans unchanged. */
 export function parseTtsDirectives(
   text: string,
   policy: SpeechModelOverridePolicy,
@@ -308,8 +350,25 @@ export function parseTtsDirectives(
       }
 
       let handled = false;
-      const directiveProviders = getDirectiveProviders();
-      for (const provider of directiveProviders) {
+      const directiveProvidersLocal = getDirectiveProviders();
+      for (const provider of directiveProvidersLocal) {
+        const genericSpeakerOverrides = parseGenericSpeakerDirective({
+          key,
+          value: rawValue,
+          policy,
+          currentOverrides: overrides.providerOverrides?.[provider.id],
+        });
+        if (genericSpeakerOverrides) {
+          overrides.providerOverrides = {
+            ...overrides.providerOverrides,
+            [provider.id]: {
+              ...overrides.providerOverrides?.[provider.id],
+              ...genericSpeakerOverrides,
+            },
+          };
+          handled = true;
+          break;
+        }
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,
@@ -336,7 +395,9 @@ export function parseTtsDirectives(
         handled = true;
         break;
       }
-      if (!handled && declaredProviderId && directiveProviders.length > 0) {
+      if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
+        // Unknown keys are only actionable when the user explicitly selected a
+        // provider; auto-selected providers may not support each other's knobs.
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }

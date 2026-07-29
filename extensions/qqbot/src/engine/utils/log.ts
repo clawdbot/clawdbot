@@ -4,14 +4,30 @@
  *
  * Only outputs when the QQBOT_DEBUG environment variable is set,
  * preventing user message content from leaking in production logs.
- *
- * Self-contained within engine/ — no framework SDK dependency.
  */
 
-const isDebug = () => !!process.env.QQBOT_DEBUG;
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+
+function isQqbotDebugEnabled(): boolean {
+  const value = process.env.QQBOT_DEBUG;
+  if (typeof value !== "string") {
+    return false;
+  }
+  switch (value.trim().toLowerCase()) {
+    case "1":
+    case "on":
+    case "true":
+    case "yes":
+      return true;
+    default:
+      return false;
+  }
+}
+
+const isDebug = () => isQqbotDebugEnabled();
 const MAX_LOG_VALUE_CHARS = 4096;
 
-export function sanitizeDebugLogValue(value: unknown): string {
+function sanitizeDebugLogValue(value: unknown): string {
   let text: string;
   if (typeof value === "string") {
     text = value;
@@ -32,7 +48,7 @@ export function sanitizeDebugLogValue(value: unknown): string {
   if (sanitized.length <= MAX_LOG_VALUE_CHARS) {
     return sanitized;
   }
-  return `${sanitized.slice(0, MAX_LOG_VALUE_CHARS)}...`;
+  return `${truncateUtf16Safe(sanitized, MAX_LOG_VALUE_CHARS)}...`;
 }
 
 function formatDebugLogArgs(args: unknown[]): string {

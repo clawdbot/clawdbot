@@ -1,3 +1,5 @@
+// Tlon helper module supports settings helpers behavior.
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PendingApproval, TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import type { TlonResolvedAccount } from "../types.js";
@@ -145,14 +147,5 @@ export function applyTlonSettingsOverrides(params: {
 }
 
 export function mergeUniqueStrings(base: string[], next?: string[]): string[] {
-  if (!next?.length) {
-    return [...base];
-  }
-  const merged = [...base];
-  for (const value of next) {
-    if (!merged.includes(value)) {
-      merged.push(value);
-    }
-  }
-  return merged;
+  return uniqueStrings([...base, ...(next ?? [])]);
 }

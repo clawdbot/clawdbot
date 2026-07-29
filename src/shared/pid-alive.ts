@@ -1,4 +1,8 @@
+// PID liveness helpers check whether process ids still refer to active processes.
+import childProcess from "node:child_process";
 import fsSync from "node:fs";
+
+const DARWIN_PS_TIMEOUT_MS = 1000;
 
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
@@ -21,14 +25,20 @@ function isZombieProcess(pid: number): boolean {
   }
 }
 
+/** Returns true only when a positive PID exists and is not a Linux zombie process. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
   }
   try {
     process.kill(pid, 0);
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM means the PID exists but we cannot signal it. Treat that as a
+    // successful existence probe, then still apply the Linux zombie check.
+    // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
+    if ((err as NodeJS.ErrnoException).code !== "EPERM") {
+      return false;
+    }
   }
   if (isZombieProcess(pid)) {
     return false;
@@ -36,19 +46,44 @@ export function isPidAlive(pid: number): boolean {
   return true;
 }
 
-/**
- * Read the process start time (field 22 "starttime") from /proc/<pid>/stat.
- * Returns the value in clock ticks since system boot, or null on non-Linux
- * platforms or if the proc file can't be read.
- *
- * This is used to detect PID recycling: if two readings for the same PID
- * return different starttimes, the PID has been reused by a different process.
- */
-export function getProcessStartTime(pid: number): number | null {
-  if (process.platform !== "linux") {
+/** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
+export function isPidDefinitelyDead(pid: number): boolean {
+  if (!isValidPid(pid)) {
+    return true;
+  }
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  }
+  return isZombieProcess(pid);
+}
+
+function getDarwinProcessStartTime(pid: number): number | null {
+  try {
+    const startedAt = childProcess
+      .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+        encoding: "utf8",
+        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: DARWIN_PS_TIMEOUT_MS,
+      })
+      .trim();
+    // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so
+    // a system timezone change cannot make a live lock owner look like PID reuse.
+    const startedAtMs = Date.parse(`${startedAt} UTC`);
+    return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
+  } catch {
     return null;
   }
+}
+
+/** Read the Linux procfs start identity used by Linux-owned runtime state. */
+export function getProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
+    return null;
+  }
+  if (process.platform !== "linux") {
     return null;
   }
   try {
@@ -67,4 +102,12 @@ export function getProcessStartTime(pid: number): number | null {
   } catch {
     return null;
   }
+}
+
+/** Read a cross-platform process identity for filesystem lock ownership. */
+export function getFileLockProcessStartTime(pid: number): number | null {
+  if (!isValidPid(pid)) {
+    return null;
+  }
+  return process.platform === "darwin" ? getDarwinProcessStartTime(pid) : getProcessStartTime(pid);
 }

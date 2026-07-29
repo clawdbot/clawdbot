@@ -1,14 +1,12 @@
+// Feishu plugin module implements dedupe key behavior.
+import { createHash } from "node:crypto";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parsePostContent } from "./post.js";
 
-type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message">;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message" | "sender">;
 
 function readExternalKey(value: unknown): string | undefined {
   return normalizeFeishuExternalKey(typeof value === "string" ? value : "");
@@ -61,6 +59,42 @@ function resolveMessageMediaParts(messageType: string, content: string): string[
   }
 }
 
+function resolveSenderIdentity(event: FeishuMessageDedupeInput): string | undefined {
+  const senderId = event.sender?.sender_id;
+  return (
+    senderId?.open_id?.trim() ||
+    senderId?.union_id?.trim() ||
+    senderId?.user_id?.trim() ||
+    undefined
+  );
+}
+
+// Feishu can redeliver the same logical text message with a fresh message_id
+// (retry/reconnect), defeating message_id-based dedupe (#46778). For text we key
+// on a stable retry identity instead: same sender + chat + create_time + content
+// is the same logical message. create_time is the message's own server timestamp
+// and stays fixed across redeliveries, so genuine repeat sends (which get a new
+// create_time) keep distinct keys and are never suppressed. Falls back to
+// message_id when any field is missing so behavior is unchanged then.
+function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | undefined {
+  const createTime = event.message.create_time?.trim();
+  const chatId = event.message.chat_id?.trim();
+  const senderId = resolveSenderIdentity(event);
+  if (
+    !createTime ||
+    parseStrictNonNegativeInteger(createTime) === undefined ||
+    !chatId ||
+    !senderId
+  ) {
+    return undefined;
+  }
+  const contentHash = createHash("sha256")
+    .update(event.message.content, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+  return JSON.stringify(["text-retry", senderId, chatId, createTime, contentHash]);
+}
+
 export function resolveFeishuMessageDedupeKey(event: FeishuMessageDedupeInput): string | undefined {
   const messageId = event.message.message_id?.trim();
   if (!messageId) {
@@ -68,5 +102,11 @@ export function resolveFeishuMessageDedupeKey(event: FeishuMessageDedupeInput): 
   }
   const messageType = event.message.message_type.trim();
   const mediaParts = resolveMessageMediaParts(messageType, event.message.content);
-  return mediaParts.length > 0 ? buildMediaDedupeKey(messageId, mediaParts) : messageId;
+  if (mediaParts.length > 0) {
+    return buildMediaDedupeKey(messageId, mediaParts);
+  }
+  if (messageType === "text") {
+    return resolveTextRetryDedupeKey(event) ?? messageId;
+  }
+  return messageId;
 }

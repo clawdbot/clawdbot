@@ -1,3 +1,4 @@
+// Nostr plugin module implements test fixtures behavior.
 import type { ResolvedNostrAccount } from "./types.js";
 
 export const TEST_HEX_PRIVATE_KEY =
@@ -5,8 +6,6 @@ export const TEST_HEX_PRIVATE_KEY =
 
 export const TEST_HEX_PUBLIC_KEY =
   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-
-export const TEST_NSEC = "nsec1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
 
 export const TEST_RELAY_URL = "wss://relay.example.com";
 export const TEST_SETUP_RELAY_URLS = ["wss://relay.damus.io", "wss://relay.primal.net"];

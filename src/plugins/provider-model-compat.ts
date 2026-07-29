@@ -1,6 +1,10 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
+// Normalizes provider model compatibility metadata from plugins.
+import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
+import { resolveOpenAICompletionsCompat } from "@openclaw/ai/transports";
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import "../llm/ai-transport-host.js";
+import type { Model } from "../llm/types.js";
 
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
@@ -15,16 +19,16 @@ export function extractModelCompat(
   return modelOrCompat as ModelCompatConfig;
 }
 
+/** @deprecated Provider-owned model compat helper; do not use from third-party plugins. */
 export function applyModelCompatPatch<T extends { compat?: ModelCompatConfig }>(
   model: T,
-  patch: ModelCompatConfig,
+  patch: Partial<ModelCompatConfig> & Record<string, unknown>,
 ): T {
-  const nextCompat = { ...model.compat, ...patch };
+  const nextCompat = { ...model.compat, ...patch } as ModelCompatConfig;
+  const currentCompat = model.compat as (Record<string, unknown> & ModelCompatConfig) | undefined;
   if (
     model.compat &&
-    Object.entries(patch).every(
-      ([key, value]) => model.compat?.[key as keyof ModelCompatConfig] === value,
-    )
+    Object.entries(patch).every(([key, value]) => currentCompat?.[key] === value)
   ) {
     return model;
   }
@@ -41,35 +45,21 @@ export function hasToolSchemaProfile(
   return extractModelCompat(modelOrCompat)?.toolSchemaProfile === profile;
 }
 
-export function hasNativeWebSearchTool(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  return extractModelCompat(modelOrCompat)?.nativeWebSearchTool === true;
-}
-
 export function resolveToolCallArgumentsEncoding(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ModelCompatConfig["toolCallArgumentsEncoding"] | undefined {
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
-export function resolveUnsupportedToolSchemaKeywords(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): ReadonlySet<string> {
-  const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
-  return new Set(
-    keywords
-      .filter((keyword): keyword is string => typeof keyword === "string")
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
-  );
-}
+// Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
+// re-export so existing core/plugin callers keep one canonical import site.
+export { resolveUnsupportedToolSchemaKeywords };
 
-function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
+function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }
 
-function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
+function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
 
@@ -77,7 +67,7 @@ function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
 
-export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+export function normalizeModelCompat(model: Model): Model {
   const baseUrl = model.baseUrl ?? "";
 
   if (isAnthropicMessagesModel(model) && baseUrl) {
@@ -92,46 +82,34 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
 
   const compat = model.compat ?? undefined;
-  const detectedCompatDefaults = baseUrl
-    ? detectOpenAICompletionsCompat(model).defaults
-    : undefined;
-  const needsForce = Boolean(
-    detectedCompatDefaults &&
-    (!detectedCompatDefaults.supportsDeveloperRole ||
-      !detectedCompatDefaults.supportsUsageInStreaming ||
-      !detectedCompatDefaults.supportsStrictMode),
-  );
-  if (!needsForce) {
+  if (!baseUrl) {
     return model;
   }
-  const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
-  const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
-  const targetStrictMode = compat?.supportsStrictMode ?? detectedCompatDefaults?.supportsStrictMode;
+  const resolved = resolveOpenAICompletionsCompat(model, resolveProviderRequestCapabilities);
   if (
-    compat?.supportsDeveloperRole !== undefined &&
-    hasStreamingUsageOverride &&
-    compat?.supportsStrictMode !== undefined
+    resolved.supportsDeveloperRole &&
+    resolved.supportsUsageInStreaming &&
+    resolved.supportsStrictMode
   ) {
+    return model;
+  }
+  const patch = {
+    ...(compat?.supportsDeveloperRole === undefined
+      ? { supportsDeveloperRole: resolved.supportsDeveloperRole }
+      : {}),
+    ...(compat?.supportsUsageInStreaming === undefined
+      ? { supportsUsageInStreaming: resolved.supportsUsageInStreaming }
+      : {}),
+    ...(compat?.supportsStrictMode === undefined
+      ? { supportsStrictMode: resolved.supportsStrictMode }
+      : {}),
+  };
+  if (Object.keys(patch).length === 0) {
     return model;
   }
 
   return {
     ...model,
-    compat: compat
-      ? {
-          ...compat,
-          supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride
-            ? {}
-            : {
-                supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
-              }),
-          supportsStrictMode: targetStrictMode,
-        }
-      : {
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
-          supportsStrictMode: detectedCompatDefaults?.supportsStrictMode ?? false,
-        },
+    compat: { ...compat, ...patch },
   } as typeof model;
 }

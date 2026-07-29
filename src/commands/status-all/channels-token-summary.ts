@@ -1,8 +1,12 @@
+// Summarizes channel token/account credential fields for `openclaw status --all`.
+// The display path is intentionally secret-safe unless the caller explicitly requests disclosure.
+
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
-import { asRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ChannelAccountTokenSummaryRow = {
   account: unknown;
@@ -10,6 +14,7 @@ export type ChannelAccountTokenSummaryRow = {
   snapshot: ChannelAccountSnapshot;
 };
 
+/** Collapses credential sources into a stable count label such as `env×2+file`. */
 function summarizeSources(sources: Array<string | undefined>): {
   label: string;
   parts: string[];
@@ -32,16 +37,18 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
     return "empty";
   }
   if (!opts.showSecrets) {
+    // Show a stable fingerprint and length so operators can compare tokens without leaking them.
     return `sha256:${sha256HexPrefix(t, 8)} · len ${t.length}`;
   }
-  const head = t.slice(0, 4);
-  const tail = t.slice(-4);
+  const head = sliceUtf16Safe(t, 0, 4);
+  const tail = sliceUtf16Safe(t, -4);
   if (t.length <= 10) {
     return `${t} · len ${t.length}`;
   }
   return `${head}…${tail} · len ${t.length}`;
 }
 
+/** Returns the credential status sentence for enabled channel accounts, if the plugin exposes token fields. */
 export function summarizeTokenConfig(params: {
   accounts: ChannelAccountTokenSummaryRow[];
   showSecrets: boolean;
@@ -52,6 +59,7 @@ export function summarizeTokenConfig(params: {
   }
 
   const accountRecs = enabled.map((a) => asRecord(a.account));
+  // Token field names are plugin-owned; infer the credential mode from the fields the plugin exposes.
   const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
   const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
   const hasSigningSecretField = accountRecs.some(
@@ -82,6 +90,7 @@ export function summarizeTokenConfig(params: {
     hasSigningSecretField &&
     enabled.every((a) => accountIsHttpMode(asRecord(a.account)))
   ) {
+    // Slack/Mattermost-style HTTP mode needs both bot token and signing secret to receive events.
     const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
@@ -137,6 +146,7 @@ export function summarizeTokenConfig(params: {
   }
 
   if (hasBotTokenField && hasAppTokenField) {
+    // Socket-mode style plugins require both halves; a single present token is still unusable.
     const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);

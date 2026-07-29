@@ -1,3 +1,7 @@
+/**
+ * Focused usage-normalization tests for provider token payload variants.
+ * Protects cache read/write and session total prompt-token calculations.
+ */
 import { describe, expect, it } from "vitest";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
 
@@ -90,6 +94,7 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage(null)).toBe(false);
     expect(hasNonzeroUsage({})).toBe(false);
     expect(hasNonzeroUsage({ input: 0, output: 0 })).toBe(false);
+    expect(hasNonzeroUsage({ reasoningTokens: 1 })).toBe(true);
     expect(hasNonzeroUsage({ input: 1 })).toBe(true);
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });

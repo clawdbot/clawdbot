@@ -1,10 +1,14 @@
+/**
+ * Looks up model catalog entries and input capability support.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
-import { normalizeProviderId } from "./provider-id.js";
 
+/** Returns whether a catalog entry declares support for an input modality. */
 export function modelSupportsInput(
   entry: ModelCatalogEntry | undefined,
   input: ModelInputType,
@@ -12,6 +16,7 @@ export function modelSupportsInput(
   return entry?.input?.includes(input) ?? false;
 }
 
+/** Finds a provider-qualified model entry in a catalog. */
 export function findModelInCatalog(
   catalog: ModelCatalogEntry[],
   provider: string,
@@ -26,6 +31,7 @@ export function findModelInCatalog(
   );
 }
 
+/** Finds a model entry, requiring uniqueness when provider is omitted. */
 export function findModelCatalogEntry(
   catalog: ModelCatalogEntry[],
   params: { provider?: string; modelId: string },

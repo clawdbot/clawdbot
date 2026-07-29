@@ -1,4 +1,6 @@
+// Shared helpers for running Vitest JSON reports and reading duration data.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +8,9 @@ import path from "node:path";
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const repoRoot = path.resolve(process.cwd());
 
+/**
+ * Normalizes absolute or relative file names to repo-relative POSIX paths.
+ */
 export function normalizeTrackedRepoPath(value) {
   const normalizedValue = typeof value === "string" ? value : String(value ?? "");
   const repoRelative = path.isAbsolute(normalizedValue)
@@ -17,10 +22,16 @@ export function normalizeTrackedRepoPath(value) {
   return normalizeRepoPath(repoRelative);
 }
 
+/**
+ * Reads and parses a JSON file.
+ */
 export function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+/**
+ * Reads a JSON file or returns the provided fallback on failure.
+ */
 export function tryReadJsonFile(filePath, fallback) {
   try {
     return readJsonFile(filePath);
@@ -29,12 +40,39 @@ export function tryReadJsonFile(filePath, fallback) {
   }
 }
 
+function validateVitestJsonReport(reportPath) {
+  if (!fs.existsSync(reportPath)) {
+    return `missing Vitest JSON report: ${reportPath}`;
+  }
+  try {
+    const report = readJsonFile(reportPath);
+    if (!report || typeof report !== "object" || Array.isArray(report)) {
+      return `invalid Vitest JSON report: ${reportPath} (report must be an object)`;
+    }
+    if (!Array.isArray(report.testResults)) {
+      return `invalid Vitest JSON report: ${reportPath} (missing testResults array)`;
+    }
+  } catch (error) {
+    return `invalid Vitest JSON report: ${reportPath} (${
+      error instanceof Error ? error.message : String(error)
+    })`;
+  }
+  return null;
+}
+
+function defaultVitestJsonReportPath(prefix) {
+  return path.join(os.tmpdir(), `${prefix}-${process.pid}-${Date.now()}-${randomUUID()}.json`);
+}
+
+/**
+ * Runs Vitest with the JSON reporter unless an existing report was supplied.
+ */
 export function runVitestJsonReport({
   config,
   reportPath = "",
   prefix = "openclaw-vitest-report",
 }) {
-  const resolvedReportPath = reportPath || path.join(os.tmpdir(), `${prefix}-${Date.now()}.json`);
+  const resolvedReportPath = reportPath || defaultVitestJsonReportPath(prefix);
 
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(
@@ -60,9 +98,18 @@ export function runVitestJsonReport({
     }
   }
 
+  const invalidReport = validateVitestJsonReport(resolvedReportPath);
+  if (invalidReport) {
+    console.error(`[test-report-utils] ${invalidReport}`);
+    process.exit(1);
+  }
+
   return resolvedReportPath;
 }
 
+/**
+ * Extracts per-file durations from a Vitest JSON report.
+ */
 export function collectVitestFileDurations(report, normalizeFile = (value) => value) {
   return (report.testResults ?? [])
     .map((result) => {
@@ -77,4 +124,30 @@ export function collectVitestFileDurations(report, normalizeFile = (value) => va
       };
     })
     .filter((entry) => entry.file.length > 0 && entry.durationMs > 0);
+}
+
+/**
+ * Extracts per-assertion durations from a Vitest JSON report.
+ */
+export function collectVitestAssertionDurations(report, normalizeFile = (value) => value) {
+  return (report.testResults ?? []).flatMap((result) => {
+    const file = typeof result.name === "string" ? normalizeFile(result.name) : "";
+    if (!file) {
+      return [];
+    }
+    return (result.assertionResults ?? [])
+      .map((assertion) => {
+        const durationMs =
+          typeof assertion?.duration === "number" && Number.isFinite(assertion.duration)
+            ? assertion.duration
+            : 0;
+        return {
+          file,
+          durationMs,
+          fullName: typeof assertion?.fullName === "string" ? assertion.fullName : "",
+          status: typeof assertion?.status === "string" ? assertion.status : "unknown",
+        };
+      })
+      .filter((entry) => entry.durationMs > 0);
+  });
 }

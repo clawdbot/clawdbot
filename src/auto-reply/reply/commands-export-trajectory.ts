@@ -1,29 +1,22 @@
-import fsp from "node:fs/promises";
+// Implements trajectory export command packaging for the active session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import {
-  exportTrajectoryForCommand,
-  formatTrajectoryCommandExportSummary,
-  resolveTrajectoryCommandOutputDir,
-  type TrajectoryCommandExportSummary,
-} from "../../trajectory/command-export.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  isReplyPayload,
-  parseExportCommandOutputPath,
-  resolveExportCommandSessionTarget,
-} from "./commands-export-common.js";
+import { parseExportCommandOutputPath } from "./commands-export-common.js";
 import {
   buildCurrentOpenClawCliArgv,
   buildCurrentOpenClawCliCommand,
+  buildCurrentOpenClawCliExecEnv,
 } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolveCommandExecApprovalRoute,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -53,17 +46,8 @@ type ExportTrajectoryCommandDeps = {
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply: deliverPrivateTrajectoryReply,
+  deliverPrivateTrajectoryReply,
 };
-
-async function fileExists(pathName: string): Promise<boolean> {
-  try {
-    await fsp.access(pathName);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function buildExportTrajectoryCommandReply(
   params: HandleCommandsParams,
@@ -130,59 +114,6 @@ async function buildExportTrajectoryApprovalReply(
   };
 }
 
-export async function buildExportTrajectoryReply(
-  params: HandleCommandsParams,
-): Promise<ReplyPayload> {
-  const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
-    "export-trajectory",
-    "trajectory",
-  ]);
-  if (args.error) {
-    return { text: args.error };
-  }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
-  if (isReplyPayload(sessionTarget)) {
-    return sessionTarget;
-  }
-  const { entry, sessionFile } = sessionTarget;
-
-  if (!(await fileExists(sessionFile))) {
-    return { text: "❌ Session file not found." };
-  }
-
-  let outputDir: string;
-  try {
-    outputDir = await resolveTrajectoryCommandOutputDir({
-      outputPath: args.outputPath,
-      workspaceDir: params.workspaceDir,
-      sessionId: entry.sessionId,
-    });
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve output path: ${formatErrorMessage(err)}`,
-    };
-  }
-
-  let summary: TrajectoryCommandExportSummary;
-  try {
-    summary = await exportTrajectoryForCommand({
-      outputDir,
-      sessionFile,
-      sessionId: entry.sessionId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-    });
-  } catch (err) {
-    return {
-      text: `❌ Failed to export trajectory: ${formatErrorMessage(err)}`,
-    };
-  }
-
-  return {
-    text: formatTrajectoryCommandExportSummary(summary),
-  };
-}
-
 async function resolvePrivateTrajectoryTargetsForCommand(
   params: HandleCommandsParams,
   request: TrajectoryExportExecRequest,
@@ -225,7 +156,7 @@ function buildTrajectoryExportApprovalRequest(
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -235,14 +166,13 @@ async function requestTrajectoryExportApproval(
   request: TrajectoryExportExecRequest,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId = readCommandMessageThreadId(params);
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -251,25 +181,25 @@ async function requestTrajectoryExportApproval(
       trigger: "export-trajectory",
       scopeKey: EXPORT_TRAJECTORY_EXEC_SCOPE_KEY,
       allowBackground: true,
+      approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
-      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
-      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
-      currentThreadTs: options.privateApprovalTarget
-        ? options.privateApprovalTarget.threadId == null
-          ? undefined
-          : String(options.privateApprovalTarget.threadId)
-        : messageThreadId,
-      accountId: options.privateApprovalTarget
-        ? (options.privateApprovalTarget.accountId ?? undefined)
-        : (params.ctx.AccountId ?? undefined),
+      sessionId: params.sessionEntry?.sessionId,
+      sessionStore: params.cfg.session?.store,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
+      ...resolveCommandExecApprovalRoute({
+        commandParams: params,
+        privateApprovalTarget: options.privateApprovalTarget,
+      }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
+      env: buildCurrentOpenClawCliExecEnv(),
       security: "allowlist",
       ask: "always",
       background: true,

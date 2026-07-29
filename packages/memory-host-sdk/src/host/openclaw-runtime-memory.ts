@@ -1,3 +1,5 @@
+// Memory-facing runtime facade for plugin registration, embeddings, and prompt artifacts.
+// Re-export only stable host seams; plugin implementations should not import core internals.
 export {
   buildActiveMemoryPromptSection,
   emptyPluginConfigSchema,
@@ -15,6 +17,7 @@ export type {
   MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,

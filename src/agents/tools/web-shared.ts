@@ -1,5 +1,14 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
+/**
+ * Shared web tool cache, timeout, and response helpers.
+ *
+ * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
+ */
+import { decodeTextPrefix } from "@openclaw/normalization-core";
+import {
+  asDateTimestampMs,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -12,7 +21,13 @@ const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(1, Math.floor(parsed));
+  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
+}
+
+export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
 }
 
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
@@ -22,7 +37,9 @@ export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): numb
 }
 
 export function normalizeCacheKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  // Request paths and query values can be case-sensitive; only surrounding
+  // whitespace is non-semantic when callers compose cache keys.
+  return value.trim();
 }
 
 export function readCache<T>(
@@ -33,7 +50,8 @@ export function readCache<T>(
   if (!entry) {
     return null;
   }
-  if (Date.now() > entry.expiresAt) {
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined || now > entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -49,6 +67,11 @@ export function writeCache<T>(
   if (ttlMs <= 0) {
     return;
   }
+  const now = Date.now();
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) {
@@ -57,38 +80,12 @@ export function writeCache<T>(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt,
+    insertedAt: now,
   });
 }
 
-export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  if (timeoutMs <= 0) {
-    return signal ?? new AbortController().signal;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
-  if (signal) {
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        controller.abort();
-      },
-      { once: true },
-    );
-  }
-  controller.signal.addEventListener(
-    "abort",
-    () => {
-      clearTimeout(timer);
-    },
-    { once: true },
-  );
-  return controller.signal;
-}
-
-export type ReadResponseTextResult = {
+type ReadResponseTextResult = {
   text: string;
   truncated: boolean;
   bytesRead: number;
@@ -96,7 +93,6 @@ export type ReadResponseTextResult = {
 
 const RESPONSE_CHARSET_SCAN_BYTES = 4096;
 const latin1Decoder = new TextDecoder("latin1");
-const utf8Decoder = new TextDecoder("utf-8");
 
 function normalizeCharset(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/^["']|["']$/g, "") ?? "";
@@ -192,13 +188,13 @@ function responseContentType(res: Response): string | null {
   return typeof headers?.get === "function" ? headers.get("content-type") : null;
 }
 
-function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
+function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const contentType = responseContentType(res);
   const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
   try {
-    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+    return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {
-    return utf8Decoder.decode(bytes);
+    return decodeTextPrefix(bytes, { encoding: "utf-8", truncated });
   }
 }
 
@@ -249,23 +245,56 @@ export async function readResponseText(
         bytesRead += chunk.byteLength;
         parts.push(chunk);
 
-        if (truncated || bytesRead >= maxBytes) {
+        if (truncated) {
+          break;
+        }
+        if (bytesRead >= maxBytes) {
+          // Reached the byte cap. A body that is exactly maxBytes bytes is
+          // complete only once EOF confirms it. Keep the conservative result
+          // if that confirming read fails or the body continues.
           truncated = true;
+          while (true) {
+            const { done: atEnd, value: extra } = await reader.read();
+            if (atEnd) {
+              truncated = false;
+              break;
+            }
+            if (extra && extra.byteLength > 0) {
+              truncated = true;
+              break;
+            }
+          }
           break;
         }
       }
     } catch {
-      // Best-effort: return whatever we read so far.
+      // Stream errors mean the accumulated bytes are only a partial body.
+      truncated = true;
     } finally {
       if (truncated) {
         // Some mocked or non-compliant streams never settle cancel(); do not
         // let cleanup turn a bounded read into a hung fetch.
         void reader.cancel().catch(() => undefined);
       }
+      try {
+        reader.releaseLock();
+      } catch {
+        // The read/cancel path already produced the best-effort body result;
+        // lock-release failures must not replace that outcome.
+      }
     }
 
     const bytes = concatBytes(parts, bytesRead);
-    return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
+    return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
+  }
+
+  if (maxBytes) {
+    if (res instanceof Response && res.body === null) {
+      return { text: "", truncated: false, bytesRead: 0 };
+    }
+    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
+    // Fail closed instead of making maxBytes a returned-text limit only.
+    return { text: "", truncated: true, bytesRead: 0 };
   }
 
   const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
@@ -284,7 +313,8 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
-    return { text, truncated: false, bytesRead: text.length };
+    const bytes = new TextEncoder().encode(text);
+    return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }

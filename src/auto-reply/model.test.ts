@@ -1,3 +1,4 @@
+/** Tests model reference formatting and parsing helpers used by auto-reply. */
 import { describe, expect, it } from "vitest";
 import { extractModelDirective } from "./model.js";
 

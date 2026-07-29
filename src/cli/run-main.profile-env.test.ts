@@ -1,4 +1,6 @@
+// Run-main profile env tests cover profile environment handling in the CLI entrypoint.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 const fileState = vi.hoisted(() => ({
   hasCliDotEnv: false,
@@ -74,24 +76,26 @@ vi.mock("./container-target.js", async () => {
 import { runCli } from "./run-main.js";
 
 describe("runCli profile env bootstrap", () => {
-  const originalProfile = process.env.OPENCLAW_PROFILE;
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  const originalContainer = process.env.OPENCLAW_CONTAINER;
-  const originalGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-  const originalGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
-  const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  const originalGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_CONTAINER",
+    "OPENCLAW_GATEWAY_PORT",
+    "OPENCLAW_GATEWAY_URL",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+  ]);
 
   beforeEach(() => {
-    delete process.env.OPENCLAW_PROFILE;
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_CONTAINER;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    deleteTestEnvValue("OPENCLAW_PROFILE");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_CONTAINER");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
     dotenvState.state.profileAtDotenvLoad = undefined;
     dotenvState.state.containerAtDotenvLoad = undefined;
     dotenvState.loadDotEnv.mockClear();
@@ -100,46 +104,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   afterEach(() => {
-    if (originalProfile === undefined) {
-      delete process.env.OPENCLAW_PROFILE;
-    } else {
-      process.env.OPENCLAW_PROFILE = originalProfile;
-    }
-    if (originalContainer === undefined) {
-      delete process.env.OPENCLAW_CONTAINER;
-    } else {
-      process.env.OPENCLAW_CONTAINER = originalContainer;
-    }
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-    if (originalConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-    }
-    if (originalGatewayPort === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
-    } else {
-      process.env.OPENCLAW_GATEWAY_PORT = originalGatewayPort;
-    }
-    if (originalGatewayUrl === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_URL;
-    } else {
-      process.env.OPENCLAW_GATEWAY_URL = originalGatewayUrl;
-    }
-    if (originalGatewayToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
-    }
-    if (originalGatewayPassword === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    } else {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = originalGatewayPassword;
-    }
+    envSnapshot.restore();
   });
 
   it("applies --profile before dotenv loading", async () => {
@@ -193,7 +158,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   it("allows container mode when OPENCLAW_PROFILE is already set in env", async () => {
-    process.env.OPENCLAW_PROFILE = "work";
+    setTestEnvValue("OPENCLAW_PROFILE", "work");
 
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "status"]),
@@ -206,7 +171,7 @@ describe("runCli profile env bootstrap", () => {
     ["OPENCLAW_GATEWAY_TOKEN", "demo-token"],
     ["OPENCLAW_GATEWAY_PASSWORD", "demo-password"],
   ])("allows container mode when %s is set in env", async (key, value) => {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
 
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "status"]),
@@ -214,7 +179,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   it("allows container mode when only OPENCLAW_STATE_DIR is set in env", async () => {
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-host-state";
+    setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-host-state");
 
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "status"]),
@@ -222,7 +187,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   it("allows container mode when only OPENCLAW_CONFIG_PATH is set in env", async () => {
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-host-state/openclaw.json";
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-host-state/openclaw.json");
 
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "status"]),

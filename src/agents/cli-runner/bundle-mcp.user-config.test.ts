@@ -1,14 +1,31 @@
+/** Tests merging user OpenClaw MCP server config into Claude bundle-MCP overlays. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { cliBundleMcpHarness, setupCliBundleMcpTestHarness } from "./bundle-mcp.test-support.js";
+import {
+  cliBundleMcpHarness,
+  requireMcpConfigPath,
+  setupCliBundleMcpTestHarness,
+} from "./bundle-mcp.test-support.js";
+
+const authMocks = vi.hoisted(() => ({
+  resolveMcpOAuthAccessToken: vi.fn(),
+}));
+
+vi.mock("../mcp-oauth.js", () => ({
+  resolveMcpOAuthAccessToken: authMocks.resolveMcpOAuthAccessToken,
+}));
 
 setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig user mcp.servers", () => {
+  beforeEach(() => {
+    authMocks.resolveMcpOAuthAccessToken.mockReset();
+  });
+
   it("merges user-configured mcp.servers from OpenClaw config", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-",
@@ -36,10 +53,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { type?: string; url?: string }>;
     };
     expect(raw.mcpServers?.omi?.type).toBe("sse");
@@ -79,10 +94,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { type?: string; transport?: string; url?: string }>;
     };
 
@@ -123,9 +136,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { type?: string; transport?: string }>;
     };
 
@@ -135,7 +147,59 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     await prepared.cleanup?.();
   });
 
+  it("omits unavailable OAuth servers without blocking the CLI agent", async () => {
+    authMocks.resolveMcpOAuthAccessToken.mockRejectedValueOnce(
+      new Error('MCP server "gbrain" requires OAuth authorization.'),
+    );
+    const warn = vi.fn();
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-user-servers-oauth-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            gbrain: {
+              transport: "streamable-http",
+              url: "https://gbrain.example.com/mcp",
+              auth: "oauth",
+            },
+            localTools: {
+              transport: "stdio",
+              command: "local-tools",
+            },
+          },
+        },
+      },
+      warn,
+    });
+
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toStrictEqual({
+      localTools: { type: "stdio", command: "local-tools" },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("skipped unavailable OAuth server gbrain"),
+    );
+
+    await prepared.cleanup?.();
+  });
+
   it("user mcp.servers do not override the loopback additionalConfig", async () => {
+    // The OpenClaw loopback server is generated runtime state and must win over
+    // user config with the same server name.
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-loopback-",
     );
@@ -170,10 +234,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { url?: string }>;
     };
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
@@ -214,9 +276,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       "utf-8",
     );
 
-    const env = captureEnv(["HOME"]);
-    try {
-      process.env.HOME = cliBundleMcpHarness.bundleProbeHomeDir;
+    await withEnvAsync({ HOME: cliBundleMcpHarness.bundleProbeHomeDir }, async () => {
       const prepared = await prepareCliBundleMcpConfig({
         enabled: true,
         mode: "claude-config-file",
@@ -243,10 +303,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
         },
       });
 
-      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-      expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+      const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
         mcpServers?: Record<
           string,
           {
@@ -265,8 +323,6 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       expect(raw.mcpServers?.omi?.env).toBeUndefined();
 
       await prepared.cleanup?.();
-    } finally {
-      env.restore();
-    }
+    });
   });
 });

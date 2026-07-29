@@ -1,3 +1,4 @@
+// Status memory scan tests cover memory-search manager status and shared-memory snapshot reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -46,13 +47,13 @@ describe("status.scan-memory", () => {
   it("forwards the shared memory snapshot dependencies", async () => {
     const { resolveStatusMemoryStatusSnapshot } = await import("./status.scan-memory.ts");
 
-    const requireDefaultStore = vi.fn((agentId: string) => `/tmp/${agentId}.sqlite`);
+    const requireDefaultDatabasePath = vi.fn((agentId: string) => `/tmp/${agentId}.sqlite`);
     const agentStatus = createMainAgentStatus();
     await resolveStatusMemoryStatusSnapshot({
       cfg: { agents: {} },
       agentStatus,
       memoryPlugin: { enabled: true, slot: "memory-core" },
-      requireDefaultStore,
+      requireDefaultDatabasePath,
     });
 
     expect(mocks.resolveSharedMemoryStatusSnapshot).toHaveBeenCalledWith({
@@ -61,7 +62,7 @@ describe("status.scan-memory", () => {
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig: mocks.resolveMemorySearchConfig,
       getMemorySearchManager: mocks.getMemorySearchManager,
-      requireDefaultStore,
+      requireDefaultDatabasePath,
     });
   });
 });

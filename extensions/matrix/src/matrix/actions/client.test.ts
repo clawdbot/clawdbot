@@ -1,3 +1,4 @@
+// Matrix tests cover client plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
@@ -57,7 +58,7 @@ describe("action client helpers", () => {
     primeMatrixClientResolverMocks();
     resolveMatrixRoomIdMock
       .mockReset()
-      .mockImplementation(async (_client, roomId: string) => roomId);
+      .mockImplementation(async (clientForTest, roomId: string) => roomId);
   });
 
   afterEach(() => {
@@ -111,7 +112,7 @@ describe("action client helpers", () => {
 
     expect(result).toBe("ok");
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
-    expect(activeClient.stop).not.toHaveBeenCalled();
+    expect(activeClient["stop"]).not.toHaveBeenCalled();
   });
 
   it("starts active clients when started readiness is required", async () => {
@@ -122,10 +123,10 @@ describe("action client helpers", () => {
       expect(client).toBe(activeClient);
     });
 
-    expect(activeClient.start).toHaveBeenCalledTimes(1);
-    expect(activeClient.prepareForOneOff).not.toHaveBeenCalled();
-    expect(activeClient.stop).not.toHaveBeenCalled();
-    expect(activeClient.stopAndPersist).not.toHaveBeenCalled();
+    expect(activeClient["start"]).toHaveBeenCalledTimes(1);
+    expect(activeClient["prepareForOneOff"]).not.toHaveBeenCalled();
+    expect(activeClient["stop"]).not.toHaveBeenCalled();
+    expect(activeClient["stopAndPersist"]).not.toHaveBeenCalled();
   });
 
   it("uses the implicit resolved account id for active client lookup and storage", async () => {

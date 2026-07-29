@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.mistral provider plugin behavior.
 import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,
@@ -14,6 +15,7 @@ const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
 const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5";
 
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderIndexIdentity: () => undefined,
   resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
     providerId === "ollama"
       ? DEFAULT_OLLAMA_EMBEDDING_MODEL
@@ -57,22 +59,37 @@ function createSettings(params: {
   } as unknown as ResolvedMemorySearchConfig;
 }
 
+type MemoryFallbackProviderRequest = NonNullable<
+  ReturnType<typeof resolveMemoryFallbackProviderRequest>
+>;
+
+function expectMemoryFallbackRequest(
+  request: ReturnType<typeof resolveMemoryFallbackProviderRequest>,
+): MemoryFallbackProviderRequest {
+  if (!request) {
+    throw new Error("Expected memory fallback provider request");
+  }
+  return request;
+}
+
 describe("memory manager mistral provider wiring", () => {
   it("stores mistral client when mistral provider is selected", () => {
+    const mistralProvider = createProvider("mistral");
     const mistralRuntime: EmbeddingProviderRuntime = {
       id: "mistral",
       cacheKeyData: { provider: "mistral", model: "mistral-embed" },
     };
 
     const state = resolveMemoryProviderState({
-      provider: createProvider("mistral"),
+      provider: mistralProvider,
+      requestedProvider: "mistral",
       runtime: mistralRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
       providerUnavailableReason: undefined,
     });
 
-    expect(state.provider?.id).toBe("mistral");
+    expect(state.provider).toBe(mistralProvider);
     expect(state.providerRuntime).toBe(mistralRuntime);
   });
 
@@ -85,8 +102,10 @@ describe("memory manager mistral provider wiring", () => {
       id: "mistral",
       cacheKeyData: { provider: "mistral", model: "mistral-embed" },
     };
+    const mistralProvider = createProvider("mistral");
     const current = resolveMemoryProviderState({
       provider: createProvider("openai"),
+      requestedProvider: "openai",
       runtime: openAiRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
@@ -98,15 +117,39 @@ describe("memory manager mistral provider wiring", () => {
       fallbackFrom: "openai",
       reason: "forced test",
       result: {
-        provider: createProvider("mistral"),
+        provider: mistralProvider,
         runtime: mistralRuntime,
       },
     });
 
     expect(fallbackState.fallbackFrom).toBe("openai");
     expect(fallbackState.fallbackReason).toBe("forced test");
-    expect(fallbackState.provider?.id).toBe("mistral");
+    expect(fallbackState.provider).toBe(mistralProvider);
     expect(fallbackState.providerRuntime).toBe(mistralRuntime);
+  });
+
+  it("clears provider unavailable reason after fallback activation", () => {
+    const fallbackState = applyMemoryFallbackProviderState({
+      current: resolveMemoryProviderState({
+        provider: null,
+        requestedProvider: "local",
+        fallbackFrom: undefined,
+        fallbackReason: undefined,
+        providerUnavailableReason: "Local embeddings degraded: worker crashed",
+        runtime: undefined,
+      }),
+      fallbackFrom: "local",
+      reason: "worker crashed",
+      result: {
+        provider: createProvider("openai"),
+        runtime: {
+          id: "openai",
+          cacheKeyData: { provider: "openai", model: "text-embedding-3-small" },
+        },
+      },
+    });
+
+    expect(fallbackState.providerUnavailableReason).toBeUndefined();
   });
 
   it("uses default ollama model when activating ollama fallback", () => {
@@ -116,9 +159,10 @@ describe("memory manager mistral provider wiring", () => {
       currentProviderId: "openai",
     });
 
-    expect(request?.provider).toBe("ollama");
-    expect(request?.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
-    expect(request?.fallback).toBe("none");
+    const fallbackRequest = expectMemoryFallbackRequest(request);
+    expect(fallbackRequest.provider).toBe("ollama");
+    expect(fallbackRequest.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
+    expect(fallbackRequest.fallback).toBe("none");
   });
 
   it("includes outputDimensionality in the primary provider request", () => {
@@ -151,15 +195,16 @@ describe("memory manager mistral provider wiring", () => {
     expect(request.documentInputType).toBe("document");
   });
 
-  it("uses default lmstudio model when activating lmstudio fallback", async () => {
+  it("uses default lmstudio model when activating lmstudio fallback", () => {
     const request = resolveMemoryFallbackProviderRequest({
       cfg: {} as OpenClawConfig,
       settings: createSettings({ provider: "openai", fallback: "lmstudio" }),
       currentProviderId: "openai",
     });
 
-    expect(request?.provider).toBe("lmstudio");
-    expect(request?.model).toBe(DEFAULT_LMSTUDIO_EMBEDDING_MODEL);
-    expect(request?.fallback).toBe("none");
+    const fallbackRequest = expectMemoryFallbackRequest(request);
+    expect(fallbackRequest.provider).toBe("lmstudio");
+    expect(fallbackRequest.model).toBe(DEFAULT_LMSTUDIO_EMBEDDING_MODEL);
+    expect(fallbackRequest.fallback).toBe("none");
   });
 });

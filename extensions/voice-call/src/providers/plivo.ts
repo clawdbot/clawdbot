@@ -1,8 +1,9 @@
+// Voice Call plugin module implements plivo behavior.
 import crypto from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type {
@@ -25,7 +26,7 @@ import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.j
 import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
-export interface PlivoProviderOptions {
+interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
   publicUrl?: string;
   /** Skip webhook signature verification (development only) */
@@ -36,7 +37,7 @@ export interface PlivoProviderOptions {
   webhookSecurity?: WebhookSecurityConfig;
 }
 
-type PendingSpeak = { text: string; locale?: string };
+type PendingSpeak = { text: string; locale?: string; listenAfterPlayback?: boolean };
 type PendingListen = { language?: string };
 
 function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
@@ -157,8 +158,18 @@ export class PlivoProvider implements VoiceCallProvider {
         this.pendingSpeakByCallId.delete(callId);
       }
 
+      const actionUrl =
+        pending?.listenAfterPlayback && callId
+          ? this.buildActionUrl(ctx, { flow: "getinput", callId })
+          : null;
       const xml = pending
-        ? PlivoProvider.xmlSpeak(pending.text, pending.locale)
+        ? actionUrl
+          ? PlivoProvider.xmlSpeakAndListen({
+              text: pending.text,
+              language: pending.locale,
+              actionUrl,
+            })
+          : PlivoProvider.xmlSpeak(pending.text, pending.locale)
         : PlivoProvider.xmlKeepAlive();
       return {
         events: [],
@@ -414,6 +425,7 @@ export class PlivoProvider implements VoiceCallProvider {
     this.pendingSpeakByCallId.set(input.callId, {
       text: input.text,
       locale: input.locale,
+      listenAfterPlayback: input.listenAfterPlayback,
     });
 
     await this.transferCallLeg({
@@ -514,7 +526,22 @@ export class PlivoProvider implements VoiceCallProvider {
     const language = params.language || "en-US";
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="1" redirect="false">
+  <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="2" redirect="false">
+  </GetInput>
+  <Wait length="300" />
+</Response>`;
+  }
+
+  private static xmlSpeakAndListen(params: {
+    text: string;
+    actionUrl: string;
+    language?: string;
+  }): string {
+    const language = params.language || "en-US";
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="2" redirect="false">
+    <Speak language="${escapeXml(language)}">${escapeXml(params.text)}</Speak>
   </GetInput>
   <Wait length="300" />
 </Response>`;
@@ -547,8 +574,6 @@ export class PlivoProvider implements VoiceCallProvider {
     try {
       if (this.options.publicUrl) {
         const base = new URL(this.options.publicUrl);
-        const requestUrl = new URL(ctx.url);
-        base.pathname = requestUrl.pathname;
         return `${base.origin}${base.pathname}`;
       }
 

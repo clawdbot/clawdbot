@@ -1,3 +1,5 @@
+// Stages bundled plugin runtime overlays into dist-runtime with SDK aliases and
+// Windows-safe symlink fallbacks.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -73,27 +75,123 @@ function writeJsonFile(targetPath, value) {
   fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
+  "codex-mcp-projection.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
+  "qa-lab.js",
+  "qa-runtime.js",
+  "ssrf-runtime-internal.js",
+];
+
+function tryReadJsonFile(targetPath) {
+  try {
+    return JSON.parse(fs.readFileSync(targetPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function isSafePluginSdkSubpathSegment(subpath) {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
+}
+
+function readPrivateLocalOnlyPluginSdkDistFileNames(repoRoot) {
+  const privateFileNames = new Set(PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK);
+  const subpaths = tryReadJsonFile(
+    path.join(repoRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+  );
+  if (!Array.isArray(subpaths)) {
+    return privateFileNames;
+  }
+  for (const subpath of subpaths) {
+    if (typeof subpath === "string" && isSafePluginSdkSubpathSegment(subpath)) {
+      privateFileNames.add(`${subpath}.js`);
+    }
+  }
+  return privateFileNames;
+}
+
+function collectLegacyPublicPluginSdkDistFileNames(params) {
+  const privateFileNames = readPrivateLocalOnlyPluginSdkDistFileNames(params.repoRoot);
+  const fileNames = new Set();
+  for (const dirent of fs.readdirSync(params.pluginSdkDir, { withFileTypes: true })) {
+    if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
+      continue;
+    }
+    if (privateFileNames.has(dirent.name)) {
+      continue;
+    }
+    fileNames.add(dirent.name);
+  }
+  return fileNames.size > 0 ? fileNames : undefined;
+}
+
+function readPublicPluginSdkDistFileNames(params) {
+  const packageJson = tryReadJsonFile(path.join(params.repoRoot, "package.json"));
+  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+    return collectLegacyPublicPluginSdkDistFileNames(params);
+  }
+  const packageExports = packageJson.exports;
+  if (!packageExports || typeof packageExports !== "object" || Array.isArray(packageExports)) {
+    return collectLegacyPublicPluginSdkDistFileNames(params);
+  }
+
+  const fileNames = new Set();
+  for (const exportKey of Object.keys(packageExports)) {
+    if (!exportKey.startsWith("./plugin-sdk/")) {
+      continue;
+    }
+    const subpath = exportKey.slice("./plugin-sdk/".length);
+    if (isSafePluginSdkSubpathSegment(subpath)) {
+      fileNames.add(`${subpath}.js`);
+    }
+  }
+
+  return fileNames.size > 0 ? fileNames : collectLegacyPublicPluginSdkDistFileNames(params);
+}
+
+function buildRuntimePluginSdkPackageExports(publicDistFileNames) {
+  if (!publicDistFileNames) {
+    return {};
+  }
+
+  const sortedFileNames = [...publicDistFileNames].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  return Object.fromEntries(
+    sortedFileNames.map((fileName) => {
+      const subpath = fileName.slice(0, -".js".length);
+      return [`./plugin-sdk/${subpath}`, `./plugin-sdk/${fileName}`];
+    }),
+  );
+}
+
 function ensureOpenClawExtensionAlias(params) {
   const pluginSdkDir = path.join(params.repoRoot, "dist", "plugin-sdk");
   if (!fs.existsSync(pluginSdkDir)) {
     return;
   }
 
+  const publicDistFileNames = readPublicPluginSdkDistFileNames({
+    repoRoot: params.repoRoot,
+    pluginSdkDir,
+  });
   const aliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
   const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
   fs.mkdirSync(aliasDir, { recursive: true });
   writeJsonFile(path.join(aliasDir, "package.json"), {
     name: "openclaw",
     type: "module",
-    exports: {
-      "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/*": "./plugin-sdk/*.js",
-    },
+    exports: buildRuntimePluginSdkPackageExports(publicDistFileNames),
   });
   removePathIfExists(pluginSdkAliasPath);
   fs.mkdirSync(pluginSdkAliasPath, { recursive: true });
   for (const dirent of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
     if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
+      continue;
+    }
+    if (publicDistFileNames && !publicDistFileNames.has(dirent.name)) {
       continue;
     }
     writeRuntimeModuleWrapper(
@@ -109,6 +207,10 @@ function shouldWrapRuntimeJsFile(sourcePath) {
 
 function isBundledSkillRuntimePath(relativePath) {
   return relativePath === "skills" || relativePath.startsWith("skills/");
+}
+
+function isRawBrowserExtensionAssetPath(relativePath) {
+  return relativePath === "chrome-extension" || relativePath.endsWith("/chrome-extension");
 }
 
 function isPathOrNestedPath(relativePath, nestedPath) {
@@ -175,6 +277,12 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
     const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
 
     if (dirent.isDirectory()) {
+      // Unpacked browser extensions are executable static payloads, not Node
+      // modules. Preserve the staged tree byte-for-byte so Chrome can load it.
+      if (isRawBrowserExtensionAssetPath(relativePath)) {
+        copyPathFallback(sourcePath, targetPath);
+        continue;
+      }
       stagePluginRuntimeOverlay(sourcePath, targetPath, relativePath);
       continue;
     }
@@ -206,6 +314,9 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
   }
 }
 
+/**
+ * Stages runtime plugin entries and aliases used by packaged bundled plugins.
+ */
 export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");

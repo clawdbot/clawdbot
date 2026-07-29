@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for timezone resolution and timestamp formatting.
+ */
 export {
   formatUtcTimestamp,
   formatZonedTimestamp,

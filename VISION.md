@@ -38,6 +38,15 @@ Contribution rules:
 - Do not open large batches of tiny PRs at once; each PR has review cost.
 - For very small related fixes, grouping into one focused PR is encouraged.
 
+Configuration compatibility:
+
+OpenClaw runtime code reads the current configuration schema only.
+We do not keep long-lived aliases or compatibility branches that silently accept old, renamed, or malformed config keys.
+
+When a config change makes existing user config invalid, the same change needs a doctor migration.
+`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the canonical format.
+Core-owned config and auth state are repaired in core doctor code; plugin-owned config is repaired by that plugin's doctor contract.
+
 ## Security
 
 Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
@@ -49,12 +58,24 @@ Canonical security policy and reporting:
 
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 
+Privacy follows the same default rule.
+OpenClaw sends no usage analytics, tracking identifiers, or attribution tags unless the operator turned that on themselves.
+A change that needs such signals waits until an explicit user-facing opt-in exists for them.
+
 ## Plugins & Memory
 
 OpenClaw has an extensive plugin API.
-Core stays lean; optional capability should usually ship as plugins.
+Core stays lean; optional capabilities should usually ship as plugins.
 We are generally slimming down core while expanding what plugins can do.
 If a useful feature cannot be built as a plugin yet, we welcome PRs and design discussions that extend the plugin API instead of adding one-off core behavior.
+
+Two layers, two bars.
+The core carries a per-call tax: each core tool, prompt line, and config key reaches every operator on every model request, so additions there face the strictest scrutiny.
+Plugins, skills, channels, and apps carry no such tax, and we want that surface to keep growing.
+When our contribution rules read as hostile to a feature, re-check the layer: usually they object to where it plugs in, not to the feature existing.
+
+Recurring demand defines interfaces.
+Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: land the seam in core or the SDK, port the bundled implementation onto it, and let the remaining candidates ship as plugins against it.
 
 There are two broad plugin styles:
 

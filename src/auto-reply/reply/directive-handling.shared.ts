@@ -1,6 +1,11 @@
+// Shared directive parsing helpers used by model and auth directive handlers.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS } from "../../config/sessions/session-snapshot-merge.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -15,31 +20,97 @@ export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
 
 export const formatInternalExecPersistenceDeniedText = () =>
-  "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
+  "Exec defaults require operator.admin for gateway callers; skipped persistence.";
 
 export const formatInternalVerbosePersistenceDeniedText = () =>
-  "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
+  "Verbose defaults require operator.admin for gateway callers; skipped persistence.";
 
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
-function canPersistInternalDirective(params: {
+export function canPersistSessionDirectiveDefaults(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
+  senderIsOwner?: boolean;
 }): boolean {
-  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
-    ? params.messageProvider
-    : params.surface;
-  if (!isInternalMessageChannel(authoritativeChannel)) {
+  const messageProvider = normalizeOptionalString(params.messageProvider);
+  const surface = normalizeOptionalString(params.surface);
+  const authoritativeChannel = messageProvider ?? surface;
+
+  if (!authoritativeChannel) {
     return true;
   }
-  const scopes = params.gatewayClientScopes ?? [];
-  return scopes.includes("operator.admin");
+
+  if (isInternalMessageChannel(authoritativeChannel)) {
+    return params.gatewayClientScopes?.includes("operator.admin") === true;
+  }
+
+  return params.commandAuthorized === true || params.senderIsOwner === true;
 }
 
-export const canPersistInternalExecDirective = canPersistInternalDirective;
-export const canPersistInternalVerboseDirective = canPersistInternalDirective;
+/** Names explicit directive writes that snapshot equality cannot infer. */
+export function resolveDirectiveTouchedSessionFields(params: {
+  directives: InlineDirectives;
+  allowInternalExecPersistence: boolean;
+  allowInternalVerbosePersistence: boolean;
+}): Array<keyof SessionEntry> {
+  const { directives } = params;
+  const fields = new Set<keyof SessionEntry>();
+  if (directives.hasThinkDirective) {
+    fields.add("thinkingLevel");
+  }
+  if (directives.hasFastDirective) {
+    fields.add("fastMode");
+  }
+  if (directives.hasVerboseDirective && params.allowInternalVerbosePersistence) {
+    fields.add("verboseLevel");
+  }
+  if (directives.hasTraceDirective) {
+    fields.add("traceLevel");
+  }
+  if (directives.hasReasoningDirective) {
+    fields.add("reasoningLevel");
+  }
+  if (directives.hasElevatedDirective) {
+    fields.add("elevatedLevel");
+  }
+  if (directives.hasModelDirective) {
+    for (const field of SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS) {
+      fields.add(field);
+    }
+  }
+  if (directives.hasExecDirective && params.allowInternalExecPersistence) {
+    if (directives.execHost) {
+      fields.add("execHost");
+    }
+    if (directives.execSecurity) {
+      fields.add("execSecurity");
+    }
+    if (directives.execAsk) {
+      fields.add("execAsk");
+    }
+    if (directives.execNode) {
+      fields.add("execNode");
+    }
+  }
+  if (directives.hasQueueDirective) {
+    if (directives.queueReset || directives.queueMode) {
+      fields.add("queueMode");
+    }
+    if (directives.queueReset || typeof directives.debounceMs === "number") {
+      fields.add("queueDebounceMs");
+    }
+    if (directives.queueReset || typeof directives.cap === "number") {
+      fields.add("queueCap");
+    }
+    if (directives.queueReset || directives.dropPolicy) {
+      fields.add("queueDrop");
+    }
+  }
+  return [...fields];
+}
 
 const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {
@@ -98,7 +169,7 @@ export function formatElevatedUnavailableText(params: {
     lines.push(`Failing gates: ${failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
   } else {
     lines.push(
-      "Fix-it keys: tools.elevated.enabled, tools.elevated.allowFrom.<provider>, agents.list[].tools.elevated.*",
+      "Fix-it keys: tools.elevated.enabled, tools.elevated.allowFrom.<provider>, agents.entries.*.tools.elevated.*",
     );
   }
   if (params.sessionKey) {

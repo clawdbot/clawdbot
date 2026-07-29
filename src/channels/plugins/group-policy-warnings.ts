@@ -1,3 +1,8 @@
+/**
+ * Channel group-policy warning collectors.
+ *
+ * Composes warning helpers for default, allowlist, and open-provider group policy states.
+ */
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -122,7 +127,7 @@ export function buildOpenGroupPolicyRestrictSendersWarning(params: {
   });
 }
 
-export function buildOpenGroupPolicyNoRouteAllowlistWarning(params: {
+function buildOpenGroupPolicyNoRouteAllowlistWarning(params: {
   surface: string;
   routeAllowlistPath: string;
   routeScope: string;

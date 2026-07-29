@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+// Discord plugin module implements runtime.moderation behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   type ActionGate,
   jsonResult,
@@ -6,25 +7,13 @@ import {
   type DiscordActionConfig,
   type OpenClawConfig,
 } from "../runtime-api.js";
-import {
-  banMemberDiscord,
-  hasAnyGuildPermissionDiscord,
-  kickMemberDiscord,
-  timeoutMemberDiscord,
-} from "../send.js";
+import { discordModerationActionRuntime } from "./runtime-deps.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
   requiredGuildPermissionForModerationAction,
 } from "./runtime.moderation-shared.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
-
-export const discordModerationActionRuntime = {
-  banMemberDiscord,
-  hasAnyGuildPermissionDiscord,
-  kickMemberDiscord,
-  timeoutMemberDiscord,
-};
 
 async function verifySenderModerationPermission(params: {
   guildId: string;

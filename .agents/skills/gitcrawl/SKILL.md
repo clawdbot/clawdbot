@@ -1,68 +1,50 @@
 ---
 name: gitcrawl
-description: Use gitcrawl for OpenClaw issue and PR archive search, duplicate discovery, related-thread clustering, and local GitHub mirror freshness checks.
+description: "GitHub archive: issue/PR search, sync freshness, duplicate clusters, gh-shim PR status, and Gitcrawl repo work."
 metadata:
   openclaw:
+    homepage: https://github.com/openclaw/gitcrawl
     requires:
       bins:
         - gitcrawl
+    install:
+      - kind: go
+        module: github.com/openclaw/gitcrawl/cmd/gitcrawl@latest
+        bins:
+          - gitcrawl
 ---
 
 # Gitcrawl
 
-Use this skill before live GitHub search when triaging OpenClaw issues or PRs.
-
-`gitcrawl` is the local candidate-discovery layer. It is fast, includes open and closed threads, and can surface duplicate attempts, related issues, and already-landed fixes. It is not the final source of truth for comments, labels, merges, closes, or current CI.
-
-## Default Flow
-
-1. Check local state:
+Use local GitHub issue/PR archives before live GitHub search. Check freshness first:
 
 ```bash
 gitcrawl doctor --json
 ```
 
-2. Read the target from the local archive:
+Find candidates:
 
 ```bash
 gitcrawl threads openclaw/openclaw --numbers <issue-or-pr-number> --include-closed --json
-```
-
-3. Find related candidates:
-
-```bash
 gitcrawl neighbors openclaw/openclaw --number <issue-or-pr-number> --limit 12 --json
-gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hybrid --limit 20 --json
+gitcrawl search issues "query" -R openclaw/openclaw --state open --json number,title,url
+gitcrawl clusters openclaw/openclaw --sort size --min-size 5
+gitcrawl cluster-detail openclaw/openclaw --id <cluster-id>
 ```
 
-4. Inspect relevant clusters:
+For PR triage, start cached and go live only before mutation/merge decisions:
 
 ```bash
-gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
+gitcrawl gh pr status <number-or-url> -R openclaw/openclaw --compact
+gitcrawl gh pr view <number-or-url> -R openclaw/openclaw --json number,title,state,url,isDraft,headRef,headSha
+gitcrawl gh --live pr status <number-or-url> -R openclaw/openclaw --compact
 ```
 
-5. Verify anything actionable with live GitHub and the checkout:
+Use live `gh` plus checkout proof before commenting, labeling, closing, reopening, merging, or filing a PR review:
 
 ```bash
 gh pr view <number> --json number,title,state,mergedAt,body,files,comments,reviews,statusCheckRollup
 gh issue view <number> --json number,title,state,body,comments,closedAt
 ```
 
-## Freshness Rules
-
-- Treat `gitcrawl` as stale if `doctor` shows no target thread, an old `last_sync_at`, missing embeddings for neighbor/search commands, or a clearly wrong open/closed state.
-- If stale data blocks the decision, refresh the portable store first:
-
-```bash
-gitcrawl init --portable-store git@github.com:openclaw/gitcrawl-store.git --json
-```
-
-- Run expensive update commands such as `gitcrawl sync --include-comments` only when the user asked to update the local store or stale data is blocking the decision.
-- The sync default is all GitHub thread states; pass `--state open`, `--state closed`, or `--state all` only when a task requires a narrower or explicit scope.
-
-## Boundaries
-
-- Use `gitcrawl` for candidates, clusters, and historical context.
-- Use `gh`, `gh api`, and the current checkout for live state before commenting, labeling, closing, reopening, merging, or filing a PR review.
-- Do not close or label based only on `gitcrawl` similarity. Require matching problem intent plus live verification.
-- If `gitcrawl` is unavailable, say so and fall back to targeted `gh search` rather than blocking normal maintainer work.
+Report absolute dates, repo names, issue/PR numbers, cluster ids, and source gaps. Do not close/label from similarity alone; require matching intent plus live verification.

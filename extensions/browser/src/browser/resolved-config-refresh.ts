@@ -1,6 +1,11 @@
+/**
+ * Runtime config refresh helpers for Browser profiles that can be hot-reloaded
+ * without restarting the whole Browser plugin server.
+ */
 import { loadBrowserConfigForRuntimeRefresh } from "./config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
-import type { BrowserServerState } from "./server-context.types.js";
+import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
+import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
 function changedProfileInvariants(
   current: ResolvedBrowserProfile,
@@ -43,7 +48,44 @@ function changedProfileInvariants(
   if ((current.userDataDir ?? "") !== (next.userDataDir ?? "")) {
     changed.push("userDataDir");
   }
+  if ((current.mcpCommand ?? "") !== (next.mcpCommand ?? "")) {
+    changed.push("mcpCommand");
+  }
+  if (
+    current.mcpArgs?.length !== next.mcpArgs?.length ||
+    current.mcpArgs?.some((arg, index) => arg !== next.mcpArgs?.[index])
+  ) {
+    changed.push("mcpArgs");
+  }
   return changed;
+}
+
+function queueRemovedProfileCleanup(params: {
+  current: BrowserServerState;
+  name: string;
+  runtime: ProfileRuntimeState;
+  initial: boolean;
+}) {
+  const actor = getProfileLifecycle(params.runtime);
+  if (!params.initial && (!actor.blockedReason || actor.transitionReason)) {
+    return;
+  }
+  params.runtime.lastTargetId = null;
+  void beginProfileTransition({
+    state: params.current,
+    runtime: params.runtime,
+    reason: params.initial ? "profile removed from config" : "profile removal cleanup retry",
+    terminal: "config-removed",
+    advanceConfigRevision: params.initial,
+    closeRelay: params.runtime.profile.driver === "extension",
+    exposeReason: true,
+  })
+    .then(() => {
+      if (params.current.profiles.get(params.name) === params.runtime) {
+        params.current.profiles.delete(params.name);
+      }
+    })
+    .catch(() => {});
 }
 
 function applyResolvedConfig(
@@ -58,34 +100,51 @@ function applyResolvedConfig(
     evaluateEnabled: current.resolved.evaluateEnabled,
   };
   for (const [name, runtime] of current.profiles) {
+    const actor = getProfileLifecycle(runtime);
+    if (actor.terminal === "config-removed") {
+      queueRemovedProfileCleanup({ current, name, runtime, initial: false });
+      continue;
+    }
+    if (actor.terminal) {
+      continue;
+    }
     const nextProfile = resolveProfile(freshResolved, name);
     if (nextProfile) {
+      if (actor.blockedReason && !actor.transitionReason) {
+        void beginProfileTransition({
+          state: current,
+          runtime,
+          reason: "profile invariant cleanup retry",
+          captureProfileResources: false,
+          exposeReason: true,
+        }).catch(() => {});
+        continue;
+      }
       const changed = changedProfileInvariants(runtime.profile, nextProfile);
       if (changed.length > 0) {
-        runtime.reconcile = {
-          previousProfile: runtime.profile,
-          reason: `profile invariants changed: ${changed.join(", ")}`,
-        };
+        const previousProfile = runtime.profile;
+        const reason = `profile invariants changed: ${changed.join(", ")}`;
+        void beginProfileTransition({
+          state: current,
+          runtime,
+          reason,
+          advanceConfigRevision: true,
+          closeRelay: previousProfile.driver === "extension",
+          exposeReason: true,
+        }).catch(() => {});
         runtime.lastTargetId = null;
       }
       runtime.profile = nextProfile;
       continue;
     }
-    runtime.reconcile = {
-      previousProfile: runtime.profile,
-      reason: "profile removed from config",
-    };
-    runtime.lastTargetId = null;
-    if (!runtime.running) {
-      current.profiles.delete(name);
-    }
+    queueRemovedProfileCleanup({ current, name, runtime, initial: true });
   }
 }
 
+/** Refreshes the Browser runtime's resolved config from disk when hot reload is enabled. */
 export function refreshResolvedBrowserConfigFromDisk(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;
-  mode: "cached" | "fresh";
 }) {
   if (!params.refreshConfigFromDisk) {
     return;
@@ -98,6 +157,7 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
   applyResolvedConfig(params.current, freshResolved);
 }
 
+/** Resolves a profile after an optional config reload. */
 export function resolveBrowserProfileWithHotReload(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;
@@ -106,19 +166,6 @@ export function resolveBrowserProfileWithHotReload(params: {
   refreshResolvedBrowserConfigFromDisk({
     current: params.current,
     refreshConfigFromDisk: params.refreshConfigFromDisk,
-    mode: "cached",
   });
-  let profile = resolveProfile(params.current.resolved, params.name);
-  if (profile) {
-    return profile;
-  }
-
-  // Hot-reload: profile missing; retry with a fresh disk read without flushing the global cache.
-  refreshResolvedBrowserConfigFromDisk({
-    current: params.current,
-    refreshConfigFromDisk: params.refreshConfigFromDisk,
-    mode: "fresh",
-  });
-  profile = resolveProfile(params.current.resolved, params.name);
-  return profile;
+  return resolveProfile(params.current.resolved, params.name);
 }

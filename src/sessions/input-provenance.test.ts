@@ -1,5 +1,11 @@
+// Input provenance tests cover source metadata attached to session inputs.
 import { describe, expect, it } from "vitest";
-import { annotateInterSessionPromptText } from "./input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  isAgentMediatedCompletionSourceTool,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+  stripInterSessionPromptPrefixForDisplay,
+} from "./input-provenance.js";
 
 describe("annotateInterSessionPromptText", () => {
   it("marks inter-session prompt text as non-user-authored", () => {
@@ -60,5 +66,66 @@ describe("annotateInterSessionPromptText", () => {
         sourceChannel: "discord",
       }),
     ).toBe("hello");
+  });
+});
+
+describe("stripInterSessionPromptPrefixForDisplay", () => {
+  it("removes generated inter-session envelope text from display content", () => {
+    const marked = annotateInterSessionPromptText("forwarded report", {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:discord:source",
+      sourceTool: "sessions_send",
+    });
+
+    expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe("forwarded report");
+  });
+});
+
+describe("isAgentMediatedCompletionSourceTool", () => {
+  it.each(["agent_harness_task", "image_generate", "music_generate", "video_generate"])(
+    "identifies %s as an agent-mediated completion source",
+    (sourceTool) => {
+      expect(isAgentMediatedCompletionSourceTool(sourceTool)).toBe(true);
+    },
+  );
+
+  it.each(["subagent_announce", "subagent_interrupted_resume", "sessions_send"])(
+    "does not classify %s as an agent-mediated completion source",
+    (sourceTool) => {
+      expect(isAgentMediatedCompletionSourceTool(sourceTool)).toBe(false);
+    },
+  );
+});
+
+describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
+  it.each([
+    "agent_harness_task",
+    "image_generate",
+    "music_generate",
+    "subagent_announce",
+    "subagent_interrupted_resume",
+    "video_generate",
+  ])("preserves user-facing session state for internal %s handoffs", (sourceTool) => {
+    expect(
+      shouldPreserveUserFacingSessionStateForInputProvenance({
+        kind: "inter_session",
+        sourceTool,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not preserve user-facing session state for external or user-directed handoffs", () => {
+    expect(
+      shouldPreserveUserFacingSessionStateForInputProvenance({
+        kind: "external_user",
+        sourceTool: "subagent_announce",
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveUserFacingSessionStateForInputProvenance({
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      }),
+    ).toBe(false);
   });
 });

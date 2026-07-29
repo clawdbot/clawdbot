@@ -1,12 +1,16 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+// Microsoft provider module implements model/runtime integration.
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   CHROMIUM_FULL_VERSION,
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
@@ -21,12 +25,13 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 type MicrosoftProviderConfig = {
   enabled: boolean;
@@ -40,17 +45,6 @@ type MicrosoftProviderConfig = {
   saveSubtitles: boolean;
   proxy?: string;
   timeoutMs?: number;
-};
-
-type MicrosoftVoiceListEntry = {
-  ShortName?: string;
-  FriendlyName?: string;
-  Locale?: string;
-  Gender?: string;
-  VoiceTag?: {
-    ContentCategories?: string[];
-    VoicePersonalities?: string[];
-  };
 };
 
 function normalizeMicrosoftProviderConfig(
@@ -109,12 +103,13 @@ function buildMicrosoftVoiceHeaders(): Record<string, string> {
   };
 }
 
-function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string | undefined {
-  const personalities = entry.VoiceTag?.VoicePersonalities?.filter(Boolean) ?? [];
-  return personalities.length > 0 ? personalities.join(", ") : undefined;
+function readMicrosoftVoiceTagStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
 }
 
-export function isCjkDominant(text: string): boolean {
+function isCjkDominant(text: string): boolean {
   const stripped = text.replace(/\s+/g, "");
   if (stripped.length === 0) {
     return false;
@@ -137,7 +132,9 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
+async function listMicrosoftVoices(
+  timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
+): Promise<SpeechVoiceOption[]> {
   const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
     `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
@@ -149,6 +146,7 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     },
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
     auditContext: "microsoft.speech.voices",
+    timeoutMs,
   });
   try {
     if (!isDebugProxyGlobalFetchPatchInstalled()) {
@@ -165,21 +163,29 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
       });
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = (await response.json()) as MicrosoftVoiceListEntry[];
+    const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
     return Array.isArray(voices)
-      ? voices
-          .map((voice) => ({
-            id: voice.ShortName?.trim() ?? "",
-            name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
-            category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
-            description: formatMicrosoftVoiceDescription(voice),
-            locale: trimToUndefined(voice.Locale),
-            gender: trimToUndefined(voice.Gender),
-            personalities: voice.VoiceTag?.VoicePersonalities?.filter(
-              (value): value is string => value.trim().length > 0,
-            ),
-          }))
-          .filter((voice) => voice.id.length > 0)
+      ? voices.flatMap((value) => {
+          const voice = asObject(value);
+          const id = trimToUndefined(voice?.ShortName);
+          if (!voice || !id) {
+            return [];
+          }
+          const voiceTag = asObject(voice.VoiceTag);
+          const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
+          const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
+          return [
+            {
+              id,
+              name: trimToUndefined(voice.FriendlyName) ?? id,
+              category: categories?.[0],
+              description: personalities?.length ? personalities.join(", ") : undefined,
+              locale: trimToUndefined(voice.Locale),
+              gender: trimToUndefined(voice.Gender),
+              personalities,
+            },
+          ];
+        })
       : [];
   } finally {
     await release();
@@ -232,13 +238,18 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { outputFormat: trimToUndefined(params.outputFormat) }),
     }),
-    listVoices: async () => await listMicrosoftVoices(),
+    listVoices: async (req) => {
+      const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
+      return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
+    },
     isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
-      const tempRoot = resolvePreferredOpenClawTmpDir();
-      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-      const tempDir = mkdtempSync(path.join(tempRoot, "tts-microsoft-"));
+      const temp = await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "tts-microsoft-",
+      });
+      const tempDir = temp.dir;
       const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
       let voice = overrideVoice ?? config.voice;
       let lang = config.lang;
@@ -272,7 +283,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             audioBuffer,
             outputFormat: format,
             fileExtension,
-            voiceCompatible: isVoiceCompatibleAudio({ fileName: outputPath }),
+            voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
           };
         };
 
@@ -286,7 +297,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
           return await runEdge(outputFormat);
         }
       } finally {
-        rmSync(tempDir, { recursive: true, force: true });
+        await temp.cleanup();
       }
     },
   };

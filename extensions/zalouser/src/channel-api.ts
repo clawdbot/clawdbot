@@ -1,3 +1,4 @@
+// Zalouser API module exposes the plugin public contract.
 export { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 export type {
   ChannelDirectoryEntry,
@@ -12,7 +13,7 @@ export {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/core";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-types";
+export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {
   isNumericTargetId,

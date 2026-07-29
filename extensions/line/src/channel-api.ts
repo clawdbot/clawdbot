@@ -1,3 +1,4 @@
+// Line API module exposes the plugin public contract.
 export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";

@@ -1,3 +1,4 @@
+// Session key continuity tests cover stable route keys across routing changes.
 import { describe, it, expect } from "vitest";
 import { buildAgentSessionKey } from "./resolve-route.js";
 

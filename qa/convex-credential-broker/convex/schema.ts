@@ -1,3 +1,4 @@
+// Schema module supports OpenClaw QA credential workflows.
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
@@ -32,6 +33,13 @@ export default defineSchema({
   })
     .index("by_kind_status", ["kind", "status"])
     .index("by_kind_lastLeasedAtMs", ["kind", "lastLeasedAtMs"]),
+
+  credential_payload_chunks: defineTable({
+    credentialId: v.id("credential_sets"),
+    index: v.number(),
+    data: v.string(),
+    createdAtMs: v.number(),
+  }).index("by_credential_index", ["credentialId", "index"]),
 
   lease_events: defineTable({
     kind: v.string(),

@@ -1,3 +1,4 @@
+// Vitest extension qa config wires the extension qa test shard.
 import { qaExtensionTestRoots } from "./vitest.extension-qa-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

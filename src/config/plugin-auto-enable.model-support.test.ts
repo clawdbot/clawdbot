@@ -1,3 +1,4 @@
+// Verifies model-support based plugin auto-enable decisions.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
@@ -80,6 +81,6 @@ describe("applyPluginAutoEnable modelSupport", () => {
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
     expect(result.config.plugins?.entries?.["proxy-openai"]).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 });

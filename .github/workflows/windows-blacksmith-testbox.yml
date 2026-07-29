@@ -57,6 +57,10 @@ jobs:
             echo "could not read required Blacksmith metadata" >&2
             exit 1
           fi
+          if ! jq -e 'type == "number"' <<<"$installation_model_id" >/dev/null; then
+            echo "invalid Blacksmith installation model id: ${installation_model_id}" >&2
+            exit 1
+          fi
 
           if [ -n "${BLACKSMITH_HOSTNAME:-}" ]; then
             runner_host="$BLACKSMITH_HOSTNAME"
@@ -65,19 +69,45 @@ jobs:
           fi
           runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
 
-          response="$(curl -s -f -L --post302 --post303 -X POST "${api_url}/api/testbox/phone-home" \
+          hydrating_body="$RUNNER_TEMP/testbox-hydrating.json"
+          hydrating_response="$RUNNER_TEMP/testbox-hydrating.response"
+          jq -n \
+            --arg testbox_id "$TESTBOX_ID" \
+            --argjson installation_model_id "$installation_model_id" \
+            --arg status "hydrating" \
+            --arg ip_address "$runner_host" \
+            --arg ssh_port "$runner_ssh_port" \
+            --arg working_directory "$GITHUB_WORKSPACE" \
+            --arg adopted_run_id "$GITHUB_RUN_ID" \
+            '{
+              testbox_id: $testbox_id,
+              installation_model_id: $installation_model_id,
+              status: $status,
+              ip_address: $ip_address,
+              ssh_port: $ssh_port,
+              working_directory: $working_directory,
+              adopted_run_id: $adopted_run_id,
+              metadata: {}
+            }' > "$hydrating_body"
+
+          # curl can expose a 2xx status before a response-body timeout, so preserve its exit code.
+          hydrating_curl_status=0
+          hydrating_http_code="$(curl -sS -L --post302 --post303 \
+            --connect-timeout 10 --max-time 30 \
+            -o "$hydrating_response" -w '%{http_code}' \
+            -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
-            -d "{
-              \"testbox_id\": \"${TESTBOX_ID}\",
-              \"installation_model_id\": ${installation_model_id},
-              \"status\": \"hydrating\",
-              \"ip_address\": \"${runner_host}\",
-              \"ssh_port\": \"${runner_ssh_port}\",
-              \"working_directory\": \"${GITHUB_WORKSPACE}\",
-              \"adopted_run_id\": \"${GITHUB_RUN_ID}\",
-              \"metadata\": {}
-            }" 2>/dev/null || true)"
+            --data-binary @"$hydrating_body")" || hydrating_curl_status=$?
+
+          echo "phone_home_hydrating_curl=${hydrating_curl_status}"
+          echo "phone_home_hydrating_http=${hydrating_http_code}"
+          if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then
+            echo "Blacksmith phone-home hydrating failed; response body:" >&2
+            cat "$hydrating_response" >&2 || true
+            exit 1
+          fi
+          response="$(cat "$hydrating_response")"
 
           echo "$TESTBOX_ID" > "$state/testbox_id"
           echo "$installation_model_id" > "$state/installation_model_id"
@@ -100,15 +130,17 @@ jobs:
           fi
 
           ssh_public_key="$(cat "$state/ssh_public_key" 2>/dev/null || true)"
-          if [ -n "$ssh_public_key" ]; then
-            mkdir -p ~/.ssh
-            printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
-            chmod 700 ~/.ssh
-            chmod 600 ~/.ssh/authorized_keys
+          if [ -z "$ssh_public_key" ]; then
+            echo "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections." >&2
+            exit 1
           fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/authorized_keys
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           submodules: false
@@ -123,6 +155,7 @@ jobs:
           git --version
 
       - name: Run Testbox
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -140,27 +173,47 @@ jobs:
           runner_ssh_port="$(cat "$state/runner_ssh_port")"
           working_directory="$(cat "$state/working_directory")"
           adopted_run_id="$(cat "$state/adopted_run_id")"
+          if ! jq -e 'type == "number"' <<<"$installation_model_id" >/dev/null; then
+            echo "invalid Blacksmith installation model id: ${installation_model_id}" >&2
+            exit 1
+          fi
 
           ready_body="$RUNNER_TEMP/testbox-ready.json"
-          cat > "$ready_body" <<JSON
-          {
-            "testbox_id": "${testbox_id}",
-            "installation_model_id": ${installation_model_id},
-            "status": "ready",
-            "ip_address": "${runner_host}",
-            "ssh_port": "${runner_ssh_port}",
-            "working_directory": "${working_directory}",
-            "adopted_run_id": "${adopted_run_id}",
-            "metadata": {}
-          }
-          JSON
+          jq -n \
+            --arg testbox_id "$testbox_id" \
+            --argjson installation_model_id "$installation_model_id" \
+            --arg status "ready" \
+            --arg ip_address "$runner_host" \
+            --arg ssh_port "$runner_ssh_port" \
+            --arg working_directory "$working_directory" \
+            --arg adopted_run_id "$adopted_run_id" \
+            '{
+              testbox_id: $testbox_id,
+              installation_model_id: $installation_model_id,
+              status: $status,
+              ip_address: $ip_address,
+              ssh_port: $ssh_port,
+              working_directory: $working_directory,
+              adopted_run_id: $adopted_run_id,
+              metadata: {}
+            }' > "$ready_body"
 
-          http_code="$(curl -sS -L --post302 --post303 -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
+          # curl can expose a 2xx status before a response-body timeout, so preserve its exit code.
+          ready_curl_status=0
+          http_code="$(curl -sS -L --post302 --post303 \
+            --connect-timeout 10 --max-time 30 \
+            -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
-            --data-binary @"$ready_body" || true)"
+            --data-binary @"$ready_body")" || ready_curl_status=$?
+          echo "phone_home_ready_curl=${ready_curl_status}"
           echo "phone_home_ready_http=${http_code}"
+          if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then
+            echo "Blacksmith phone-home ready failed; response body:" >&2
+            cat "$RUNNER_TEMP/testbox-ready.response" >&2 || true
+            exit 1
+          fi
 
           echo "============================================"
           echo "Testbox ready!"
@@ -197,4 +250,4 @@ jobs:
 
       - name: Testbox action marker
         if: ${{ false }}
-        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d

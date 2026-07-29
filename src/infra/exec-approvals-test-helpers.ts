@@ -1,8 +1,11 @@
+// Provides shared fixtures for exec approval tests.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandResolution, ExecutableResolution } from "./exec-command-resolution.js";
 
+// Shared exec-approval fixtures keep parser, allowlist, and wrapper tests on
+// the same mock resolution shape.
 export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
     return { PATH: binDir };
@@ -10,10 +13,21 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   return { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" };
 }
 
+/** Create a real temp directory for exec-approval tests that need filesystem paths. */
 export function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")));
 }
 
+/** Create an executable file in a test bin directory. */
+export function makeExecutable(dir: string, name: string): string {
+  const fileName = process.platform === "win32" ? `${name}.exe` : name;
+  const exe = path.join(dir, fileName);
+  fs.writeFileSync(exe, "");
+  fs.chmodSync(exe, 0o755);
+  return exe;
+}
+
+/** Build a minimal executable resolution for command-policy tests. */
 export function makeMockExecutableResolution(params: {
   rawExecutable: string;
   executableName: string;
@@ -28,6 +42,7 @@ export function makeMockExecutableResolution(params: {
   };
 }
 
+/** Build a command resolution while preserving legacy getter accessors. */
 export function makeMockCommandResolution(params: {
   execution: ExecutableResolution;
   policy?: ExecutableResolution;
@@ -96,6 +111,7 @@ export function loadShellParserParityFixtureCases(): ShellParserParityFixtureCas
   return fixture.cases;
 }
 
+/** Load wrapper resolution parity cases generated from shell-parser fixtures. */
 export function loadWrapperResolutionParityFixtureCases(): WrapperResolutionParityFixtureCase[] {
   const fixturePath = path.join(
     process.cwd(),

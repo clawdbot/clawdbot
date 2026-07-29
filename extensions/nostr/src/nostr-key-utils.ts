@@ -1,3 +1,4 @@
+// Nostr helper module supports nostr key utils behavior.
 import { getPublicKey, nip19 } from "nostr-tools";
 
 /**
@@ -7,7 +8,7 @@ export function validatePrivateKey(key: string): Uint8Array {
   const trimmed = key.trim();
 
   // Handle nsec (bech32) format
-  if (trimmed.startsWith("nsec1")) {
+  if (trimmed.startsWith("nsec1") || trimmed.startsWith("NSEC1")) {
     const decoded = nip19.decode(trimmed);
     if (decoded.type !== "nsec") {
       throw new Error("Invalid nsec key: wrong type");
@@ -37,44 +38,19 @@ export function getPublicKeyFromPrivate(privateKey: string): string {
 }
 
 /**
- * Check if a string looks like a valid Nostr pubkey (hex or npub)
- */
-export function isValidPubkey(input: string): boolean {
-  if (typeof input !== "string") {
-    return false;
-  }
-  const trimmed = input.trim();
-
-  // npub format
-  if (trimmed.startsWith("npub1")) {
-    try {
-      const decoded = nip19.decode(trimmed);
-      return decoded.type === "npub";
-    } catch {
-      return false;
-    }
-  }
-
-  // Hex format
-  return /^[0-9a-fA-F]{64}$/.test(trimmed);
-}
-
-/**
  * Normalize a pubkey to hex format (accepts npub or hex)
  */
 export function normalizePubkey(input: string): string {
   const trimmed = input.trim();
 
   // npub format - decode to hex
-  if (trimmed.startsWith("npub1")) {
+  if (trimmed.startsWith("npub1") || trimmed.startsWith("NPUB1")) {
     const decoded = nip19.decode(trimmed);
-    if (decoded.type !== "npub") {
+    if (decoded.type !== "npub" || typeof decoded.data !== "string") {
       throw new Error("Invalid npub key");
     }
-    // Convert Uint8Array to hex string
-    return Array.from(decoded.data as unknown as Uint8Array)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    // nip19.decode(npub).data is already the hex pubkey (string), not Uint8Array.
+    return decoded.data.toLowerCase();
   }
 
   // Already hex - validate and return lowercase
@@ -82,13 +58,4 @@ export function normalizePubkey(input: string): string {
     throw new Error("Pubkey must be 64 hex characters or npub format");
   }
   return trimmed.toLowerCase();
-}
-
-/**
- * Convert a hex pubkey to npub format
- */
-export function pubkeyToNpub(hexPubkey: string): string {
-  const normalized = normalizePubkey(hexPubkey);
-  // npubEncode expects a hex string, not Uint8Array
-  return nip19.npubEncode(normalized);
 }

@@ -1,9 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
+// Telegram tests cover channel actions plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramMessageActions } from "./channel-actions.js";
 
 const handleTelegramActionMock = vi.hoisted(() => vi.fn());
-const originalHandleTelegramAction = telegramMessageActionRuntime.handleTelegramAction;
+
+vi.mock("./action-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
+  return { ...actual, handleTelegramAction: handleTelegramActionMock };
+});
 
 describe("telegramMessageActions", () => {
   beforeEach(() => {
@@ -12,18 +17,65 @@ describe("telegramMessageActions", () => {
       content: [],
       details: {},
     });
-    telegramMessageActionRuntime.handleTelegramAction = (...args) =>
-      handleTelegramActionMock(...args);
-  });
-
-  afterEach(() => {
-    telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
   it("executes message actions in the gateway when a gateway is available", () => {
     for (const action of ["send", "poll", "react", "delete", "edit"] as const) {
       expect(telegramMessageActions.resolveExecutionMode?.({ action })).toBe("gateway");
     }
+  });
+
+  it("classifies provider-native mutation actions", () => {
+    for (const action of ["sendMessage", "editMessage", "deleteMessage", "react", "topic-edit"]) {
+      expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
+    }
+    for (const action of ["searchSticker", "stickerCacheStats"]) {
+      expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
+    }
+  });
+
+  it("classifies Telegram message ids as resources rather than delivery targets", () => {
+    for (const action of ["react", "edit", "delete"] as const) {
+      expect(telegramMessageActions.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId"],
+        deliveryTargetAliases: [],
+      });
+    }
+  });
+
+  it("forwards only host-owned mutation context to the runtime", async () => {
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "delete",
+      params: {
+        messageId: "9001",
+        to: "-1001:topic:77",
+        conversationReadOrigin: "direct-operator",
+      },
+      cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
+      accountId: "work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001:topic:77",
+        currentMessageId: "9001",
+      },
+    } as never);
+
+    expect(handleTelegramActionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ conversationReadOrigin: "direct-operator" }),
+      expect.anything(),
+      expect.objectContaining({
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "work",
+        toolContext: expect.objectContaining({ currentMessageId: "9001" }),
+      }),
+    );
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).toMatchObject({
+      action: "deleteMessage",
+      messageId: "9001",
+    });
   });
 
   it("allows interactive-only sends", async () => {
@@ -43,10 +95,11 @@ describe("telegramMessageActions", () => {
       cfg: {} as never,
       accountId: "default",
       mediaLocalRoots: [],
+      sessionKey: "telegram-session",
     } as never);
 
     expect(handleTelegramActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         action: "sendMessage",
         to: "123456",
         interactive: {
@@ -58,11 +111,14 @@ describe("telegramMessageActions", () => {
           ],
         },
         accountId: "default",
-      }),
-      expect.anything(),
-      expect.objectContaining({
+      },
+      {},
+      {
         mediaLocalRoots: [],
-      }),
+        mediaReadFile: undefined,
+        sessionKey: "telegram-session",
+        gatewayClientScopes: undefined,
+      },
     );
   });
 
@@ -189,9 +245,8 @@ describe("telegramMessageActions", () => {
           cfg: testCase.cfg,
         })?.actions ?? [];
       if (testCase.expectSticker) {
-        expect(actions, testCase.name).toEqual(
-          expect.arrayContaining(["sticker", "sticker-search"]),
-        );
+        expect(actions, testCase.name).toContain("sticker");
+        expect(actions, testCase.name).toContain("sticker-search");
       } else {
         expect(actions, testCase.name).not.toContain("sticker");
         expect(actions, testCase.name).not.toContain("sticker-search");
@@ -296,19 +351,168 @@ describe("telegramMessageActions", () => {
         toolContext: "toolContext" in testCase ? testCase.toolContext : undefined,
       });
 
-      const call = handleTelegramActionMock.mock.calls[0]?.[0] as
+      const call = handleTelegramActionMock.mock.calls.at(0)?.[0] as
         | Record<string, unknown>
         | undefined;
-      expect(call, testCase.name).toBeDefined();
-      expect(call?.action, testCase.name).toBe("react");
-      expect(String(call?.[testCase.expectedChannelField]), testCase.name).toBe(
+      if (!call) {
+        throw new Error(`expected Telegram action call for ${testCase.name}`);
+      }
+      expect(call.action, testCase.name).toBe("react");
+      expect(String(call[testCase.expectedChannelField]), testCase.name).toBe(
         testCase.expectedChannelValue,
       );
       if (testCase.expectedMessageId === undefined) {
-        expect(call?.messageId, testCase.name).toBeUndefined();
+        expect(call.messageId, testCase.name).toBeUndefined();
       } else {
-        expect(String(call?.messageId), testCase.name).toBe(testCase.expectedMessageId);
+        expect(String(call.messageId), testCase.name).toBe(testCase.expectedMessageId);
       }
     }
+  });
+
+  // Regression for #75433: prompt discovery reads raw config before the active
+  // runtime snapshot has resolved SecretRefs. Treat SecretRef-backed accounts
+  // as configured and keep advertising config-derived actions.
+  it("describes discovery when botToken is an unresolved SecretRef instead of crashing the embedded run", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+          actions: {
+            reactions: true,
+            poll: false,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("react");
+    expect(discovery?.actions).not.toContain("poll");
+  });
+
+  it("describes scoped account discovery when Telegram account token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+              actions: {
+                reactions: false,
+                poll: true,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "ops",
+    });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("poll");
+    expect(discovery?.actions).not.toContain("react");
+  });
+
+  it("advertises poll duration as a positive integer in message tool schema", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { poll: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+    const schema = Array.isArray(discovery?.schema) ? discovery.schema[0] : undefined;
+
+    expect(schema?.properties.pollDurationSeconds).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+  });
+
+  it("matches runtime account-key normalization during SecretRef-tolerant discovery", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": {
+              botToken: { source: "exec", provider: "default", id: "telegram-carey" },
+              actions: {
+                poll: true,
+                reactions: false,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "carey-notifications",
+    });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("poll");
+    expect(discovery?.actions).not.toContain("react");
+  });
+
+  it("does not discover unknown scoped accounts via channel-level fallback in multi-account config", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok-channel",
+          accounts: {
+            work: { botToken: "tok-work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      telegramMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "unknown",
+      })?.actions,
+    ).toEqual([]);
+  });
+
+  it("keeps healthy Telegram accounts discoverable when a sibling token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            unresolved: {
+              botToken: { source: "exec", provider: "default", id: "telegram-unresolved" },
+              actions: {
+                reactions: false,
+                poll: false,
+              },
+            },
+            healthy: {
+              botToken: "tok-healthy",
+              actions: {
+                reactions: true,
+                poll: false,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("react");
+    expect(discovery?.actions).not.toContain("poll");
   });
 });

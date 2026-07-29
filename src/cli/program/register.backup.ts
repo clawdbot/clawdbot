@@ -1,16 +1,24 @@
+// Backup command registration for local state archive creation and verification.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  backupSqliteCreateCommand,
+  backupSqliteListCommand,
+  backupSqliteRestoreCommand,
+  backupSqliteVerifyCommand,
+} from "../../commands/backup-sqlite.js";
 import { backupVerifyCommand } from "../../commands/backup-verify.js";
 import { backupCreateCommand } from "../../commands/backup.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
+/** Register backup create/verify subcommands. */
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")
-    .description("Create and verify local backup archives for OpenClaw state")
+    .description("Create and verify backup archives and SQLite snapshots")
     .addHelpText(
       "after",
       () =>
@@ -72,7 +80,7 @@ export function registerBackupCommand(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           [
-            "openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz",
+            "openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz",
             "Check that the archive structure and manifest are intact.",
           ],
           [
@@ -85,6 +93,92 @@ export function registerBackupCommand(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await backupVerifyCommand(defaultRuntime, {
           archive: archive as string,
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
+  registerBackupSqliteCommands(backup);
+}
+
+function registerBackupSqliteCommands(backup: Command): void {
+  const sqlite = backup
+    .command("sqlite")
+    .description("Create, list, verify, and restore SQLite snapshots")
+    .action(() => {
+      sqlite.outputHelp();
+      process.exitCode = 1;
+    });
+
+  sqlite
+    .command("create")
+    .description("Create a compact, verified snapshot of an OpenClaw SQLite database")
+    .option("--global", "Snapshot the shared OpenClaw state database", false)
+    .option("--agent <id>", "Snapshot one per-agent OpenClaw database")
+    .requiredOption("--repository <path>", "Snapshot repository directory")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw backup sqlite create --global --repository ~/Backups/openclaw-sqlite",
+            "Snapshot the shared state database.",
+          ],
+          [
+            "openclaw backup sqlite create --agent main --repository ~/Backups/openclaw-sqlite",
+            "Snapshot the main agent database.",
+          ],
+        ])}`,
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await backupSqliteCreateCommand(defaultRuntime, {
+          global: Boolean(opts.global),
+          agent: opts.agent as string | undefined,
+          repository: opts.repository as string,
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
+  sqlite
+    .command("list")
+    .description("List committed snapshots in a repository")
+    .requiredOption("--repository <path>", "Snapshot repository directory")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await backupSqliteListCommand(defaultRuntime, {
+          repository: opts.repository as string,
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
+  sqlite
+    .command("verify <snapshot>")
+    .description("Verify a snapshot manifest, artifact hash, SQLite integrity, and database owner")
+    .option("--scratch <path>", "Existing private directory for verification copies")
+    .option("--json", "Output JSON", false)
+    .action(async (snapshot, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await backupSqliteVerifyCommand(defaultRuntime, snapshot as string, {
+          scratch: opts.scratch as string | undefined,
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
+  sqlite
+    .command("restore <snapshot>")
+    .description("Restore a verified snapshot to a new SQLite database path")
+    .requiredOption("--target <path>", "Fresh target path; existing files and sidecars are refused")
+    .option("--json", "Output JSON", false)
+    .action(async (snapshot, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await backupSqliteRestoreCommand(defaultRuntime, snapshot as string, {
+          target: opts.target as string,
           json: Boolean(opts.json),
         });
       });

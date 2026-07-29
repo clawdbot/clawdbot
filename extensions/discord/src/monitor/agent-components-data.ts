@@ -1,9 +1,11 @@
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements agent components data behavior.
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
 } from "../component-custom-id.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import { decodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData, ModalInteraction } from "../internal/discord.js";
 import type { AgentComponentInteraction } from "./agent-components.types.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -41,21 +43,12 @@ function mapOptionLabels(
 
 export function parseAgentComponentData(data: ComponentData): { componentId: string } | null {
   const raw = readParsedComponentId(data);
-  const decodeSafe = (value: string): string => {
-    if (!value.includes("%")) {
-      return value;
-    }
-    if (!/%[0-9A-Fa-f]{2}/.test(value)) {
-      return value;
-    }
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  };
   const componentId =
-    typeof raw === "string" ? decodeSafe(raw) : typeof raw === "number" ? String(raw) : null;
+    typeof raw === "string"
+      ? decodeCustomIdComponent(raw)
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
   if (!componentId) {
     return null;
   }

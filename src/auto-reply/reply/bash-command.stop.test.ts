@@ -1,3 +1,4 @@
+// Tests bash stop command handling and active-process cancellation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
@@ -27,6 +28,7 @@ function buildParams(commandBody: string) {
 
   const ctx = {
     CommandBody: commandBody,
+    commandText: commandBody,
     SessionKey: "session-key",
   } as MsgContext;
 
@@ -123,6 +125,15 @@ describe("handleBashChatCommand stop", () => {
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
 
+  it("does not split boundary emoji in missing session snippets", async () => {
+    getSessionMock.mockReturnValue(undefined);
+    getFinishedSessionMock.mockReturnValue(undefined);
+
+    const result = await handleBashChatCommand(buildParams("/bash stop 1234567😀tail"));
+
+    expect(result.text).toBe("⚙️ No running bash job found for 1234567….");
+  });
+
   it("fails stop when session has no pid", async () => {
     const session = buildRunningSession({ pid: undefined, child: undefined });
     getSessionMock.mockReturnValue(session);
@@ -155,10 +166,11 @@ describe("handleBashChatCommand stop", () => {
         },
       });
 
-    const result = await handleBashChatCommand(buildElevatedDeniedParams("/bash pwd"));
+    const params = buildElevatedDeniedParams("/bash pwd");
+    const result = await handleBashChatCommand(params);
 
     expect(resolveSandboxRuntimeStatusSpy).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
+      cfg: params.cfg,
       sessionKey: "agent:target:telegram:direct:target-session",
     });
     expect(result.text).toContain(

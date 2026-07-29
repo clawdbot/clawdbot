@@ -1,3 +1,7 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+/**
+ * Enforces source-managed provider secret ownership rules.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
@@ -6,8 +10,15 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
+import { normalizeProviderMapKeys } from "./models-config.merge.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
 
+/**
+ * Reapplies source-managed secret markers to normalized provider config.
+ *
+ * This keeps runtime snapshots from materializing secret refs as plain values after config
+ * normalization rewrites provider entries.
+ */
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 function normalizeSourceProviderLookup(
@@ -16,15 +27,12 @@ function normalizeSourceProviderLookup(
   if (!providers) {
     return {};
   }
-  const out: Record<string, ProviderConfig> = {};
-  for (const [key, provider] of Object.entries(providers)) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || !isRecord(provider)) {
-      continue;
-    }
-    out[normalizedKey] = provider;
-  }
-  return out;
+  const validProviders = Object.fromEntries(
+    Object.entries(providers).filter(([, provider]) => isRecord(provider)),
+  ) as Record<string, ProviderConfig>;
+  // Use the merge boundary's collision rule so a case alias cannot displace the
+  // canonical SecretRef owner and expose its resolved runtime value to models.json.
+  return normalizeProviderMapKeys(validProviders);
 }
 
 function resolveSourceManagedApiKeyMarker(params: {
@@ -70,6 +78,7 @@ function resolveSourceManagedHeaderMarkers(params: {
   return markers;
 }
 
+/** Preserves source-managed apiKey/header markers from the original provider config. */
 export function enforceSourceManagedProviderSecrets(params: {
   providers: ModelsConfig["providers"];
   sourceProviders: ModelsConfig["providers"] | undefined;
@@ -90,7 +99,8 @@ export function enforceSourceManagedProviderSecrets(params: {
     if (!isRecord(provider)) {
       continue;
     }
-    const sourceProvider = sourceProvidersByKey[providerKey.trim()];
+    const canonicalProviderKey = normalizeProviderId(providerKey);
+    const sourceProvider = sourceProvidersByKey[canonicalProviderKey];
     if (!sourceProvider) {
       continue;
     }
@@ -102,7 +112,7 @@ export function enforceSourceManagedProviderSecrets(params: {
       sourceSecretDefaults: params.sourceSecretDefaults,
     });
     if (sourceApiKeyMarker) {
-      params.secretRefManagedProviders?.add(providerKey.trim());
+      params.secretRefManagedProviders?.add(canonicalProviderKey);
       if (nextProvider.apiKey !== sourceApiKeyMarker) {
         providerMutated = true;
         nextProvider = {
@@ -120,6 +130,8 @@ export function enforceSourceManagedProviderSecrets(params: {
       const currentHeaders = isRecord(nextProvider.headers)
         ? (nextProvider.headers as Record<string, unknown>)
         : undefined;
+      // Merge marker headers over normalized headers so auth metadata remains managed while
+      // unrelated provider headers survive normalization.
       const nextHeaders = {
         ...(currentHeaders as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
       };

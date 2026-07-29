@@ -1,3 +1,4 @@
+// Control UI i18n module implements registry behavior.
 import type { Locale, TranslationMap } from "./types.ts";
 
 type LazyLocale = Exclude<Locale, "en">;
@@ -19,6 +20,7 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "ja-JP",
   "ko",
   "fr",
+  "hi",
   "ar",
   "it",
   "tr",
@@ -29,6 +31,7 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "vi",
   "nl",
   "fa",
+  "ru",
 ];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
@@ -63,6 +66,10 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   fr: {
     exportName: "fr",
     loader: () => import("../locales/fr.ts"),
+  },
+  hi: {
+    exportName: "hi",
+    loader: () => import("../locales/hi.ts"),
   },
   ar: {
     exportName: "ar",
@@ -104,6 +111,10 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "fa",
     loader: () => import("../locales/fa.ts"),
   },
+  ru: {
+    exportName: "ru",
+    loader: () => import("../locales/ru.ts"),
+  },
 };
 
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
@@ -116,9 +127,19 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
   return LAZY_LOCALES.includes(locale as LazyLocale);
 }
 
-export function resolveNavigatorLocale(navLang: string): Locale {
+export function resolveNavigatorLocale(browserLanguage: string): Locale {
+  const navLang = browserLanguage.toLowerCase();
   if (navLang.startsWith("zh")) {
-    return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
+    const [, ...subtags] = navLang.split("-");
+    if (subtags.includes("hant")) {
+      return "zh-TW";
+    }
+    if (subtags.includes("hans")) {
+      return "zh-CN";
+    }
+    return subtags.some((subtag) => subtag === "tw" || subtag === "hk" || subtag === "mo")
+      ? "zh-TW"
+      : "zh-CN";
   }
   if (navLang.startsWith("pt")) {
     return "pt-BR";
@@ -137,6 +158,9 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   }
   if (navLang.startsWith("fr")) {
     return "fr";
+  }
+  if (navLang.startsWith("hi")) {
+    return "hi";
   }
   if (navLang.startsWith("ar")) {
     return "ar";
@@ -167,6 +191,9 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   }
   if (navLang.startsWith("fa")) {
     return "fa";
+  }
+  if (navLang.startsWith("ru")) {
+    return "ru";
   }
   return DEFAULT_LOCALE;
 }

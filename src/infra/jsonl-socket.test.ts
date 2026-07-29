@@ -1,3 +1,4 @@
+// Covers JSONL socket request framing and response handling.
 import net from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -123,6 +124,36 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           accept: () => undefined,
         }),
       ).resolves.toBeNull();
+    });
+  });
+
+  it("returns null when the socket closes without an accepted response", async () => {
+    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+      const socketPath = path.join(dir, "socket.sock");
+      const server = net.createServer((socket) => {
+        socket.on("data", () => {
+          socket.destroy();
+        });
+      });
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
+
+      try {
+        const startMs = Date.now();
+        const result = await requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 250,
+          accept: () => undefined,
+        });
+
+        expect(result).toBeNull();
+        expect(Date.now() - startMs).toBeLessThan(100);
+      } finally {
+        server.close();
+      }
     });
   });
 });

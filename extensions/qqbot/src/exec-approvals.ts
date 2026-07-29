@@ -1,4 +1,8 @@
-import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
+// Qqbot plugin module implements exec approvals behavior.
+import {
+  markImplicitSameChatApprovalAuthorization,
+  resolveApprovalApprovers,
+} from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   createChannelExecApprovalProfile,
   isChannelExecApprovalClientEnabledFromConfig,
@@ -9,12 +13,12 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listQQBotAccountIds, resolveQQBotAccount } from "./bridge/config.js";
 import type { QQBotExecApprovalConfig } from "./types.js";
 
@@ -213,6 +217,25 @@ const qqbotExecApprovalProfile = createChannelExecApprovalProfile({
 });
 
 export const isQQBotExecApprovalClientEnabled = qqbotExecApprovalProfile.isClientEnabled;
-export const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
-export const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
+const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
+const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
 export const shouldHandleQQBotExecApprovalRequest = qqbotExecApprovalProfile.shouldHandleRequest;
+
+export function authorizeQQBotApprovalAction(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  senderId?: string | null;
+  approvalKind: "exec" | "plugin";
+}): { authorized: boolean; reason?: string } {
+  if (resolveQQBotExecApprovalConfig(params) === undefined) {
+    return markImplicitSameChatApprovalAuthorization({ authorized: true });
+  }
+
+  const authorized =
+    params.approvalKind === "plugin"
+      ? isQQBotExecApprovalApprover(params)
+      : isQQBotExecApprovalAuthorizedSender(params);
+  return authorized
+    ? { authorized: true }
+    : { authorized: false, reason: "You are not authorized to approve this request." };
+}

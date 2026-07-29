@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
@@ -6,7 +7,7 @@ type DiscordChannelRuntime = {
   sendMessageDiscord?: typeof import("./send.js").sendMessageDiscord;
 };
 
-export type DiscordRuntime = PluginRuntime & {
+type DiscordRuntime = PluginRuntime & {
   channel: PluginRuntime["channel"] & {
     discord?: DiscordChannelRuntime;
   };

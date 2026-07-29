@@ -1,9 +1,10 @@
+// Agent session helper tests cover explicit session resolution through config and session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionKeyForRequest } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSessionStore: vi.fn(),
+  listSessionEntries: vi.fn(),
   resolveStorePath: vi.fn(),
   listAgentIds: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
@@ -19,8 +20,8 @@ vi.mock("../../config/sessions/main-session.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: mocks.loadSessionStore,
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: mocks.listSessionEntries,
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -28,9 +29,9 @@ vi.mock("../../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", async () => {
-  const { normalizeAgentId } = await vi.importActual<
-    typeof import("../../routing/session-key.js")
-  >("../../routing/session-key.js");
+  const { normalizeAgentId } = await vi.importActual<typeof import("../../routing/session-key.js")>(
+    "../../routing/session-key.js",
+  );
   return {
     listAgentIds: mocks.listAgentIds,
     resolveDefaultAgentId: (cfg: OpenClawConfig) => {
@@ -60,7 +61,12 @@ describe("resolveSessionKeyForRequest", () => {
   };
 
   const mockStoresByPath = (stores: Partial<Record<string, SessionStoreMap>>) => {
-    mocks.loadSessionStore.mockImplementation((storePath: string) => stores[storePath] ?? {});
+    mocks.listSessionEntries.mockImplementation((scope?: { storePath?: string }) =>
+      Object.entries(stores[scope?.storePath ?? ""] ?? {}).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry,
+      })),
+    );
   };
 
   beforeEach(() => {
@@ -71,10 +77,12 @@ describe("resolveSessionKeyForRequest", () => {
 
   const baseCfg: OpenClawConfig = {};
 
-  it("returns sessionKey when --to resolves a session key via context", async () => {
+  it("returns sessionKey when --to resolves a session key via context", () => {
     mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
-    mocks.loadSessionStore.mockReturnValue({
-      "agent:main:main": { sessionId: "sess-1", updatedAt: 0 },
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 0 },
+      },
     });
 
     const result = resolveSessionKeyForRequest({
@@ -84,7 +92,24 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:main");
   });
 
-  it("uses the configured default agent store for new --to sessions", async () => {
+  it("uses an agent-scoped --to value as the requested session key", () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        [sessionKey]: { sessionId: "wechat-session", updatedAt: 0 },
+      },
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      to: sessionKey,
+    });
+
+    expect(result.sessionKey).toBe(sessionKey);
+  });
+
+  it("uses the configured default agent store for new --to sessions", () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({
       [MAIN_STORE_PATH]: {},
@@ -102,7 +127,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("migrates legacy main-store main-key sessions for plain --to default-agent requests", async () => {
+  it("does not adopt another agent's main session for a default-agent request", () => {
     setupMainAndMybotStorePaths();
     const mainStore = {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
@@ -121,18 +146,18 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");
-    expect(result.sessionStore).toBe(mybotStore);
+    expect(result.sessionStore).toEqual(mybotStore);
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
+    expect(result.sessionStore["agent:mybot:main"]).toBeUndefined();
   });
 
-  it("migrates legacy main-key sessions for plain --to default-agent requests with a literal shared store", async () => {
+  it("does not adopt another agent's main session from a literal shared store", () => {
     const sharedStore = {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
     };
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockReturnValue(SHARED_STORE_PATH);
-    mocks.loadSessionStore.mockReturnValue(sharedStore);
+    mockStoresByPath({ [SHARED_STORE_PATH]: sharedStore });
 
     const result = resolveSessionKeyForRequest({
       cfg: {
@@ -143,14 +168,17 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");
-    expect(result.sessionStore).toBe(sharedStore);
+    expect(result.sessionStore).toEqual(sharedStore);
     expect(result.storePath).toBe(SHARED_STORE_PATH);
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
-    expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionStore).toHaveBeenCalledWith(SHARED_STORE_PATH);
+    expect(result.sessionStore["agent:mybot:main"]).toBeUndefined();
+    expect(mocks.listSessionEntries).toHaveBeenCalledTimes(1);
+    expect(mocks.listSessionEntries).toHaveBeenCalledWith({
+      agentId: "mybot",
+      storePath: SHARED_STORE_PATH,
+    });
   });
 
-  it("prefers the configured default-agent session over legacy main-store rows", async () => {
+  it("prefers the configured default-agent session over legacy main-store rows", () => {
     setupMainAndMybotStorePaths();
     const mybotStore = {
       "agent:mybot:main": { sessionId: "current-session-id", updatedAt: 2 },
@@ -170,14 +198,16 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");
-    expect(result.sessionStore).toBe(mybotStore);
+    expect(result.sessionStore).toEqual(mybotStore);
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("finds session by sessionId via reverse lookup in primary store", async () => {
+  it("finds session by sessionId via reverse lookup in primary store", () => {
     mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
-    mocks.loadSessionStore.mockReturnValue({
-      "agent:main:main": { sessionId: "target-session-id", updatedAt: 0 },
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        "agent:main:main": { sessionId: "target-session-id", updatedAt: 0 },
+      },
     });
 
     const result = resolveSessionKeyForRequest({
@@ -187,7 +217,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:main");
   });
 
-  it("finds session by sessionId in non-primary agent store", async () => {
+  it("finds session by sessionId in non-primary agent store", () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({
       [MYBOT_STORE_PATH]: {
@@ -203,7 +233,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("does not let --agent short-circuit --session-id back to the agent main session", async () => {
+  it("does not let --agent short-circuit --session-id back to the agent main session", () => {
     setupMainAndMybotStorePaths();
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:mybot:main");
     mockStoresByPath({
@@ -226,7 +256,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("treats whitespace --session-id as absent when resolving --agent", async () => {
+  it("treats whitespace --session-id as absent when resolving --agent", () => {
     setupMainAndMybotStorePaths();
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:mybot:main");
     mockStoresByPath({
@@ -245,7 +275,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("does not search other agent stores when --agent scopes --session-id", async () => {
+  it("does not search other agent stores when --agent scopes --session-id", () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
@@ -265,11 +295,14 @@ describe("resolveSessionKeyForRequest", () => {
 
     expect(result.sessionKey).toBe("agent:mybot:explicit:target-session-id");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
-    expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionStore).toHaveBeenCalledWith(MYBOT_STORE_PATH);
+    expect(mocks.listSessionEntries).toHaveBeenCalledTimes(1);
+    expect(mocks.listSessionEntries).toHaveBeenCalledWith({
+      agentId: "mybot",
+      storePath: MYBOT_STORE_PATH,
+    });
   });
 
-  it("returns correct sessionStore when session found in non-primary agent store", async () => {
+  it("returns correct sessionStore when session found in non-primary agent store", () => {
     const mybotStore = {
       "agent:mybot:main": { sessionId: "target-session-id", updatedAt: 0 },
     };
@@ -285,9 +318,9 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("target-session-id");
   });
 
-  it("returns a deterministic explicit sessionKey when sessionId not found in any store", async () => {
+  it("returns a deterministic explicit sessionKey when sessionId not found in any store", () => {
     setupMainAndMybotStorePaths();
-    mocks.loadSessionStore.mockReturnValue({});
+    mocks.listSessionEntries.mockReturnValue([]);
 
     const result = resolveSessionKeyForRequest({
       cfg: baseCfg,
@@ -296,11 +329,13 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:explicit:nonexistent-id");
   });
 
-  it("does not search other stores when explicitSessionKey is set", async () => {
+  it("does not search other stores when explicitSessionKey is set", () => {
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
     mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
-    mocks.loadSessionStore.mockReturnValue({
-      "agent:main:main": { sessionId: "other-id", updatedAt: 0 },
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        "agent:main:main": { sessionId: "other-id", updatedAt: 0 },
+      },
     });
 
     const result = resolveSessionKeyForRequest({
@@ -312,7 +347,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:main");
   });
 
-  it("searches other stores when --to derives a key that does not match --session-id", async () => {
+  it("searches other stores when --to derives a key that does not match --session-id", () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
@@ -334,18 +369,20 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("skips already-searched primary store when iterating agents", async () => {
+  it("skips already-searched primary store when iterating agents", () => {
     setupMainAndMybotStorePaths();
-    mocks.loadSessionStore.mockReturnValue({});
+    mocks.listSessionEntries.mockReturnValue([]);
 
     resolveSessionKeyForRequest({
       cfg: baseCfg,
       sessionId: "nonexistent-id",
     });
 
-    // loadSessionStore should be called twice: once for main, once for mybot
+    // listSessionEntries should be called twice: once for main, once for mybot
     // (not twice for main)
-    const storePaths = mocks.loadSessionStore.mock.calls.map((call) => String(call[0]));
+    const storePaths = mocks.listSessionEntries.mock.calls.map((call) =>
+      String(call[0]?.storePath),
+    );
     expect(storePaths).toHaveLength(2);
     expect(storePaths).toContain(MAIN_STORE_PATH);
     expect(storePaths).toContain(MYBOT_STORE_PATH);

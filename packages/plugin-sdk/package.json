@@ -52,6 +52,10 @@
       "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
       "default": "./src/number-runtime.ts"
     },
+    "./outbound-media": {
+      "types": "./dist/src/plugin-sdk/outbound-media.d.ts",
+      "default": "./src/outbound-media.ts"
+    },
     "./secure-random-runtime": {
       "types": "./dist/src/plugin-sdk/secure-random-runtime.d.ts",
       "default": "./src/secure-random-runtime.ts"
@@ -68,6 +72,10 @@
       "types": "./dist/src/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./src/transport-ready-runtime.ts"
     },
+    "./exec-approvals-runtime": {
+      "types": "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./src/exec-approvals-runtime.ts"
+    },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"
@@ -75,10 +83,6 @@
     "./config-runtime": {
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
       "default": "./src/config-runtime.ts"
-    },
-    "./config-types": {
-      "types": "./dist/src/plugin-sdk/config-types.d.ts",
-      "default": "./src/config-types.ts"
     },
     "./plugin-config-runtime": {
       "types": "./dist/src/plugin-sdk/plugin-config-runtime.d.ts",
@@ -104,6 +108,10 @@
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"
     },
+    "./gateway-method-runtime": {
+      "types": "./dist/src/plugin-sdk/gateway-method-runtime.d.ts",
+      "default": "./src/gateway-method-runtime.ts"
+    },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
       "default": "./src/error-runtime.ts"
@@ -123,6 +131,10 @@
     "./provider-auth-runtime": {
       "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",
       "default": "./src/provider-auth-runtime.ts"
+    },
+    "./provider-auth-login-flow-runtime": {
+      "types": "./dist/src/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
+      "default": "./src/provider-auth-login-flow-runtime.ts"
     },
     "./provider-env-vars": {
       "types": "./dist/src/plugin-sdk/provider-env-vars.d.ts",
@@ -188,6 +200,10 @@
       "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
       "default": "./src/runtime-env.ts"
     },
+    "./infra-runtime": {
+      "types": "./dist/src/plugin-sdk/infra-runtime.d.ts",
+      "default": "./src/infra-runtime.ts"
+    },
     "./security-runtime": {
       "types": "./dist/src/plugin-sdk/security-runtime.d.ts",
       "default": "./src/security-runtime.ts"
@@ -204,21 +220,25 @@
       "types": "./dist/src/plugin-sdk/secret-input.d.ts",
       "default": "./src/secret-input.ts"
     },
-    "./text-runtime": {
-      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
-      "default": "./src/text-runtime.ts"
-    },
     "./tts-runtime": {
       "types": "./dist/src/plugin-sdk/tts-runtime.d.ts",
       "default": "./src/tts-runtime.ts"
     },
-    "./testing": {
-      "types": "./dist/src/plugin-sdk/testing.d.ts",
-      "default": "./src/testing.ts"
+    "./text-runtime": {
+      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
+      "default": "./src/text-runtime.ts"
     },
     "./video-generation": {
       "types": "./dist/src/plugin-sdk/video-generation.d.ts",
       "default": "./src/video-generation.ts"
+    },
+    "./config-contracts": {
+      "types": "./dist/src/plugin-sdk/config-contracts.d.ts",
+      "default": "./src/config-contracts.ts"
+    },
+    "./text-utility-runtime": {
+      "types": "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./src/text-utility-runtime.ts"
     },
     "./zod": {
       "types": "./dist/src/plugin-sdk/zod.d.ts",

@@ -1,7 +1,9 @@
+// Emoji and sticker command registration for Discord-style media assets.
 import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register emoji list/upload commands. */
 export function registerMessageEmojiCommands(message: Command, helpers: MessageCliHelpers) {
   const emoji = message.command("emoji").description("Emoji actions");
 
@@ -27,6 +29,7 @@ export function registerMessageEmojiCommands(message: Command, helpers: MessageC
     });
 }
 
+/** Register sticker send/upload commands. */
 export function registerMessageStickerCommands(message: Command, helpers: MessageCliHelpers) {
   const sticker = message.command("sticker").description("Sticker actions");
 

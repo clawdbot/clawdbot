@@ -1,3 +1,4 @@
+// Elevenlabs provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -7,9 +8,13 @@ import {
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+  parseFiniteNumber as readFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
-import { normalizeElevenLabsBaseUrl } from "./shared.js";
+import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
@@ -57,26 +62,10 @@ const ELEVENLABS_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const ELEVENLABS_REALTIME_RECONNECT_DELAY_MS = 1000;
 const ELEVENLABS_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readNestedElevenLabsConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
   const providers = readRecord(raw?.providers);
   return readRecord(providers?.elevenlabs ?? raw?.elevenlabs ?? raw) ?? {};
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  const next =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number.parseFloat(value)
-        : undefined;
-  return Number.isFinite(next) ? next : undefined;
 }
 
 function normalizeCommitStrategy(value: unknown): "manual" | "vad" | undefined {
@@ -88,6 +77,23 @@ function normalizeCommitStrategy(value: unknown): "manual" | "vad" | undefined {
     return normalized;
   }
   throw new Error(`Invalid ElevenLabs realtime transcription commit strategy: ${normalized}`);
+}
+
+function normalizePositiveSafeInteger(value: unknown): number | undefined {
+  const parsed = readFiniteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeFiniteRange(value: unknown, min: number, max: number): number | undefined {
+  const parsed = readFiniteNumber(value);
+  return parsed !== undefined && parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+function normalizeIntegerRange(value: unknown, min: number, max: number): number | undefined {
+  const parsed = readFiniteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= min && parsed <= max
+    ? parsed
+    : undefined;
 }
 
 function normalizeProviderConfig(
@@ -102,22 +108,26 @@ function normalizeProviderConfig(
     baseUrl: normalizeOptionalString(raw.baseUrl),
     modelId: normalizeOptionalString(raw.modelId ?? raw.model ?? raw.sttModel),
     audioFormat: normalizeOptionalString(raw.audioFormat ?? raw.audio_format ?? raw.encoding),
-    sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
+    sampleRate: normalizePositiveSafeInteger(raw.sampleRate ?? raw.sample_rate),
     languageCode: normalizeOptionalString(raw.languageCode ?? raw.language),
     commitStrategy: normalizeCommitStrategy(raw.commitStrategy ?? raw.commit_strategy),
-    vadSilenceThresholdSecs: readFiniteNumber(
+    vadSilenceThresholdSecs: normalizeFiniteRange(
       raw.vadSilenceThresholdSecs ?? raw.vad_silence_threshold_secs,
+      0.3,
+      3,
     ),
-    vadThreshold: readFiniteNumber(raw.vadThreshold ?? raw.vad_threshold),
-    minSpeechDurationMs: readFiniteNumber(raw.minSpeechDurationMs ?? raw.min_speech_duration_ms),
-    minSilenceDurationMs: readFiniteNumber(raw.minSilenceDurationMs ?? raw.min_silence_duration_ms),
+    vadThreshold: normalizeFiniteRange(raw.vadThreshold ?? raw.vad_threshold, 0.1, 0.9),
+    minSpeechDurationMs: normalizeIntegerRange(
+      raw.minSpeechDurationMs ?? raw.min_speech_duration_ms,
+      50,
+      2_000,
+    ),
+    minSilenceDurationMs: normalizeIntegerRange(
+      raw.minSilenceDurationMs ?? raw.min_silence_duration_ms,
+      50,
+      2_000,
+    ),
   };
-}
-
-function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
-  const url = new URL(normalizeElevenLabsBaseUrl(value));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  return url.toString().replace(/\/+$/, "");
 }
 
 function toElevenLabsRealtimeWsUrl(config: ElevenLabsRealtimeTranscriptionSessionConfig): string {
@@ -209,7 +219,6 @@ function createElevenLabsRealtimeTranscriptionSession(
         if (event.message_type?.includes("error")) {
           config.onError?.(new Error(readErrorDetail(event)));
         }
-        return;
     }
   };
 
@@ -238,6 +247,16 @@ function createElevenLabsRealtimeTranscriptionSession(
   });
 }
 
+function resolveElevenLabsRealtimeApiKey(
+  config: ElevenLabsRealtimeTranscriptionProviderConfig,
+): string | null | undefined {
+  return (
+    config.apiKey ??
+    resolveElevenLabsApiKeyWithProfileFallback() ??
+    normalizeOptionalString(process.env.XI_API_KEY)
+  );
+}
+
 export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
   return {
     id: "elevenlabs",
@@ -247,22 +266,17 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        normalizeProviderConfig(providerConfig).apiKey ||
-        resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY,
-      ),
+      Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+      const apiKey = resolveElevenLabsRealtimeApiKey(config);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
       return createElevenLabsRealtimeTranscriptionSession({
         ...req,
         apiKey,
-        baseUrl: normalizeElevenLabsBaseUrl(config.baseUrl),
+        baseUrl: normalizeElevenLabsRealtimeBaseUrl(config.baseUrl),
         modelId: config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL,
         audioFormat: config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
         sampleRate: config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE,
@@ -276,8 +290,3 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     },
   };
 }
-
-export const __testing = {
-  normalizeProviderConfig,
-  toElevenLabsRealtimeWsUrl,
-};

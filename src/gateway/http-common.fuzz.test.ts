@@ -1,5 +1,7 @@
+// Deterministic fuzz coverage for shared Gateway HTTP helpers and disconnect
+// handling without adding a property-test dependency.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -9,14 +11,13 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
-  sendText,
   sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
-import { makeMockHttpResponse } from "./test-http-response.js";
+import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.js";
 
 /**
  * Seeded property-based / fuzz coverage for http-common.
@@ -151,21 +152,6 @@ describe("fuzz: sendJson", () => {
       expect(res.statusCode).toBe(status);
       expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
       expect(end).toHaveBeenCalledWith(JSON.stringify(body));
-    }
-  });
-});
-
-describe("fuzz: sendText", () => {
-  it("propagates status, sets plain-text content type, and forwards the body", () => {
-    const rng = makeRng(0xfeed);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, setHeader, end } = makeMockHttpResponse();
-      const status = randInt(rng, 100, 599);
-      const body = randString(rng, 64);
-      sendText(res, status, body);
-      expect(res.statusCode).toBe(status);
-      expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-      expect(end).toHaveBeenCalledWith(body);
     }
   });
 });
@@ -318,7 +304,8 @@ describe("fuzz: readJsonBodyOrError", () => {
       }
 
       const maxBytes = randInt(rng, 1, 1 << 20);
-      const result = await readJsonBodyOrError(makeRequest(), res, maxBytes);
+      const req = makeRequest();
+      const result = await readJsonBodyOrError(req, res, maxBytes);
       if (pick === 0) {
         expect(result).toEqual(expectedValue);
       } else {
@@ -326,7 +313,7 @@ describe("fuzz: readJsonBodyOrError", () => {
         expect(res.statusCode).toBe(expectedStatus);
         expect(end).toHaveBeenCalledWith(expectedBody);
       }
-      expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), maxBytes);
+      expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes);
     }
   });
 });
@@ -368,16 +355,6 @@ describe("fuzz: setSseHeaders", () => {
 });
 
 describe("fuzz: watchClientDisconnect", () => {
-  function buildReqRes(
-    reqSocket: EventEmitter | null,
-    resSocket: EventEmitter | null,
-  ): { req: IncomingMessage; res: ServerResponse } {
-    return {
-      req: { socket: reqSocket } as unknown as IncomingMessage,
-      res: { socket: resSocket } as unknown as ServerResponse,
-    };
-  }
-
   it("invariants hold for arbitrary socket/controller/callback combinations", () => {
     const rng = makeRng(0xc105e);
     for (let i = 0; i < ITERATIONS; i += 1) {
@@ -407,9 +384,8 @@ describe("fuzz: watchClientDisconnect", () => {
       }
       const onDisconnect = hasCallback ? vi.fn() : undefined;
 
-      const { req, res } = buildReqRes(reqSocket, resSocket);
+      const { req, res } = makeMockHttpReqRes(reqSocket, resSocket);
       const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-      expect(typeof cleanup).toBe("function");
 
       const uniqueSockets = new Set<EventEmitter>();
       if (reqSocket) {

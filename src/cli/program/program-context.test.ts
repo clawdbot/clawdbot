@@ -1,3 +1,4 @@
+// Program context tests cover command context creation and propagation.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import type { ProgramContext } from "./context.js";

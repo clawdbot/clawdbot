@@ -1,3 +1,4 @@
+// Plugin SDK bundle index tests cover bundled SDK export inventory and packaging.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -40,6 +41,12 @@ async function listBuiltJsFiles(rootDir: string): Promise<string[]> {
   return nested.flat();
 }
 
+async function expectBuiltJsFile(outDir: string, entry: string): Promise<void> {
+  const stat = await fs.stat(path.join(outDir, `${entry}.js`));
+  expect(stat.isFile()).toBe(true);
+  expect(stat.size).toBeGreaterThan(0);
+}
+
 describe("plugin-sdk bundled exports", () => {
   afterAll(() => {
     bundleTempRootTracker.cleanup();
@@ -78,12 +85,12 @@ describe("plugin-sdk bundled exports", () => {
     expect(pluginSdkEntrypoints.length).toBeGreaterThan(bundledRepresentativeEntrypoints.length);
     await Promise.all(
       bundledRepresentativeEntrypoints.map(async (entry) => {
-        await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
+        await expectBuiltJsFile(outDir, entry);
       }),
     );
     await Promise.all(
       Object.keys(matrixRuntimeCoverageEntries).map(async (entry) => {
-        await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
+        await expectBuiltJsFile(outDir, entry);
       }),
     );
     const builtJsFiles = await listBuiltJsFiles(outDir);
@@ -95,7 +102,7 @@ describe("plugin-sdk bundled exports", () => {
         }),
       )
     ).filter((filePath): filePath is string => filePath !== null);
-    expect(filesWithBareMatrixSdkImports).toEqual([]);
+    expect(filesWithBareMatrixSdkImports).toStrictEqual([]);
 
     // Export list and package-specifier coverage already live in
     // plugin-sdk-package-contract-guardrails.test.ts and plugin-sdk-subpaths.test.ts. Keep this file

@@ -1,3 +1,4 @@
+// Implements task-list commands that route through the current session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
@@ -70,7 +71,10 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);
-  const meta = [TASK_RUNTIME_LABELS[task.runtime], status, timing].filter(Boolean).join(" · ");
+  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status}`;
+  if (timing) {
+    meta += ` · ${timing}`;
+  }
   const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
   if (detail) {
     lines.push(`   ${detail}`);
@@ -107,7 +111,7 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   return lines.join("\n");
 }
 
-export async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const agentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,

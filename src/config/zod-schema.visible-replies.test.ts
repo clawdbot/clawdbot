@@ -1,3 +1,4 @@
+// Covers visible-reply config schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -59,11 +60,54 @@ describe("visible reply config schema", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "messages.visibleReplies",
-        }),
+      const visibleRepliesIssue = result.issues.find(
+        (issue) => issue.path === "messages.visibleReplies",
       );
+      expect(visibleRepliesIssue?.path).toBe("messages.visibleReplies");
+    }
+  });
+
+  it("accepts enum unmentioned group inbound values", () => {
+    const legacy = validateConfigObjectRaw({
+      messages: {
+        groupChat: {
+          unmentionedInbound: "user_request",
+        },
+      },
+    });
+    const roomEvent = validateConfigObjectRaw({
+      messages: {
+        groupChat: {
+          unmentionedInbound: "room_event",
+        },
+      },
+    });
+
+    expect(legacy.ok).toBe(true);
+    expect(roomEvent.ok).toBe(true);
+    if (legacy.ok) {
+      expect(legacy.config.messages?.groupChat?.unmentionedInbound).toBe("user_request");
+    }
+    if (roomEvent.ok) {
+      expect(roomEvent.config.messages?.groupChat?.unmentionedInbound).toBe("room_event");
+    }
+  });
+
+  it("rejects boolean unmentioned group inbound values", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        groupChat: {
+          unmentionedInbound: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (candidate) => candidate.path === "messages.groupChat.unmentionedInbound",
+      );
+      expect(issue?.path).toBe("messages.groupChat.unmentionedInbound");
     }
   });
 });

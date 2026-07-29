@@ -1,14 +1,15 @@
+/**
+ * Auth profile ordering regression tests.
+ * Ensures last-good hints do not override explicit config, aws-sdk, or
+ * round-robin ordering semantics.
+ */
 import { describe, expect, it, vi } from "vitest";
-import {
-  ANTHROPIC_CFG,
-  ANTHROPIC_STORE,
-} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "z.ai" ? "zai" : provider.trim().toLowerCase(),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
 function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
@@ -38,9 +39,95 @@ function makeApiKeyProfilesByProviderProvider(
   );
 }
 
+const ANTHROPIC_STORE = {
+  version: 1,
+  profiles: {
+    "anthropic:default": {
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-default",
+    },
+    "anthropic:work": {
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-work",
+    },
+  },
+} satisfies AuthProfileStore;
+
+const ANTHROPIC_CFG = {
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" },
+    },
+  },
+} satisfies OpenClawConfig;
+
 describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;
   const cfg = ANTHROPIC_CFG;
+
+  it("keeps config-only aws-sdk profiles for aws-sdk providers", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          order: {
+            "amazon-bedrock": ["amazon-bedrock:default"],
+          },
+          profiles: {
+            "amazon-bedrock:default": {
+              provider: "amazon-bedrock",
+              mode: "aws-sdk",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+      provider: "amazon-bedrock",
+    });
+
+    expect(order).toEqual(["amazon-bedrock:default"]);
+  });
+
+  it("rejects config-only aws-sdk profiles for non aws-sdk providers", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              auth: "api-key",
+              baseUrl: "https://api.anthropic.com",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "anthropic:aws": {
+              provider: "anthropic",
+              mode: "aws-sdk",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+      provider: "anthropic",
+    });
+
+    expect(order).toStrictEqual([]);
+  });
 
   function resolveWithAnthropicOrderAndUsage(params: {
     orderSource: "store" | "config";
@@ -107,7 +194,7 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order[0]).toBe("anthropic:default");
   });
-  it("normalizes z.ai aliases in auth.order", () => {
+  it("does not match auth.order across provider id variants", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
@@ -121,7 +208,7 @@ describe("resolveAuthProfileOrder", () => {
       store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
       provider: "zai",
     });
-    expect(order).toEqual(["zai:work", "zai:default"]);
+    expect(order).toEqual(["zai:default", "zai:work"]);
   });
   it("normalizes provider casing in auth.order keys", () => {
     const order = resolveAuthProfileOrder({
@@ -139,7 +226,7 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["openai:work", "openai:default"]);
   });
-  it("normalizes z.ai aliases in auth.profiles", () => {
+  it("does not match provider id variants in auth.profiles", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
@@ -152,7 +239,7 @@ describe("resolveAuthProfileOrder", () => {
       store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
       provider: "zai",
     });
-    expect(order).toEqual(["zai:default", "zai:work"]);
+    expect(order).toEqual([]);
   });
   it("prioritizes oauth profiles when order missing", () => {
     const mixedStore: AuthProfileStore = {
@@ -244,68 +331,68 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "oauth",
             },
           },
           order: {
-            "openai-codex": ["openai-codex:default"],
+            openai: ["openai:default"],
           },
         },
       },
       store: {
         version: 1,
         profiles: {
-          "openai-codex:user@example.com": {
+          "openai:user@example.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
           },
         },
       },
-      provider: "openai-codex",
+      provider: "openai",
     });
-    expect(order).toEqual(["openai-codex:user@example.com"]);
+    expect(order).toEqual(["openai:user@example.com"]);
   });
   it("does not bypass explicit ids when the configured profile exists but is invalid", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "token",
             },
           },
           order: {
-            "openai-codex": ["openai-codex:default"],
+            openai: ["openai:default"],
           },
         },
       },
       store: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "expired-token",
             expires: Date.now() - 1_000,
           },
-          "openai-codex:user@example.com": {
+          "openai:user@example.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
           },
         },
       },
-      provider: "openai-codex",
+      provider: "openai",
     });
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("drops explicit order entries that belong to another provider", () => {
     const order = resolveAuthProfileOrder({
@@ -417,6 +504,43 @@ describe("resolveAuthProfileOrder", () => {
       provider: "anthropic",
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+  it("prefers store order over stale configured profiles", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai:old-login": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      store: {
+        version: 1,
+        order: { openai: ["openai:new-login", "openai:old-login"] },
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: Date.now() + 60_000,
+          },
+          "openai:old-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai",
+    });
+
+    expect(order).toEqual(["openai:new-login", "openai:old-login"]);
   });
   it.each(["store", "config"] as const)(
     "pushes cooldown profiles to the end even with %s order",
@@ -600,7 +724,7 @@ describe("resolveAuthProfileOrder", () => {
     },
   ])("$caseName", ({ profile }) => {
     const order = resolveMinimaxOrderWithProfile(profile);
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("keeps api_key profiles backed by keyRef when plaintext key is absent", () => {
     const order = resolveAuthProfileOrder({
@@ -652,7 +776,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       expires: 0,
     });
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("keeps token profiles with inline token when no expires is set", () => {
     const order = resolveMinimaxOrderWithProfile({

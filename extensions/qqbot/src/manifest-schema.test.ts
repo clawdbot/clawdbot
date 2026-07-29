@@ -1,5 +1,6 @@
+// Qqbot tests cover manifest schema plugin behavior.
 import fs from "node:fs";
-import { validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 
 const manifest = JSON.parse(
@@ -52,5 +53,36 @@ describe("qqbot manifest schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("validates context visibility modes", () => {
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: manifestConfigSchemaCacheKey,
+        value: { contextVisibility: "allowlist_quote" },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: manifestConfigSchemaCacheKey,
+        value: { accounts: { bot2: { contextVisibility: "allowlist" } } },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: manifestConfigSchemaCacheKey,
+        value: { contextVisibility: "allowlistt" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: manifestConfigSchemaCacheKey,
+        value: { accounts: { bot2: { contextVisibility: "allowlistt" } } },
+      }).ok,
+    ).toBe(false);
   });
 });

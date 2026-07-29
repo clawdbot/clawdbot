@@ -1,6 +1,6 @@
+// Discord plugin module implements runtime api.monitor behavior.
 export {
   allowListMatches,
-  buildDiscordMediaPayload,
   createDiscordMessageHandler,
   createDiscordNativeCommand,
   isDiscordGroupAllowedByPolicy,
@@ -46,5 +46,8 @@ export {
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  mergeAbortSignals,
+  isAbortError,
+  normalizeDiscordInboundWorkerTimeoutMs,
+  normalizeDiscordListenerTimeoutMs,
+  runDiscordTaskWithTimeout,
 } from "./src/monitor/timeouts.js";

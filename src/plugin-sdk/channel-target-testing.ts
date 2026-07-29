@@ -1,3 +1,6 @@
+/**
+ * Test SDK subpath for shared channel target resolver error-case contracts.
+ */
 export {
   installCommonResolveTargetErrorCases,
   type ResolveTargetFn,

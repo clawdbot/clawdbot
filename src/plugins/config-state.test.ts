@@ -1,3 +1,4 @@
+// Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginActivationSource,
@@ -7,6 +8,8 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "./config-state.js";
+import * as discovery from "./discovery.js";
+import * as manifest from "./manifest.js";
 
 function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
   return normalizePluginsConfig({
@@ -145,12 +148,29 @@ describe("normalizePluginsConfig", () => {
     expect(normalizeVoiceCallEntry({ subagent })?.subagent).toEqual(expected);
   });
 
+  it("normalizes plugin llm override policy settings", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        llm: {
+          allowModelOverride: true,
+          allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
+          allowAgentIdOverride: false,
+        },
+      })?.llm,
+    ).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      allowAgentIdOverride: false,
+    });
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
-      allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
-      deny: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
+      allow: ["openai", "google-gemini-cli", "minimax-portal-auth"],
+      deny: ["openai", "google-gemini-cli", "minimax-portal-auth"],
       entries: {
-        "openai-codex": {
+        openai: {
           enabled: true,
         },
         "google-gemini-cli": {
@@ -169,15 +189,11 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 
-  it("normalizes unknown plugin ids without loading discovery", async () => {
-    vi.resetModules();
-    const discovery = await import("./discovery.js");
+  it("normalizes unknown plugin ids without consulting discovery", async () => {
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
-    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
-      await import("./config-state.js");
     discoverPlugins.mockClear();
 
-    const result = normalizeFreshPluginsConfig({
+    const result = normalizePluginsConfig({
       allow: ["unknown-plugin-one", "unknown-plugin-two"],
       deny: ["unknown-plugin-three"],
       entries: {
@@ -193,10 +209,21 @@ describe("normalizePluginsConfig", () => {
     expect(discoverPlugins).not.toHaveBeenCalled();
   });
 
-  it("does not load discovery or manifests for alias lookup", async () => {
-    vi.resetModules();
-    const discovery = await import("./discovery.js");
-    const manifest = await import("./manifest.js");
+  it("normalizes unknown plugin ids to lowercase canonical keys", () => {
+    const result = normalizePluginsConfig({
+      allow: [" Demo-Plugin "],
+      deny: [" OTHER-PLUGIN "],
+      entries: {
+        " CODEX ": { enabled: true },
+      },
+    });
+
+    expect(result.allow).toEqual(["demo-plugin"]);
+    expect(result.deny).toEqual(["other-plugin"]);
+    expect(result.entries.codex?.enabled).toBe(true);
+  });
+
+  it("does not consult discovery or manifests for alias lookup", async () => {
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins").mockReturnValue({
       candidates: [
         {
@@ -228,12 +255,10 @@ describe("normalizePluginsConfig", () => {
         providers: ["anthropic"],
       },
     });
-    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
-      await import("./config-state.js");
     discoverPlugins.mockClear();
     loadManifest.mockClear();
 
-    const result = normalizeFreshPluginsConfig({
+    const result = normalizePluginsConfig({
       deny: ["anthropic"],
     });
 

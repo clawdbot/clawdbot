@@ -1,7 +1,9 @@
+// Memory Core tests cover qmd manager.slugified paths plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,16 +13,18 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logInfoMock: vi.fn(),
 }));
 
+type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+
 interface MockChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+  stdout: MockStream;
+  stderr: MockStream;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
 }
 
 function createMockChild(params?: { autoClose?: boolean }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child = new EventEmitter() as unknown as MockChild;
   child.stdout = stdout;
   child.stderr = stderr;
@@ -36,12 +40,7 @@ function createMockChild(params?: { autoClose?: boolean }): MockChild {
   return child;
 }
 
-function emitAndClose(
-  child: MockChild,
-  stream: "stdout" | "stderr",
-  data: string,
-  code: number = 0,
-) {
+function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: string, code = 0) {
   queueMicrotask(() => {
     child[stream].emit("data", data);
     child.closeWith(code);
@@ -80,6 +79,28 @@ import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host
 import { QmdMemoryManager } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
+const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
+const TEST_OBSERVED_AT = "2026-07-01T10:00:00.000Z";
+const withLease = async <T>(
+  options: { signal?: AbortSignal },
+  run: (lease: { signal: AbortSignal; assertOwned: () => void }) => Promise<T>,
+) =>
+  await run({
+    signal: options.signal ?? new AbortController().signal,
+    assertOwned: vi.fn(),
+  });
+
+function setQmdStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreQmdStateDir(): void {
+  if (originalQmdStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalQmdStateDir);
+  }
+}
 
 describe("QmdMemoryManager slugified path resolution", () => {
   let tmpRoot: string;
@@ -104,6 +125,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         cfg: cfgToUse,
         agentId,
         resolved,
+        withLease,
         mode: "status",
       }),
     );
@@ -150,12 +172,16 @@ describe("QmdMemoryManager slugified path resolution", () => {
         all: (...args: unknown[]) => {
           if (query.includes("collection = ? AND path = ? AND active = 1")) {
             expect(args).toEqual([params.collection, params.normalizedPath]);
-            return (params.exactPaths ?? []).map((pathValue) => ({ path: pathValue }));
+            return (params.exactPaths ?? []).map((pathValue) => ({
+              path: pathValue,
+              modified_at: TEST_OBSERVED_AT,
+            }));
           }
           if (query.includes("collection = ? AND active = 1")) {
             expect(args).toEqual([params.collection]);
             return (params.allPaths ?? [params.actualPath]).map((pathValue) => ({
               path: pathValue,
+              modified_at: TEST_OBSERVED_AT,
             }));
           }
           throw new Error(`unexpected sqlite query: ${query}`);
@@ -176,7 +202,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     workspaceDir = path.join(tmpRoot, "workspace");
     stateDir = path.join(tmpRoot, "state");
     await fs.mkdir(workspaceDir, { recursive: true });
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setQmdStateDir(stateDir);
 
     cfg = {
       agents: {
@@ -201,7 +227,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     );
     openManagers.clear();
     await fs.rm(tmpRoot, { recursive: true, force: true });
-    delete process.env.OPENCLAW_STATE_DIR;
+    restoreQmdStateDir();
   });
 
   it("maps slugified workspace qmd URIs back to the indexed filesystem path", async () => {
@@ -248,10 +274,16 @@ describe("QmdMemoryManager slugified path resolution", () => {
         score: 0.73,
         snippet: "@@ -2,1\nline-2",
         source: "memory",
+        provenance: {
+          originClass: "untrusted",
+          sessionKind: "unknown",
+          observedAt: Date.parse(TEST_OBSERVED_AT),
+        },
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "slugified QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
       from: 1,
@@ -320,10 +352,16 @@ describe("QmdMemoryManager slugified path resolution", () => {
         score: 0.81,
         snippet: "@@ -1,1\nvault memory",
         source: "memory",
+        provenance: {
+          originClass: "untrusted",
+          sessionKind: "unknown",
+          observedAt: Date.parse(TEST_OBSERVED_AT),
+        },
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "vault QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: `qmd/${collectionName}/${actualRelative}`,
       text: "vault memory",
       from: 1,
@@ -379,10 +417,16 @@ describe("QmdMemoryManager slugified path resolution", () => {
         score: 0.79,
         snippet: "@@ -1,1\nexact slugified path",
         source: "memory",
+        provenance: {
+          originClass: "untrusted",
+          sessionKind: "unknown",
+          observedAt: Date.parse(TEST_OBSERVED_AT),
+        },
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "exact QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
       from: 1,

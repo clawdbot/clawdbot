@@ -1,15 +1,16 @@
+// Media store redirect tests cover redirected media paths and lookup behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
-import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { saveMediaSource } from "./store.js";
+import { setMediaStoreNetworkDepsForTest } from "./store.test-support.js";
 
-const homeRootTracker = createSuiteTempRootTracker({
-  prefix: "openclaw-home-redirect-",
-});
 const mockRequest = vi.fn();
 
 function createMockHttpExchange() {
@@ -17,6 +18,9 @@ function createMockHttpExchange() {
     statusCode: 0,
     headers: {} as Record<string, string>,
   });
+  const originalResume = res.resume.bind(res);
+  const resume = vi.fn(() => originalResume());
+  res.resume = resume as typeof res.resume;
   const req = {
     on: (event: string, handler: (...args: unknown[]) => void) => {
       if (event === "error") {
@@ -27,18 +31,40 @@ function createMockHttpExchange() {
     end: () => undefined,
     destroy: () => res.destroy(),
   } as const;
-  return { req, res };
+  return { req, res, resume };
 }
 
-function mockRedirectExchange(params: { location?: string }) {
-  const { req, res } = createMockHttpExchange();
+function mockRedirectExchange(params: { body?: string; location?: string }) {
+  const { req, res, resume } = createMockHttpExchange();
   res.statusCode = 302;
   res.headers = params.location ? { location: params.location } : {};
   return {
     req,
+    resume,
     send(cb: (value: unknown) => void) {
       setImmediate(() => {
         cb(res as unknown);
+        if (params.body) {
+          res.write(params.body);
+        }
+        res.end();
+      });
+    },
+  };
+}
+
+function mockHttpStatusExchange(params: { body?: string; statusCode: number }) {
+  const { req, res, resume } = createMockHttpExchange();
+  res.statusCode = params.statusCode;
+  return {
+    req,
+    resume,
+    send(cb: (value: unknown) => void) {
+      setImmediate(() => {
+        cb(res as unknown);
+        if (params.body) {
+          res.write(params.body);
+        }
         res.end();
       });
     },
@@ -93,14 +119,13 @@ async function expectRedirectSaveFailure(expectedMessage: string) {
 }
 
 describe("media store redirects", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-  let home = "";
+  let testState: OpenClawTestState;
 
   beforeAll(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    await homeRootTracker.setup();
-    home = await homeRootTracker.make("state");
-    process.env.OPENCLAW_STATE_DIR = home;
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-media-store-redirect-",
+    });
   });
 
   beforeEach(() => {
@@ -117,9 +142,7 @@ describe("media store redirects", () => {
   });
 
   afterAll(async () => {
-    await homeRootTracker.cleanup();
-    home = "";
-    envSnapshot.restore();
+    await testState.cleanup();
     setMediaStoreNetworkDepsForTest();
     vi.clearAllMocks();
   });
@@ -209,12 +232,74 @@ describe("media store redirects", () => {
     expect(getRequestHeaders(1).get("authorization")).toBe("Bearer secret");
   });
 
+  it("drains ignored redirect response bodies before following redirects", async () => {
+    let redirectResume: ReturnType<typeof vi.fn> | undefined;
+    let call = 0;
+    mockRequest.mockImplementation((_url, _opts, cb) => {
+      call += 1;
+      if (call === 1) {
+        const exchange = mockRedirectExchange({
+          body: "ignored redirect response body",
+          location: "https://example.com/final",
+        });
+        redirectResume = exchange.resume;
+        exchange.send(cb);
+        return exchange.req;
+      }
+
+      const exchange = mockSuccessfulTextExchange({
+        text: "redirected",
+        contentType: "text/plain",
+      });
+      exchange.send(cb);
+      return exchange.req;
+    });
+
+    await saveMediaSource("https://example.com/start");
+
+    expect(redirectResume).toHaveBeenCalledOnce();
+  });
+
   it("fails when redirect response omits location header", async () => {
+    let redirectResume: ReturnType<typeof vi.fn> | undefined;
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const exchange = mockRedirectExchange({});
+      const exchange = mockRedirectExchange({ body: "ignored redirect response body" });
+      redirectResume = exchange.resume;
       exchange.send(cb);
       return exchange.req;
     });
     await expectRedirectSaveFailure("Redirect loop or missing Location header");
+    expect(redirectResume).toHaveBeenCalledOnce();
+  });
+
+  it("fails when redirect location is malformed", async () => {
+    let redirectResume: ReturnType<typeof vi.fn> | undefined;
+    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
+      const exchange = mockRedirectExchange({
+        body: "ignored redirect response body",
+        location: "http://[",
+      });
+      redirectResume = exchange.resume;
+      exchange.send(cb);
+      return exchange.req;
+    });
+    await expectRedirectSaveFailure("Invalid redirect Location header");
+    expect(redirectResume).toHaveBeenCalledOnce();
+  });
+
+  it("drains ignored HTTP error response bodies before failing", async () => {
+    let errorResume: ReturnType<typeof vi.fn> | undefined;
+    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
+      const exchange = mockHttpStatusExchange({
+        body: "ignored error response body",
+        statusCode: 500,
+      });
+      errorResume = exchange.resume;
+      exchange.send(cb);
+      return exchange.req;
+    });
+
+    await expectRedirectSaveFailure("HTTP 500 downloading media");
+    expect(errorResume).toHaveBeenCalledOnce();
   });
 });

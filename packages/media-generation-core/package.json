@@ -1,0 +1,44 @@
+{
+  "name": "@openclaw/media-generation-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./capability-model-ref": {
+      "types": "./dist/capability-model-ref.d.mts",
+      "import": "./dist/capability-model-ref.mjs",
+      "default": "./dist/capability-model-ref.mjs"
+    },
+    "./catalog": {
+      "types": "./dist/catalog.d.mts",
+      "import": "./dist/catalog.mjs",
+      "default": "./dist/catalog.mjs"
+    },
+    "./model-ref": {
+      "types": "./dist/model-ref.d.mts",
+      "import": "./dist/model-ref.mjs",
+      "default": "./dist/model-ref.mjs"
+    },
+    "./normalization": {
+      "types": "./dist/normalization.d.mts",
+      "import": "./dist/normalization.mjs",
+      "default": "./dist/normalization.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/capability-model-ref.ts src/catalog.ts src/model-ref.ts src/normalization.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

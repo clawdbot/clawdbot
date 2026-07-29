@@ -2,11 +2,19 @@
  * OpenAI-compatible STT (Speech-to-Text) configuration and transcription.
  *
  * Migrated from `src/stt.ts` — uses core/utils/string-normalize instead
- * of openclaw/plugin-sdk/text-runtime.
+ * of broad SDK text barrels.
  */
 
 import * as fs from "node:fs";
 import path from "node:path";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   normalizeOptionalString,
   asOptionalObjectRecord as asRecord,
@@ -14,10 +22,24 @@ import {
   sanitizeFileName,
 } from "./string-normalize.js";
 
+const STT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DEFAULT_STT_TIMEOUT_MS = 60_000;
+
 interface STTConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  timeoutMs: number;
+}
+
+function resolveSTTTimeoutMs(...timeoutSeconds: unknown[]): number {
+  for (const value of timeoutSeconds) {
+    const timeoutMs = finiteSecondsToTimerSafeMilliseconds(value);
+    if (timeoutMs !== undefined) {
+      return timeoutMs;
+    }
+  }
+  return DEFAULT_STT_TIMEOUT_MS;
 }
 
 /** Resolve the STT configuration from the nested config object. */
@@ -36,7 +58,12 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
     const apiKey = readString(channelStt, "apiKey") ?? readString(providerCfg, "apiKey");
     const model = readString(channelStt, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
-      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
+      return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        apiKey,
+        model,
+        timeoutMs: resolveSTTTimeoutMs(providerCfg?.timeoutSeconds),
+      };
     }
   }
 
@@ -44,8 +71,10 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
   const tools = asRecord(cfg.tools);
   const media = asRecord(tools?.media);
   const audio = asRecord(media?.audio);
-  const audioModels = audio?.models;
-  const audioModelEntry = Array.isArray(audioModels) ? asRecord(audioModels[0]) : undefined;
+  const mediaModels = Array.isArray(media?.models) ? media.models : [];
+  const audioModelEntry = mediaModels
+    .map((entry) => asRecord(entry))
+    .find((entry) => !Array.isArray(entry?.capabilities) || entry.capabilities.includes("audio"));
   if (audioModelEntry) {
     const providerId = readString(audioModelEntry, "provider") ?? "openai";
     const providerCfg = asRecord(providers?.[providerId]);
@@ -53,7 +82,16 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
     const apiKey = readString(audioModelEntry, "apiKey") ?? readString(providerCfg, "apiKey");
     const model = readString(audioModelEntry, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
-      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
+      return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        apiKey,
+        model,
+        timeoutMs: resolveSTTTimeoutMs(
+          audioModelEntry.timeoutSeconds,
+          audio?.timeoutSeconds,
+          providerCfg?.timeoutSeconds,
+        ),
+      };
     }
   }
 
@@ -72,29 +110,33 @@ export async function transcribeAudio(
 
   const fileBuffer = fs.readFileSync(audioPath);
   const fileName = sanitizeFileName(path.basename(audioPath));
-  const mime = fileName.endsWith(".wav")
-    ? "audio/wav"
-    : fileName.endsWith(".mp3")
-      ? "audio/mpeg"
-      : fileName.endsWith(".ogg")
-        ? "audio/ogg"
-        : "application/octet-stream";
+  const mime = mimeTypeFromFilePath(fileName) ?? "application/octet-stream";
 
   const form = new FormData();
   form.append("file", new Blob([fileBuffer], { type: mime }), fileName);
   form.append("model", sttCfg.model);
 
-  const resp = await fetch(`${sttCfg.baseUrl}/audio/transcriptions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${sttCfg.apiKey}` },
-    body: form,
+  const { response: resp, release } = await fetchWithSsrFGuard({
+    url: `${sttCfg.baseUrl}/audio/transcriptions`,
+    auditContext: "qqbot-stt",
+    timeoutMs: sttCfg.timeoutMs,
+    init: {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sttCfg.apiKey}` },
+      body: form,
+    },
   });
+  try {
+    if (!resp.ok) {
+      const detail = await readResponseTextLimited(resp, STT_ERROR_BODY_LIMIT_BYTES).catch(
+        () => "",
+      );
+      throw new Error(`STT failed (HTTP ${resp.status}): ${truncateUtf16Safe(detail, 300)}`);
+    }
 
-  if (!resp.ok) {
-    const detail = await resp.text().catch(() => "");
-    throw new Error(`STT failed (HTTP ${resp.status}): ${detail.slice(0, 300)}`);
+    const result = await readProviderJsonResponse<{ text?: string }>(resp, "qqbot.stt");
+    return normalizeOptionalString(result.text) ?? null;
+  } finally {
+    await release();
   }
-
-  const result = (await resp.json()) as { text?: string };
-  return normalizeOptionalString(result.text) ?? null;
 }

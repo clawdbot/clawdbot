@@ -1,3 +1,5 @@
+// Tool allowlist guard tests cover fail-closed behavior when explicit
+// allowlists leave no callable tools for the selected runtime/model.
 import { describe, expect, it } from "vitest";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -32,6 +34,8 @@ describe("tool allowlist guard", () => {
   });
 
   it("allows inherited config allowlists when a run intentionally disables tools", () => {
+    // Explicit runtime allowlists are command-time intent, while inherited
+    // config allowlists should not block a deliberately text-only run.
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "tools.allow", entries: ["lobster", "llm-task"] }],

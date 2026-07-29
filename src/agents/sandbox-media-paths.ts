@@ -1,6 +1,13 @@
+/**
+ * Sandbox media path resolution helpers.
+ *
+ * Bridges media references through sandbox filesystems while enforcing workspace-only boundaries when required.
+ */
 import path from "node:path";
+import { resolveMediaReferenceSandboxPath } from "../media/media-reference.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SandboxFsBridge, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
+import { isPathInsideContainerRoot, normalizeContainerPath } from "./sandbox/path-utils.js";
 
 export type SandboxedBridgeMediaPathConfig = {
   root: string;
@@ -25,16 +32,44 @@ export async function resolveSandboxedBridgeMediaPath(params: {
 }): Promise<{ resolved: string; rewrittenFrom?: string }> {
   const normalizeFileUrl = (rawPath: string) =>
     rawPath.startsWith("file://") ? rawPath.slice("file://".length) : rawPath;
-  const filePath = normalizeFileUrl(params.mediaPath);
-  const enforceWorkspaceBoundary = async (hostPath: string) => {
+  const mediaPathInfo = params.inboundFallbackDir
+    ? resolveMediaReferenceSandboxPath(params.mediaPath, params.inboundFallbackDir)
+    : { resolved: params.mediaPath };
+  const filePath = normalizeFileUrl(mediaPathInfo.resolved);
+  const rewrittenFrom = mediaPathInfo.rewrittenFrom;
+  if (rewrittenFrom) {
+    const stat = await params.sandbox.bridge.stat({
+      filePath,
+      cwd: params.sandbox.root,
+    });
+    if (!stat) {
+      throw new Error(`Sandbox media reference is not staged: ${rewrittenFrom}`);
+    }
+  }
+  const enforceWorkspaceBoundary = async (resolved: SandboxResolvedPath) => {
     if (!params.sandbox.workspaceOnly) {
       return;
     }
-    await assertSandboxPath({
-      filePath: hostPath,
+    if (resolved.hostPath) {
+      await assertSandboxPath({
+        filePath: resolved.hostPath,
+        cwd: params.sandbox.root,
+        root: params.sandbox.root,
+      });
+      return;
+    }
+    const workspaceRoot = params.sandbox.bridge.resolvePath({
+      filePath: params.sandbox.root,
       cwd: params.sandbox.root,
-      root: params.sandbox.root,
     });
+    if (
+      !isPathInsideContainerRoot(
+        normalizeContainerPath(workspaceRoot.containerPath),
+        normalizeContainerPath(resolved.containerPath),
+      )
+    ) {
+      throw new Error(`Sandbox path escapes workspace root: ${resolved.containerPath}`);
+    }
   };
 
   const resolveDirect = () =>
@@ -44,10 +79,11 @@ export async function resolveSandboxedBridgeMediaPath(params: {
     });
   try {
     const resolved = resolveDirect();
-    if (resolved.hostPath) {
-      await enforceWorkspaceBoundary(resolved.hostPath);
-    }
-    return { resolved: resolved.hostPath ?? resolved.containerPath };
+    await enforceWorkspaceBoundary(resolved);
+    return {
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      ...(rewrittenFrom ? { rewrittenFrom } : {}),
+    };
   } catch (err) {
     const fallbackDir = params.inboundFallbackDir?.trim();
     if (!fallbackDir) {
@@ -69,9 +105,7 @@ export async function resolveSandboxedBridgeMediaPath(params: {
       filePath: fallbackPath,
       cwd: params.sandbox.root,
     });
-    if (resolvedFallback.hostPath) {
-      await enforceWorkspaceBoundary(resolvedFallback.hostPath);
-    }
+    await enforceWorkspaceBoundary(resolvedFallback);
     return {
       resolved: resolvedFallback.hostPath ?? resolvedFallback.containerPath,
       rewrittenFrom: filePath,

@@ -1,9 +1,12 @@
+// Register agent tests cover agent command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgentCommands } from "./register.agent.js";
+import { registerAgentTurnCommand } from "./register.agent-turn.js";
+import { registerAgentsCommands } from "./register.agent.js";
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
+  agentExecCommandMock: vi.fn(),
   agentsAddCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
@@ -12,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   agentsSetIdentityCommandMock: vi.fn(),
   agentsUnbindCommandMock: vi.fn(),
   setVerboseMock: vi.fn(),
-  createDefaultDepsMock: vi.fn(() => ({ deps: true })),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -21,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const agentCliCommandMock = mocks.agentCliCommandMock;
+const agentExecCommandMock = mocks.agentExecCommandMock;
 const agentsAddCommandMock = mocks.agentsAddCommandMock;
 const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
 const agentsBindCommandMock = mocks.agentsBindCommandMock;
@@ -29,39 +32,51 @@ const agentsListCommandMock = mocks.agentsListCommandMock;
 const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
 const agentsUnbindCommandMock = mocks.agentsUnbindCommandMock;
 const setVerboseMock = mocks.setVerboseMock;
-const createDefaultDepsMock = mocks.createDefaultDepsMock;
 const runtime = mocks.runtime;
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => ({
+vi.mock("../../commands/agent-exec.js", () => ({
+  agentExecCommand: mocks.agentExecCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.bind.js", () => ({
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
   agentsBindCommand: mocks.agentsBindCommandMock,
-  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
-  agentsListCommand: mocks.agentsListCommandMock,
-  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
   agentsUnbindCommand: mocks.agentsUnbindCommandMock,
 }));
 
-vi.mock("../../globals.js", () => ({
-  setVerbose: mocks.setVerboseMock,
+vi.mock("../../commands/agents.commands.delete.js", () => ({
+  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
 }));
 
-vi.mock("../deps.js", () => ({
-  createDefaultDeps: mocks.createDefaultDepsMock,
+vi.mock("../../commands/agents.commands.identity.js", () => ({
+  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.list.js", () => ({
+  agentsListCommand: mocks.agentsListCommandMock,
+}));
+
+vi.mock("../../global-state.js", () => ({
+  setVerbose: mocks.setVerboseMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
 
-describe("registerAgentCommands", () => {
+describe("agent command registration", () => {
   async function runCli(args: string[]) {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentsCommands(program);
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -69,6 +84,7 @@ describe("registerAgentCommands", () => {
     vi.clearAllMocks();
     runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
+    agentExecCommandMock.mockResolvedValue({ exitCode: 0 });
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
@@ -76,65 +92,154 @@ describe("registerAgentCommands", () => {
     agentsListCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
     agentsUnbindCommandMock.mockResolvedValue(undefined);
-    createDefaultDepsMock.mockReturnValue({ deps: true });
   });
 
-  it("runs agent command with deps and verbose enabled for --verbose on", async () => {
+  function commandCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`expected command call ${index + 1}`);
+    }
+    return call;
+  }
+
+  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+    const program = new Command();
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    const agent = program.commands.find((command) => command.name() === "agent");
+    const exec = agent?.commands.find((command) => command.name() === "exec");
+
+    expect(agent?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+    expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+  });
+
+  it("runs agent command with verbose enabled for --verbose on", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
 
     expect(setVerboseMock).toHaveBeenCalledWith(true);
-    expect(createDefaultDepsMock).toHaveBeenCalledTimes(1);
-    expect(agentCliCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "hi",
-        verbose: "ON",
-        json: true,
-      }),
-      runtime,
-      { deps: true },
-    );
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { verbose?: string }).verbose).toBe("ON");
+    expect((options as { json?: boolean }).json).toBe(true);
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
   });
 
   it("runs agent command with verbose disabled for --verbose off", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "off"]);
 
     expect(setVerboseMock).toHaveBeenCalledWith(false);
-    expect(agentCliCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "hi",
-        verbose: "off",
-      }),
-      runtime,
-      { deps: true },
-    );
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { verbose?: string }).verbose).toBe("off");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("forwards a message file to the agent command", async () => {
+    await runCli(["agent", "--message-file", "task.md", "--agent", "ops"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBeUndefined();
+    expect((options as { messageFile?: string }).messageFile).toBe("task.md");
+    expect((options as { agent?: string }).agent).toBe("ops");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
   });
 
   it("accepts a model override for one-shot agent runs", async () => {
     await runCli(["agent", "--message", "hi", "--agent", "ops", "--model", "openai/gpt-5.4"]);
 
-    expect(agentCliCommandMock).toHaveBeenCalledWith(
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { agent?: string }).agent).toBe("ops");
+    expect((options as { model?: string }).model).toBe("openai/gpt-5.4");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("forwards an explicit session key to the agent command", async () => {
+    await runCli(["agent", "--message", "hi", "--session-key", "agent:ops:incident-42"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { sessionKey?: string }).sessionKey).toBe("agent:ops:incident-42");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("keeps bare agent on the existing parent action", async () => {
+    await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+    expect(agentExecCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an exec-valued parent message on the existing parent action", async () => {
+    await runCli(["agent", "--message", "exec", "--agent", "ops"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+    expect(agentExecCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the nested headless exec command with repeatable fallbacks", async () => {
+    await runCli([
+      "agent",
+      "exec",
+      "fix it",
+      "--cwd",
+      "/tmp/project",
+      "--model",
+      "openai/gpt-5.6-sol",
+      "--code-mode",
+      "code",
+      "--local-model-lean",
+      "--fallback",
+      "anthropic/claude-sonnet-4-6",
+      "--fallback",
+      "google/gemini-3.1-pro-preview",
+      "--json",
+    ]);
+
+    expect(agentCliCommandMock).not.toHaveBeenCalled();
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
       expect.objectContaining({
-        message: "hi",
-        agent: "ops",
-        model: "openai/gpt-5.4",
+        cwd: "/tmp/project",
+        model: "openai/gpt-5.6-sol",
+        codeMode: "code",
+        localModelLean: true,
+        fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+        authEnvOnly: true,
+        timeout: "600",
+        json: true,
       }),
       runtime,
-      { deps: true },
+    );
+  });
+
+  it("accepts parent options before the nested exec command", async () => {
+    await runCli(["agent", "--model", "openai/gpt-5.6-sol", "exec", "fix it", "--json"]);
+
+    expect(agentCliCommandMock).not.toHaveBeenCalled();
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ model: "openai/gpt-5.6-sol", json: true }),
+      runtime,
     );
   });
 
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
-    expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        name: "alpha",
-        workspace: undefined,
-        bind: [],
-      }),
-      runtime,
-      { hasFlags: false },
-    );
+    const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);
+    expect((alphaOptions as { name?: string }).name).toBe("alpha");
+    expect((alphaOptions as { workspace?: string }).workspace).toBeUndefined();
+    expect((alphaOptions as { bind?: string[] }).bind).toEqual([]);
+    expect(alphaRuntime).toBe(runtime);
+    expect(alphaFlags).toEqual({ hasFlags: false });
 
     await runCli([
       "agents",
@@ -149,18 +254,14 @@ describe("registerAgentCommands", () => {
       "--non-interactive",
       "--json",
     ]);
-    expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        name: "beta",
-        workspace: "/tmp/ws",
-        bind: ["telegram", "discord:acct"],
-        nonInteractive: true,
-        json: true,
-      }),
-      runtime,
-      { hasFlags: true },
-    );
+    const [betaOptions, betaRuntime, betaFlags] = commandCall(agentsAddCommandMock, 1);
+    expect((betaOptions as { name?: string }).name).toBe("beta");
+    expect((betaOptions as { workspace?: string }).workspace).toBe("/tmp/ws");
+    expect((betaOptions as { bind?: string[] }).bind).toEqual(["telegram", "discord:acct"]);
+    expect((betaOptions as { nonInteractive?: boolean }).nonInteractive).toBe(true);
+    expect((betaOptions as { json?: boolean }).json).toBe(true);
+    expect(betaRuntime).toBe(runtime);
+    expect(betaFlags).toEqual({ hasFlags: true });
   });
 
   it("runs agents list when root agents command is invoked", async () => {
@@ -214,7 +315,7 @@ describe("registerAgentCommands", () => {
 
   it("documents bind accountId resolution behavior in help text", () => {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentsCommands(program);
     const agents = program.commands.find((command) => command.name() === "agents");
     const bind = agents?.commands.find((command) => command.name() === "bind");
     const help = bind?.helpInformation() ?? "";
@@ -236,14 +337,11 @@ describe("registerAgentCommands", () => {
 
   it("forwards agents delete options", async () => {
     await runCli(["agents", "delete", "worker-a", "--force", "--json"]);
-    expect(agentsDeleteCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "worker-a",
-        force: true,
-        json: true,
-      }),
-      runtime,
-    );
+    const [options, callRuntime] = commandCall(agentsDeleteCommandMock);
+    expect((options as { id?: string }).id).toBe("worker-a");
+    expect((options as { force?: boolean }).force).toBe(true);
+    expect((options as { json?: boolean }).json).toBe(true);
+    expect(callRuntime).toBe(runtime);
   });
 
   it("forwards set-identity options", async () => {

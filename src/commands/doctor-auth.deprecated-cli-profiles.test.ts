@@ -1,3 +1,5 @@
+// Doctor deprecated CLI profile tests cover legacy auth profile migration and warnings.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -26,7 +28,7 @@ vi.mock("../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStore: () => authProfileStoreMock.store,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
@@ -48,6 +50,22 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
     shouldForce: repairMode.shouldForce,
     repairMode,
   };
+}
+
+function requireAuthConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["auth"]> {
+  if (!config.auth) {
+    throw new Error("expected repaired auth config");
+  }
+  return config.auth;
+}
+
+function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return expectDefined(arg, "arg test invariant");
 }
 
 beforeEach(() => {
@@ -132,25 +150,30 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
       makePrompter(true),
     );
 
-    expect(repairMocks.repairOAuthProfileIdMismatch).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        auth: expect.objectContaining({
-          profiles: expect.objectContaining({
-            "anthropic:default": { provider: "anthropic", mode: "oauth" },
-          }),
-        }),
-      }),
-      store: authProfileStoreMock.store,
-      provider: "anthropic",
-      legacyProfileId: "anthropic:default",
-    });
-    expect(next.auth?.profiles?.["anthropic:default"]).toBeUndefined();
-    expect(next.auth?.profiles?.["anthropic:user@example.com"]).toMatchObject({
+    expect(repairMocks.repairOAuthProfileIdMismatch).toHaveBeenCalledOnce();
+    const repairCall = requireFirstMockArg(
+      repairMocks.repairOAuthProfileIdMismatch,
+      "OAuth profile repair",
+    ) as {
+      cfg?: OpenClawConfig;
+      store?: AuthProfileStore;
+      provider?: unknown;
+      legacyProfileId?: unknown;
+    };
+    expect(repairCall.cfg?.auth?.profiles?.["anthropic:default"]).toEqual({
       provider: "anthropic",
       mode: "oauth",
-      email: "user@example.com",
     });
-    expect(next.auth?.order?.anthropic).toEqual(["anthropic:user@example.com"]);
+    expect(repairCall.store).toBe(authProfileStoreMock.store);
+    expect(repairCall.provider).toBe("anthropic");
+    expect(repairCall.legacyProfileId).toBe("anthropic:default");
+    const auth = requireAuthConfig(next);
+    expect(auth.profiles?.["anthropic:default"]).toBeUndefined();
+    const repairedProfile = auth.profiles?.["anthropic:user@example.com"];
+    expect(repairedProfile?.provider).toBe("anthropic");
+    expect(repairedProfile?.mode).toBe("oauth");
+    expect(repairedProfile?.email).toBe("user@example.com");
+    expect(auth.order?.anthropic).toEqual(["anthropic:user@example.com"]);
   });
 
   it("strips provider-controlled terminal escapes from repair prompts", async () => {

@@ -1,3 +1,8 @@
+/**
+ * Channel surface contract registry selectors.
+ *
+ * Assigns bundled channels to surface, threading, and directory contract shards.
+ */
 import type { ChannelId } from "../../channel-id.types.js";
 import { listBundledChannelPluginIds } from "./bundled-channel-plugin-loader.js";
 
@@ -11,7 +16,6 @@ type DirectoryContractRef = {
 };
 
 const threadingContractPluginIds = new Set<ChannelId>([
-  "bluebubbles",
   "discord",
   "googlechat",
   "matrix",
@@ -49,6 +53,7 @@ function getBundledChannelPluginIdsForShard(params: {
   );
 }
 
+/** Returns all bundled channel ids assigned to one surface-contract shard. */
 export function getSurfaceContractRegistryShardIds(params: {
   shardIndex: number;
   shardCount: number;
@@ -56,6 +61,7 @@ export function getSurfaceContractRegistryShardIds(params: {
   return getBundledChannelPluginIdsForShard(params);
 }
 
+/** Returns shard refs for bundled channels expected to expose threading hooks. */
 export function getThreadingContractRegistryShardRefs(params: {
   shardIndex: number;
   shardCount: number;
@@ -67,6 +73,7 @@ export function getThreadingContractRegistryShardRefs(params: {
 
 const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
 
+/** Returns shard refs for bundled channels expected to expose directory hooks. */
 export function getDirectoryContractRegistryShardRefs(params: {
   shardIndex: number;
   shardCount: number;

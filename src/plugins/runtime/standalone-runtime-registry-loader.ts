@@ -1,3 +1,4 @@
+// Standalone runtime registry loader builds plugin runtime registries outside gateway startup.
 import {
   type ActiveRuntimePluginRegistrySurface,
   getLoadedRuntimePluginRegistry,
@@ -26,7 +27,7 @@ function resolveRuntimeSubagentMode(
   return "default";
 }
 
-function installStandaloneRegistry(
+function installStandaloneRuntimePluginRegistry(
   registry: PluginRegistry,
   params: {
     loadOptions: PluginLoadOptions;
@@ -92,7 +93,13 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     return registry;
   }
 
-  installStandaloneRegistry(registry, {
+  // Tool discovery returns a request-local snapshot. Installing it would replace live provider,
+  // channel, or HTTP-route registries with a registry that intentionally omits those surfaces.
+  if (params.loadOptions.toolDiscovery === true) {
+    return registry;
+  }
+
+  installStandaloneRuntimePluginRegistry(registry, {
     loadOptions: params.loadOptions,
     surface,
   });

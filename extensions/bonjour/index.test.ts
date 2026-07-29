@@ -1,5 +1,6 @@
+// Bonjour tests cover index plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   advertiserModuleLoaded: vi.fn(),
@@ -25,6 +26,12 @@ vi.mock("openclaw/plugin-sdk/runtime", () => {
 });
 
 const { default: bonjourPlugin } = await import("./index.js");
+
+afterAll(() => {
+  vi.doUnmock("./src/advertiser.js");
+  vi.doUnmock("openclaw/plugin-sdk/runtime");
+  vi.resetModules();
+});
 
 describe("bonjour plugin entry", () => {
   it("lazy-loads advertiser runtime when gateway discovery advertises", async () => {
@@ -66,6 +73,7 @@ describe("bonjour plugin entry", () => {
         gatewayPort: 3210,
         gatewayTlsEnabled: true,
         gatewayTlsFingerprintSha256: "abc123",
+        gatewayDirectReachable: true,
         canvasPort: 9876,
         sshPort: 22,
         tailnetDns: "dev.tailnet.ts.net",
@@ -82,6 +90,7 @@ describe("bonjour plugin entry", () => {
         gatewayPort: 3210,
         gatewayTlsEnabled: true,
         gatewayTlsFingerprintSha256: "abc123",
+        gatewayDirectReachable: true,
         canvasPort: 9876,
         sshPort: 22,
         tailnetDns: "dev.tailnet.ts.net",

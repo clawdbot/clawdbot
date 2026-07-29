@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+// Extension package boundary tests cover package/project boundaries for bundled extensions.
+import fs from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectExtensionsWithTsconfig,
@@ -12,12 +13,15 @@ import {
   readExtensionPackageBoundaryPackageJson,
   readExtensionPackageBoundaryTsconfig,
 } from "../../../scripts/lib/extension-package-boundary.ts";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
   "extensions/tsconfig.package-boundary.paths.json" as const;
 const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
+const trackedCodeFilesByRoot = new Map<string, readonly string[] | null>();
 
 type TsConfigJson = {
   extends?: unknown;
@@ -41,70 +45,102 @@ type PackageJson = {
   devDependencies?: Record<string, string>;
 };
 const MEMORY_HOST_SDK_EXPORTS = [
-  "./engine",
   "./engine-embeddings",
   "./engine-foundation",
   "./engine-qmd",
   "./engine-storage",
   "./multimodal",
   "./query",
-  "./runtime",
-  "./runtime-cli",
   "./runtime-core",
   "./runtime-files",
   "./secret",
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
 ] as const;
 const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-cli.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
 ] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
-  return JSON.parse(readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
+  return JSON.parse(fs.readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
+}
+
+function listTrackedCodeFiles(relativeDir: string): string[] | null {
+  if (trackedCodeFilesByRoot.has(relativeDir)) {
+    const files = trackedCodeFilesByRoot.get(relativeDir);
+    return files ? [...files] : null;
+  }
+  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
+  if (!trackedFiles) {
+    trackedCodeFilesByRoot.set(relativeDir, null);
+    return null;
+  }
+  const files = trackedFiles
+    .filter((line) => line.length > 0 && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(line))
+    .filter((line) => fs.existsSync(resolve(REPO_ROOT, line)))
+    .toSorted();
+  trackedCodeFilesByRoot.set(relativeDir, files);
+  return [...files];
 }
 
 function collectCodeFiles(relativeDir: string): string[] {
+  const trackedFiles = listTrackedCodeFiles(relativeDir);
+  if (trackedFiles) {
+    return trackedFiles;
+  }
+
   const dir = resolve(REPO_ROOT, relativeDir);
   const files: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const nextPath = resolve(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...collectCodeFiles(relative(REPO_ROOT, nextPath).replaceAll("\\", "/")));
+      files.push(...collectCodeFiles(toRepoRelativePath(REPO_ROOT, nextPath)));
       continue;
     }
     if (entry.isFile() && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(entry.name)) {
-      files.push(relative(REPO_ROOT, nextPath).replaceAll("\\", "/"));
+      files.push(toRepoRelativePath(REPO_ROOT, nextPath));
     }
   }
   return files.toSorted();
 }
 
 function collectCoreReferenceFiles(relativeDir: string): string[] {
-  return collectCodeFiles(relativeDir).filter((file) => {
-    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-    return source.includes("../../../../src/") || source.includes("../../../src/");
-  });
+  return collectCodeFiles(relativeDir)
+    .filter((file) => !file.endsWith(".test.ts"))
+    .filter((file) => {
+      const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
+      return source.includes("../../../../src/") || source.includes("../../../src/");
+    });
 }
 
 function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {
   return collectCodeFiles(relativeDir).filter((file) => {
-    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+    const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
     return source.includes('"./openclaw-runtime.js"');
   });
 }
 
 describe("opt-in extension package boundaries", () => {
+  it("lists package boundary code files from git without walking package roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const memoryHostFiles = collectCodeFiles("packages/memory-host-sdk/src");
+      const packageContractFiles = collectCodeFiles("packages/plugin-package-contract/src");
+
+      expect(memoryHostFiles.length).toBeGreaterThan(0);
+      expect(packageContractFiles.length).toBeGreaterThan(0);
+    });
+  });
+
   it("keeps path aliases in a dedicated shared config", () => {
     const pathsConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG);
     expect(pathsConfig.extends).toBe("../tsconfig.json");
@@ -158,6 +194,15 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
+      "../../packages/ai/src/**/*.ts",
+      "../../packages/markdown-core/src/**/*.ts",
+      "../../packages/media-core/src/**/*.ts",
+      "../../packages/media-generation-core/src/**/*.ts",
+      "../../packages/model-catalog-core/src/**/*.ts",
+      "../../packages/normalization-core/src/**/*.ts",
+      "../../packages/retry/src/**/*.ts",
+      "../../packages/acp-core/src/**/*.ts",
+      "../../packages/terminal-core/src/**/*.ts",
       "../../src/plugin-sdk/**/*.ts",
       "../../src/video-generation/dashscope-compatible.ts",
       "../../src/video-generation/types.ts",
@@ -184,6 +229,9 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./core"]?.types).toBe("./dist/src/plugin-sdk/core.d.ts");
     expect(packageJson.exports?.["./error-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/error-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./exec-approvals-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
     );
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
       "./dist/src/plugin-sdk/plugin-entry.d.ts",
@@ -218,8 +266,11 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./ssrf-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/text-runtime.d.ts",
+    expect(packageJson.exports?.["./config-contracts"]?.types).toBe(
+      "./dist/src/plugin-sdk/config-contracts.d.ts",
+    );
+    expect(packageJson.exports?.["./text-utility-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
       "./dist/src/plugin-sdk/video-generation.d.ts",
@@ -227,8 +278,14 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
     );
+    expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/infra-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/text-runtime.d.ts",
+    );
     expect(packageJson.exports?.["./zod"]?.types).toBe("./dist/src/plugin-sdk/zod.d.ts");
-    expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
+    expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );
   });
@@ -249,7 +306,10 @@ describe("opt-in extension package boundaries", () => {
       if (!target) {
         throw new Error(`Missing memory-host-sdk export target for ${exportPath}`);
       }
-      const source = readFileSync(resolve(REPO_ROOT, "packages/memory-host-sdk", target), "utf8");
+      const source = fs.readFileSync(
+        resolve(REPO_ROOT, "packages/memory-host-sdk", target),
+        "utf8",
+      );
       expect(source, target).not.toContain("src/memory-host-sdk/");
     }
 
@@ -262,6 +322,6 @@ describe("opt-in extension package boundaries", () => {
   });
 
   it("keeps plugin-package-contract independent from core internals", () => {
-    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toEqual([]);
+    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toStrictEqual([]);
   });
 });

@@ -1,36 +1,43 @@
+// SSRF policy helpers enforce network target safety for plugin HTTP requests.
+import { asNullableRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
+  mergeSsrFPolicies,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "./channel-contract.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
-export { isPrivateIpAddress };
+export { isPrivateIpAddress, mergeSsrFPolicies };
 export type { SsrFPolicy };
 
+/** Accepted channel config shapes that opt into private-network HTTP targets. */
 export type PrivateNetworkOptInInput =
   | boolean
   | null
   | undefined
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
+      /** Canonical explicit opt-in for private/internal network targets. */
       dangerouslyAllowPrivateNetwork?: boolean | null;
       /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
+      /** Nested channel config shape used by current plugin network settings. */
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
         | null
         | undefined;
     };
 
+/** Reads current and legacy private-network opt-in shapes from channel config. */
 export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): boolean {
   if (input === true) {
     return true;
@@ -48,57 +55,27 @@ export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): b
   );
 }
 
+/** Converts channel private-network opt-in config into the shared SSRF policy shape. */
 export function ssrfPolicyFromPrivateNetworkOptIn(
   input: PrivateNetworkOptInInput,
 ): SsrFPolicy | undefined {
   return isPrivateNetworkOptInEnabled(input) ? { allowPrivateNetwork: true } : undefined;
 }
 
+/** Compatibility wrapper for callers that already use the canonical dangerous flag name. */
 export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
   dangerouslyAllowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
   return ssrfPolicyFromPrivateNetworkOptIn(dangerouslyAllowPrivateNetwork);
 }
 
-export function mergeSsrFPolicies(
-  ...policies: Array<SsrFPolicy | undefined>
-): SsrFPolicy | undefined {
-  const merged: SsrFPolicy = {};
-  for (const policy of policies) {
-    if (!policy) {
-      continue;
-    }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowIpv6UniqueLocalRange) {
-      merged.allowIpv6UniqueLocalRange = true;
-    }
-    if (policy.allowedHostnames?.length) {
-      merged.allowedHostnames = Array.from(
-        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
-      );
-    }
-    if (policy.hostnameAllowlist?.length) {
-      merged.hostnameAllowlist = Array.from(
-        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
-      );
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
+/** Detects the retired flat `allowPrivateNetwork` key before doctor migration. */
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
   const entry = asNullableRecord(value);
-  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
+  return Boolean(entry && Object.hasOwn(entry, "allowPrivateNetwork"));
 }
 
+/** Moves flat private-network config into `network.dangerouslyAllowPrivateNetwork`. */
 export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -152,6 +129,7 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   );
 }
 
+/** Build doctor rules that migrate legacy private-network aliases for one channel config. */
 export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: string }): {
   legacyConfigRules: ChannelDoctorLegacyConfigRule[];
   normalizeCompatibilityConfig: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
@@ -233,12 +211,14 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
   };
 }
 
+/** @deprecated Use `ssrfPolicyFromDangerouslyAllowPrivateNetwork`. */
 export function ssrfPolicyFromAllowPrivateNetwork(
   allowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
   return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);
 }
 
+/** Allows cleartext HTTP only when the target is loopback/private or DNS-pins to private IPs. */
 export async function assertHttpUrlTargetsPrivateNetwork(
   url: string,
   params: {
@@ -248,7 +228,15 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     errorMessage?: string;
   } = {},
 ): Promise<void> {
-  const parsed = new URL(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // URL parser errors retain rejected input. Keep only stable classification.
+    const err = new TypeError("Invalid URL") as TypeError & { code: string };
+    err.code = "ERR_INVALID_URL";
+    throw err;
+  }
   if (parsed.protocol !== "http:") {
     return;
   }
@@ -318,11 +306,12 @@ export function normalizeHostnameSuffixAllowlist(
   if (!source || source.length === 0) {
     return [];
   }
-  const normalized = source.map(normalizeHostnameSuffix).filter(Boolean);
+  const normalized = normalizeUniqueStringEntries(source.map(normalizeHostnameSuffix));
   if (normalized.includes("*")) {
+    // `*` is an explicit opt-out from hostname suffix restrictions.
     return ["*"];
   }
-  return Array.from(new Set(normalized));
+  return normalized;
 }
 
 /** Check whether a URL is HTTPS and its hostname matches the normalized suffix allowlist. */

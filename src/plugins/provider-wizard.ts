@@ -1,10 +1,12 @@
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expectDefined } from "@openclaw/normalization-core";
+/** Provider setup wizard helpers shared by provider plugins and CLI setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginSetupProvider } from "./setup-registry.js";
@@ -17,16 +19,17 @@ import type {
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
-export type ProviderWizardOption = {
+type ProviderWizardOption = {
   value: string;
   label: string;
   hint?: string;
   groupId: string;
   groupLabel: string;
   groupHint?: string;
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
 };
 
 export type ProviderModelPickerEntry = {
@@ -119,6 +122,7 @@ function buildSetupOptionForMethod(params: {
     ...(params.wizard.assistantVisibility
       ? { assistantVisibility: params.wizard.assistantVisibility }
       : {}),
+    ...(params.wizard.onboardingFeatured ? { onboardingFeatured: true } : {}),
   };
 }
 
@@ -287,7 +291,10 @@ export function resolveProviderPluginChoice(params: {
       normalizeProviderId(provider.id) === normalizeProviderId(choice) &&
       provider.auth.length > 0
     ) {
-      return { provider, method: provider.auth[0] };
+      return {
+        provider,
+        method: expectDefined(provider.auth[0], "auth entry at 0"),
+      };
     }
   }
 

@@ -1,7 +1,10 @@
+/**
+ * Tests OpenAI HTTP usage extraction and gateway usage accounting.
+ */
 import { describe, expect, it } from "vitest";
-import { __testOnlyOpenAiHttp } from "./openai-http.js";
+import { testOnlyOpenAiHttp } from "./openai-http.js";
 
-const { resolveChatCompletionUsage } = __testOnlyOpenAiHttp;
+const { resolveChatCompletionUsage } = testOnlyOpenAiHttp;
 
 describe("resolveChatCompletionUsage", () => {
   it("maps agentMeta.usage to OpenAI prompt/completion/total fields", () => {
@@ -17,6 +20,7 @@ describe("resolveChatCompletionUsage", () => {
       prompt_tokens: 130,
       completion_tokens: 42,
       total_tokens: 172,
+      prompt_tokens_details: { cached_tokens: 10 },
     });
   });
 

@@ -1,3 +1,4 @@
+// Device Pair tests cover pair command auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolvePairingCommandAuthState } from "./pair-command-auth.js";
 
@@ -11,6 +12,8 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: false,
       isMissingPairingPrivilege: true,
+      isMissingSetupHandoffPrivilege: true,
+      canIssueFullAccessSetup: false,
       approvalCallerScopes: undefined,
     });
   });
@@ -25,6 +28,8 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: false,
       isMissingPairingPrivilege: false,
+      isMissingSetupHandoffPrivilege: false,
+      canIssueFullAccessSetup: true,
       approvalCallerScopes: ["operator.pairing"],
     });
   });
@@ -38,11 +43,13 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: true,
       isMissingPairingPrivilege: true,
+      isMissingSetupHandoffPrivilege: true,
+      canIssueFullAccessSetup: false,
       approvalCallerScopes: [],
     });
   });
 
-  it("accepts pairing and admin scopes for internal callers", () => {
+  it("tracks pairing and setup-handoff privileges independently for internal callers", () => {
     expect(
       resolvePairingCommandAuthState({
         channel: "webchat",
@@ -51,7 +58,21 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: true,
       isMissingPairingPrivilege: false,
+      isMissingSetupHandoffPrivilege: true,
+      canIssueFullAccessSetup: false,
       approvalCallerScopes: ["operator.write", "operator.pairing"],
+    });
+    expect(
+      resolvePairingCommandAuthState({
+        channel: "webchat",
+        gatewayClientScopes: ["operator.write", "operator.pairing", "operator.talk.secrets"],
+      }),
+    ).toEqual({
+      isInternalGatewayCaller: true,
+      isMissingPairingPrivilege: false,
+      isMissingSetupHandoffPrivilege: false,
+      canIssueFullAccessSetup: false,
+      approvalCallerScopes: ["operator.write", "operator.pairing", "operator.talk.secrets"],
     });
     expect(
       resolvePairingCommandAuthState({
@@ -61,6 +82,8 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: true,
       isMissingPairingPrivilege: false,
+      isMissingSetupHandoffPrivilege: false,
+      canIssueFullAccessSetup: true,
       approvalCallerScopes: ["operator.admin"],
     });
   });
@@ -75,6 +98,8 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: true,
       isMissingPairingPrivilege: false,
+      isMissingSetupHandoffPrivilege: true,
+      canIssueFullAccessSetup: false,
       approvalCallerScopes: ["operator.write", "operator.pairing"],
     });
   });

@@ -1,3 +1,4 @@
+// Config-flow step tests cover doctor repair step ordering and mutation planning.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
@@ -65,12 +66,46 @@ describe("doctor config flow steps", () => {
       warnings: [],
     } satisfies DoctorConfigPreflightResult["snapshot"]);
 
-    expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
-    expect(result.changeLines).not.toEqual([]);
-    expect(result.state.fixHints).toContain(
+    expect(result.issueLines).toEqual(["- heartbeat: use agents.defaults.heartbeat"]);
+    expect(result.changeLines).not.toStrictEqual([]);
+    expect(result.state.fixHints).toStrictEqual([
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
-    );
+    ]);
     expect(result.state.pendingChanges).toBe(true);
+  });
+
+  it("migrates the resolved config so single-file include values are repairable", () => {
+    const sourceConfig = {
+      mcp: { servers: { local: { command: "node", disabled: true } } },
+    } as unknown as OpenClawConfig;
+    migrateLegacyConfigMock.mockReturnValueOnce({
+      config: {
+        commands: { native: "auto" },
+        mcp: { servers: { local: { command: "node", enabled: false } } },
+      },
+      sourceConfig: { mcp: { servers: { local: { command: "node", enabled: false } } } },
+      changes: ["Moved mcp.servers.local.disabled true → enabled false."],
+    });
+
+    const result = createLegacyStepResult({
+      exists: true,
+      parsed: { mcp: { $include: "./mcp.json5" } },
+      legacyIssues: [{ path: "mcp.servers", message: "disabled is legacy" }],
+      path: "/tmp/config.json",
+      valid: false,
+      issues: [],
+      raw: "{}",
+      resolved: sourceConfig,
+      sourceConfig,
+      config: sourceConfig,
+      runtimeConfig: sourceConfig,
+      warnings: [],
+    } satisfies DoctorConfigPreflightResult["snapshot"]);
+
+    expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig);
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.state.candidate.mcp?.servers?.local?.enabled).toBe(false);
+    expect(result.state.candidate.commands).toBeUndefined();
   });
 
   it("keeps pending repair state for legacy issues even when the snapshot is already normalized", () => {
@@ -94,18 +129,20 @@ describe("doctor config flow steps", () => {
       warnings: [],
     } satisfies DoctorConfigPreflightResult["snapshot"]);
 
-    expect(result.changeLines).toEqual([]);
+    expect(result.changeLines).toStrictEqual([]);
     expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.fixHints).toContain(
+    expect(result.state.fixHints).toStrictEqual([
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
-    );
+    ]);
   });
 
   it("commits migration even when post-migration validation has unrelated issues (#76798)", () => {
     const migratedConfig = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
     migrateLegacyConfigMock.mockReturnValueOnce({
       config: migratedConfig,
-      changes: ["Removed agents.defaults.llm; model idle timeout now follows models.providers."],
+      changes: [
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers within the agent/run timeout ceiling.",
+      ],
       partiallyValid: true,
     });
 
@@ -157,8 +194,10 @@ describe("doctor config flow steps", () => {
     });
 
     expect(result.removed).toEqual(["bogus"]);
-    expect(result.state.candidate).toEqual({});
-    expect(result.state.fixHints).toContain('Run "openclaw doctor --fix" to remove these keys.');
+    expect(result.state.candidate).toStrictEqual({});
+    expect(result.state.fixHints).toStrictEqual([
+      'Run "openclaw doctor --fix" to remove these keys.',
+    ]);
   });
 
   it("repairs active malformed auth profile metadata after unknown-key cleanup", () => {
@@ -282,7 +321,7 @@ describe("doctor config flow steps", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.repairs).toEqual([]);
+    expect(result.repairs).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
       provider: "openai",
       mode: "api_key",
@@ -433,7 +472,7 @@ describe("doctor config flow steps", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.work).toEqual({
       provider: "openai",
       mode: "api_key",

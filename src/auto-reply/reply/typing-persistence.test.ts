@@ -1,4 +1,6 @@
+// Tests typing mode persistence across session updates and reply turns.
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { createTypingController } from "./typing.js";
 
 describe("typing persistence bug fix", () => {
@@ -117,5 +119,23 @@ describe("typing persistence bug fix", () => {
 
     expect(inert.isActive()).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clamps oversized typing interval and TTL timers", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const boundedController = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: Number.MAX_SAFE_INTEGER,
+      typingTtlMs: Number.MAX_SAFE_INTEGER,
+      log: vi.fn(),
+    });
+
+    await boundedController.startTypingLoop();
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    boundedController.cleanup();
   });
 });

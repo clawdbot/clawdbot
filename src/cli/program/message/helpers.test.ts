@@ -1,3 +1,4 @@
+// Message program helper tests cover message command helper behavior and mocks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
@@ -22,7 +23,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (_event: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -59,6 +60,8 @@ vi.mock("../../deps.js", () => ({
 
 const { createMessageCliHelpers } = await import("./helpers.js");
 
+const NON_NEGATIVE_INTEGER_FLAGS = new Set(["--delete-days", "--duration-min"]);
+
 const baseSendOptions = {
   channel: "discord",
   target: "123",
@@ -87,11 +90,34 @@ function expectNoAccountFieldInPassedOptions() {
   const passedOpts = (
     messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
   )?.[0]?.[0];
-  expect(passedOpts).toBeTruthy();
-  if (!passedOpts) {
+  if (passedOpts === undefined) {
     throw new Error("expected message command call");
   }
   expect(passedOpts).not.toHaveProperty("account");
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMessageCommandOptions(expected: Record<string, unknown>, callIndex = 0): void {
+  const call = (messageCommandMock.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected messageCommand call ${callIndex}`);
+  }
+  const options = requireRecord(call[0], `messageCommand options ${callIndex}`);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(options[key], `messageCommand options.${key}`).toEqual(expectedValue);
+  }
+  if (call[1] == null) {
+    throw new Error("expected messageCommand runtime");
+  }
+  if (call[2] == null) {
+    throw new Error("expected messageCommand deps");
+  }
 }
 
 describe("runMessageAction", () => {
@@ -142,16 +168,12 @@ describe("runMessageAction", () => {
     await runSendAction({ target: "channel:12345" });
 
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        channel: "discord",
-        target: "channel:12345",
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "discord",
+      target: "channel:12345",
+      message: "hi",
+    });
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -169,15 +191,11 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "broadcast",
-        targets: ["telegram:1", "telegram:2"],
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "broadcast",
+      targets: ["telegram:1", "telegram:2"],
+      message: "hi",
+    });
   });
 
   it("keeps unknown actions on the local preload path", async () => {
@@ -195,13 +213,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["discord"],
     });
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "custom-action",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({ action: "custom-action" });
   });
 
   it("preloads when the scoped channel plugin is not cheaply available", async () => {
@@ -219,15 +231,11 @@ describe("runMessageAction", () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        target: "telegram:12345",
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      target: "telegram:12345",
+      message: "hi",
+    });
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -243,21 +251,17 @@ describe("runMessageAction", () => {
     });
 
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        channel: "telegram",
-        accountId: "default",
-        target: "@ops",
-        message: "hi",
-        media: "./diagram.png",
-        presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
-        delivery: '{"pin":true}',
-        forceDocument: true,
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "telegram",
+      accountId: "default",
+      target: "@ops",
+      message: "hi",
+      media: "./diagram.png",
+      presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
+      delivery: '{"pin":true}',
+      forceDocument: true,
+    });
     expectNoAccountFieldInPassedOptions();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
@@ -273,7 +277,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
@@ -305,6 +309,137 @@ describe("runMessageAction", () => {
     expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
+  it.each([
+    [
+      "poll duration hours",
+      "poll",
+      {
+        channel: "discord",
+        target: "123",
+        pollQuestion: "ship?",
+        pollOption: ["yes", "no"],
+        pollDurationHours: "1.5",
+      },
+      "--poll-duration-hours",
+    ],
+    [
+      "poll duration seconds",
+      "poll",
+      {
+        channel: "telegram",
+        target: "123",
+        pollQuestion: "ship?",
+        pollOption: ["yes", "no"],
+        pollDurationSeconds: "60s",
+      },
+      "--poll-duration-seconds",
+    ],
+    [
+      "timeout duration",
+      "timeout",
+      { guildId: "g", userId: "u", durationMin: "5m" },
+      "--duration-min",
+    ],
+    ["ban delete days", "ban", { guildId: "g", userId: "u", deleteDays: "7d" }, "--delete-days"],
+    ["read limit", "read", { channel: "discord", target: "123", limit: "10x" }, "--limit"],
+    ["search limit", "search", { guildId: "g", query: "hello", limit: "10x" }, "--limit"],
+    ["pins limit", "list-pins", { channel: "discord", target: "123", limit: "10x" }, "--limit"],
+    [
+      "reactions limit",
+      "reactions",
+      { channel: "discord", target: "123", messageId: "m", limit: "10x" },
+      "--limit",
+    ],
+    [
+      "thread auto archive minutes",
+      "thread-create",
+      {
+        channel: "discord",
+        target: "123",
+        threadName: "ops",
+        autoArchiveMin: "60m",
+      },
+      "--auto-archive-min",
+    ],
+    ["thread list limit", "thread-list", { guildId: "g", limit: "10x" }, "--limit"],
+  ])("rejects malformed numeric CLI option for %s", async (_name, action, opts, flag) => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
+
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
+    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
+  it.each([
+    ["pollDurationHours", "0", "--poll-duration-hours"],
+    ["pollDurationSeconds", "-1", "--poll-duration-seconds"],
+    ["durationMin", "", "--duration-min"],
+    ["deleteDays", Number.NaN, "--delete-days"],
+    ["limit", 1.2, "--limit"],
+    ["autoArchiveMin", null, "--auto-archive-min"],
+  ])("rejects non-positive or non-integer %s values", async (key, value, flag) => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("send", {
+        ...baseSendOptions,
+        [key]: value,
+      }),
+    ).rejects.toThrow("exit");
+
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
+    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(exitMock).toHaveBeenCalledWith(1);
+  });
+
+  it("allows zero delete-days for no-history Discord bans", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("ban", {
+        guildId: "g",
+        userId: "u",
+        deleteDays: "0",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({
+      action: "ban",
+      guildId: "g",
+      userId: "u",
+      deleteDays: "0",
+    });
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("allows zero duration-min for clearing Discord timeouts", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("timeout", {
+        guildId: "g",
+        userId: "u",
+        durationMin: "0",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({
+      action: "timeout",
+      guildId: "g",
+      userId: "u",
+      durationMin: "0",
+    });
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
   it("runs gateway_stop hooks before exit when registered", async () => {
     hasHooksMock.mockReturnValueOnce(true);
     await runSendAction();
@@ -334,7 +469,7 @@ describe("runMessageAction", () => {
     vi.useFakeTimers();
     try {
       hasHooksMock.mockReturnValueOnce(true);
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => undefined));
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
       const runMessageAction = createRunMessageAction();
 
       const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");
@@ -420,17 +555,13 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        channel: "discord",
-        target: "456",
-        accountId: "acct-1",
-        message: "hi",
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "poll",
+      channel: "discord",
+      target: "456",
+      accountId: "acct-1",
+      message: "hi",
+    });
     // account key should be stripped in favor of accountId
     expectNoAccountFieldInPassedOptions();
   });
@@ -447,16 +578,12 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(messageCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "send",
-        channel: "discord",
-        target: "789",
-        accountId: undefined,
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "discord",
+      target: "789",
+      accountId: undefined,
+    });
     expectNoAccountFieldInPassedOptions();
   });
 });

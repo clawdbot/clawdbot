@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+/** Resolves channel and account context for command handlers. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 
 type CommandSurfaceParams = {
   ctx: {
@@ -30,6 +31,7 @@ type ChannelAccountParams = {
   };
 };
 
+/** Resolves the command surface channel from inbound context and command state. */
 export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??
@@ -39,6 +41,7 @@ export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): stri
   return normalizeOptionalLowercaseString(channel) ?? "";
 }
 
+/** Resolves command account id, falling back to plugin default account config. */
 export function resolveChannelAccountId(params: ChannelAccountParams): string {
   const accountId = normalizeOptionalString(params.ctx.AccountId) ?? "";
   if (accountId) {

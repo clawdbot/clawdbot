@@ -1,3 +1,4 @@
+// Qqbot plugin module implements surface behavior.
 import {
   createStandardChannelSetupStatus,
   setSetupChannelEnabled,
@@ -28,7 +29,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
       }),
   }),
   credentials: [],
-  finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime }) =>
-    await finalizeQQBotSetup({ cfg, accountId, forceAllowFrom, prompter, runtime }),
+  finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime, options }) =>
+    await finalizeQQBotSetup({ cfg, accountId, forceAllowFrom, prompter, runtime, options }),
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

@@ -1,20 +1,17 @@
+/**
+ * Resolves command queue lane names for nested, cron, and subagent work.
+ */
 import { CommandLane } from "../process/lanes.js";
 
-export const AGENT_LANE_NESTED = CommandLane.Nested;
-export const AGENT_LANE_CRON_NESTED = CommandLane.CronNested;
+/** Default lane for nested agent work. */
+const AGENT_LANE_NESTED = CommandLane.Nested;
+const AGENT_LANE_CRON_NESTED = CommandLane.CronNested;
 export const AGENT_LANE_SUBAGENT = CommandLane.Subagent;
 const AGENT_LANE_CRON: string = CommandLane.Cron;
 const NESTED_LANE = "nested";
 const NESTED_LANE_PREFIX = `${NESTED_LANE}:`;
 
-export function resolveNestedAgentLane(lane?: string): string {
-  const trimmed = lane?.trim();
-  if (!trimmed) {
-    return AGENT_LANE_NESTED;
-  }
-  return trimmed;
-}
-
+/** Resolves the lane for agent work started from cron. */
 export function resolveCronAgentLane(lane?: string): string {
   const trimmed = lane?.trim();
   // Cron jobs already occupy the outer cron lane, so inner agent work needs
@@ -25,6 +22,7 @@ export function resolveCronAgentLane(lane?: string): string {
   return trimmed;
 }
 
+/** Resolves a per-session nested lane to serialize nested agent work. */
 export function resolveNestedAgentLaneForSession(sessionKey: string | undefined): string {
   const trimmed = sessionKey?.trim();
   if (!trimmed) {
@@ -33,6 +31,7 @@ export function resolveNestedAgentLaneForSession(sessionKey: string | undefined)
   return `${NESTED_LANE_PREFIX}${trimmed}`;
 }
 
+/** Returns true when a lane belongs to nested agent work. */
 export function isNestedAgentLane(lane: string | undefined): boolean {
   if (!lane) {
     return false;

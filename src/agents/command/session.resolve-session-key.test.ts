@@ -1,14 +1,21 @@
+// Covers cross-store session-key resolution for multi-agent session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionStoreMock: vi.fn<(storePath: string) => Record<string, SessionEntry>>(),
+  listSessionEntriesMock: vi.fn<
+    (scope?: { storePath?: string; clone?: boolean }) => Array<{
+      entry: SessionEntry;
+      sessionKey: string;
+    }>
+  >(),
   listAgentIdsMock: vi.fn<() => string[]>(),
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
+    hoisted.listSessionEntriesMock(scope),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -30,7 +37,12 @@ const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
   await import("./session.js");
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
-  hoisted.loadSessionStoreMock.mockImplementation((storePath) => storesByPath[storePath] ?? {});
+  hoisted.listSessionEntriesMock.mockImplementation((scope) =>
+    Object.entries(storesByPath[scope?.storePath ?? ""] ?? {}).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
+  );
 }
 
 function expectResolvedRequestSession(params: {
@@ -49,13 +61,13 @@ function expectResolvedRequestSession(params: {
   });
 
   expect(result.sessionKey).toBe(params.sessionKey);
-  expect(result.sessionStore).toBe(params.sessionStore);
+  expect(result.sessionStore).toEqual(params.sessionStore);
   expect(result.storePath).toBe(params.storePath);
 }
 
 describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.listSessionEntriesMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
   });
@@ -81,6 +93,8 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("keeps a cross-store structural winner over a newer local fuzzy duplicate", () => {
+    // Structural keys beat fuzzy timestamp matches so ACP/subagent resumes do
+    // not accidentally attach to a newer generic main-session duplicate.
     const mainStore = {
       "agent:main:main": { sessionId: "sid", updatedAt: 20 },
     } satisfies Record<string, SessionEntry>;
@@ -105,12 +119,7 @@ describe("resolveSessionKeyForRequest", () => {
       "agent:embedded-agent:main": { sessionId: "other-session", updatedAt: 2 },
       "agent:embedded-agent:work": { sessionId: "resume-agent-1", updatedAt: 1 },
     } satisfies Record<string, SessionEntry>;
-    hoisted.loadSessionStoreMock.mockImplementation((storePath) => {
-      if (storePath === "/stores/embedded-agent.json") {
-        return embeddedAgentStore;
-      }
-      return {};
-    });
+    mockSessionStores({ "/stores/embedded-agent.json": embeddedAgentStore });
 
     const result = resolveStoredSessionKeyForSessionId({
       cfg: {
@@ -123,8 +132,48 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:embedded-agent:work");
-    expect(result.sessionStore).toBe(embeddedAgentStore);
+    expect(result.sessionStore).toEqual(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("borrows session stores when requested", () => {
+    // clone=false is used by callers that intend to mutate the selected store,
+    // so the resolver must pass that option through every candidate load.
+    const mainStore = {
+      "agent:main:main": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    const otherStore = {
+      "agent:other:acp:sid": { sessionId: "sid", updatedAt: 20 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/main.json": mainStore,
+      "/stores/other.json": otherStore,
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "sid",
+      clone: false,
+    });
+
+    expect(result.sessionKey).toBe("agent:other:acp:sid");
+    expect(result.sessionStore).toEqual(otherStore);
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/main.json",
+        clone: false,
+      }),
+    );
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/other.json",
+        clone: false,
+      }),
+    );
   });
 });

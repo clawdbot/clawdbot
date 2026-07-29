@@ -1,3 +1,4 @@
+// Whatsapp tests cover logout plugin behavior.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";

@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover doctor plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   collectDiscordMissingEnvTokenWarnings,
@@ -7,14 +8,89 @@ import {
   maybeRepairDiscordNumericIds,
   scanDiscordNumericIdEntries,
 } from "./doctor.js";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
+
+function getDiscordCompatibilityNormalizer(): NonNullable<
+  typeof discordDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = discordDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected discord doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
 
 describe("discord doctor", () => {
+  it("promotes shipped nested DM access at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            dm: { enabled: false, policy: "allowlist", allowFrom: ["123"] },
+            accounts: {
+              work: {
+                dm: { groupEnabled: true, policy: "open", allowFrom: ["*"] },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      dm: { enabled: false },
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      accounts: {
+        work: {
+          dm: { groupEnabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+  });
+
+  it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            gatewayInfoTimeoutMs: 1,
+            gatewayReadyTimeoutMs: 2,
+            gatewayRuntimeReadyTimeoutMs: 3,
+            eventQueue: { listenerTimeout: 4 },
+            retry: { attempts: 5 },
+            voice: {
+              realtime: {
+                providers: {
+                  custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } },
+                },
+              },
+            },
+            accounts: {
+              work: { eventQueue: { maxConcurrency: 6 }, retry: { attempts: 7 } },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      voice: {
+        realtime: {
+          providers: { custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } } },
+        },
+      },
+      accounts: { work: {} },
+    });
+    expect(result.changes).toContain("Removed retired Discord tuning knobs.");
+  });
+
   it("normalizes legacy discord streaming aliases for runtime config", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -56,9 +132,16 @@ describe("discord doctor", () => {
         work: {
           streaming: {
             mode: "off",
+            chunkMode: "newline",
             block: {
+              enabled: true,
               coalesce: {
                 idleMs: 250,
+              },
+            },
+            preview: {
+              chunk: {
+                minChars: 120,
               },
             },
           },
@@ -72,15 +155,71 @@ describe("discord doctor", () => {
       "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
       "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
       "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+      "Copied flat channels.discord delivery keys into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("pins progress mode when migrating delivery-only aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: { blockStreaming: true },
+        },
+      } as never,
+    });
+
+    const migrated = result.config.channels?.discord as Record<string, unknown>;
+    expect(migrated).toEqual({
+      streaming: { mode: "progress", block: { enabled: true } },
+    });
+    // Effective preview-mode parity: `streaming` absent resolved to progress
+    // before migration, so the migrated object must keep progress instead of
+    // falling to the object-without-mode default (off).
+    expect(resolveDiscordPreviewStreamMode(migrated)).toBe(resolveDiscordPreviewStreamMode({}));
+    expect(result.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+      "Set channels.discord.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("seeds the inherited root streaming settings when migrating account delivery aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    // Account `streaming` objects replace the root object wholesale on merge,
+    // so the migrated account must carry the settings it previously inherited.
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
+            accounts: { work: { chunkMode: "newline" } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
+      accounts: {
+        work: {
+          streaming: {
+            mode: "off",
+            chunkMode: "newline",
+            block: { coalesce: { idleMs: 5 } },
+          },
+        },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
+      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
   it("moves account voice.tts.edge into providers.microsoft", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -116,12 +255,152 @@ describe("discord doctor", () => {
     expect(mainTts?.edge).toBeUndefined();
   });
 
+  it("does not move unsupported root and account tts provider aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            tts: {
+              edge: {
+                voice: "en-US-RootNeural",
+              },
+            },
+            voice: {
+              tts: {
+                edge: {
+                  voice: "en-US-VoiceNeural",
+                },
+              },
+            },
+            accounts: {
+              main: {
+                tts: {
+                  edge: {
+                    voice: "en-US-AccountNeural",
+                  },
+                },
+                voice: {
+                  tts: {
+                    edge: {
+                      voice: "en-US-AccountVoiceNeural",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
+      "Moved channels.discord.voice.tts.edge → channels.discord.voice.tts.providers.microsoft.",
+    ]);
+    const discordConfig = result.config.channels?.discord as
+      | {
+          tts?: Record<string, unknown>;
+          voice?: { tts?: Record<string, unknown> };
+          accounts?: {
+            main?: {
+              tts?: Record<string, unknown>;
+              voice?: { tts?: Record<string, unknown> };
+            };
+          };
+        }
+      | undefined;
+    expect(discordConfig?.tts).toEqual({
+      edge: {
+        voice: "en-US-RootNeural",
+      },
+    });
+    expect(discordConfig?.accounts?.main?.tts).toEqual({
+      edge: {
+        voice: "en-US-AccountNeural",
+      },
+    });
+    expect(discordConfig?.voice?.tts).toEqual({
+      providers: {
+        microsoft: {
+          voice: "en-US-VoiceNeural",
+        },
+      },
+    });
+    expect(discordConfig?.accounts?.main?.voice?.tts).toEqual({
+      providers: {
+        microsoft: {
+          voice: "en-US-AccountVoiceNeural",
+        },
+      },
+    });
+  });
+
+  it("removes unsupported Discord realtime wake names", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            voice: {
+              realtime: {
+                wakeNames: ["Claw", "Claw Bot Helper", "Open Claw"],
+              },
+            },
+            accounts: {
+              work: {
+                voice: {
+                  realtime: {
+                    wakeNames: ["Work Bot Helper", "Work Bot"],
+                  },
+                },
+              },
+              invalid: {
+                voice: {
+                  realtime: {
+                    wakeNames: ["Only Three Words"],
+                  },
+                },
+              },
+              empty: {
+                voice: {
+                  realtime: {
+                    wakeNames: [],
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Shortened 1 unsupported channels.discord.accounts.work.voice.realtime.wakeNames entries to one or two words.",
+      "Shortened 1 unsupported channels.discord.accounts.invalid.voice.realtime.wakeNames entries to one or two words.",
+      "Removed empty channels.discord.accounts.empty.voice.realtime.wakeNames; unset wake names use the default agent/OpenClaw fallback.",
+      "Shortened 1 unsupported channels.discord.voice.realtime.wakeNames entries to one or two words.",
+    ]);
+    expect(result.config.channels?.discord?.voice?.realtime?.wakeNames).toEqual([
+      "Claw",
+      "Claw Bot",
+      "Open Claw",
+    ]);
+    expect(result.config.channels?.discord?.accounts?.work?.voice?.realtime?.wakeNames).toEqual([
+      "Work Bot",
+    ]);
+    expect(result.config.channels?.discord?.accounts?.invalid?.voice?.realtime?.wakeNames).toEqual([
+      "Only Three",
+    ]);
+    expect(result.config.channels?.discord?.accounts?.empty?.voice?.realtime?.wakeNames).toBe(
+      undefined,
+    );
+  });
+
   it("moves legacy guild channel allow toggles into enabled", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -169,11 +448,7 @@ describe("discord doctor", () => {
   });
 
   it("moves legacy guild channel agentId into a top-level route binding", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -213,11 +488,7 @@ describe("discord doctor", () => {
   });
 
   it("moves account-scoped guild channel agentId into an account-scoped route binding", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -247,7 +518,7 @@ describe("discord doctor", () => {
     ]);
     expect(
       result.config.channels?.discord?.accounts?.work?.guilds?.["100"]?.channels?.["200"],
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(result.config.bindings).toEqual([
       { agentId: "main", match: { channel: "discord" } },
       {
@@ -263,11 +534,7 @@ describe("discord doctor", () => {
   });
 
   it("removes legacy guild channel agentId when a matching route binding already exists", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const existingBinding = {
       agentId: "video",
@@ -299,7 +566,7 @@ describe("discord doctor", () => {
     expect(result.changes).toEqual([
       "Removed channels.discord.guilds.100.channels.200.agentId; a matching top-level bindings[] route already exists for Discord channel 200.",
     ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({});
+    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toStrictEqual({});
     expect(result.config.bindings).toEqual([existingBinding]);
   });
 
@@ -346,11 +613,13 @@ describe("discord doctor", () => {
 
     const result = maybeRepairDiscordNumericIds(cfg, "openclaw doctor --fix");
     expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
+    expect(
+      (result.config.channels?.discord?.dm as { allowFrom?: string[] } | undefined)?.allowFrom,
+    ).toEqual(["99"]);
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("formats repair guidance for unsafe numeric ids", () => {
@@ -372,19 +641,21 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
-      expect.stringContaining("DISCORD_BOT_TOKEN is absent"),
+    const missingTokenWarning =
+      "- channels.discord: default account has no available bot token, and DISCORD_BOT_TOKEN is absent in this doctor environment. After migration, verify DISCORD_BOT_TOKEN is present in the state-dir .env or configure channels.discord.token / channels.discord.accounts.default.token as a SecretRef.";
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([
+      missingTokenWarning,
     ]);
     expect(
       collectDiscordMissingEnvTokenWarnings({ cfg, env: { DISCORD_BOT_TOKEN: "Bot tok" } }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       await discordDoctor.collectPreviewWarnings?.({
         cfg,
         doctorFixCommand: "openclaw doctor --fix",
         env: {},
       }),
-    ).toEqual([expect.stringContaining("DISCORD_BOT_TOKEN is absent")]);
+    ).toStrictEqual([missingTokenWarning]);
   });
 
   it("does not warn about DISCORD_BOT_TOKEN when a non-default account is selected", () => {
@@ -400,6 +671,6 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
 });

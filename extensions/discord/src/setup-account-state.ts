@@ -1,10 +1,7 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+// Discord plugin module implements setup account state behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { inspectDiscordConfiguredToken } from "./account-token-inspect.js";
 import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
 import type { DiscordAccountConfig } from "./runtime-api.js";
@@ -19,40 +16,6 @@ type InspectedDiscordSetupAccount = {
   configured: boolean;
   config: DiscordAccountConfig;
 };
-
-function inspectConfiguredToken(value: unknown): {
-  token: string;
-  tokenSource: "config";
-  tokenStatus: "available" | "configured_unavailable";
-} | null {
-  const normalized = normalizeSecretInputString(value);
-  if (normalized) {
-    return {
-      token: normalized.replace(/^Bot\s+/i, ""),
-      tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    };
-  }
-  return null;
-}
-
-export function listDiscordSetupAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.discord?.accounts;
-  return listCombinedAccountIds({
-    configuredAccountIds:
-      accounts && typeof accounts === "object" && !Array.isArray(accounts)
-        ? Object.keys(accounts).map((accountId) => normalizeAccountId(accountId))
-        : [],
-    implicitAccountId: DEFAULT_ACCOUNT_ID,
-  });
-}
 
 export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
   return resolveDefaultDiscordAccountId(cfg);
@@ -79,10 +42,9 @@ export function inspectDiscordSetupAccount(params: {
   const enabled = params.cfg.channels?.discord?.enabled !== false && config.enabled !== false;
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const hasAccountToken = Boolean(
-    accountConfig &&
-    Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
+    accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
   );
-  const accountToken = inspectConfiguredToken(accountConfig?.token);
+  const accountToken = inspectDiscordConfiguredToken(accountConfig?.token);
   if (accountToken) {
     return {
       accountId,
@@ -106,7 +68,7 @@ export function inspectDiscordSetupAccount(params: {
     };
   }
 
-  const channelToken = inspectConfiguredToken(params.cfg.channels?.discord?.token);
+  const channelToken = inspectDiscordConfiguredToken(params.cfg.channels?.discord?.token);
   if (channelToken) {
     return {
       accountId,

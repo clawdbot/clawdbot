@@ -1,5 +1,9 @@
+// Memory Core tests cover config plugin behavior.
 import fs from "node:fs";
-import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 
 const manifest = JSON.parse(
@@ -7,6 +11,28 @@ const manifest = JSON.parse(
 ) as { configSchema: JsonSchemaObject };
 
 describe("memory-core manifest config schema", () => {
+  it("publishes the canonical promotion gate defaults", () => {
+    expect(manifest.configSchema).toMatchObject({
+      properties: {
+        dreaming: {
+          properties: {
+            phases: {
+              properties: {
+                deep: {
+                  properties: {
+                    minScore: { default: 0.75 },
+                    minRecallCount: { default: 3 },
+                    minUniqueQueries: { default: 3 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("accepts dreaming phase thresholds used by QA and runtime", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -35,6 +61,7 @@ describe("memory-core manifest config schema", () => {
               minUniqueQueries: 3,
               recencyHalfLifeDays: 14,
               maxAgeDays: 30,
+              maxPriorEntryLossFraction: 0.25,
             },
             rem: {
               enabled: true,

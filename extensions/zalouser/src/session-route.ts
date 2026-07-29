@@ -1,3 +1,4 @@
+// Zalouser plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
@@ -5,7 +6,7 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function stripZalouserTargetPrefix(raw: string): string {
   return raw
@@ -110,6 +111,7 @@ export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessi
     agentId: params.agentId,
     channel: "zalouser",
     accountId: params.accountId,
+    recipientSessionExact: isGroup,
     peer: {
       kind: isGroup ? "group" : "direct",
       id: peerId,

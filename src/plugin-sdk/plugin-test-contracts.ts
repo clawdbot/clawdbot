@@ -1,3 +1,6 @@
+/**
+ * Test SDK subpath for plugin package, registration, and public surface contracts.
+ */
 export {
   assertNoImportTimeSideEffects,
   createPluginRegistryFixture,

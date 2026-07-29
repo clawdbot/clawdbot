@@ -1,9 +1,12 @@
-let _embeddedMode = false;
+// Stores the process-local embedded mode flag.
+let embeddedModeValue = false;
 
+/** Sets the process-local embedded-mode flag used by UI and hosted runtimes. */
 export function setEmbeddedMode(value: boolean): void {
-  _embeddedMode = value;
+  embeddedModeValue = value;
 }
 
+/** Returns whether the current process is running inside an embedded OpenClaw host. */
 export function isEmbeddedMode(): boolean {
-  return _embeddedMode;
+  return embeddedModeValue;
 }

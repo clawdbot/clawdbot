@@ -1,16 +1,8 @@
-import {
-  configPathMapKey,
-  modelProviderConfigBatchJson,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
-} from "./provider-auth.ts";
+// Powershell script supports OpenClaw repository automation.
+import { modelProviderConfigBatchJson, providerIdFromModelId } from "./provider-auth.ts";
 
 export function psSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-export function psArray(values: string[]): string {
-  return `@(${values.map(psSingleQuote).join(", ")})`;
 }
 
 export function encodePowerShell(script: string): string {
@@ -42,55 +34,36 @@ export const windowsScopedEnvFunction = String.raw`function Invoke-WithScopedEnv
   }
 }`;
 
-export function windowsModelProviderTimeoutScript(modelId: string): string {
-  const providerId = providerIdFromModelId(modelId);
-  const configJson = providerTimeoutConfigJson(modelId, "windows");
-  if (!providerId || !configJson) {
-    return "";
-  }
-  const batchJson = JSON.stringify([
-    {
-      path: `models.providers.${providerId}`,
-      value: JSON.parse(configJson) as unknown,
-    },
-    {
-      path: `agents.defaults.models${configPathMapKey(modelId)}`,
-      value: {
-        alias: "GPT",
-        params: {
-          transport: "sse",
-        },
-      },
-    },
-  ]);
-  return `$providerTimeoutBatchPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-provider-timeout.batch.json'
-@'
-${batchJson}
-'@ | Set-Content -Path $providerTimeoutBatchPath -Encoding UTF8
-Invoke-OpenClaw config set --batch-file $providerTimeoutBatchPath --strict-json
-$providerTimeoutExit = $LASTEXITCODE
-Remove-Item $providerTimeoutBatchPath -Force -ErrorAction SilentlyContinue
-if ($providerTimeoutExit -ne 0) { throw "model provider timeout config set failed" }`;
-}
-
 export function windowsAgentTurnConfigPatchScript(modelId: string): string {
   const batchJson = modelProviderConfigBatchJson(modelId, "windows");
+  const pluginId = providerIdFromModelId(modelId) || modelId.split("/", 1)[0] || "openai";
   const payloadJson = JSON.stringify({
     modelId,
     operations: batchJson ? (JSON.parse(batchJson) as unknown) : [],
+    pluginId,
   });
   return `$agentTurnConfigPatchPath = $env:OPENCLAW_CONFIG_PATH
 if (-not $agentTurnConfigPatchPath) { $agentTurnConfigPatchPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json' }
+$agentTurnVersionText = Invoke-OpenClaw --version 2>$null | Out-String
+$agentTurnRuntimePolicySupported = $false
+if ($agentTurnVersionText -match 'OpenClaw\\s+(\\d{4})\\.(\\d{1,2})\\.(\\d{1,2})') {
+  $agentTurnYear = [int]$Matches[1]
+  $agentTurnMonth = [int]$Matches[2]
+  $agentTurnDay = [int]$Matches[3]
+  $agentTurnRuntimePolicySupported = ($agentTurnYear -gt 2026) -or ($agentTurnYear -eq 2026 -and (($agentTurnMonth -gt 5) -or ($agentTurnMonth -eq 5 -and $agentTurnDay -ge 9)))
+}
 $env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATCH = @'
 ${payloadJson}
 '@
 $env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATH = $agentTurnConfigPatchPath
+$env:OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED = if ($agentTurnRuntimePolicySupported) { '1' } else { '0' }
 $agentTurnConfigPatchScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-agent-turn-config-patch.cjs'
 @'
 const fs = require("node:fs");
 const path = require("node:path");
 const configPath = process.env.OPENCLAW_PARALLELS_AGENT_CONFIG_PATH;
 const payload = JSON.parse(process.env.OPENCLAW_PARALLELS_AGENT_CONFIG_PATCH || "{}");
+const canWriteAgentRuntime = process.env.OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED === "1";
 function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\\uFEFF/u, ""));
 }
@@ -103,6 +76,11 @@ cfg.agents.defaults.model = { ...existingModel, primary: payload.modelId };
 cfg.agents.defaults.models = cfg.agents.defaults.models && typeof cfg.agents.defaults.models === "object" ? cfg.agents.defaults.models : {};
 cfg.tools = cfg.tools && typeof cfg.tools === "object" ? cfg.tools : {};
 cfg.tools.profile = "minimal";
+cfg.plugins = cfg.plugins && typeof cfg.plugins === "object" && !Array.isArray(cfg.plugins) ? cfg.plugins : {};
+cfg.plugins.entries = { [payload.pluginId]: { enabled: true } };
+cfg.plugins.allow = [payload.pluginId];
+const stateDir = path.dirname(configPath);
+fs.rmSync(path.join(stateDir, "npm", "node_modules", "@openclaw", "codex"), { recursive: true, force: true });
 for (const op of payload.operations || []) {
   const segments = String(op.path || "").match(/(?:[^.[\\]]+)|(?:\\["((?:\\\\.|[^"\\\\])*)"\\])/g) || [];
   let cursor = cfg;
@@ -118,6 +96,27 @@ for (const op of payload.operations || []) {
     }
   }
 }
+const selectedModelEntry = cfg.agents.defaults.models[payload.modelId];
+if (selectedModelEntry && typeof selectedModelEntry === "object" && !Array.isArray(selectedModelEntry)) {
+  if (canWriteAgentRuntime) {
+    selectedModelEntry.agentRuntime = { id: "openclaw" };
+  } else {
+    delete selectedModelEntry.agentRuntime;
+  }
+}
+const providerId = String(payload.modelId || "").split("/", 1)[0];
+const providerModelId = String(payload.modelId || "").slice(providerId.length + 1);
+const providerEntry = cfg.models && typeof cfg.models === "object" && cfg.models.providers && typeof cfg.models.providers === "object" ? cfg.models.providers[providerId] : undefined;
+if (providerEntry && typeof providerEntry === "object" && !Array.isArray(providerEntry)) {
+  delete providerEntry.agentRuntime;
+  if (Array.isArray(providerEntry.models)) {
+    for (const model of providerEntry.models) {
+      if (model && typeof model === "object" && (model.id === providerModelId || model.id === payload.modelId || model.name === providerModelId || model.name === payload.modelId)) {
+        delete model.agentRuntime;
+      }
+    }
+  }
+}
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\\n", { mode: 0o600 });
 '@ | Set-Content -Path $agentTurnConfigPatchScriptPath -Encoding UTF8
@@ -126,10 +125,15 @@ $agentTurnConfigPatchExit = $LASTEXITCODE
 Remove-Item $agentTurnConfigPatchScriptPath -Force -ErrorAction SilentlyContinue
 Remove-Item Env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATCH -Force -ErrorAction SilentlyContinue
 Remove-Item Env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATH -Force -ErrorAction SilentlyContinue
+Remove-Item Env:OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED -Force -ErrorAction SilentlyContinue
 if ($agentTurnConfigPatchExit -ne 0) { throw "agent turn config patch failed" }`;
 }
 
-export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawCommand {
+export const windowsOpenClawResolver = String.raw`$portableNode = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\nodejs' } else { $null }
+if ($portableNode -and (Test-Path (Join-Path $portableNode 'node.exe'))) {
+  $env:PATH = "$portableNode;$env:PATH"
+}
+function Resolve-OpenClawCommand {
   if ($script:OpenClawResolvedCommand) { return $script:OpenClawResolvedCommand }
   $shimCandidates = @()
   if ($env:APPDATA) {

@@ -1,6 +1,7 @@
+// Resolves bundled source overlays used by plugin packaging.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 
 function decodeMountInfoPath(value: string): string {
@@ -9,7 +10,8 @@ function decodeMountInfoPath(value: string): string {
   );
 }
 
-export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
+/** Parses Linux mountinfo content into absolute mount points. */
+function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
   const mountPoints = new Set<string>();
   for (const line of mountInfo.split(/\r?\n/u)) {
     const trimmed = line.trim();
@@ -49,6 +51,7 @@ function sourceOverlaysDisabled(env: NodeJS.ProcessEnv): boolean {
   return raw === "1" || raw === "true";
 }
 
+/** True when a path appears to be a mounted bundled source overlay. */
 export function isBundledSourceOverlayPath(params: {
   sourcePath: string;
   mountPoints?: ReadonlySet<string>;
@@ -58,6 +61,7 @@ export function isBundledSourceOverlayPath(params: {
   return mountPoints.has(resolved) || isFilesystemMountPoint(resolved);
 }
 
+/** Lists source overlay directories that shadow packaged bundled plugin dirs. */
 export function listBundledSourceOverlayDirs(params: {
   bundledRoot?: string;
   env?: NodeJS.ProcessEnv;

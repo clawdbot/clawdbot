@@ -1,3 +1,4 @@
+// Legacy web-fetch config migration from tools.web.fetch to plugin-owned config.
 import { mergeMissing } from "../../../config/legacy.shared.js";
 import {
   cloneRecord,
@@ -75,15 +76,7 @@ function migratePluginWebFetchConfig(params: {
   );
 }
 
-export function listLegacyWebFetchConfigPaths(raw: unknown): string[] {
-  const fetch = resolveLegacyFetchConfig(raw);
-  const firecrawl = fetch ? copyLegacyFirecrawlFetchConfig(fetch) : undefined;
-  if (!firecrawl) {
-    return [];
-  }
-  return Object.keys(firecrawl).map((key) => `tools.web.fetch.firecrawl.${key}`);
-}
-
+/** Move legacy Firecrawl web-fetch config into plugins.entries.firecrawl.config.webFetch. */
 export function migrateLegacyWebFetchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw) || !hasMappedLegacyWebFetchConfig(raw)) {
     return { config: raw, changes: [] };

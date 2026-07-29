@@ -1,3 +1,4 @@
+// Channel auth CLI tests cover channel auth command routing and credential prompts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 
@@ -32,7 +33,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
 vi.mock("../channels/plugins/helpers.js", () => ({
@@ -64,7 +65,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./plugins-install-record-commit.js", () => ({
+vi.mock("../plugins/install-record-commit.js", () => ({
   commitConfigWithPendingPluginInstalls: mocks.commitConfigWithPendingPluginInstalls,
 }));
 
@@ -77,6 +78,48 @@ vi.mock("../commands/channel-setup/plugin-install.js", () => ({
   loadChannelSetupPluginRegistrySnapshotForChannel:
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
 }));
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function readFirstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first call argument object");
+  }
+  return arg as Record<string, unknown>;
+}
+
+function readFirstLogMessage(runtime: { log: ReturnType<typeof vi.fn> }): string {
+  const [message] = runtime.log.mock.calls[0] ?? [];
+  return String(message);
+}
+
+function gatewayRequestError(message: string, gatewayCode: string): Error {
+  const error = new Error(message) as Error & { gatewayCode: string };
+  error.name = "GatewayClientRequestError";
+  error.gatewayCode = gatewayCode;
+  return error;
+}
+
+function findCallArg(
+  mock: ReturnType<typeof vi.fn>,
+  predicate: (arg: Record<string, unknown>) => boolean,
+): Record<string, unknown> | undefined {
+  for (const [arg] of mock.mock.calls) {
+    if (arg && typeof arg === "object" && predicate(arg as Record<string, unknown>)) {
+      return arg as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
 
 describe("channel-auth", () => {
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -164,15 +207,13 @@ describe("channel-auth", () => {
 
     expect(mocks.setVerbose).toHaveBeenCalledWith(true);
     expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
-    expect(mocks.login).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: { channels: { whatsapp: {} } },
-        accountId: "acct-1",
-        runtime,
-        verbose: true,
-        channelInput: "wa",
-      }),
-    );
+    expectFields(readFirstCallArg(mocks.login), {
+      cfg: { channels: { whatsapp: {} } },
+      accountId: "acct-1",
+      runtime,
+      verbose: true,
+      channelInput: "wa",
+    });
     expect(mocks.callGateway).toHaveBeenCalledWith({
       config: { channels: { whatsapp: {} } },
       method: "channels.start",
@@ -195,7 +236,7 @@ describe("channel-auth", () => {
     await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway is in remote mode"));
+    expect(readFirstLogMessage(runtime)).toContain("Gateway is in remote mode");
   });
 
   it("keeps login successful when local gateway runtime reconcile fails", async () => {
@@ -205,27 +246,85 @@ describe("channel-auth", () => {
       runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
     ).resolves.toBeUndefined();
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("running gateway did not restart it: gateway unreachable"),
+    expect(readFirstLogMessage(runtime)).toContain(
+      "running gateway did not restart it: gateway unreachable",
     );
+  });
+
+  it("requests gateway restart when channels.start fails because plugin is not loaded", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(
+        gatewayRequestError("invalid channels.start channel", "INVALID_REQUEST"),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "channels.start",
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "gateway.restart.request",
+        params: { reason: "channel login: load whatsapp" },
+      }),
+    );
+    expect(readFirstLogMessage(runtime)).toContain("Gateway restart requested to load whatsapp");
+  });
+
+  it("falls back to generic warning when both channels.start and gateway restart fail", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(
+        gatewayRequestError("invalid channels.start channel", "INVALID_REQUEST"),
+      )
+      .mockRejectedValueOnce(new Error("restart denied"));
+
+    await expect(
+      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(readFirstLogMessage(runtime)).toContain(
+      "running gateway did not restart it: invalid channels.start channel",
+    );
+  });
+
+  it.each([
+    ["plain error", new Error("invalid channels.start channel")],
+    [
+      "plugin start failure",
+      gatewayRequestError("plugin failed: unknown channel upstream", "UNAVAILABLE"),
+    ],
+    [
+      "different invalid request",
+      gatewayRequestError("unknown channel: whatsapp", "INVALID_REQUEST"),
+    ],
+  ])("does not restart for %s", async (_label, error) => {
+    mocks.callGateway.mockRejectedValue(error);
+
+    await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(readFirstLogMessage(runtime)).toContain("running gateway did not restart it:");
   });
 
   it("auto-picks the single configured channel that supports login when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
-    expect(mocks.login).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelInput: "whatsapp",
-      }),
-    );
+    expectFields(readFirstCallArg(mocks.login), { channelInput: "whatsapp" });
   });
 
   it("does not auto-pick enabled-only channel stubs when channel is omitted", async () => {
     mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "Channel is required (no configured channels support login).",
+      "No configured channel supports login.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -241,12 +340,10 @@ describe("channel-auth", () => {
       config: {},
       env: process.env,
     });
-    expect(mocks.login).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: autoEnabledCfg,
-        channelInput: "whatsapp",
-      }),
-    );
+    expectFields(readFirstCallArg(mocks.login), {
+      cfg: autoEnabledCfg,
+      channelInput: "whatsapp",
+    });
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: autoEnabledCfg,
       baseHash: "config-1",
@@ -260,12 +357,10 @@ describe("channel-auth", () => {
 
     await runChannelLogout({}, runtime);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: autoEnabledCfg,
-        method: "channels.logout",
-      }),
-    );
+    expectFields(readFirstCallArg(mocks.callGateway), {
+      config: autoEnabledCfg,
+      method: "channels.logout",
+    });
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: autoEnabledCfg,
       baseHash: "config-1",
@@ -288,7 +383,7 @@ describe("channel-auth", () => {
     await runChannelLogin({}, runtime);
 
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
-    expect(mocks.login).toHaveBeenCalled();
+    expect(mocks.login).toHaveBeenCalledTimes(1);
   });
 
   it("propagates auth-channel ambiguity when multiple configured channels support login", async () => {
@@ -313,7 +408,7 @@ describe("channel-auth", () => {
     );
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "multiple configured channels support login: whatsapp, zalouser",
+      "Multiple configured channels support login: whatsapp, zalouser.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -333,14 +428,14 @@ describe("channel-auth", () => {
     await runChannelLogin({}, runtime);
 
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
-    expect(mocks.login).toHaveBeenCalled();
+    expect(mocks.login).toHaveBeenCalledTimes(1);
   });
 
   it("throws for unsupported channel aliases", async () => {
     mocks.normalizeChannelId.mockImplementation(() => undefined);
 
     await expect(runChannelLogin({ channel: "bad-channel" }, runtime)).rejects.toThrow(
-      "Unsupported channel: bad-channel",
+      'Unsupported channel "bad-channel".',
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -353,7 +448,7 @@ describe("channel-auth", () => {
     });
 
     await expect(runChannelLogin({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support login",
+      'Channel "whatsapp" does not support login. Run `openclaw channels status --channel whatsapp` to inspect supported actions.',
     );
   });
 
@@ -386,25 +481,27 @@ describe("channel-auth", () => {
 
     await runChannelLogin({ channel: "whatsapp" }, runtime);
 
-    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: catalogEntry,
-        runtime,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectFields(readFirstCallArg(mocks.ensureChannelSetupPluginInstalled), {
+      entry: catalogEntry,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+    });
+    expectFields(
+      findCallArg(
+        mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
+        (arg) => arg.pluginId === "whatsapp",
+      ),
+      {
         channel: "whatsapp",
         pluginId: "whatsapp",
         workspaceDir: "/tmp/workspace",
-      }),
+      },
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: { channels: { whatsapp: {} } },
       baseHash: "config-1",
     });
-    expect(mocks.login).toHaveBeenCalled();
+    expect(mocks.login).toHaveBeenCalledTimes(1);
   });
 
   it("strips pending install records before persisting install-on-demand login config", async () => {
@@ -462,16 +559,14 @@ describe("channel-auth", () => {
       baseHash: "config-1",
       writeOptions: { unsetPaths: [["plugins", "installs"]] },
     });
-    expect(mocks.login).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {
-          channels: { whatsapp: {} },
-          plugins: {
-            entries: { whatsapp: { enabled: true } },
-          },
+    expectFields(readFirstCallArg(mocks.login), {
+      cfg: {
+        channels: { whatsapp: {} },
+        plugins: {
+          entries: { whatsapp: { enabled: true } },
         },
-      }),
-    );
+      },
+    });
   });
 
   it("resolves explicit channel login through the catalog when registry normalize misses", async () => {
@@ -505,18 +600,13 @@ describe("channel-auth", () => {
 
     await runChannelLogin({ channel: "whatsapp" }, runtime);
 
-    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({ id: "whatsapp" }),
-        runtime,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
-    expect(mocks.login).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelInput: "whatsapp",
-      }),
-    );
+    const installArg = readFirstCallArg(mocks.ensureChannelSetupPluginInstalled);
+    expectFields(installArg, {
+      runtime,
+      workspaceDir: "/tmp/workspace",
+    });
+    expectFields(installArg.entry, { id: "whatsapp" });
+    expectFields(readFirstCallArg(mocks.login), { channelInput: "whatsapp" });
   });
 
   it("runs logout through the live gateway with resolved account and explicit account id", async () => {
@@ -550,8 +640,8 @@ describe("channel-auth", () => {
       account: { id: "resolved-account" },
       runtime,
     });
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("running gateway did not stop it: gateway unreachable"),
+    expect(readFirstLogMessage(runtime)).toContain(
+      "running gateway did not stop it: gateway unreachable",
     );
     expect(mocks.setVerbose).not.toHaveBeenCalled();
   });
@@ -564,7 +654,7 @@ describe("channel-auth", () => {
     });
 
     await expect(runChannelLogout({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support logout",
+      'Channel "whatsapp" does not support logout. Run `openclaw channels status --channel whatsapp` to inspect supported actions.',
     );
   });
 });

@@ -1,3 +1,6 @@
+/**
+ * Test SDK subpath for provider HTTP mock installation and cleanup.
+ */
 export {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,

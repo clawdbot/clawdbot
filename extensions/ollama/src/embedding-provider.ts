@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   isKnownEnvApiKeyMarker,
@@ -5,17 +6,21 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import {
-  fetchWithSsrFGuard,
   formatErrorMessage,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -25,9 +30,18 @@ export type OllamaEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
 };
+
+type MemoryCoreAcquireLocalService = (
+  target: {
+    providerId: string;
+    baseUrl: string;
+    headers?: HeadersInit;
+  },
+  signal?: AbortSignal | null,
+) => Promise<{ release: () => void } | undefined>;
 
 type OllamaEmbeddingOptions = {
   config: OpenClawConfig;
@@ -43,6 +57,7 @@ type OllamaEmbeddingOptions = {
   local?: unknown;
   outputDimensionality?: number;
   taskType?: unknown;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
 export type OllamaEmbeddingClient = {
@@ -50,12 +65,16 @@ export type OllamaEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  outputDimensionality?: number;
+  localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
+  acquireLocalService?: MemoryCoreAcquireLocalService;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+const OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const QUERY_INSTRUCTION_TEMPLATES = [
   {
@@ -73,8 +92,15 @@ const QUERY_INSTRUCTION_TEMPLATES = [
   },
 ] as const;
 
-function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
-  const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
+function sanitizeAndNormalizeEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
+  const selected =
+    typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  const sanitized = selected.map((value) => {
+    if (typeof value !== "number") {
+      throw new Error("Ollama embed response contains a non-number embedding value");
+    }
+    return Number.isFinite(value) ? value : 0;
+  });
   const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
   if (magnitude < 1e-10) {
     return sanitized;
@@ -85,20 +111,34 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  configuredLocalOriginBaseUrl: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchConfiguredLocalOriginWithSsrFGuard({
     url: params.url,
     init: params.init,
+    signal: params.signal,
     policy: params.ssrfPolicy,
-    auditContext: "memory-remote",
+    configuredLocalOriginBaseUrl: params.configuredLocalOriginBaseUrl,
+    auditContext: "ollama-memory-embedding",
   });
   try {
     return await params.onResponse(response);
   } finally {
     await release();
   }
+}
+
+async function readOllamaEmbeddingJsonResponse(
+  response: Response,
+): Promise<{ embeddings?: unknown }> {
+  const payload = await readProviderJsonResponse<unknown>(response, "Ollama embed response");
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new Error("Ollama embed response returned a non-object JSON payload");
+  }
+  return payload as { embeddings?: unknown };
 }
 
 function normalizeEmbeddingModel(model: string, providerId?: string): string {
@@ -125,15 +165,16 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
   const providerId = options.provider?.trim() || "ollama";
   const direct = providers[providerId];
   if (direct) {
-    return direct;
+    return { providerId, config: direct };
   }
   const normalized = normalizeProviderId(providerId);
   for (const [candidateId, candidate] of Object.entries(providers)) {
     if (normalizeProviderId(candidateId) === normalized) {
-      return candidate;
+      return { providerId: candidateId, config: candidate };
     }
   }
-  return providers.ollama;
+  const fallback = providers.ollama;
+  return fallback ? { providerId: "ollama", config: fallback } : undefined;
 }
 
 function resolveMemorySecretInputString(params: {
@@ -187,11 +228,11 @@ function resolveOllamaEmbeddingResolvedKeys(
   const remote = resolveSourcedOllamaEmbeddingKey({
     configString: resolveMemorySecretInputString({
       value: remoteValue,
-      path: "agents.*.memorySearch.remote.apiKey",
+      path: "memory.search.remote.apiKey",
     }),
     declared: hasConfiguredSecretInput(remoteValue),
   });
-  const providerValue = providerConfig?.apiKey;
+  const providerValue = providerConfig?.config.apiKey;
   const provider = resolveSourcedOllamaEmbeddingKey({
     configString: normalizeOptionalSecretInput(providerValue),
     declared: hasConfiguredSecretInput(providerValue),
@@ -209,7 +250,7 @@ function resolveOllamaEmbeddingBaseUrl(params: {
   if (remoteBaseUrl) {
     return { baseUrl: resolveOllamaApiBase(remoteBaseUrl), origin: "remote-config" };
   }
-  const providerBaseUrl = readProviderBaseUrl(params.providerConfig);
+  const providerBaseUrl = readProviderBaseUrl(params.providerConfig?.config);
   if (providerBaseUrl) {
     return { baseUrl: resolveOllamaApiBase(providerBaseUrl), origin: "provider-config" };
   }
@@ -274,7 +315,11 @@ function resolveOllamaEmbeddingClient(
     providerConfig,
   });
   const model = normalizeEmbeddingModel(options.model, options.provider);
-  const headerOverrides = Object.assign({}, providerConfig?.headers, options.remote?.headers);
+  const headerOverrides = Object.assign(
+    {},
+    providerConfig?.config.headers,
+    options.remote?.headers,
+  );
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...headerOverrides,
@@ -283,16 +328,28 @@ function resolveOllamaEmbeddingClient(
     resolved: resolveOllamaEmbeddingResolvedKeys(options, providerConfig),
     baseUrl,
     baseUrlOrigin,
-    providerOwnedHost: resolveOllamaApiBase(readProviderBaseUrl(providerConfig)),
+    providerOwnedHost: resolveOllamaApiBase(readProviderBaseUrl(providerConfig?.config)),
   });
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
+  const localService = providerConfig?.config.localService;
   return {
     baseUrl,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
+    outputDimensionality: options.outputDimensionality,
+    ...(localService && baseUrlOrigin !== "remote-config"
+      ? {
+          localServiceTarget: {
+            providerId: providerConfig.providerId,
+            baseUrl: `${baseUrl.replace(/\/+$/, "")}/v1`,
+            headers,
+          },
+          acquireLocalService: options.acquireLocalService,
+        }
+      : {}),
   };
 }
 
@@ -302,22 +359,37 @@ export async function createOllamaEmbeddingProvider(
   const client = resolveOllamaEmbeddingClient(options);
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
-  const embedMany = async (input: string | string[]): Promise<number[][]> => {
-    const json = await withRemoteHttpResponse({
-      url: embedUrl,
-      ssrfPolicy: client.ssrfPolicy,
-      init: {
-        method: "POST",
-        headers: client.headers,
-        body: JSON.stringify({ model: client.model, input }),
-      },
-      onResponse: async (response) => {
-        if (!response.ok) {
-          throw new Error(`Ollama embed HTTP ${response.status}: ${await response.text()}`);
-        }
-        return (await response.json()) as { embeddings?: unknown };
-      },
-    });
+  const embedMany = async (input: string | string[], signal?: AbortSignal): Promise<number[][]> => {
+    const localServiceLease =
+      client.localServiceTarget && client.acquireLocalService
+        ? await client.acquireLocalService(client.localServiceTarget, signal)
+        : undefined;
+    let json: Awaited<ReturnType<typeof readOllamaEmbeddingJsonResponse>>;
+    try {
+      json = await withRemoteHttpResponse({
+        url: embedUrl,
+        ssrfPolicy: client.ssrfPolicy,
+        configuredLocalOriginBaseUrl: client.baseUrl,
+        signal,
+        init: {
+          method: "POST",
+          headers: client.headers,
+          body: JSON.stringify({ model: client.model, input }),
+        },
+        onResponse: async (response) => {
+          if (!response.ok) {
+            const detail = await readResponseTextLimited(
+              response,
+              OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES,
+            ).catch(() => "unknown error");
+            throw new Error(`Ollama embed HTTP ${response.status}: ${detail}`);
+          }
+          return await readOllamaEmbeddingJsonResponse(response);
+        },
+      });
+    } finally {
+      localServiceLease?.release();
+    }
     if (!Array.isArray(json.embeddings)) {
       throw new Error("Ollama embed response missing embeddings[]");
     }
@@ -331,26 +403,30 @@ export async function createOllamaEmbeddingProvider(
       if (!Array.isArray(embedding)) {
         throw new Error("Ollama embed response contains a non-array embedding");
       }
-      return sanitizeAndNormalizeEmbedding(embedding);
+      return sanitizeAndNormalizeEmbedding(embedding, client.outputDimensionality);
     });
   };
 
-  const embedOne = async (text: string): Promise<number[]> => {
-    const [embedding] = await embedMany(text);
+  const embedOne = async (text: string, signal?: AbortSignal): Promise<number[]> => {
+    const [embedding] = await embedMany(text, signal);
     if (!embedding) {
       throw new Error("Ollama embed response returned no embedding");
     }
     return embedding;
   };
 
-  const embedQuery = async (text: string): Promise<number[]> =>
-    await embedOne(applyQueryInstructionTemplate(client.model, text));
+  const embedQuery = async (
+    text: string,
+    optionsValue?: { signal?: AbortSignal },
+  ): Promise<number[]> =>
+    await embedOne(applyQueryInstructionTemplate(client.model, text), optionsValue?.signal);
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
     embedQuery,
-    embedBatch: async (texts) => (texts.length === 0 ? [] : await embedMany(texts)),
+    embedBatch: async (texts, optionsLocal) =>
+      texts.length === 0 ? [] : await embedMany(texts, optionsLocal?.signal),
   };
 
   return {

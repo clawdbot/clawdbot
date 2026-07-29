@@ -1,4 +1,5 @@
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+// Gradium tests cover tts plugin behavior.
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gradiumTTS } from "./tts.js";
 
@@ -26,6 +27,14 @@ describe("gradium tts diagnostics", () => {
       response: new Response(stream, { status: params.status }),
       getReadCount: () => reads,
     };
+  }
+
+  function createStreamingAudioResponse(params: {
+    chunkCount: number;
+    chunkSize: number;
+    byte: number;
+  }): { response: Response; getReadCount: () => number } {
+    return createStreamingErrorResponse({ ...params, status: 200 });
   }
 
   afterEach(() => {
@@ -133,5 +142,88 @@ describe("gradium tts diagnostics", () => {
       json_config: '{"padding_bonus":0}',
     });
     expect(result).toEqual(audioData);
+  });
+
+  it("rejects HTTP base URLs before sending the API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      gradiumTTS({
+        text: "hello",
+        apiKey: "gsk_test123",
+        baseUrl: "http://api.gradium.ai",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium baseUrl must use https");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Gradium base URLs before sending the API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      gradiumTTS({
+        text: "hello",
+        apiKey: "gsk_test123",
+        baseUrl: "https://example.com",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium baseUrl must target api.gradium.ai");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects hostname suffix lookalikes before sending the API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      gradiumTTS({
+        text: "hello",
+        apiKey: "gsk_test123",
+        baseUrl: "https://api.gradium.ai.example.com",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium baseUrl must target api.gradium.ai");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
+    const streamed = createStreamingAudioResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+      byte: 121,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed.response));
+
+    await expect(
+      gradiumTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.gradium.ai",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 5_000,
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Gradium TTS audio response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 });

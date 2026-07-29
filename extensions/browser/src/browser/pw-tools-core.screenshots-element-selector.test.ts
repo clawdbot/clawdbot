@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.screenshots element selector plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,7 +13,8 @@ import {
 
 installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
+const downloads = await import("./pw-tools-core.downloads.js");
 
 function createFileChooserPageMocks() {
   const fileChooser = { setFiles: vi.fn(async () => {}) };
@@ -107,14 +109,14 @@ describe("pw-tools-core", () => {
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
+    const waitForEvent = vi.fn(async (_eventValue: string, _opts: unknown) => fileChooser);
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },
     });
 
     try {
-      await mod.armFileUploadViaPlaywright({
+      await downloads.armFileUploadViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "T1",
         paths: [uploadPath],
@@ -137,7 +139,7 @@ describe("pw-tools-core", () => {
     const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
     const { fileChooser, press } = createFileChooserPageMocks();
 
-    await mod.armFileUploadViaPlaywright({
+    await downloads.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       paths: [missingPath],
@@ -152,7 +154,7 @@ describe("pw-tools-core", () => {
   it("arms the next file chooser and escapes if no paths provided", async () => {
     const { fileChooser, press } = createFileChooserPageMocks();
 
-    await mod.armFileUploadViaPlaywright({
+    await downloads.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       paths: [],
     });

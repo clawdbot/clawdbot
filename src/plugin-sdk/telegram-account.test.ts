@@ -1,3 +1,6 @@
+/**
+ * Tests Telegram account helper behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -36,11 +39,7 @@ describe("telegram account plugin-sdk compatibility facade", () => {
       cfg,
       accountId: "default",
     });
-    expect(account).toEqual(
-      expect.objectContaining({
-        accountId: "default",
-        token: "token",
-      }),
-    );
+    expect(account.accountId).toBe("default");
+    expect(account.token).toBe("token");
   });
 });

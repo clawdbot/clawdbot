@@ -1,6 +1,12 @@
+/**
+ * Browser HTTP auth helpers.
+ *
+ * Validates browser-control bearer token or password headers with constant-time
+ * comparison against resolved control auth.
+ */
 import type { IncomingMessage } from "node:http";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { safeEqualSecret } from "../security/secret-equal.js";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function firstHeaderValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
@@ -35,6 +41,7 @@ function parseBasicPassword(authorization: string): string | undefined {
   }
 }
 
+/** Return true when request headers satisfy browser-control auth. */
 export function isAuthorizedBrowserRequest(
   req: IncomingMessage,
   auth: { token?: string; password?: string },

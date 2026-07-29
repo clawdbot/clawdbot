@@ -1,9 +1,12 @@
+// Whatsapp plugin module implements login qr behavior.
 import { randomUUID } from "node:crypto";
+import { logInfo } from "openclaw/plugin-sdk/logging-core";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { getActiveWebListener } from "./active-listener.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -12,6 +15,8 @@ import {
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
+  formatError,
+  logoutWeb,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -19,7 +24,7 @@ import {
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "./socket-timing.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
-export type StartWebLoginWithQrResult = {
+type StartWebLoginWithQrResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;
@@ -55,12 +60,22 @@ type LoginQrRaceResult =
   | { outcome: "failed"; message: string };
 
 function waitForNextTask(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
 const MAX_QR_RENDER_CHASES = 10;
 const activeLogins = new Map<string, ActiveLogin>();
+
+function resolveWhatsAppLoginTimeoutMs(
+  value: number | undefined,
+  fallbackMs: number,
+  minMs: number,
+): number {
+  return resolveTimerTimeoutMs(value, fallbackMs, minMs);
+}
 
 function closeSocket(sock: WaSocket) {
   closeWaSocket(sock);
@@ -187,6 +202,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
         return;
       }
       const qrVersion = updateLoginQrState(current, qr);
+      notifyQrUpdate(current);
       renderLatestQrDataUrlInBackground({
         accountId,
         loginId: login.id,
@@ -217,7 +233,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
       current.error = result.message;
       current.errorStatus = result.statusCode;
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       const current = activeLogins.get(accountId);
       if (current?.id !== login.id) {
         return;
@@ -234,7 +250,7 @@ async function waitForQrOrRecoveredLogin(params: {
 }): Promise<LoginQrRaceResult> {
   const qrResult = params.qrPromise.then(
     (qr) => ({ outcome: "qr", qr }) as const,
-    (err) =>
+    (err: unknown) =>
       ({
         outcome: "failed",
         message: `Failed to get QR: ${String(err)}`,
@@ -269,8 +285,29 @@ async function waitForQrOrRecoveredLogin(params: {
       message: latest.error ? `WhatsApp login failed: ${latest.error}` : "WhatsApp login failed.",
     } as const;
   });
+  const qrUpdateResult = params.login.qrUpdatePromise.then(() => {
+    const current = activeLogins.get(params.accountId);
+    if (current?.id !== params.login.id) {
+      return {
+        outcome: "failed",
+        message: "WhatsApp login was replaced by a newer request.",
+      } as const;
+    }
+    if (current.qr) {
+      return { outcome: "qr", qr: current.qr } as const;
+    }
+    if (current.connected) {
+      return { outcome: "connected" } as const;
+    }
+    return {
+      outcome: "failed",
+      message: current.error
+        ? `WhatsApp login failed: ${current.error}`
+        : "WhatsApp QR update ended without an active QR.",
+    } as const;
+  });
 
-  return await Promise.race([qrResult, loginResult]);
+  return await Promise.race([qrResult, loginResult, qrUpdateResult]);
 }
 
 export async function startWebLoginWithQr(
@@ -285,7 +322,7 @@ export async function startWebLoginWithQr(
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
-  const socketTiming = resolveWhatsAppSocketTiming(cfg);
+  const socketTiming = resolveWhatsAppSocketTiming();
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
     return {
@@ -293,12 +330,31 @@ export async function startWebLoginWithQr(
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     };
   }
-  if (authState.exists && !opts.force) {
+  if (authState.exists && !opts.force && getActiveWebListener(account.accountId)) {
     const selfId = readWebSelfId(account.authDir);
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {
       message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
     };
+  }
+  if (authState.exists && opts.force) {
+    try {
+      const cleared = await logoutWeb({
+        authDir: account.authDir,
+        isLegacyAuthDir: account.isLegacyAuthDir,
+        runtime,
+      });
+      if (!cleared) {
+        return {
+          message:
+            "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
+        };
+      }
+    } catch (err) {
+      return {
+        message: `WhatsApp login failed: ${formatError(err)}`,
+      };
+    }
   }
 
   const existing = activeLogins.get(account.accountId);
@@ -322,7 +378,7 @@ export async function startWebLoginWithQr(
     () => {
       rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
     },
-    Math.max(opts.timeoutMs ?? 30_000, 5000),
+    resolveWhatsAppLoginTimeoutMs(opts.timeoutMs, 30_000, 5000),
   );
 
   let sock: WaSocket;
@@ -470,7 +526,7 @@ export async function waitForWebLogin(
       message: "The login QR expired. Ask me to generate a new one.",
     };
   }
-  const timeoutMs = Math.max(opts.timeoutMs ?? 120_000, 1000);
+  const timeoutMs = resolveWhatsAppLoginTimeoutMs(opts.timeoutMs, 120_000, 1000);
   const deadline = Date.now() + timeoutMs;
   const currentQrDataUrl = opts.currentQrDataUrl;
 
@@ -510,9 +566,9 @@ export async function waitForWebLogin(
         message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
       };
     }
-    const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), remaining),
-    );
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), remaining);
+    });
     const result = await Promise.race([
       login.waitPromise.then(() => "done" as const),
       login.qrUpdatePromise.then(() => "qr-update" as const),

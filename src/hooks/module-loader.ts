@@ -1,9 +1,10 @@
+// Hook module loader imports hook modules from file URLs with cache isolation.
 import { pathToFileURL } from "node:url";
 
 type ModuleNamespace = Record<string, unknown>;
 type GenericFunction = (...args: never[]) => unknown;
 
-export function resolveFileModuleUrl(params: {
+function resolveFileModuleUrl(params: {
   modulePath: string;
   cacheBust?: boolean;
   nowMs?: number;

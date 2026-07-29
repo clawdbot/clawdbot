@@ -1,8 +1,11 @@
+// Verifies secret resolution config types and defaults.
 import { describe, expect, it } from "vitest";
 import {
+  isUnresolvedSecretInputError,
   normalizeResolvedSecretInputString,
   parseLegacySecretRefEnvMarker,
   resolveSecretInputString,
+  UnresolvedSecretInputError,
 } from "./types.secrets.js";
 
 describe("resolveSecretInputString", () => {
@@ -70,6 +73,25 @@ describe("resolveSecretInputString", () => {
       }),
     ).toThrow(/unresolved SecretRef/);
   });
+
+  it("throws a typed unresolved SecretRef error in strict mode", () => {
+    let thrown: unknown;
+    try {
+      resolveSecretInputString({
+        value: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        path: "models.providers.openai.apiKey",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvedSecretInputError);
+    expect(isUnresolvedSecretInputError(thrown)).toBe(true);
+    expect(thrown).toMatchObject({
+      path: "models.providers.openai.apiKey",
+      ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    });
+  });
 });
 
 describe("normalizeResolvedSecretInputString", () => {
@@ -89,6 +111,11 @@ describe("parseLegacySecretRefEnvMarker", () => {
       source: "env",
       provider: "default",
       id: "OPENAI_API_KEY",
+    });
+    expect(parseLegacySecretRefEnvMarker("__env__:BAILIAN_API_KEY")).toEqual({
+      source: "env",
+      provider: "default",
+      id: "BAILIAN_API_KEY",
     });
     expect(parseLegacySecretRefEnvMarker("secretref-env:not-valid")).toBeNull();
     expect(

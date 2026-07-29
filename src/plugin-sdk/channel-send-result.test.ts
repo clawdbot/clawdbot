@@ -1,3 +1,6 @@
+/**
+ * Tests channel send result normalization and adapter wrapping helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   attachChannelToResult,
@@ -33,10 +36,28 @@ describe("attachChannelToResult(s)", () => {
       { channel: "signal", messageId: "m2", timestamp: 2 },
     ]);
   });
+
+  it("keeps the explicitly attached channel authoritative", () => {
+    const providerResult = {
+      channel: "stale-provider-channel",
+      messageId: "m1",
+    };
+
+    expect(attachChannelToResult("configured-channel", providerResult)).toEqual({
+      channel: "configured-channel",
+      messageId: "m1",
+    });
+    expect(attachChannelToResults("configured-channel", [providerResult])).toEqual([
+      {
+        channel: "configured-channel",
+        messageId: "m1",
+      },
+    ]);
+  });
 });
 
 describe("buildChannelSendResult", () => {
-  it("normalizes raw send results", () => {
+  it("normalizes raw send results directly", () => {
     const result = buildChannelSendResult("zalo", {
       ok: false,
       messageId: null,
@@ -110,38 +131,32 @@ describe("createAttachedChannelResultAdapter", () => {
 });
 
 describe("createRawChannelSendResultAdapter", () => {
-  it("normalizes raw send results", async () => {
+  it("normalizes successes and rejects provider failures", async () => {
     const adapter = createRawChannelSendResultAdapter({
       channel: "zalo",
       sendText: async () => ({ ok: true, messageId: "m1" }),
       sendMedia: async () => ({ ok: false, error: "boom" }),
     });
 
-    const sendCases = [
-      {
-        name: "sendText",
-        run: () => adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" }),
-        expected: {
-          channel: "zalo",
-          ok: true,
-          messageId: "m1",
-          error: undefined,
-        },
-      },
-      {
-        name: "sendMedia",
-        run: () => adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" }),
-        expected: {
-          channel: "zalo",
-          ok: false,
-          messageId: "",
-          error: new Error("boom"),
-        },
-      },
-    ];
+    await expect(adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" })).resolves.toEqual({
+      channel: "zalo",
+      ok: true,
+      messageId: "m1",
+      error: undefined,
+    });
+    await expect(adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
+      "boom",
+    );
+  });
 
-    for (const testCase of sendCases) {
-      await expect(testCase.run()).resolves.toEqual(testCase.expected);
-    }
+  it("uses a channel-specific error when a failed result has no message", async () => {
+    const adapter = createRawChannelSendResultAdapter({
+      channel: "legacy-test",
+      sendText: async () => ({ ok: false }),
+    });
+
+    await expect(adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
+      "Channel send failed for legacy-test",
+    );
   });
 });

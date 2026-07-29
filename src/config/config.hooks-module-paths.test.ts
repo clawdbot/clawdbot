@@ -1,3 +1,4 @@
+// Covers hook module path config validation.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -8,13 +9,13 @@ describe("config hooks module paths", () => {
     if (res.ok) {
       throw new Error("expected validation failure");
     }
-    expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
+    expect(res.issues.map((issue) => issue.path)).toContain(expectedPath);
   };
 
   it("rejects absolute hooks.mappings[].transform.module", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           mappings: [
             {
@@ -32,7 +33,7 @@ describe("config hooks module paths", () => {
   it("rejects escaping hooks.mappings[].transform.module", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           mappings: [
             {
@@ -50,7 +51,7 @@ describe("config hooks module paths", () => {
   it("rejects absolute hooks.internal.handlers[].module", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           internal: {
             enabled: true,
@@ -65,7 +66,7 @@ describe("config hooks module paths", () => {
   it("rejects escaping hooks.internal.handlers[].module", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           internal: {
             enabled: true,
@@ -79,7 +80,7 @@ describe("config hooks module paths", () => {
 
   it("accepts hooks.mappings[].channel runtime plugin ids", () => {
     const res = validateConfigObjectWithPlugins({
-      agents: { list: [{ id: "pi" }] },
+      agents: { entries: { openclaw: {} } },
       hooks: {
         mappings: [
           {
@@ -97,7 +98,7 @@ describe("config hooks module paths", () => {
   it("rejects blank hooks.mappings[].channel values", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           mappings: [
             {

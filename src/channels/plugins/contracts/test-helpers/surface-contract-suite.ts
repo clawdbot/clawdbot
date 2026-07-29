@@ -1,6 +1,12 @@
+/**
+ * Channel plugin surface contract assertions.
+ *
+ * Checks the minimum callable shape for optional channel plugin adapter surfaces.
+ */
 import { expect } from "vitest";
 import type { ChannelPlugin } from "../../types.js";
 
+/** Asserts the minimum callable shape for one declared channel plugin surface. */
 export function expectChannelSurfaceContract(params: {
   plugin: Pick<
     ChannelPlugin,
@@ -70,19 +76,28 @@ export function expectChannelSurfaceContract(params: {
         messaging?.parseExplicitTarget,
         messaging?.inferTargetChatType,
         messaging?.buildCrossContextPresentation,
-        messaging?.enableInteractiveReplies,
         messaging?.hasStructuredReplyPayload,
         messaging?.formatTargetDisplay,
         messaging?.resolveOutboundSessionRoute,
       ].some((value) => typeof value === "function"),
     ).toBe(true);
     if (messaging?.targetResolver) {
+      // Target resolvers are optional but, when present, must expose either a
+      // callable resolver or stable hint metadata for tool UX.
       if (messaging.targetResolver.looksLikeId) {
         expect(typeof messaging.targetResolver.looksLikeId).toBe("function");
       }
       if (messaging.targetResolver.hint !== undefined) {
         expect(typeof messaging.targetResolver.hint).toBe("string");
         expect(messaging.targetResolver.hint.trim()).not.toBe("");
+      }
+      if (messaging.targetResolver.reservedLiterals !== undefined) {
+        expect(Array.isArray(messaging.targetResolver.reservedLiterals)).toBe(true);
+        expect(
+          messaging.targetResolver.reservedLiterals.every(
+            (value) => typeof value === "string" && value.trim(),
+          ),
+        ).toBe(true);
       }
       if (messaging.targetResolver.resolveTarget) {
         expect(typeof messaging.targetResolver.resolveTarget).toBe("function");

@@ -1,3 +1,4 @@
+// Windows schtasks exec tests cover scheduled task command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { execSchtasks } from "./schtasks-exec.js";
 

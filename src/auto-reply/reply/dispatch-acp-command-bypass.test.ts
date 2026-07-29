@@ -1,3 +1,4 @@
+// Tests ACP command bypass detection before normal dispatch.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -73,6 +74,42 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
+  it("returns true for local status plugin commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/STATUS plugins",
+      BodyForCommands: "/STATUS plugins",
+      BodyForAgent: "/STATUS plugins",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for registry-backed local help commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandBody: "/help",
+      BodyForCommands: "/help",
+      BodyForAgent: "/help",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("prefers clean command text over channel envelopes", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
+      BodyForCommands: "/status",
+      BodyForAgent: "/status",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
   it("returns true for local unfocus commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -84,6 +121,45 @@ describe("shouldBypassAcpDispatchForCommand", () => {
 
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
+
+  it("returns true for local verbose commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/verbose on",
+      BodyForCommands: "/verbose on",
+      BodyForAgent: "/verbose on",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for local verbose alias commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/v off",
+      BodyForCommands: "/v off",
+      BodyForAgent: "/v off",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it.each(["/verbose:on", "/v:off", "/verbose:"])(
+    "returns true for colon-form local verbose command %s",
+    (command) => {
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        CommandBody: command,
+        BodyForCommands: command,
+        BodyForAgent: command,
+      });
+
+      expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+    },
+  );
 
   it("returns true for ACP reset-tail slash commands", () => {
     const ctx = buildTestCtx({
