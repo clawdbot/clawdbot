@@ -221,6 +221,23 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it.each([
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ])(
+    "routes setup inference transcript ownership changes through both regressions for %s",
+    (path) => {
+      expect(resolveChangedTestTargetPlan([path])).toEqual({
+        mode: "targets",
+        targets: [
+          "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+          "src/commands/onboard-guided.inference.e2e.test.ts",
+        ],
+      });
+    },
+  );
+
   it("keeps changed mode focused by default for Vitest wiring edits", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
