@@ -28,6 +28,7 @@ import {
   modelProviderConfigBatchJson,
   parseProvider,
   parseMacosDsclUserHomeLine,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
@@ -2441,6 +2442,16 @@ setInterval(() => {}, 1000);
         readPositiveIntEnv("OPENCLAW_PARALLELS_NUMERIC_TEST", 7),
       ),
     ).toBe(42);
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: ` ${"A".repeat(40)} ` }, () =>
+        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+      ),
+    ).toBe("a".repeat(40));
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: " " }, () =>
+        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+      ),
+    ).toBeUndefined();
 
     expectFatalError(
       () =>
@@ -2483,6 +2494,13 @@ setInterval(() => {}, 1000);
       "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
     );
     expectFatalError(
+      () =>
+        withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: "main" }, () =>
+          readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+        ),
+      "invalid OPENCLAW_PARALLELS_DEV_TARGET_REF: expected a full 40-character commit SHA",
+    );
+    expectFatalError(
       () => parseNpmUpdateSmokeArgs(["--platform", "macos,macos"]),
       "duplicate --platform entry: macos",
     );
@@ -2515,6 +2533,7 @@ setInterval(() => {}, 1000);
 
   it("keeps Windows update-only env flags scoped before verification", () => {
     const windows = readFileSync(TS_PATHS.windows, "utf8");
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
     const powershell = readFileSync(TS_PATHS.powershell, "utf8");
 
     expect(powershell).toContain("windowsScopedEnvFunction");
@@ -2523,6 +2542,15 @@ setInterval(() => {}, 1000);
     );
     expect(windows).toContain("$script:OpenClawUpdateExit = $LASTEXITCODE");
     expect(windows).not.toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
+    for (const script of [macos, windows]) {
+      expect(script).toContain('readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF")');
+      expect(script).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF");
+      expect(script).toContain("dev update checkout head");
+    }
+    expect(macos).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}");
+    expect(windows).toContain(
+      "OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}",
+    );
   });
 
   it("writes Parallels phase timing artifacts", () => {

@@ -11,6 +11,7 @@ import {
   parseMode,
   parseTcpPort,
   parseProvider,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
@@ -148,6 +149,10 @@ Options:
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
+
+Environment:
+  OPENCLAW_PARALLELS_DEV_TARGET_REF
+                             Pin the guest dev update to a full commit SHA.
 `;
 }
 
@@ -257,6 +262,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   );
   private gatewayRecoveryAfterMs =
     readPositiveIntEnv("OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S", 180) * 1000;
+  private devTargetCommit = readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF");
   private artifact: PackageArtifact | null = null;
   private minGitZipPath = "";
   private latestVersion = "";
@@ -660,6 +666,9 @@ ${this.windowsPluginIsolationScript()}`,
   }
 
   private async runDevChannelUpdate(): Promise<void> {
+    const devTargetEntry = this.devTargetCommit
+      ? `; OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}`
+      : "";
     await this.guestPowerShellBackground(
       "update-dev",
       `$ErrorActionPreference = 'Stop'
@@ -678,7 +687,7 @@ $config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value
 $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
 ${windowsScopedEnvFunction}
 $script:OpenClawUpdateExit = 0
-Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1' } {
+Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'${devTargetEntry} } {
   Invoke-OpenClaw update --channel dev --yes --json
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
@@ -697,6 +706,21 @@ Invoke-OpenClaw update status --json`,
     for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
+      }
+    }
+    if (this.devTargetCommit) {
+      const checkoutHead =
+        this.guestPowerShell(`${windowsPortableGitPathScript}
+$checkoutPath = Join-Path $env:USERPROFILE 'openclaw'
+git.exe -C $checkoutPath rev-parse HEAD`)
+          .replaceAll("\r", "")
+          .trim()
+          .split("\n")
+          .at(-1) ?? "";
+      if (checkoutHead !== this.devTargetCommit) {
+        throw new Error(
+          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
+        );
       }
     }
   }

@@ -21,6 +21,7 @@ import {
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
   parseTcpPort,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
@@ -165,6 +166,10 @@ Options:
   --discord-channel-id <id>  Discord channel ID for smoke roundtrip.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
+
+Environment:
+  OPENCLAW_PARALLELS_DEV_TARGET_REF
+                             Pin the guest dev update to a full commit SHA.
 `;
 }
 
@@ -288,6 +293,7 @@ class MacosSmoke {
   private guestTransport: "current-user" | "sudo" = "current-user";
   private modelTimeoutSeconds: number;
   private updateDevTimeoutSeconds: number;
+  private devTargetCommit: string | undefined;
 
   private status = {
     freshAgent: "skip",
@@ -318,6 +324,7 @@ class MacosSmoke {
       "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S",
       1800,
     );
+    this.devTargetCommit = readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF");
     this.validateDiscord();
   }
 
@@ -948,6 +955,9 @@ npm install --prefix "$bootstrap_root" --no-save pnpm@11
   private async runDevChannelUpdate(): Promise<void> {
     this.ensureGuestPnpm();
     const home = this.guestHome();
+    const devTargetEnv = this.devTargetCommit
+      ? ` OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}`
+      : "";
     await this.guest.shBackground(
       "macos-update-dev",
       `set -eu
@@ -962,7 +972,7 @@ config.update = { ...(config.update || {}), channel: "dev" };
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestOpenClawEntryRunner} update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1${devTargetEnv} ${guestOpenClawEntryRunner} update --channel dev --yes --json
 ${guestOpenClawEntryRunner} --version
 ${guestOpenClawEntryRunner} update status --json`,
       {},
@@ -975,6 +985,19 @@ ${guestOpenClawEntryRunner} update status --json`,
     for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
+      }
+    }
+    if (this.devTargetCommit) {
+      const checkoutHead =
+        this.guestSh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`)
+          .replaceAll("\r", "")
+          .trim()
+          .split("\n")
+          .at(-1) ?? "";
+      if (checkoutHead !== this.devTargetCommit) {
+        throw new Error(
+          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
+        );
       }
     }
   }
