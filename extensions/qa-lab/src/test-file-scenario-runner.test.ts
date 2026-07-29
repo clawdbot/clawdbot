@@ -123,6 +123,7 @@ async function writeScriptProducerEvidence(params: {
   scenarioId?: string;
   status: "blocked" | "fail" | "pass";
   failureReason?: string;
+  emptyEntries?: boolean;
 }) {
   const scenarioArtifactBase = path.join(params.outputDir, params.scenarioId ?? "scenario-script");
   const runRoot = path.join(scenarioArtifactBase, "run-1");
@@ -135,34 +136,36 @@ async function writeScriptProducerEvidence(params: {
         schemaVersion: 2,
         generatedAt: "2026-06-14T00:00:00.000Z",
         evidenceMode: "full",
-        entries: [
-          {
-            test: {
-              kind: "script-producer-check",
-              id: "script-producer.web-ui.smoke",
-              title: "Script producer: web-ui smoke",
-              source: { path: "scripts/evidence-producer.ts" },
-            },
-            coverage: [{ id: "ui.control", role: "primary" }],
-            execution: {
-              runner: "evidence-producer-script",
-              environment: { ref: "scenario-ref", os: "darwin", nodeVersion: "v24.0.0" },
-              provider: {
-                id: "script-producer",
-                live: false,
-                model: { name: null, ref: null },
-                fixture: "mocked-script-evidence",
+        entries: params.emptyEntries
+          ? []
+          : [
+              {
+                test: {
+                  kind: "script-producer-check",
+                  id: "script-producer.web-ui.smoke",
+                  title: "Script producer: web-ui smoke",
+                  source: { path: "scripts/evidence-producer.ts" },
+                },
+                coverage: [{ id: "ui.control", role: "primary" }],
+                execution: {
+                  runner: "evidence-producer-script",
+                  environment: { ref: "scenario-ref", os: "darwin", nodeVersion: "v24.0.0" },
+                  provider: {
+                    id: "script-producer",
+                    live: false,
+                    model: { name: null, ref: null },
+                    fixture: "mocked-script-evidence",
+                  },
+                  packageSource: { kind: "source-checkout", sha: "abc123" },
+                  artifacts: [],
+                },
+                result: {
+                  status: params.status,
+                  ...(params.failureReason ? { failure: { reason: params.failureReason } } : {}),
+                  timing: { wallMs: 1 },
+                },
               },
-              packageSource: { kind: "source-checkout", sha: "abc123" },
-              artifacts: [],
-            },
-            result: {
-              status: params.status,
-              ...(params.failureReason ? { failure: { reason: params.failureReason } } : {}),
-              timing: { wallMs: 1 },
-            },
-          },
-        ],
+            ],
       },
       null,
       2,
@@ -541,6 +544,92 @@ describe("qa test file scenario runner", () => {
       result: {
         status: "pass",
       },
+    });
+  });
+
+  it("fails generic script scenarios that exit 0 without fresh producer evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-script-missing-producer-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-missing");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: "script pass without evidence\n",
+        stderr: "",
+      }),
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]).toMatchObject({
+      status: "fail",
+      failureMessage: expect.stringMatching(/no fresh qa-evidence/u),
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("fail");
+  });
+
+  it("does not reuse stale producer evidence across script invocations", async () => {
+    const repoRoot = await makeTempRepo("qa-script-stale-producer-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-stale");
+    await writeScriptProducerEvidence({
+      outputDir,
+      status: "pass",
+    });
+
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: "script pass without rewriting evidence\n",
+        stderr: "",
+      }),
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]?.status).toBe("fail");
+    expect(result.results[0]?.failureMessage).toMatch(/no fresh qa-evidence/u);
+  });
+
+  it("fails when script producer evidence has empty entries", async () => {
+    const repoRoot = await makeTempRepo("qa-script-empty-producer-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-empty");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => {
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "pass",
+          emptyEntries: true,
+        });
+        return {
+          exitCode: 0,
+          stdout: "script empty producer\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]).toMatchObject({
+      status: "fail",
+      failureMessage: expect.stringMatching(/no entries/u),
     });
   });
 

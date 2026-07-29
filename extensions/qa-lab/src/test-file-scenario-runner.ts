@@ -275,6 +275,17 @@ async function runScenarioCommandSteps(params: {
   };
 }
 
+async function invalidateScriptProducerEvidence(params: {
+  outputDir: string;
+  scenario: QaTestFileScenario;
+}) {
+  const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
+  await Promise.all([
+    fs.rm(path.join(scenarioOutputDir, "latest-run.json"), { force: true }),
+    fs.rm(path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME), { force: true }),
+  ]);
+}
+
 async function runQaTestFileScenario(params: {
   env: NodeJS.ProcessEnv;
   commandTimeoutMs: number;
@@ -284,6 +295,13 @@ async function runQaTestFileScenario(params: {
   scenario: QaTestFileScenario;
 }) {
   const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
+  if (params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario)) {
+    // Drop prior producer indexes so this invocation cannot import stale pass evidence.
+    await invalidateScriptProducerEvidence({
+      outputDir: params.outputDir,
+      scenario: params.scenario,
+    });
+  }
   const result = await runScenarioCommandSteps({
     ...params,
     steps: definition.buildSteps(params.scenario, { outputDir: params.outputDir }),
@@ -291,14 +309,15 @@ async function runQaTestFileScenario(params: {
   if (params.scenario.execution.kind !== "script") {
     return result;
   }
+  // Docker batch owns summary.json / batch evidence separately.
+  if (isDockerE2eScenario(params.scenario)) {
+    return result;
+  }
   const producerEvidenceResult = await readScriptProducerEvidence({
     outputDir: params.outputDir,
     repoRoot: params.repoRoot,
     scenario: params.scenario,
   });
-  if (!producerEvidenceResult.producerEvidence) {
-    return result;
-  }
   if (result.status !== "pass") {
     return {
       ...result,
@@ -312,6 +331,7 @@ async function runQaTestFileScenario(params: {
     ...statusFromProducerEvidence({
       allowBlockedEvidence: params.scenario.execution.allowBlockedEvidence === true,
       producerEvidence: producerEvidenceResult.producerEvidence,
+      requireFreshProducerEvidence: true,
     }),
   };
 }
@@ -319,9 +339,18 @@ async function runQaTestFileScenario(params: {
 function statusFromProducerEvidence(params: {
   allowBlockedEvidence: boolean;
   producerEvidence: QaEvidenceSummaryJson | undefined;
+  requireFreshProducerEvidence?: boolean;
 }): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
-  const { allowBlockedEvidence, producerEvidence } = params;
+  const { allowBlockedEvidence, producerEvidence, requireFreshProducerEvidence } = params;
   if (!producerEvidence || producerEvidence.entries.length === 0) {
+    if (requireFreshProducerEvidence) {
+      return {
+        failureMessage: !producerEvidence
+          ? "script scenario produced no fresh qa-evidence.json / latest-run.json producer bundle"
+          : "script scenario producer evidence has no entries",
+        status: "fail",
+      };
+    }
     return { status: "pass" };
   }
   const blockingEntry = producerEvidence.entries.find(
