@@ -67,6 +67,68 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
   });
 
+  it("terminalizes an admitted steered turn as successful despite later dispatch failure", async () => {
+    const broadcast = vi.fn();
+    const cleanupAdmittedRun = vi.fn();
+    const removeChatRun = vi.fn();
+    const warn = vi.fn();
+    const dedupe = new Map();
+    const lifecycle = createChatSendDispatchErrorLifecycle({
+      admission: {
+        activeRunAbort: {
+          cleanup: vi.fn(),
+          controller: new AbortController(),
+          entry: undefined,
+          registered: true,
+        } as never,
+        cleanupAdmittedRun,
+        lifecycleGeneration: "test-generation",
+        restartSafeAdmission: undefined,
+      },
+      context: {
+        agentRunSeq: new Map(),
+        broadcast,
+        chatRunState: createChatRunState(),
+        dedupe,
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn },
+        nodeSendToSession: vi.fn(),
+        removeChatRun,
+      } as never,
+      isActiveRunTurnAdopted: () => true,
+      isQueuedFollowupEnqueued: () => false,
+      persistUserTurnTranscript: vi.fn(),
+      session: {
+        agentId: "main",
+        backingSessionId: undefined,
+        cfg: {},
+        clientRunId: "run-2",
+        now: 1,
+        rawSessionKey: "agent:main:main",
+        sessionKey: "agent:main:main",
+      },
+      terminalizeRestartSafeAdmission: vi.fn(),
+      userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
+    });
+
+    await lifecycle.handleError(new Error("late failure after steer"));
+    lifecycle.finalize();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("dispatch failed after active-run steer adoption"),
+    );
+    expect(dedupe.get("chat:run-2")).toMatchObject({
+      ok: true,
+      payload: { runId: "run-2", status: "ok" },
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-2", state: "final" }),
+      { sessionKeys: ["agent:main:main"] },
+    );
+    expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+  });
+
   it("preserves an explicitly aborted terminal when its dispatch later rejects", async () => {
     const runId = "explicit-abort-before-dispatch-rejection";
     const sessionKey = "agent:main:main";

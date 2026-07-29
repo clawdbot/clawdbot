@@ -29,6 +29,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     "activeRunAbort" | "cleanupAdmittedRun" | "lifecycleGeneration" | "restartSafeAdmission"
   >;
   context: GatewayRequestContext;
+  isActiveRunTurnAdopted?: () => boolean;
   isQueuedFollowupEnqueued: () => boolean;
   persistUserTurnTranscript: () => Promise<unknown>;
   session: Pick<
@@ -44,6 +45,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
   const {
     admission,
     context,
+    isActiveRunTurnAdopted,
     isQueuedFollowupEnqueued,
     persistUserTurnTranscript,
     session,
@@ -58,10 +60,14 @@ export function createChatSendDispatchErrorLifecycle(params: {
 
   const handleError = async (err: unknown) => {
     const errorMessage = String(err);
+    const activeRunTurnAdopted = isActiveRunTurnAdopted?.() === true;
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
-    if (queuedFollowupEnqueued) {
+    const ownedByActiveRun = activeRunTurnAdopted || queuedFollowupEnqueued;
+    if (ownedByActiveRun) {
       context.logGateway.warn(
-        `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
+        activeRunTurnAdopted
+          ? `webchat dispatch failed after active-run steer adoption: ${formatForLog(err)}`
+          : `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
       );
       if (!context.chatRunState.hasAbortMarker(clientRunId)) {
         setGatewayDedupeEntry({

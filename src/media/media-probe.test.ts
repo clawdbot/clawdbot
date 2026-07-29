@@ -9,12 +9,22 @@ import {
 } from "./media-probe.js";
 import type { MediaProbeKind, MediaProbeResult } from "./media-probe.js";
 
-const { runFfprobe } = vi.hoisted(() => ({
+const { runFfprobe, withTempWorkspace, resolvePreferredOpenClawTmpDir } = vi.hoisted(() => ({
   runFfprobe: vi.fn(),
+  withTempWorkspace: vi.fn(),
+  resolvePreferredOpenClawTmpDir: vi.fn(),
 }));
 
 vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
+}));
+
+vi.mock("../infra/private-temp-workspace.js", () => ({
+  withTempWorkspace,
+}));
+
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir,
 }));
 
 let testDir = "";
@@ -40,6 +50,19 @@ afterAll(async () => {
 
 beforeEach(() => {
   runFfprobe.mockReset();
+  resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
+  // Write a real seekable file so probeVideoDimensions can fs.open it (same
+  // path production uses after withTempWorkspace.write).
+  withTempWorkspace.mockImplementation(async (_opts, run) => {
+    const workspace = {
+      write: vi.fn(async (name: string, buffer: Buffer) => {
+        const filePath = path.join(testDir, name);
+        await fs.writeFile(filePath, buffer);
+        return filePath;
+      }),
+    };
+    return await run(workspace);
+  });
 });
 
 async function probeMediaFile(filePath: string, kind: MediaProbeKind): Promise<MediaProbeResult> {
@@ -192,11 +215,29 @@ describe("probeMediaFilesWithinBudget", () => {
 });
 
 describe("probeVideoDimensions", () => {
-  it("keeps buffer callers on the canonical probe path", async () => {
+  it("writes buffer to seekable temp file then probes path", async () => {
     const buffer = Buffer.from("video");
+    let write: ReturnType<typeof vi.fn> | undefined;
+    withTempWorkspace.mockImplementationOnce(async (_opts, run) => {
+      write = vi.fn(async (name: string, data: Buffer) => {
+        const filePath = path.join(testDir, name);
+        await fs.writeFile(filePath, data);
+        return filePath;
+      });
+      return await run({ write });
+    });
     runFfprobe.mockResolvedValueOnce(JSON.stringify({ streams: [{ width: 720, height: 1280 }] }));
 
     await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
+
+    expect(write).toHaveBeenCalledWith("video.bin", buffer);
+    expect(withTempWorkspace).toHaveBeenCalledWith(
+      {
+        rootDir: "/tmp/openclaw",
+        prefix: "openclaw-ffprobe-",
+      },
+      expect.any(Function),
+    );
     expect(runFfprobe).toHaveBeenCalledWith(
       [
         "-v",
@@ -204,14 +245,31 @@ describe("probeVideoDimensions", () => {
         "-select_streams",
         "v:0",
         "-protocol_whitelist",
-        "pipe",
+        "fd",
         "-show_entries",
         "format=duration:stream=duration,width,height",
         "-of",
         "json",
-        "pipe:0",
+        "-fd",
+        "0",
+        "fd:",
       ],
-      { input: buffer },
+      { stdinFileDescriptor: expect.any(Number) },
     );
+  });
+
+  it("falls back when ffprobe fails or returns malformed output", async () => {
+    const buffer = Buffer.from("video");
+
+    runFfprobe.mockRejectedValueOnce(new Error("missing ffprobe"));
+    await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
+
+    runFfprobe.mockResolvedValueOnce("{");
+    await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
+  });
+
+  it("falls back when the temp workspace write rejects", async () => {
+    withTempWorkspace.mockRejectedValueOnce(new Error("disk full"));
+    await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toBeUndefined();
   });
 });

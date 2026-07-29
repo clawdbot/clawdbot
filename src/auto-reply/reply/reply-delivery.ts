@@ -30,7 +30,9 @@ export function normalizeReplyPayloadDirectives(params: {
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        (params.extractMediaDirectives !== false && /media:/i.test(sourceText)) ||
+        // Always parse MEDIA: so block streaming can strip the directive from visible
+        // text even when extractMediaDirectives is false (no mid-stream attach).
+        /media:/i.test(sourceText) ||
         (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
         sourceText.includes(silentToken)));
 

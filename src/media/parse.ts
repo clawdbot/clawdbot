@@ -500,7 +500,9 @@ export function splitMediaFromOutput(
   }
   const extractMarkdownImages = options.extractMarkdownImages === true;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
-  const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
+  // Always detect MEDIA: lines so block-streaming (extractMediaDirectives:false) can
+  // still strip the directive from visible text without attaching mid-stream.
+  const mayContainMediaToken = /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
@@ -542,7 +544,7 @@ export function splitMediaFromOutput(
     }
 
     const trimmedStart = line.trimStart();
-    if (!extractMediaDirectives || !trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+    if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({ line, media })
         : { lineSegments: [], foundMedia: false };
@@ -593,7 +595,11 @@ export function splitMediaFromOutput(
       for (const part of parts) {
         const candidate = normalizeMediaSource(cleanCandidate(part));
         if (isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)) {
-          media.push(candidate);
+          // Collect attachments only when extraction is enabled; always mark handled so
+          // the directive line is stripped from visible text during block streaming.
+          if (extractMediaDirectives) {
+            media.push(candidate);
+          }
           hasValidMedia = true;
           foundMediaToken = true;
           validCount += 1;
@@ -615,7 +621,9 @@ export function splitMediaFromOutput(
         // A single valid split plus invalid leftovers can be one local path containing spaces.
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(fallback, { allowSpaces: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
+          if (extractMediaDirectives) {
+            media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
+          }
           hasValidMedia = true;
           foundMediaToken = true;
           validCount = 1;
@@ -626,7 +634,9 @@ export function splitMediaFromOutput(
       if (!hasValidMedia && !unwrapped && /\s/.test(payloadValue)) {
         const spacedFallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(spacedFallback, { allowSpaces: true, allowBareFilename: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
+          if (extractMediaDirectives) {
+            media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
+          }
           hasValidMedia = true;
           foundMediaToken = true;
           validCount = 1;
@@ -637,7 +647,9 @@ export function splitMediaFromOutput(
       if (!hasValidMedia) {
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
-          media.push(fallback);
+          if (extractMediaDirectives) {
+            media.push(fallback);
+          }
           hasValidMedia = true;
           foundMediaToken = true;
           invalidParts.length = 0;
@@ -650,11 +662,15 @@ export function splitMediaFromOutput(
           lineSegments.push({ type: "text", text: beforeText });
         }
         pieces.length = 0;
-        for (const url of media.slice(mediaStartIndex, mediaStartIndex + validCount)) {
-          lineSegments.push({ type: "media", url });
-        }
-        if (invalidParts.length > 0) {
-          pieces.push(invalidParts.join(" "));
+        if (extractMediaDirectives) {
+          for (const url of media.slice(mediaStartIndex, mediaStartIndex + validCount)) {
+            lineSegments.push({ type: "media", url });
+          }
+          // Keep invalid leftovers visible only when attaching; strip-only mode drops
+          // the whole MEDIA directive from streamed text.
+          if (invalidParts.length > 0) {
+            pieces.push(invalidParts.join(" "));
+          }
         }
       } else if (looksLikeLocalPath) {
         // Strip MEDIA: lines with local paths even when invalid (e.g. absolute paths

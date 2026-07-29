@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -189,8 +191,25 @@ type VideoDimensions = {
   height: number;
 };
 
-/** Probes a video buffer while preserving the existing public media-runtime API. */
+/**
+ * Probes a video buffer via a seekable temp file. Pipe:0 probing fails for
+ * large MP4s because ffprobe needs to seek the MOOV atom (often at the end for
+ * faststart files), which is impossible over a non-seekable stdin pipe.
+ */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const { width, height } = await probeMediaSource({ kind: "buffer", buffer }, "video");
-  return width && height ? { width, height } : undefined;
+  try {
+    return await withTempWorkspace(
+      {
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-ffprobe-",
+      },
+      async (workspace) => {
+        const tempPath = await workspace.write("video.bin", buffer);
+        const { width, height } = await probeMediaFile(tempPath, "video");
+        return width && height ? { width, height } : undefined;
+      },
+    );
+  } catch {
+    return undefined;
+  }
 }

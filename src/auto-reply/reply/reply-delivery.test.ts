@@ -323,7 +323,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.mediaUrls).toEqual([]);
   });
 
-  it("leaves media-looking text alone when media directive parsing is disabled", () => {
+  it("strips MEDIA directives from visible text when attachment extraction is disabled", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "Result\nMEDIA: ./image.png" },
       trimLeadingWhitespace: true,
@@ -331,7 +331,8 @@ describe("createBlockReplyDeliveryHandler", () => {
       extractMediaDirectives: false,
     });
 
-    expect(normalized.payload.text).toBe("Result\nMEDIA: ./image.png");
+    // Block streaming disables mid-stream attach, but the directive must not leak as text.
+    expect(normalized.payload.text).toBe("Result");
     expect(normalized.payload.mediaUrl).toBeUndefined();
     expect(normalized.payload.mediaUrls).toBeUndefined();
   });

@@ -143,6 +143,35 @@ describe("splitMediaFromOutput", () => {
     ]);
   });
 
+  it("strips MEDIA lines from visible text when attachment extraction is disabled", () => {
+    expectParsedMediaOutputCase(
+      "Caption\nMEDIA:./screenshot.png\nDone",
+      {
+        text: "Caption\nDone",
+        mediaUrls: undefined,
+      },
+      { extractMediaDirectives: false },
+    );
+  });
+
+  it("strips mixed valid/invalid MEDIA leftovers when extraction is disabled", () => {
+    expectParsedMediaOutputCase(
+      "Caption\nMEDIA:./ok.png leftover-words\nDone",
+      {
+        text: "Caption\nDone",
+        mediaUrls: undefined,
+      },
+      { extractMediaDirectives: false },
+    );
+  });
+
+  it("still extracts MEDIA attachments when extraction remains enabled", () => {
+    expectParsedMediaOutputCase("Caption\nMEDIA:./screenshot.png\nDone", {
+      text: "Caption\nDone",
+      mediaUrls: ["./screenshot.png"],
+    });
+  });
+
   const extractMarkdownImages = { extractMarkdownImages: true } as const;
 
   it("keeps markdown image urls as text by default", () => {
