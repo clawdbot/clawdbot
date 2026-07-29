@@ -5,13 +5,20 @@ export {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   cosineSimilarity,
+  extractProjectKeysFromCuratedEntry,
   ensureDir,
   hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
   listMemoryFiles,
+  MEMORY_CHUNKING_VERSION,
+  normalizeProjectAnnotationKey,
   normalizeExtraMemoryPaths,
   parseEmbedding,
   remapChunkLines,
   runWithConcurrency,
+  splitCuratedMarkdownEntries,
+  type CuratedMarkdownEntry,
+  type CuratedProjectAnnotations,
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./host/internal.js";
@@ -62,6 +69,7 @@ export {
 } from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
+  readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
 } from "./host/memory-recall-metadata.js";

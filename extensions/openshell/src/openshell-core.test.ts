@@ -158,6 +158,7 @@ describe("openshell cli helpers", () => {
           command: openshellCommand,
           gateway: "alice",
           gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+          workspace: "research",
         }),
       },
       args: ["sandbox", "get", "demo"],
@@ -172,19 +173,43 @@ describe("openshell cli helpers", () => {
       "alice",
       "--gateway-endpoint",
       "http://openshell.openshell-alice.svc.cluster.local:8080",
+      "--workspace",
+      "research",
       "sandbox",
       "get",
       "demo",
     ]);
   });
 
+  it("preserves the ambient workspace when workspace is not configured", async () => {
+    process.env.OPENSHELL_WORKSPACE = "ambient";
+    const openshellCommand = await makeExecutable({
+      name: "openshell",
+      script: ["#!/bin/sh", `printf '%s\\n' "$OPENSHELL_WORKSPACE|$*" >> "__LOG__"`, "exit 0"].join(
+        "\n",
+      ),
+    });
+
+    await runOpenShellCli({
+      context: {
+        sandboxName: "demo",
+        config: resolveOpenShellPluginConfig({ command: openshellCommand }),
+      },
+      args: ["sandbox", "get", "demo"],
+    });
+
+    await expect(fs.readFile(process.env.OPEN_SHELL_CLI_TEST_LOG as string, "utf8")).resolves.toBe(
+      "ambient|sandbox get demo\n",
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
-    "adds direct gateway endpoints to generated ssh proxy configs",
+    "preserves workspace selection when adding a direct gateway endpoint",
     async () => {
       const configText = [
-        "Host openshell-demo",
+        "Host openshell-demo.research",
         "    User sandbox",
-        "    ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo",
+        "    ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --workspace research",
         "",
       ].join("\n");
 
@@ -192,9 +217,10 @@ describe("openshell cli helpers", () => {
         readOpenShellSshConfig({
           configText,
           gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+          workspace: "research",
         }),
       ).resolves.toContain(
-        "ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --server 'http://openshell.openshell-alice.svc.cluster.local:8080'",
+        "ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --workspace research --server 'http://openshell.openshell-alice.svc.cluster.local:8080'",
       );
     },
   );
@@ -746,6 +772,7 @@ async function makeExecutable(params: { name: string; script: string }): Promise
 async function readOpenShellSshConfig(params: {
   configText: string;
   gatewayEndpoint: string;
+  workspace?: string;
 }): Promise<string> {
   const command = await makeExecutable({
     name: "openshell-ssh-config",
@@ -762,6 +789,7 @@ async function readOpenShellSshConfig(params: {
       config: resolveOpenShellPluginConfig({
         command,
         gatewayEndpoint: params.gatewayEndpoint,
+        workspace: params.workspace,
       }),
     },
   });

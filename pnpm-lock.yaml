@@ -1480,6 +1480,9 @@ importers:
       ws:
         specifier: 8.21.1
         version: 8.21.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1756,6 +1759,9 @@ importers:
       '@slack/web-api':
         specifier: 8.0.0
         version: 8.0.0
+      get-east-asian-width:
+        specifier: 1.6.0
+        version: 1.6.0
       p-map:
         specifier: 7.0.5
         version: 7.0.5

@@ -92,9 +92,10 @@ function toAgentToolResult(params: {
   toolName: string;
   result: CallToolResult;
 }): AgentToolResult<unknown> {
-  const content: AgentToolResult<unknown>["content"] = Array.isArray(params.result.content)
-    ? params.result.content.map(mcpContentBlockToAgentContent)
-    : [];
+  const sourceContent = Array.isArray(params.result.content) ? params.result.content : [];
+  const content: AgentToolResult<unknown>["content"] = sourceContent.map(
+    mcpContentBlockToAgentContent,
+  );
   const structuredContentBlock =
     params.result.structuredContent !== undefined
       ? ({
@@ -102,10 +103,15 @@ function toAgentToolResult(params: {
           text: `structuredContent:\n${JSON.stringify(params.result.structuredContent, null, 2)}`,
         } as const)
       : null;
-  // Structured MCP results are the canonical model payload here; replacing
-  // mirrored content avoids duplicating large tool output in the prompt.
+  // Structured results replace mirrored text, but original non-text blocks
+  // still carry images, linked resources, and audio that the JSON cannot mirror.
   const normalizedContent: AgentToolResult<unknown>["content"] = structuredContentBlock
-    ? [structuredContentBlock]
+    ? [
+        structuredContentBlock,
+        ...sourceContent
+          .filter((block) => block.type !== "text")
+          .map(mcpContentBlockToAgentContent),
+      ]
     : content.length > 0
       ? content
       : ([

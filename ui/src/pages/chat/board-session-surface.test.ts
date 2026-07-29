@@ -4,10 +4,12 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { boardProviderForSession } from "../../lib/board/provider.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
+import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { renderBoardFaceToggle, renderBoardSessionSurface } from "./board-session-surface.ts";
 
 const containers: HTMLElement[] = [];
-let previousUrl = "/";
+
+installBrowserHistoryIsolation();
 
 function createContainer() {
   const container = document.createElement("div");
@@ -20,12 +22,9 @@ afterEach(() => {
   for (const container of containers.splice(0)) {
     container.remove();
   }
-  // UI files share jsdom; leaking mockBoard turns later gateway boards into mocks.
-  window.history.replaceState({}, "", previousUrl);
 });
 
 beforeEach(() => {
-  previousUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   window.history.replaceState({}, "", "/?mockBoard=1");
 });
 

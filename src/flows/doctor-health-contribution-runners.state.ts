@@ -128,6 +128,18 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
   });
 }
 
+export async function runSessionTranscriptHeadersHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptHeaderHealth } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  await noteSessionTranscriptHeaderHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 export async function runSessionTranscriptLabelsHealth(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {

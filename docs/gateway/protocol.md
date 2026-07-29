@@ -45,9 +45,18 @@ that supervise the Gateway as a child process, see
 
 Frame shapes:
 
-- Request: `{type:"req", id, method, params}`
+- Request: `{type:"req", id, method, params, traceparent?}`
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
+
+After authentication, a client may include a W3C `traceparent` string on each
+request frame. The Gateway continues a valid value as a child trace context for
+that request. Missing or syntactically malformed values within the
+128-character field limit keep the default fresh request trace and do not fail
+the RPC; longer values make the request frame invalid. The initial `connect`
+request never establishes trace context for later frames. Use a separate
+`traceparent` for each logical request on a long-lived connection; do not treat
+the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Clients should branch on `code` and `details.code`; `message` remains human-readable

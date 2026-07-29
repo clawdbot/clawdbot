@@ -195,7 +195,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +7: bounded archive extraction, entry reads, errors, and policy types.
       // +3: root-bounded walk iterator, options, and entry contract.
       // +5: pinned secret create/read functions and their options contract.
-      4755,
+      // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
+      // +1: watched-sessions prompt block for plugin-owned harness runtimes.
+      4757,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -228,7 +230,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: bounded archive extraction and single-entry reads.
       // +1: root-bounded directory walk iterator.
       // +4: pinned secret create and synchronous/asynchronous reads.
-      2876,
+      // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
+      // +1: watched-sessions prompt block for plugin-owned harness runtimes.
+      2878,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

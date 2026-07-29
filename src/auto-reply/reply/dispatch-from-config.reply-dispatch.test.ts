@@ -65,6 +65,13 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+function pendingFinalDelivery(
+  text: string,
+  overrides: { createdAt?: number; context?: Record<string, unknown>; intentId?: string } = {},
+) {
+  return { kind: "replayable" as const, text, createdAt: 1, ...overrides };
+}
+
 describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
@@ -82,7 +89,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetReplyRunRegistry();
     setDiscordTestRegistry();
     resetInboundDedupe();
-    mocks.routeReply.mockReset().mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply
+      .mockReset()
+      .mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({
       handled: false,
       aborted: false,
@@ -217,16 +226,12 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {
       sessionKey: "agent:test:session",
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "durable reply",
-      pendingFinalDeliveryCreatedAt: 1,
-      pendingFinalDeliveryLastAttemptAt: 2,
-      pendingFinalDeliveryAttemptCount: 3,
-      pendingFinalDeliveryLastError: "previous failure",
-      pendingFinalDeliveryContext: { source: "heartbeat" },
+      pendingFinalDelivery: pendingFinalDelivery("durable reply", {
+        context: { source: "heartbeat" },
+      }),
     };
     sessionStoreMocks.loadSessionStore.mockClear();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
 
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
@@ -252,12 +257,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
   });
 
   it("clears pending final delivery when abort fires after a successful final send (#89115)", async () => {
@@ -268,14 +267,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {
       sessionKey: "agent:test:session",
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "durable reply",
-      pendingFinalDeliveryCreatedAt: 1,
-      pendingFinalDeliveryLastAttemptAt: 2,
-      pendingFinalDeliveryAttemptCount: 3,
-      pendingFinalDeliveryLastError: "previous failure",
-      pendingFinalDeliveryContext: { source: "heartbeat" },
-      pendingFinalDeliveryIntentId: "intent-89115",
+      pendingFinalDelivery: pendingFinalDelivery("durable reply", {
+        context: { source: "heartbeat" },
+        intentId: "intent-89115",
+      }),
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -309,22 +304,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(result.queuedFinal).toBe(false);
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("preserves pending final delivery when final dispatch fails", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {
       sessionKey: "agent:test:session",
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "durable reply",
-      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDelivery: pendingFinalDelivery("durable reply"),
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -341,9 +327,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
     expect(result.queuedFinal).toBe(false);
     expect(sessionStoreMocks.updateSessionEntry).not.toHaveBeenCalled();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+      pendingFinalDelivery("durable reply"),
+    );
   });
 
   it("preserves pending final delivery when beforeDeliver times out", async () => {
@@ -352,10 +338,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       sessionStoreMocks.currentEntry = {
         sessionKey: "agent:test:session",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "durable reply",
-        pendingFinalDeliveryCreatedAt: 1,
-        pendingFinalDeliveryContext: { channel: "whatsapp", to: "+1000" },
+        pendingFinalDelivery: pendingFinalDelivery("durable reply", {
+          context: { channel: "whatsapp", to: "+1000" },
+        }),
       };
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
@@ -390,11 +375,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       // attempt follows the timed-out final.
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toEqual({
-        channel: "whatsapp",
-        to: "+1000",
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toMatchObject({
+        kind: "replayable",
+        text: "durable reply",
+        context: {
+          channel: "whatsapp",
+          to: "+1000",
+        },
       });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -408,9 +395,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       sessionStoreMocks.currentEntry = {
         sessionKey: "agent:test:session",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "durable reply",
-        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDelivery: pendingFinalDelivery("durable reply"),
       };
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
@@ -451,7 +436,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       );
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -464,9 +448,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       sessionStoreMocks.currentEntry = {
         sessionKey: "agent:test:session",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "durable reply",
-        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDelivery: pendingFinalDelivery("durable reply"),
       };
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
@@ -505,8 +487,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         expect.objectContaining({ text: "auxiliary" }),
         expect.objectContaining({ kind: "final" }),
       );
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        pendingFinalDelivery("durable reply"),
+      );
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -519,9 +502,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       sessionStoreMocks.currentEntry = {
         sessionKey: "agent:test:session",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "auxiliary\n\ndurable reply",
-        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDelivery: pendingFinalDelivery("auxiliary\n\ndurable reply"),
       };
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
@@ -554,9 +535,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       await resultPromise;
 
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        pendingFinalDelivery("durable reply"),
+      );
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -569,10 +550,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       sessionStoreMocks.currentEntry = {
         sessionKey: "agent:test:session",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "auxiliary durable reply",
-        pendingFinalDeliveryCreatedAt: 1,
-        pendingFinalDeliveryIntentId: "heartbeat-intent",
+        pendingFinalDelivery: pendingFinalDelivery("auxiliary durable reply", {
+          intentId: "heartbeat-intent",
+        }),
       };
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
@@ -620,10 +600,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       await resultPromise;
 
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBe("heartbeat-intent");
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        pendingFinalDelivery("durable reply", { intentId: "heartbeat-intent" }),
+      );
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -636,10 +615,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       sessionStoreMocks.currentEntry = {
         sessionKey: "agent:test:session",
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "older reply",
-        pendingFinalDeliveryCreatedAt: 1,
-        pendingFinalDeliveryIntentId: "older-intent",
+        pendingFinalDelivery: pendingFinalDelivery("older reply", { intentId: "older-intent" }),
       };
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
@@ -670,17 +646,17 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       await hookStarted.promise;
       sessionStoreMocks.currentEntry = {
         ...sessionStoreMocks.currentEntry,
-        pendingFinalDeliveryText: "newer reply",
-        pendingFinalDeliveryCreatedAt: 2,
-        pendingFinalDeliveryIntentId: "newer-intent",
+        pendingFinalDelivery: pendingFinalDelivery("newer reply", {
+          createdAt: 2,
+          intentId: "newer-intent",
+        }),
       };
       await vi.advanceTimersByTimeAsync(15_000);
       await resultPromise;
 
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("newer reply");
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(2);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBe("newer-intent");
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        pendingFinalDelivery("newer reply", { createdAt: 2, intentId: "newer-intent" }),
+      );
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -691,9 +667,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {
       sessionKey: "agent:test:session",
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "possibly visible reply",
-      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDelivery: pendingFinalDelivery("possibly visible reply"),
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -720,16 +694,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("clears pending final delivery after intentional pre-delivery cancellation", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {
       sessionKey: "agent:test:session",
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "policy-suppressed reply",
-      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDelivery: pendingFinalDelivery("policy-suppressed reply"),
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -758,7 +729,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("delivers a generated final reply before queued follow-up admission", async () => {

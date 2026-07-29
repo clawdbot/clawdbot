@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto";
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
-import { toErrorObject } from "../../infra/errors.js";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-command.js";
+import {
+  isNativeHookRelayBridgeStaleRegistrationError,
+  NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+} from "./native-hook-relay-client.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import {
   clearNativeHookRelayBridgeRecordsForTests,
@@ -20,7 +17,6 @@ import {
 } from "./native-hook-relay-store.js";
 import type {
   ActiveNativeHookRelayRegistration,
-  InvokeNativeHookRelayBridgeParams,
   InvokeNativeHookRelayParams,
   NativeHookRelayBridgeRegistration,
   NativeHookRelayProcessResponse,
@@ -29,18 +25,17 @@ import type {
 import {
   isJsonObject,
   normalizePositiveInteger,
-  readNativeHookRelayEvent,
-  readNativeHookRelayProvider,
   readNonEmptyString,
 } from "./native-hook-relay-utils.js";
 
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
-const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
-const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
-export const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
-export const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
-  "native hook relay bridge stale registration";
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
+
+export {
+  isRetryableNativeHookRelayBridgeLookupError,
+  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+  NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+} from "./native-hook-relay-client.js";
 
 const { relays, relayBridges } = nativeHookRelayState;
 
@@ -304,17 +299,6 @@ function writeNativeHookRelayBridgeJson(
   res.end(body);
 }
 
-function readNativeHookRelayBridgeRecord(
-  relayId: string,
-  stateDbPath?: string,
-): NativeHookRelayBridgeRecord {
-  const record = readNativeHookRelayBridgeRecordIfExists(relayId, stateDbPath);
-  if (!record) {
-    throw new Error("native hook relay bridge not found");
-  }
-  return record;
-}
-
 export function readNativeHookRelayBridgeRecordIfExists(
   relayId: string,
   stateDbPath?: string,
@@ -325,166 +309,6 @@ export function readNativeHookRelayBridgeRecordIfExists(
     log.debug("failed to read native hook relay bridge record", { error, relayId });
   }
   return undefined;
-}
-
-export async function invokeNativeHookRelayBridge(
-  params: InvokeNativeHookRelayBridgeParams,
-): Promise<NativeHookRelayProcessResponse> {
-  const provider = readNativeHookRelayProvider(params.provider);
-  const relayId = readNonEmptyString(params.relayId, "relayId");
-  const event = readNativeHookRelayEvent(params.event);
-  const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
-  const registrationTimeoutMs = normalizePositiveInteger(params.registrationTimeoutMs, timeoutMs);
-  const startedAt = Date.now();
-  let lastError: unknown = new Error("native hook relay bridge not found");
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const record = readNativeHookRelayBridgeRecord(relayId, params.stateDbPath);
-      if (Date.now() > record.expiresAtMs) {
-        throw new Error("native hook relay bridge expired");
-      }
-      return await postNativeHookRelayBridgeRecord({
-        record,
-        timeoutMs: Math.max(1, timeoutMs - (Date.now() - startedAt)),
-        payload: {
-          provider,
-          relayId,
-          event,
-          generation: params.generation,
-          rawPayload: params.rawPayload,
-        },
-      });
-    } catch (error) {
-      lastError = error;
-      if (
-        error instanceof Error &&
-        error.message === "native hook relay bridge not found" &&
-        Date.now() - startedAt >= registrationTimeoutMs
-      ) {
-        break;
-      }
-      if (
-        !isRetryableNativeHookRelayBridgeLookupError({
-          error,
-          elapsedMs: Date.now() - startedAt,
-        })
-      ) {
-        break;
-      }
-      await delay(
-        Math.min(NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS, timeoutMs - (Date.now() - startedAt)),
-      );
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
-
-function postNativeHookRelayBridgeRecord(params: {
-  record: NativeHookRelayBridgeRecord;
-  timeoutMs: number;
-  payload: InvokeNativeHookRelayParams;
-}): Promise<NativeHookRelayProcessResponse> {
-  const body = JSON.stringify(params.payload);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const resolveOnce = (value: NativeHookRelayProcessResponse) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
-    const rejectOnce = (error: unknown) => {
-      if (!settled) {
-        settled = true;
-        reject(toErrorObject(error, "Non-Error rejection"));
-      }
-    };
-    const req = httpRequest(
-      {
-        hostname: params.record.hostname,
-        method: "POST",
-        path: "/invoke",
-        port: params.record.port,
-        timeout: params.timeoutMs,
-        headers: {
-          authorization: `Bearer ${params.record.token}`,
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        let responseText = "";
-        let responseBytes = 0;
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          const chunkText = typeof chunk === "string" ? chunk : String(chunk);
-          responseBytes += Buffer.byteLength(chunkText);
-          if (responseBytes > MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES) {
-            rejectOnce(new Error("native hook relay bridge response too large"));
-            res.destroy();
-            return;
-          }
-          responseText += chunkText;
-        });
-        res.on("error", rejectOnce);
-        res.on("end", () => {
-          if (settled) {
-            return;
-          }
-          try {
-            const parsed = JSON.parse(responseText) as
-              | { ok: true; result: NativeHookRelayProcessResponse }
-              | { ok: false; error?: string };
-            if (parsed.ok) {
-              resolveOnce(parsed.result);
-              return;
-            }
-            rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));
-          } catch (error) {
-            rejectOnce(error);
-          }
-        });
-      },
-    );
-    req.on("timeout", () => {
-      req.destroy(new Error("native hook relay bridge timed out"));
-    });
-    req.on("error", rejectOnce);
-    req.end(body);
-  });
-}
-
-function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "ENOENT" ||
-    code === "ECONNREFUSED" ||
-    code === "EAGAIN" ||
-    (error instanceof Error && error.message === "native hook relay bridge not found")
-  );
-}
-
-export function isRetryableNativeHookRelayBridgeLookupError(params: {
-  error: unknown;
-  elapsedMs: number;
-}): boolean {
-  return (
-    isRetryableNativeHookRelayBridgeError(params.error) ||
-    (params.elapsedMs < NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS &&
-      isNativeHookRelayBridgeStaleRegistrationError(params.error))
-  );
-}
-
-export function isNativeHookRelayBridgeStaleRegistrationError(error: unknown): boolean {
-  return (
-    error instanceof Error && error.message === NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR
-  );
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(0, ms));
-  });
 }
 
 export function clearNativeHookRelayBridgesForTests(): void {

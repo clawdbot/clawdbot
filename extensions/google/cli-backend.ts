@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
@@ -10,6 +11,7 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
   "flash-lite": "gemini-3.1-flash-lite",
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
+const GEMINI_ALLOWED_MCP_SERVERS_ARG = "--allowed-mcp-server-names";
 
 type GeminiCliBackendConfig = CliBackendPlugin["config"];
 type GeminiCliOutputMode = NonNullable<GeminiCliBackendConfig["output"]>;
@@ -55,6 +57,43 @@ function normalizeGeminiCliBackendConfig(config: GeminiCliBackendConfig): Gemini
   };
 }
 
+function isGeminiAllowedMcpServersArg(arg: string): boolean {
+  const [name] = arg.split("=", 1);
+  if (!name?.startsWith("--")) {
+    return false;
+  }
+  return name.slice(2).replaceAll(/[-_]/g, "").toLowerCase() === "allowedmcpservernames";
+}
+
+function resolveGeminiCliExecutionArgs(
+  ctx: Parameters<NonNullable<CliBackendPlugin["resolveExecutionArgs"]>>[0],
+): readonly string[] {
+  if (!ctx.toolAvailability) {
+    return ctx.baseArgs;
+  }
+  const terminatorIndex = ctx.baseArgs.indexOf("--");
+  const optionArgs = terminatorIndex === -1 ? ctx.baseArgs : ctx.baseArgs.slice(0, terminatorIndex);
+  const positionalArgs = terminatorIndex === -1 ? [] : ctx.baseArgs.slice(terminatorIndex);
+  const args: string[] = [];
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index];
+    if (arg && isGeminiAllowedMcpServersArg(arg)) {
+      if (!arg.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg !== undefined) {
+      args.push(arg);
+    }
+  }
+
+  // Gemini intersects file-based allowlists, where an empty intersection means
+  // unrestricted. The argv override bypasses that merge and prevents MCP startup.
+  const allowedServer = ctx.toolAvailability.openClaw.length > 0 ? "openclaw" : crypto.randomUUID();
+  return [...args, GEMINI_ALLOWED_MCP_SERVERS_ARG, allowedServer, ...positionalArgs];
+}
+
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
@@ -81,6 +120,7 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     toolAvailabilityEnforcement: "prepare-execution",
     authEpochMode: "profile-only",
     normalizeConfig: normalizeGeminiCliBackendConfig,
+    resolveExecutionArgs: resolveGeminiCliExecutionArgs,
     prepareExecution: async (ctx) => {
       const { prepareGeminiCliExecution } = await import("./cli-backend-auth.runtime.js");
       return await prepareGeminiCliExecution(

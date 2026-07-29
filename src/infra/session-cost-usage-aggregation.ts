@@ -130,9 +130,10 @@ export function readUsageCostRollups(
   agentId: string,
   pricingFingerprint: string,
   databasePath?: string,
+  rows = readSessionCostUsageRollupRows(agentId, databasePath),
 ): Map<string, UsageCostStoredRollup> {
   const result = new Map<string, UsageCostStoredRollup>();
-  for (const row of readSessionCostUsageRollupRows(agentId, databasePath)) {
+  for (const row of rows) {
     try {
       const entry = normalizeUsageCostRollup(JSON.parse(row.valueJson), pricingFingerprint);
       if (entry) {
@@ -595,7 +596,7 @@ export async function refreshCostUsageCacheForAgent(params: {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
-    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
+    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
     const discoveredFiles = await listUsageCountedTranscriptFiles(
       params.agentId,
       params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
@@ -616,6 +617,7 @@ export async function refreshCostUsageCacheForAgent(params: {
       agentId: params.agentId,
       databasePath,
       liveKeys: new Set(files.map((file) => file.filePath)),
+      rows,
     });
 
     const requestedPaths = new Set<string>();

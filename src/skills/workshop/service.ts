@@ -612,6 +612,7 @@ export async function applySkillProposal(
       status: "applied",
       updatedAt: now,
       appliedAt: now,
+      statusReason: normalizeOptionalString(input.reason),
       scan,
     };
     await updateSkillProposalRecord({

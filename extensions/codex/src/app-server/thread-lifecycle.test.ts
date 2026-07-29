@@ -451,6 +451,67 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
+  it("adds native completion handoff guidance only when sessions_yield is available", () => {
+    const withSessionsYield = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw_direct",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "End the current turn",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
+    const withoutSessionsYield = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [],
+      },
+    );
+    const withWrongNamespace = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "Different tool with the same leaf name",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(withSessionsYield).toContain(
+      "end the current turn with `openclaw_direct.sessions_yield`",
+    );
+    expect(withSessionsYield).toContain(
+      "Use native `wait_agent` only for an intentional same-turn wait",
+    );
+    expect(withSessionsYield).toContain("Never loop-poll for native child completion.");
+    expect(withoutSessionsYield).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withoutSessionsYield).not.toContain("native `wait_agent`");
+    expect(withWrongNamespace).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withWrongNamespace).not.toContain("native `wait_agent`");
+  });
+
   it("summarizes deferred dynamic tool names in developer instructions", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [

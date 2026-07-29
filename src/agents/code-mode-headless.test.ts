@@ -58,6 +58,7 @@ function expectFailed(result: CodeModeHeadlessResult) {
 describe("headless Code Mode", () => {
   afterEach(() => {
     vi.useRealTimers();
+    testing.setTypescriptRuntimeForTest(null);
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -804,6 +805,46 @@ describe("headless Code Mode", () => {
     expect(result).toMatchObject({
       code: "aborted",
       error: "code mode execution aborted",
+    });
+  });
+
+  it("times out an unfinished headless TypeScript runtime load", async () => {
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        language: "typescript",
+        code: "return 42;",
+        wallClockMs: 25,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      code: "timeout",
+      error: "code mode headless wall-clock timeout exceeded",
+      output: [],
+      toolCallCount: 0,
+    });
+  });
+
+  it("aborts an unfinished headless TypeScript runtime load", async () => {
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    const controller = new AbortController();
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness(),
+      language: "typescript",
+      code: "return 42;",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    expect(expectFailed(await resultPromise)).toMatchObject({
+      code: "aborted",
+      error: "code mode execution aborted",
+      output: [],
+      toolCallCount: 0,
     });
   });
 

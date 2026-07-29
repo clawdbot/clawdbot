@@ -46,6 +46,10 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import {
+  resolveReplyOperationRunState,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -61,6 +65,8 @@ export async function gatherDispatchRequest(
   const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
   const state = { params: normalizedParams, messageAuditTerminal };
   const { cfg, dispatcher } = normalizedParams;
+  const replyOperationRunState: ReplyOperationRunState =
+    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
@@ -454,6 +460,7 @@ export async function gatherDispatchRequest(
       inboundAudio,
       sessionTtsAuto,
       workspaceDir,
+      replyOperationRunState,
       completeDispatchReplyOperation,
       dispatchHookDispatcher,
       ensureDispatchReplyOperation,

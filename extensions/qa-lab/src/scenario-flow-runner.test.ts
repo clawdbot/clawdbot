@@ -402,10 +402,43 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it.each(["runtime-first-hour-20-turn", "runtime-soak-100-turn"])(
+    "fails %s when no requested outbound marker is delivered",
+    async (scenarioId) => {
+      await expect(runLoadedScenarioFlow(scenarioId)).rejects.toThrow("test condition was not met");
+    },
+  );
+
+  it.each([
+    { id: "runtime-first-hour-20-turn", prefix: "FIRST-HOUR-20", width: 2 },
+    { id: "runtime-soak-100-turn", prefix: "SOAK-100", width: 3 },
+  ])("fails $id when user turns are persisted more than once", async ({ id, prefix, width }) => {
+    const state = createQaBusState();
+    let turnCount = 0;
+    await expect(
+      runLoadedScenarioFlow(id, {
+        state,
+        api: {
+          normalizeLowercaseStringOrEmpty: (value: unknown) =>
+            typeof value === "string" ? value.trim().toLowerCase() : "",
+          runAgentPrompt: async () => {
+            turnCount += 1;
+            state.addOutboundMessage({
+              accountId: "qa-channel",
+              to: "dm:qa-operator",
+              text: `${prefix}-${String(turnCount).padStart(width, "0")}`,
+            });
+          },
+          readSessionTranscriptSummary: async () => ({ userMessageCount: turnCount + 1 }),
+        },
+      }),
+    ).rejects.toThrow("persisted user turns");
+  });
+
   it.each([
     "control-ui-qa-channel-image-roundtrip",
     "control-ui-assistant-transcript-role-boundary",
-  ])("opens the selected Control UI session on the chat route for %s", async (scenarioId) => {
+  ])("opens the selected Control UI session from the gateway root for %s", async (scenarioId) => {
     const scenario = readQaScenarioById(scenarioId);
     const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions);
     if (!actions) {
@@ -475,7 +508,7 @@ describe("scenario-flow-runner", () => {
       throw new Error(`scenario did not open its Control UI session: ${scenarioId}`);
     }
     const chatUrl = new URL(openedUrl);
-    expect(chatUrl.pathname).toBe("/chat");
+    expect(chatUrl.pathname).toBe("/");
     expect(chatUrl.searchParams.get("session")).toBe(sessionKey);
     expect(chatUrl.hash).toBe(`#token=${encodeURIComponent(gatewayToken)}`);
   });

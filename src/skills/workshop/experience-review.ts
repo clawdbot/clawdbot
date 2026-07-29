@@ -40,6 +40,7 @@ type ExperienceReviewAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   authProfileId?: string;
+  modelIterations?: number;
   skillWorkshopAvailable?: boolean;
   compacted?: boolean;
   trigger?: string;
@@ -298,7 +299,15 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
 
       const turnMessages = currentTurnMessages(params.event.messages);
-      const modelIterations = countModelIterations(turnMessages);
+      // Native harnesses can report exact provider iterations even when their
+      // transcript projection has a different assistant-message cardinality.
+      const reportedModelIterations = params.ctx.modelIterations;
+      const modelIterations =
+        reportedModelIterations === undefined
+          ? countModelIterations(turnMessages)
+          : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
+            ? reportedModelIterations
+            : 0;
       if (params.event.success && modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as

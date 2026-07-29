@@ -606,6 +606,78 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("preserves a project annotation from recall ingestion through promotion", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Use the repository release helper";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-02", [`- ${snippet}`]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "release helper",
+        results: [
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+            projectKey: "path:/Users/Alice/Repo",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "repository release",
+        results: [
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+            projectKey: "path:/Users/alice/repo",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "mixed case repository",
+        results: [
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+            projectKey: "github.com/OpenClaw/OpenClaw",
+          },
+        ],
+      });
+      const candidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(candidates[0]?.projectKey).toBe(
+        "path:/Users/Alice/Repo; path:/Users/alice/repo; github.com/OpenClaw/OpenClaw",
+      );
+
+      await applyShortTermPromotions({
+        workspaceDir,
+        candidates,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
+        "<!-- project: path:/Users/Alice/Repo; path:/Users/alice/repo; github.com/OpenClaw/OpenClaw -->",
+      );
+    });
+  });
+
   it("serializes concurrent recall writes so counts are not lost", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await Promise.all(

@@ -112,6 +112,11 @@ describe("gateway-backed session route resolution", () => {
       draft: undefined,
       face: "dashboard",
       canonicalLocation: { pathname: "/dashboard/research", search: "", hash: "" },
+      canonicalLocationSource: {
+        pathname: "/chat/research",
+        search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+        hash: "",
+      },
     });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research", search: "global" }),
@@ -163,6 +168,7 @@ describe("gateway-backed session route resolution", () => {
       draft: undefined,
       face: "chat",
       canonicalLocation: { pathname: "/chat/roboclaw", search: "", hash: "" },
+      canonicalLocationSource: targetLocation(target),
     });
   });
 
@@ -223,6 +229,7 @@ describe("gateway-backed session route resolution", () => {
         search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1",
         hash: "",
       },
+      canonicalLocationSource: targetLocation(target),
     });
   });
 

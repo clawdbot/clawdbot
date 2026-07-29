@@ -144,6 +144,7 @@ no route-specific URL parameters.
 | Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                 |
 | Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                 |
 | MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                 |
+| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`    |
 | Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                 |
 | Labs                | `/settings/labs`            | -                         | Shared settings parameters below                 |
 | About               | `/settings/about`           | -                         | Shared settings parameters below                 |
@@ -168,6 +169,11 @@ no route-specific URL parameters.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
+with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
+`?section=memory` are replaced once with the corresponding path while keeping
+any setting anchor.
 
 ## Special documents and startup modes
 

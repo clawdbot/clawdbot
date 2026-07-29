@@ -718,6 +718,18 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([]);
   });
 
+  it("skips app_mention events for modern C-prefixed group DMs without channel_type", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open", channelType: "mpim" },
+      event: { ...makeAppMentionEvent({ channel: "C0MPDM42" }), channel_type: undefined },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    // Handled via message.mpim; must not log a duplicate receipt.
+    expect(inboundLogLines()).toEqual([]);
+  });
+
   it("routes app_mention events from channels to the message handler", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "app_mention",

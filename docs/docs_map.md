@@ -690,6 +690,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Targets for outbound delivery
   - H2: DM channel retry
   - H2: Preview streaming
+  - H2: Read channel history (message tool)
   - H2: Reactions (message tool)
   - H2: Interactive buttons (message tool)
   - H3: Direct API integration (external scripts)
@@ -918,6 +919,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Token model
   - H2: Actions and gates
   - H2: Access control and routing
+  - H3: Group DMs (MPDMs) and bots
   - H2: Threading, sessions, and reply tags
   - H2: Ack reactions
   - H3: Emoji (ackReaction)
@@ -2612,6 +2614,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recall: two lanes
   - H3: Lane 1: always on, zero model calls
   - H3: Lane 2: escalation
+  - H2: Project-scoped memory
   - H2: The user model
   - H2: Standing intents: prospective memory
   - H2: The security model
@@ -3863,6 +3866,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Signals exported
   - H2: Configuration reference
   - H3: Environment variables
+  - H2: Continue an upstream WebSocket trace
   - H2: Privacy and content capture
   - H2: Sampling and flushing
   - H3: Model-call observation units
@@ -5066,6 +5070,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: The computer.act node command
   - H2: Authorization
   - H2: Safety
+  - H2: macOS permission troubleshooting
   - H2: Relationship to other desktop-control paths
 
 ## nodes/images.md
@@ -5538,6 +5543,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements for stable permissions
   - H2: Accessibility grants for Node and CLI runtimes
+  - H2: Separate Computer Control grants
   - H2: Recovery checklist when prompts disappear
   - H2: Files and folders permissions (Desktop/Documents/Downloads)
   - H2: Related
@@ -10468,6 +10474,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Review past sessions manually
   - H2: What OpenClaw can learn
   - H2: When experience review runs
+  - H2: Runtime support
   - H2: What the reviewer receives
   - H2: Proposal safety
   - H2: Review learned proposals
@@ -10719,6 +10726,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Supported providers
   - H2: Configuration
+  - H3: Local Speech Swift and speech-core
   - H3: Per-agent voice overrides
   - H2: Personas
   - H3: Minimal persona

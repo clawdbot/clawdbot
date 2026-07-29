@@ -1,5 +1,6 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { SessionEntry } from "./types.js";
@@ -28,10 +29,11 @@ function normalizeTranscriptSessionId(value: string): string | undefined {
 }
 
 function normalizeOptionalTimestamp(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  return value === undefined
+    ? undefined
+    : typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? value
+      : 0;
 }
 
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
@@ -39,9 +41,147 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   const {
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
+    pendingFinalDeliveryCreatedAt,
+    pendingFinalDeliveryLastAttemptAt: _pendingFinalDeliveryLastAttemptAt,
+    pendingFinalDeliveryAttemptCount: _pendingFinalDeliveryAttemptCount,
+    pendingFinalDeliveryLastError: _pendingFinalDeliveryLastError,
+    pendingFinalDeliveryText,
+    pendingFinalDeliveryContext,
+    pendingFinalDeliveryIntentId,
+    fallbackNoticeSelectedModel,
+    fallbackNoticeActiveModel,
+    fallbackNoticeReason,
+    memoryFlushAt: _memoryFlushAt,
+    memoryFlushCompactionCount,
+    memoryFlushContextHash: _memoryFlushContextHash,
+    memoryFlushFailureCount,
+    memoryFlushLastFailedAt: _memoryFlushLastFailedAt,
+    memoryFlushLastFailureError: _memoryFlushLastFailureError,
     ...canonicalValue
   } = value;
+  const legacyPendingText = normalizeOptionalString(pendingFinalDeliveryText);
+  const legacySelectedModel = normalizeOptionalString(fallbackNoticeSelectedModel);
+  const legacyActiveModel = normalizeOptionalString(fallbackNoticeActiveModel);
+  const legacyFlushCompactionCount = normalizeCount(memoryFlushCompactionCount);
+  const legacyFlushFailureCount = normalizeCount(memoryFlushFailureCount);
+  const intentId = normalizeOptionalString(pendingFinalDeliveryIntentId);
+  const pendingFinalDelivery =
+    normalizePendingFinalDelivery(canonicalValue.pendingFinalDelivery) ??
+    (legacyPendingText || value.pendingFinalDelivery === true
+      ? {
+          ...(legacyPendingText
+            ? { kind: "replayable" as const, text: legacyPendingText }
+            : { kind: "transport-only" as const }),
+          createdAt:
+            normalizeOptionalTimestamp(pendingFinalDeliveryCreatedAt) ??
+            normalizeOptionalTimestamp(value.updatedAt) ??
+            0,
+          ...(isRecord(pendingFinalDeliveryContext)
+            ? { context: pendingFinalDeliveryContext }
+            : {}),
+          ...(intentId ? { intentId } : {}),
+        }
+      : undefined);
+  if (pendingFinalDelivery) {
+    canonicalValue.pendingFinalDelivery = pendingFinalDelivery;
+  } else {
+    delete canonicalValue.pendingFinalDelivery;
+  }
+  const reason = normalizeOptionalString(fallbackNoticeReason);
+  const fallbackNotice =
+    normalizeFallbackNotice(canonicalValue.fallbackNotice) ??
+    (legacySelectedModel && legacyActiveModel
+      ? {
+          kind: "active" as const,
+          selectedModel: legacySelectedModel,
+          activeModel: legacyActiveModel,
+          ...(reason ? { reason } : {}),
+        }
+      : undefined);
+  if (fallbackNotice) {
+    canonicalValue.fallbackNotice = fallbackNotice;
+  } else {
+    delete canonicalValue.fallbackNotice;
+  }
+  const memoryFlush =
+    normalizeMemoryFlush(canonicalValue.memoryFlush) ??
+    (legacyFlushFailureCount && legacyFlushFailureCount > 0
+      ? {
+          kind: "failed" as const,
+          ...(legacyFlushCompactionCount !== undefined
+            ? { compactionCount: legacyFlushCompactionCount }
+            : {}),
+          failureCount: legacyFlushFailureCount,
+        }
+      : legacyFlushCompactionCount !== undefined
+        ? { kind: "succeeded" as const, compactionCount: legacyFlushCompactionCount }
+        : undefined);
+  if (memoryFlush) {
+    canonicalValue.memoryFlush = memoryFlush;
+  } else {
+    delete canonicalValue.memoryFlush;
+  }
   return canonicalValue as unknown as SessionEntry;
+}
+
+function normalizePendingFinalDelivery(
+  value: unknown,
+): SessionEntry["pendingFinalDelivery"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const createdAt = normalizeOptionalTimestamp(value.createdAt);
+  if (createdAt === undefined) {
+    return undefined;
+  }
+  const intentId = normalizeOptionalString(value.intentId);
+  const base = {
+    createdAt,
+    ...(isRecord(value.context) ? { context: value.context } : {}),
+    ...(intentId ? { intentId } : {}),
+  };
+  if (value.kind === "transport-only") {
+    return { kind: "transport-only", ...base };
+  }
+  const text = normalizeOptionalString(value.text);
+  return value.kind === "replayable" && text ? { kind: "replayable", text, ...base } : undefined;
+}
+
+function normalizeFallbackNotice(value: unknown): SessionEntry["fallbackNotice"] | undefined {
+  if (!isRecord(value) || value.kind !== "active") {
+    return undefined;
+  }
+  const selectedModel = normalizeOptionalString(value.selectedModel);
+  const activeModel = normalizeOptionalString(value.activeModel);
+  const reason = normalizeOptionalString(value.reason);
+  return selectedModel && activeModel
+    ? { kind: "active", selectedModel, activeModel, ...(reason ? { reason } : {}) }
+    : undefined;
+}
+
+function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const compactionCount = normalizeCount(value.compactionCount);
+  if (value.kind === "succeeded" && compactionCount !== undefined) {
+    return { kind: "succeeded", compactionCount };
+  }
+  const failureCount = normalizeCount(value.failureCount);
+  if (value.kind !== "failed" || !failureCount) {
+    return undefined;
+  }
+  return {
+    kind: "failed",
+    ...(compactionCount !== undefined ? { compactionCount } : {}),
+    failureCount,
+  };
+}
+
+function normalizeCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /** Normalizes persisted session store entries before they reach runtime callers. */

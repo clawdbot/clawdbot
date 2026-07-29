@@ -43,6 +43,7 @@ export type ShortTermRecallEntry = {
   recallDays: string[];
   conceptTags: string[];
   claimHash?: string;
+  projectKey?: string;
   promotedAt?: string;
   provenance?: MemoryEntryProvenance;
 };
@@ -101,6 +102,7 @@ export type PromotionCandidate = {
   maxScore: number;
   uniqueQueries: number;
   claimHash?: string;
+  projectKey?: string;
   promotedAt?: string;
   firstRecalledAt: string;
   lastRecalledAt: string;

@@ -1058,6 +1058,10 @@ export async function healthCommand(
       }
     }
 
+    if (Number.isFinite(summary.durationMs)) {
+      runtime.log(info(`Gateway probe duration: ${summary.durationMs}ms`));
+    }
+
     if (resolvedAgents.length > 0) {
       const agentLabels = resolvedAgents.map((agent) =>
         agent.isDefault ? `${agent.agentId} (default)` : agent.agentId,

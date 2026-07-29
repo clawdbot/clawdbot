@@ -788,10 +788,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
-.shell-nav-backdrop {
-  display: none;
-}
-
 /* 1px overlay on the nav border edge; the divider paints its own centered
    line, so the host needs no background here. */
 .sidebar-resizer {
@@ -1733,6 +1729,11 @@ html.openclaw-native-macos
   padding: 4px 10px 10px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.sidebar-session-empty-placeholder {
+  /* Match the section title: 9px header inset + 8px drag handle + 8px gap. */
+  padding-left: 25px;
 }
 
 .sidebar-session--archived {

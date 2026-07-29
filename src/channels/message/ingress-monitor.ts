@@ -28,6 +28,7 @@ export type ChannelIngressMonitorLifecycle = {
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
+  onFailed?: (error: unknown) => void | Promise<void>;
   onAbandoned: () => void | Promise<void>;
 };
 
@@ -218,6 +219,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const getQueue = (): Queue => (queue ??= queueFactory());
 
+  const ensureQueueAvailable = (): void => {
+    try {
+      getQueue();
+    } catch (error) {
+      throw new ChannelIngressUnavailableError(
+        `Channel ingress queue is unavailable: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+  };
+
   const isAborted = () => drainAbortSignal.aborted;
 
   const waitForActiveDeliveries = async (): Promise<void> => {
@@ -294,6 +306,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             handedOff = true;
             deferredHandoff = true;
             lifecycle.onAdoptionFinalizing();
+          },
+          onFailed: async (error) => {
+            handedOff = true;
+            deferredHandoff = true;
+            await lifecycle.onFailed?.(error);
+            requestDrain();
           },
           onAbandoned: async () => {
             handedOff = true;
@@ -607,19 +625,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       // running a timer that reports the same unrecoverable error on every tick. The typed
       // rethrow is what lets the gateway record the failure as dead ingress rather than as
       // one more anonymous channel crash.
-      try {
-        getQueue();
-      } catch (error) {
-        throw new ChannelIngressUnavailableError(
-          `Channel ingress queue is unavailable: ${formatErrorMessage(error)}`,
-          { cause: error },
-        );
-      }
+      ensureQueueAvailable();
       running = true;
       pollTimer = setInterval(requestDrain, options.pollIntervalMs);
       pollTimer.unref?.();
       requestDrain();
     },
+    ensureQueueAvailable,
     requestDrain,
     pause,
     stop: () => {

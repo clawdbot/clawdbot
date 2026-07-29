@@ -101,6 +101,7 @@ function buildConsolidationPrompt(
       resultEntry: buildCandidateResultEntry(candidate, maxPromotedSnippetTokens),
       sourceRef: candidateSourceRef(candidate),
       provenance: candidate.provenance,
+      projectKey: candidate.projectKey ?? null,
       supersedesKey: candidate.provenance?.supersedesKey ?? null,
     })),
   });
@@ -219,6 +220,7 @@ function normalizeComparableMemoryFact(value: string): string {
     .replace(/^[-*+]\s+/u, "")
     .replace(/\s+<!--\s*trigger:[^\r\n]*?-->/giu, "")
     .replace(/\s+<!--\s*importance:\s*\d+\s*-->/giu, "")
+    .replace(/\s+<!--\s*project:\s*[^\r\n]*?-->/giu, "")
     .replace(/\s+Source:\s+[^\r\n]+#L\d+-L\d+\s*$/giu, "")
     .replace(
       /\s+\[score=\d+(?:\.\d+)? signals=\d+ recalls=\d+ avg=\d+(?:\.\d+)? source=[^\]]+\]\s*$/u,

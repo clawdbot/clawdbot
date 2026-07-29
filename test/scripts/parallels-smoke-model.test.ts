@@ -281,12 +281,41 @@ describe("Parallels smoke model selection", () => {
     expect(controller).toContain('prlctl stop "$VM_NAME" --acpi');
     expect(controller).toContain("HypervisorPresent");
     expect(controller).toContain("git --version && node --version && npm --version");
+    expect(controller).toContain("wait_for_check WSL 'wsl.exe --version'");
+    expect(controller).toContain("ensure_wsl_default_version");
+    expect(controller).toContain("WSL default version did not become 2 within 120 seconds");
+    expect(controller).toContain("1641 { exit 105 }");
+    expect(controller).toContain("3010 { exit 194 }");
+    expect(controller).toContain('run_bounded 1800 prlctl exec "$VM_NAME" powershell.exe');
+    expect(controller).not.toContain('run_windows_installer prlctl exec "$VM_NAME"');
     expect(controller).toContain(
       "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs')",
     );
     expect(controller).toContain("winget.exe download --source winget");
     expect(controller).toContain("OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY");
     expect(controller).not.toContain("openclaw-windows-node");
+  });
+
+  it("resets Linux product state before both install lanes", () => {
+    const linux = readFileSync(TS_PATHS.linux, "utf8");
+    for (const lane of ["fresh", "upgrade"]) {
+      const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
+      const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
+      const installIndex = linux.indexOf(
+        `this.phase("${lane}.${lane === "fresh" ? "install-latest-bootstrap" : "install-latest"}"`,
+      );
+      expect(restoreIndex).toBeGreaterThanOrEqual(0);
+      expect(resetIndex).toBeGreaterThan(restoreIndex);
+      expect(installIndex).toBeGreaterThan(resetIndex);
+    }
+    expect(linux).toContain("npm uninstall -g openclaw");
+    expect(linux).toContain("rm -rf /root/.openclaw /root/.npm/_cacache");
+  });
+
+  it("forces the explicit test-owned Windows gateway stop", () => {
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+    expect(windows).toContain('const forceFlag = action === "stop" ? " --force" : "";');
+    expect(windows).toContain("Invoke-OpenClaw gateway ${action}${forceFlag}");
   });
 
   it("preserves caller arguments when loaded as the Windows controller library", () => {

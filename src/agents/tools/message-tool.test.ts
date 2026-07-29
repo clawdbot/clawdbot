@@ -963,11 +963,13 @@ describe("message tool secret scoping", () => {
   it("carries terminal source-reply intent outside provider params", async () => {
     mockSendResult();
     const sessionKey = "agent:main:telegram:direct:123";
+    const runSessionKey = "agent:main:main";
     const turnCapability = mintMessageActionTurnCapability({
       agentId: "main",
       runId: "run-source-reply",
       sessionId: "session-source-reply",
       sessionKey,
+      sourceReplySessionKey: runSessionKey,
       toolContext: {
         currentChannelProvider: "telegram",
         currentChannelId: "123",
@@ -980,6 +982,7 @@ describe("message tool secret scoping", () => {
       runMessageAction: mocks.runMessageAction as never,
       agentId: "main",
       agentSessionKey: sessionKey,
+      runSessionKey,
       runId: "run-source-reply",
       sessionId: "session-source-reply",
       messageActionTurnCapability: turnCapability,
@@ -1001,6 +1004,8 @@ describe("message tool secret scoping", () => {
     const [progress, terminal] = mocks.runMessageAction.mock.calls.map((call) => call[0]);
     expect(progress?.sourceReplyFinal).toBe(false);
     expect(terminal?.sourceReplyFinal).toBe(true);
+    expect(progress?.sourceReplySessionKey).toBe(runSessionKey);
+    expect(terminal?.sourceReplySessionKey).toBe(runSessionKey);
     expect(progress?.sourceReplyToolCallId).toBe("message_progress");
     expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");

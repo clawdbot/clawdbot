@@ -98,6 +98,7 @@ describe("listGatewayMethods", () => {
       "sessions.companion.ask",
       "sessions.companion.state",
       "sessions.companion.reset",
+      "memory.search",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -197,6 +198,7 @@ describe("listGatewayMethods", () => {
       "sessions.companion.ask",
       "sessions.companion.state",
       "sessions.companion.reset",
+      "memory.search",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

@@ -4,7 +4,11 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
-import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
 
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
@@ -22,11 +26,29 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     "Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
+    buildNativeSubagentCompletionInstruction(options.dynamicTools),
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function buildNativeSubagentCompletionInstruction(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string | undefined {
+  const directNamespace = dynamicTools?.find(
+    (tool) =>
+      tool.type === "namespace" &&
+      tool.name.trim() === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  );
+  const hasSessionsYield =
+    directNamespace?.type === "namespace" &&
+    directNamespace.tools.some((tool) => tool.name.trim() === "sessions_yield");
+  if (!hasSessionsYield) {
+    return undefined;
+  }
+  return "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.";
 }
 
 function buildDeferredDynamicToolManifest(

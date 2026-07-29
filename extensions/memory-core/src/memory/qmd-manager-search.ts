@@ -272,7 +272,7 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
       if (score < minScore) {
         continue;
       }
-      const result = {
+      const result: MemorySearchResult = {
         path: doc.rel,
         startLine: lines.startLine,
         endLine: lines.endLine,
@@ -280,7 +280,10 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
         snippet,
         source: doc.source,
         provenance: resolveQmdSearchProvenance(doc.rel, doc.source, doc.observedAt),
-      } satisfies MemorySearchResult;
+      };
+      // QMD snippets are lossy presentation excerpts, not authoritative entries.
+      // Leave project identity neutral until QMD can return real indexed metadata;
+      // inferring from nearby comment text can attribute an adjacent entry.
       const artifactIdentity =
         doc.source === "sessions"
           ? resolveQmdSessionArtifactIdentity({

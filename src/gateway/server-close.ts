@@ -862,6 +862,16 @@ export function createGatewayCloseHandler(
           await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
         }
       });
+      // Load the bridge only at shutdown; eager imports boot the subagent registry at startup.
+      // Cancel parked calls before their agent harnesses and MCP transports disappear.
+      await shutdownStep(
+        "code-mode-runs",
+        async () => {
+          const { disposeAllCodeModeRuns } = await import("../agents/code-mode-state.js");
+          return disposeAllCodeModeRuns();
+        },
+        warnings,
+      );
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([

@@ -3,6 +3,9 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { BoardFace } from "./lib/board/settings.ts";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
+export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
+
+export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
@@ -27,6 +30,7 @@ const APP_ROUTE_DEFINITIONS = {
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },
+  talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
   about: { path: "/settings/about" },
@@ -58,6 +62,18 @@ export function isRouteId(routeId: string): routeId is RouteId {
   return routeId in APP_ROUTE_DEFINITIONS;
 }
 
+// Single source for page definitions: ui/src/pages/*/route.ts spreads this
+// into definePage so router matching can never drift from the table that
+// drives routeIdFromPath and base-path inference.
+export function routePageSpec<Id extends RouteId>(
+  routeId: Id,
+): { id: Id; path: string; aliases?: readonly string[] } {
+  const definition = APP_ROUTE_DEFINITIONS[routeId];
+  return "aliases" in definition
+    ? { id: routeId, path: definition.path, aliases: definition.aliases }
+    : { id: routeId, path: definition.path };
+}
+
 export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
 }
@@ -78,6 +94,25 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   }
   const encodedBoardId = encodeURIComponent(boardId).replaceAll(".", "%2E");
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
+}
+
+export function pathForMemoryTab(tab: MemoryRouteTab, basePath = ""): string {
+  const memoryPath = pathForRoute("memory", basePath);
+  return tab === "overview" ? memoryPath : `${memoryPath}/${tab}`;
+}
+
+export function memoryTabFromPath(pathname: string, basePath = ""): MemoryRouteTab | null {
+  const normalizedPath = normalizePath(pathname);
+  const memoryPath = pathForRoute("memory", basePath);
+  if (normalizedPath === memoryPath) {
+    return "overview";
+  }
+  const prefix = `${memoryPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const segment = normalizedPath.slice(prefix.length);
+  return segment === "memories" || segment === "dreams" || segment === "settings" ? segment : null;
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
@@ -136,6 +171,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
     : normalizedPath;
   if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
     return "workboard";
+  }
+  if (memoryTabFromPath(normalizedPath, normalizedBasePath)) {
+    return "memory";
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
   if (sessionNamespace) {
@@ -201,14 +239,21 @@ export function inferBasePathFromPathname(pathname: string): string {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
-    const dynamicSessionRoute = sessionRouteNamespaceFromPath(candidate) !== null;
-    if (!routePath && !dynamicWorkboardRoute && !dynamicSessionRoute) {
+    const dynamicMemoryRoute = memoryTabFromPath(candidate) !== null;
+    const sessionNamespace = sessionRouteNamespaceFromPath(candidate);
+    const dynamicSessionRoute = sessionNamespace !== null;
+    if (!routePath && !dynamicWorkboardRoute && !dynamicMemoryRoute && !dynamicSessionRoute) {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const firstRouteSegment = (routePath ?? APP_ROUTE_DEFINITIONS.workboard.path)
-      .split("/")
-      .find(Boolean);
+    const dynamicRoutePath = dynamicWorkboardRoute
+      ? APP_ROUTE_DEFINITIONS.workboard.path
+      : dynamicMemoryRoute
+        ? APP_ROUTE_DEFINITIONS.memory.path
+        : sessionNamespace
+          ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
+          : null;
+    const firstRouteSegment = (routePath ?? dynamicRoutePath ?? "").split("/").find(Boolean);
     if (
       index > 0 &&
       previousSegment === firstRouteSegment &&

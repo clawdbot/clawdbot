@@ -144,6 +144,7 @@ function decodeMessageActionContext(
   const context = {
     expiresAtMs: value.expiresAtMs,
     sessionId: normalizeOptionalString(value.sessionId),
+    sourceReplySessionKey: normalizeOptionalString(value.sourceReplySessionKey),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),
     toolContext,

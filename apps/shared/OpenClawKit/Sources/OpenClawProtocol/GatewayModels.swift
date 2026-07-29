@@ -1179,17 +1179,20 @@ public struct RequestFrame: Codable, Sendable {
     public let id: String
     public let method: String
     public let params: AnyCodable?
+    public let traceparent: String?
 
     public init(
         type: String,
         id: String,
         method: String,
-        params: AnyCodable? = nil)
+        params: AnyCodable? = nil,
+        traceparent: String? = nil)
     {
         self.type = type
         self.id = id
         self.method = method
         self.params = params
+        self.traceparent = traceparent
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1197,6 +1200,7 @@ public struct RequestFrame: Codable, Sendable {
         case id
         case method
         case params
+        case traceparent
     }
 }
 

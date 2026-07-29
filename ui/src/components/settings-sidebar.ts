@@ -24,6 +24,7 @@ import "./sidebar-update-card.ts";
 type SettingsSidebarProps = {
   basePath: string;
   activeRouteId: RouteId;
+  activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
@@ -54,6 +55,9 @@ type SettingsNavigationItemView = {
 };
 
 function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
+  if (block.pathname) {
+    return false;
+  }
   const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
   return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
     (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
@@ -96,7 +100,7 @@ function filterSettingsNavigationGroups(
   const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
   const seenBlocks = new Set<string>();
   for (const block of blockMatches) {
-    const blockKey = `${block.routeId}\u0000${block.search ?? ""}\u0000${block.hash}`;
+    const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
     if (seenBlocks.has(blockKey)) {
       continue;
     }
@@ -170,9 +174,11 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
 }
 
 function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock) {
-  const href = pathForRoute(block.routeId, props.basePath) + (block.search ?? "") + block.hash;
+  const pathname = block.pathname ?? pathForRoute(block.routeId, props.basePath);
+  const href = pathname + (block.search ?? "") + block.hash;
   const active =
     props.activeRouteId === block.routeId &&
+    (block.pathname === undefined || props.activePathname === block.pathname) &&
     props.activeHash === block.hash &&
     (block.search === undefined || props.activeSearch === block.search);
   return html`
@@ -193,6 +199,7 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
         }
         event.preventDefault();
         props.onNavigate(block.routeId, {
+          ...(block.pathname ? { pathname: block.pathname } : {}),
           ...(block.search ? { search: block.search } : {}),
           hash: block.hash,
         });

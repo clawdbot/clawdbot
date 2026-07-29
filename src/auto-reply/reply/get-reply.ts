@@ -546,8 +546,8 @@ export async function getReplyFromConfig(
     storePath,
   });
 
-  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+  if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
 
     // Heartbeats may safely clear ack-only pending state, but must not replay
     // user-facing pending finals through a different delivery target.
@@ -879,6 +879,7 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
   };

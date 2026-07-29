@@ -378,6 +378,12 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const canEnforceExactToolAvailability =
+    backendResolved.nativeToolMode === "selectable" &&
+    ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+      backendResolved.resolveExecutionArgs !== undefined) ||
+      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
+        backendResolved.prepareExecution !== undefined));
   let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
     if (params.cliToolAvailability !== undefined) {
@@ -412,6 +418,16 @@ export async function prepareCliRunContext(
       };
     }
   }
+  if (params.disableTools === true && !isSideQuestion && canEnforceExactToolAvailability) {
+    // Selectable backends need the exact empty cap as well as the generic flag;
+    // otherwise their native tools remain selectable and the run must fail closed.
+    runtimeToolsAllowPolicy = undefined;
+    params = {
+      ...params,
+      toolsAllow: undefined,
+      cliToolAvailability: { native: [], openClaw: [] },
+    };
+  }
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = resolveNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -429,15 +445,7 @@ export async function prepareCliRunContext(
       },
     };
   }
-  if (
-    params.cliToolAvailability !== undefined &&
-    (backendResolved.nativeToolMode !== "selectable" ||
-      !backendResolved.toolAvailabilityEnforcement ||
-      (backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-        !backendResolved.resolveExecutionArgs) ||
-      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-        !backendResolved.prepareExecution))
-  ) {
+  if (params.cliToolAvailability !== undefined && !canEnforceExactToolAvailability) {
     // Cron persists this verbatim and failure alerts truncate at 200 characters,
     // so keep the upgrade recovery and fail-closed outcome compact.
     throw new Error(

@@ -60,6 +60,7 @@ export type ChatRouteData =
       shortId?: string;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
+      canonicalLocationSource?: RouteLocation;
     }
   | {
       kind: "ambiguous";
@@ -448,7 +449,7 @@ function resolvedSessionRouteData(params: {
     draft: draftFromLocation(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
-    ...(canonicalLocation ? { canonicalLocation } : {}),
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
 
@@ -485,7 +486,7 @@ function resolvedMainSessionRouteData(params: {
     agentId: params.target.agentId,
     draft: draftFromLocation(params.location),
     face,
-    ...(canonicalLocation ? { canonicalLocation } : {}),
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
 
@@ -537,7 +538,7 @@ export async function loadChatRoute(
       face: resolvedFace,
       // Non-null only on a preference-derived open, where it always at least drops the
       // marker from the URL.
-      ...(canonicalLocation ? { canonicalLocation } : {}),
+      ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: routeLocation } : {}),
     };
   }
   if (target.kind === "main") {
@@ -570,7 +571,7 @@ export async function loadChatRoute(
       draft: draftFromLocation(routeLocation),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search
-        ? { canonicalLocation }
+        ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : {}),
     };
   }
@@ -668,11 +669,13 @@ export async function loadChatRoute(
       draft: draftFromLocation(routeLocation),
       face,
       ...(canonicalLocation
-        ? { canonicalLocation }
+        ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : preferenceLocation && preferenceLocation.search !== routeLocation.search
-          ? { canonicalLocation: preferenceLocation }
+          ? { canonicalLocation: preferenceLocation, canonicalLocationSource: routeLocation }
           : {}),
-      ...(canonicalLocationReady ? { canonicalLocationReady } : {}),
+      ...(canonicalLocationReady
+        ? { canonicalLocationReady, canonicalLocationSource: routeLocation }
+        : {}),
     };
   }
   const cached = findCachedShortSession(context, routeLocation, target);
@@ -685,7 +688,9 @@ export async function loadChatRoute(
       draft: draftFromLocation(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
-      ...(canonicalLocationChanged ? { canonicalLocation } : {}),
+      ...(canonicalLocationChanged
+        ? { canonicalLocation, canonicalLocationSource: routeLocation }
+        : {}),
     };
   }
   const resolution = cached?.row

@@ -498,6 +498,22 @@ describe("channel ingress monitor", () => {
     });
   });
 
+  it("can prepare the durable queue before starting the drain", async () => {
+    await withQueue(async (queue) => {
+      const queueFactory = vi.fn(() => queue);
+      const monitor = createMonitor(queueFactory, vi.fn());
+
+      monitor.ensureQueueAvailable();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(false);
+
+      monitor.start();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(true);
+      await monitor.stop();
+    });
+  });
+
   it("fails start once when the durable queue cannot be opened", async () => {
     const denial = new Error(
       'openChannelIngressQueue is only available for trusted plugins in this release. Plugin "slack" loaded with origin "config"',

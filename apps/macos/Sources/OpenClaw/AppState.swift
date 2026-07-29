@@ -278,8 +278,7 @@ final class AppState {
     /// via its own Mac app instead of a second, separately toggled bridge here.
     func applyPeekabooBridgeHostState() {
         self.ifNotPreview {
-            let computerControlEnabled = UserDefaults.standard
-                .object(forKey: computerControlEnabledKey) as? Bool ?? false
+            let computerControlEnabled = isComputerControlEnabled()
             let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
             Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
         }

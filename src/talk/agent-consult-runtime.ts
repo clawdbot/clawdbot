@@ -262,7 +262,9 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  abortSignal?: AbortSignal;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  params.abortSignal?.throwIfAborted();
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
@@ -310,6 +312,12 @@ export async function consultRealtimeVoiceAgent(params: {
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
     },
   });
+  const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
+  if (params.abortSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    params.abortSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
 
   try {
     return await sessionWorkAdmission.run(async () => {
@@ -402,6 +410,7 @@ export async function consultRealtimeVoiceAgent(params: {
       return { text };
     });
   } finally {
+    params.abortSignal?.removeEventListener("abort", abortFromCaller);
     sessionWorkAdmission.release();
   }
 }

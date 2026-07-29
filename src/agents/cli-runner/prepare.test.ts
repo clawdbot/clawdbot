@@ -2857,7 +2857,72 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("requires prepared-execution backends to acknowledge exact enforcement and cleans up", async () => {
+  it("translates disableTools into an exact empty cap for selectable backends", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      disableTools: true,
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+  });
+
+  it("lets disableTools override a selectable backend toolsAllow projection", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      disableTools: true,
+      toolsAllow: ["write"],
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+  });
+
+  it("requires prepared-execution backends to enforce the derived disabled-tools cap", async () => {
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ cleanup }));
     setRawCliBackendForPrepareTest({
@@ -2879,7 +2944,7 @@ describe("prepareCliRunContext", () => {
     await expect(
       fixture.prepare({
         provider: "settings-cli",
-        cliToolAvailability: { native: [], openClaw: [] },
+        disableTools: true,
       }),
     ).rejects.toThrow(
       "did not enforce exact per-run tool availability during execution preparation",
@@ -2888,6 +2953,30 @@ describe("prepareCliRunContext", () => {
       expect.objectContaining({ toolAvailability: { native: [], openClaw: [], mcp: [] } }),
     );
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("still rejects disableTools when a selectable backend cannot enforce an exact cap", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      nativeToolMode: "selectable",
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "selectable-cli",
+        disableTools: true,
+      }),
+    ).rejects.toThrow(
+      "CLI backend selectable-cli cannot run with tools disabled because it exposes native tools",
+    );
   });
 
   it("accepts a positive prepared-execution enforcement acknowledgement", async () => {
