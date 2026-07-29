@@ -283,12 +283,12 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
 
 ## Execution styles
 
-| Style           | `--session` value   | Runs in                  | Best for                        |
-| --------------- | ------------------- | ------------------------ | ------------------------------- |
+| Style           | `--session` value   | Runs in                   | Best for                        |
+| --------------- | ------------------- | ------------------------- | ------------------------------- |
 | Main session    | `main`              | Dedicated automation lane | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
-| Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`  | Reports, background chores      |
+| Current session | `current`           | Bound at creation time    | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session  | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 

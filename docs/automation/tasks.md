@@ -88,13 +88,13 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 ## What creates a task
 
-| Source                 | Runtime type | When a task record is created                                          | Default notify policy |
-| ---------------------- | ------------ | ---------------------------------------------------------------------- | --------------------- |
-| ACP background runs    | `acp`        | Spawning a child ACP session                                           | `done_only`           |
-| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                               | `done_only`           |
-| Automation jobs (all types) | `cron`  | Every automation run (main-session and isolated)                       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway                 | `silent`              |
-| Agent media jobs       | `cli`        | Session-backed `image_generate`/`music_generate`/`video_generate` runs | `silent`              |
+| Source                      | Runtime type | When a task record is created                                          | Default notify policy |
+| --------------------------- | ------------ | ---------------------------------------------------------------------- | --------------------- |
+| ACP background runs         | `acp`        | Spawning a child ACP session                                           | `done_only`           |
+| Subagent orchestration      | `subagent`   | Spawning a subagent via `sessions_spawn`                               | `done_only`           |
+| Automation jobs (all types) | `cron`       | Every automation run (main-session and isolated)                       | `silent`              |
+| CLI operations              | `cli`        | `openclaw agent` commands that run through the gateway                 | `silent`              |
+| Agent media jobs            | `cli`        | Session-backed `image_generate`/`music_generate`/`video_generate` runs | `silent`              |
 
 <AccordionGroup>
   <Accordion title="Notify defaults for automations and media">
@@ -168,10 +168,10 @@ That means the usual workflow is push-based: start detached work once, then let 
 
 Control how much you hear about each task:
 
-| Policy                | What is delivered                                       |
-| --------------------- | ------------------------------------------------------- |
-| `done_only` (default) | Only terminal state (succeeded, failed, etc.)           |
-| `state_changes`       | Every state transition and progress update              |
+| Policy                | What is delivered                                             |
+| --------------------- | ------------------------------------------------------------- |
+| `done_only` (default) | Only terminal state (succeeded, failed, etc.)                 |
+| `state_changes`       | Every state transition and progress update                    |
 | `silent`              | Nothing at all (default for automation, CLI, and media tasks) |
 
 Change the policy while a task is running:

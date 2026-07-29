@@ -31,19 +31,19 @@ flowchart TD
     Q5 -->|Yes| SO[Standing Orders]
 ```
 
-| Use case                                | Recommended            | Why                                              |
-| --------------------------------------- | ---------------------- | ------------------------------------------------ |
-| Send daily report at 9 AM sharp         | Automations            | Exact timing, isolated execution                 |
-| Remind me in 20 minutes                 | Automations            | One-shot with precise timing (`--at`)            |
-| Run weekly deep analysis                | Automations            | Standalone task, can use different model         |
-| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
-| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
-| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
-| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
-| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
-| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
-| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls        |
-| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
+| Use case                                | Recommended      | Why                                              |
+| --------------------------------------- | ---------------- | ------------------------------------------------ |
+| Send daily report at 9 AM sharp         | Automations      | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                 | Automations      | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                | Automations      | Standalone task, can use different model         |
+| Check inbox every 30 min                | Heartbeat        | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events    | Heartbeat        | Natural fit for periodic awareness               |
+| Inspect status of a subagent or ACP run | Background Tasks | Tasks ledger tracks all detached work            |
+| Audit what ran and when                 | Background Tasks | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize      | Task Flow        | Durable orchestration with revision tracking     |
+| Run a script on session reset           | Hooks            | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call         | Plugin hooks     | In-process hooks can intercept tool calls        |
+| Always check compliance before replying | Standing Orders  | Injected into every session automatically        |
 
 ### Automations vs Heartbeat
 
