@@ -1086,14 +1086,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
   }
 
-  private recoverDeletedActiveSession(state: ApplicationContext["sessions"]["state"]) {
+  private recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
     const context = this.context;
     const routeId = this.routeState.routeId;
     const sessionKey = this.activeSessionKey.trim();
     if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
       return;
     }
-    const selectedSessionDeleted = state.deletedSessions.some(({ key, agentId }) =>
+    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
       uiSessionEventMatches(
         {
           agentsList: context.agents.state.agentsList,
