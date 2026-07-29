@@ -12,6 +12,7 @@ import {
   readCodexAppServerClientRuntimeArtifact,
   validateCodexAppServerRuntimeArtifact,
 } from "./runtime-artifact.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function startOptions(
   command: string,
@@ -51,7 +52,7 @@ async function captureBinding(params: {
     before,
     startOptions: params.options,
     spawnIdentity: identity,
-    runtimeIdentity: { serverVersion: "0.144.1", userAgent: "codex-test" },
+    runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION, userAgent: "codex-test" },
   });
   bindCodexAppServerRuntimeArtifact(client, binding);
   return { binding, client };
@@ -210,7 +211,7 @@ describe("Codex app-server runtime artifact", () => {
           before,
           startOptions: options,
           spawnIdentity: identity,
-          runtimeIdentity: { serverVersion: "0.144.1" },
+          runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION },
         }),
       ).rejects.toThrow("changed during startup");
     });

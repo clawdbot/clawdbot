@@ -301,9 +301,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("streams assistant deltas when the app-server omits the item phase", async () => {
-    // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
-    // "final_answer" phase. These surface on the replaceable agent-event path;
-    // legacy append-oriented partial callbacks stay quiet.
+    // Codex can stream agentMessage deltas without a final-answer phase. Route
+    // them through replaceable events, not append-oriented partial callbacks.
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const params = await createParams();

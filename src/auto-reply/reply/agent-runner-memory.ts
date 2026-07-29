@@ -458,22 +458,61 @@ function readLatestNonzeroUsageFromTranscriptEvents(
   return undefined;
 }
 
+function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): {
+  boundaryFound: boolean;
+  tainted: boolean;
+} {
+  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+  for (const event of activeEvents.toReversed()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role === "user") {
+      return { boundaryFound: true, tainted: false };
+    }
+    const metadata = record["__openclaw"];
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      continue;
+    }
+    const openClaw = metadata as { resultContentSource?: unknown; turnTainted?: unknown };
+    if (openClaw.turnTainted === true || openClaw.resultContentSource === "network") {
+      return { boundaryFound: false, tainted: true };
+    }
+  }
+  return { boundaryFound: false, tainted: false };
+}
+
 function readSqliteSessionLogSnapshot(
   scope: { agentId?: string; sessionId: string; sessionKey?: string; storePath: string },
-  options: { includeByteSize: boolean; includeUsage: boolean },
+  options: { includeByteSize: boolean; includeTurnTaint?: boolean; includeUsage: boolean },
 ): SessionLogSnapshot {
   const snapshot: SessionLogSnapshot = {};
   try {
     if (options.includeByteSize) {
       snapshot.byteSize = readSessionTranscriptActiveStats(scope).sizeBytes;
     }
-    if (options.includeUsage) {
+    if (options.includeUsage || options.includeTurnTaint) {
       const events = readRecentSessionTranscriptActiveEvents(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
-      snapshot.usage = deriveTranscriptUsageSnapshot({
-        usage: readLatestNonzeroUsageFromTranscriptEvents(events),
-      });
+      if (options.includeUsage) {
+        snapshot.usage = deriveTranscriptUsageSnapshot({
+          usage: readLatestNonzeroUsageFromTranscriptEvents(events),
+        });
+      }
+      if (options.includeTurnTaint) {
+        const scan = readActiveTurnTaintFromTranscriptEvents(events);
+        snapshot.turnTainted =
+          scan.tainted || (!scan.boundaryFound && events.length >= SQLITE_USAGE_TAIL_MAX_EVENTS);
+      }
     }
   } catch {
+    if (options.includeTurnTaint) {
+      snapshot.turnTainted = true;
+    }
     return snapshot;
   }
   return snapshot;
@@ -481,6 +520,7 @@ function readSqliteSessionLogSnapshot(
 
 type SessionLogSnapshot = {
   byteSize?: number;
+  turnTainted?: boolean;
   usage?: SessionTranscriptUsageSnapshot;
 };
 
@@ -513,6 +553,7 @@ async function readSessionLogSnapshot(params: {
   sessionKey?: string;
   opts?: { agentId?: string; storePath?: string };
   includeByteSize: boolean;
+  includeTurnTaint?: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
   const logPath = memoryDeps.resolveSessionLogPath(
@@ -541,12 +582,12 @@ async function readSessionLogSnapshot(params: {
   if (sqliteMarker) {
     return readSqliteSessionLogSnapshot(sqliteMarker, params);
   }
-  return {};
+  return params.includeTurnTaint ? { turnTainted: true } : {};
 }
 
 async function readFileSessionLogSnapshot(
   logPath: string,
-  params: { includeByteSize: boolean; includeUsage: boolean },
+  params: { includeByteSize: boolean; includeTurnTaint?: boolean; includeUsage: boolean },
 ): Promise<SessionLogSnapshot> {
   const snapshot: SessionLogSnapshot = {};
   let usageScan: SessionLogUsageScan | undefined;
@@ -564,12 +605,43 @@ async function readFileSessionLogSnapshot(
     const scannedSize = usageScan?.byteSize;
     if (typeof scannedSize === "number" && Number.isFinite(scannedSize) && scannedSize >= 0) {
       snapshot.byteSize = Math.floor(scannedSize);
-      return snapshot;
+    } else {
+      snapshot.byteSize = await readSessionLogByteSize(logPath);
     }
-    snapshot.byteSize = await readSessionLogByteSize(logPath);
+  }
+
+  if (params.includeTurnTaint) {
+    snapshot.turnTainted = await readFileSessionTurnTaint(logPath);
   }
 
   return snapshot;
+}
+
+async function readFileSessionTurnTaint(logPath: string): Promise<boolean> {
+  const handle = await fs.promises.open(logPath, "r");
+  try {
+    const stat = await handle.stat();
+    const size = Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, stat.size);
+    const buffer = Buffer.allocUnsafe(size);
+    const { bytesRead } = await handle.read(buffer, 0, size, stat.size - size);
+    const lines = buffer.toString("utf8", 0, bytesRead).split(/\n+/u);
+    if (stat.size > size) {
+      lines.shift();
+    }
+    const events = lines.flatMap((line) => {
+      try {
+        return line.trim() ? [JSON.parse(line) as unknown] : [];
+      } catch {
+        return [];
+      }
+    });
+    const scan = readActiveTurnTaintFromTranscriptEvents(events);
+    return scan.tainted || (!scan.boundaryFound && stat.size > size);
+  } catch {
+    return true;
+  } finally {
+    await handle.close();
+  }
 }
 
 type SessionLogUsageScan = {
@@ -1226,7 +1298,11 @@ export async function runMemoryFlushIfNeeded(params: {
     Number.isFinite(forceFlushTranscriptBytes) &&
     forceFlushTranscriptBytes > 0,
   );
-  const shouldReadSessionLog = shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
+  const shouldReadTurnTaint = Boolean(
+    canAttemptFlush && entry && memoryFlushPlan.recordWriteProvenance,
+  );
+  const shouldReadSessionLog =
+    shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush || shouldReadTurnTaint;
   const sessionLogSnapshot = shouldReadSessionLog
     ? await readSessionLogSnapshot({
         sessionId: params.followupRun.run.sessionId,
@@ -1234,6 +1310,7 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         opts: { agentId: params.followupRun.run.agentId, storePath: params.storePath },
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeTurnTaint: shouldReadTurnTaint,
         includeUsage: shouldReadTranscript,
       })
     : undefined;
@@ -1515,7 +1592,10 @@ export async function runMemoryFlushIfNeeded(params: {
         relativePath: memoryFlushWritePath,
         contentBefore: memoryFlushContentBefore,
         contentAfter: await readMemoryFlushContent(),
-        originClass: params.followupRun.run.senderIsOwner ? "agent" : "untrusted",
+        originClass:
+          params.followupRun.run.senderIsOwner && sessionLogSnapshot?.turnTainted !== true
+            ? "agent"
+            : "untrusted",
         observedAt: memoryDeps.now(),
       });
     }

@@ -1458,6 +1458,12 @@ describe("openshell fs bridges", () => {
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
       Buffer.from("inside"),
     );
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 6 })).resolves.toEqual(
+      Buffer.from("inside"),
+    );
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 5 })).rejects.toThrow(
+      "Sandbox boundary checks failed",
+    );
   });
 
   it("reads materialized sandbox skills from the protected skills workspace", async () => {

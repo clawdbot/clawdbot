@@ -4,11 +4,8 @@ import { zoomMeetingsInvalidRequest } from "./errors.js";
 import type {
   ZoomMeetingsChromeHealth,
   ZoomMeetingsJoinRequest,
-  ZoomMeetingsPluginTypes,
   ZoomMeetingsSession,
 } from "./transports/types.js";
-
-export type ZoomMeetingsProbeContext = ZoomMeetingsPluginTypes["ProbeContext"];
 
 const probes = MeetingPlatformAdapter.createRuntimeProbes<
   ZoomMeetingsConfig,

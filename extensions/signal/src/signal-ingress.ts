@@ -1,5 +1,6 @@
 // Signal plugin module owns raw-envelope durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -11,10 +12,6 @@ import { normalizeNullableString as normalizeRawString } from "openclaw/plugin-s
 import type { SignalSseEvent } from "./client-adapter.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
-const SIGNAL_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES = 1000;
-const SIGNAL_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_FAILED_MAX_ENTRIES = 1000;
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 
 type SignalIngressEnvelope = {
@@ -49,16 +46,9 @@ type SignalIngressDispatch = (
   lifecycle: SignalIngressLifecycle,
 ) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
 
-class SignalIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SignalIngressPermanentError";
-  }
-}
+const SignalIngressPermanentError = createChannelIngressError<
+  "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
+>("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -191,10 +181,8 @@ export async function startSignalIngressMonitor(params: {
     retention: {
       // Signal previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      completedTtlMs: SIGNAL_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SIGNAL_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SIGNAL_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     drain: {
