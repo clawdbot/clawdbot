@@ -540,6 +540,22 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
   });
 
+  it("does not normalize mixed line endings outside the changed hunk", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "first\r\nsecond\nthird\r\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-second
++changed
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("first\r\nchanged\nthird\r\n");
+  });
+
   it("applies a real deletion of the sole blank line", async () => {
     const memory = createMemoryPatchSandbox({ "source.txt": "\n" });
     const patch = `*** Begin Patch

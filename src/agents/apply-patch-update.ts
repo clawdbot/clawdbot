@@ -5,7 +5,7 @@
  */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
-import { detectLineEnding, normalizeToLF, restoreLineEndings } from "./line-endings.js";
+import { hasOnlyCrlfLineEndings, normalizeToLF, restoreLineEndings } from "./line-endings.js";
 
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
@@ -34,8 +34,11 @@ export async function applyUpdateHunk(
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });
 
-  const lineEnding = detectLineEnding(originalContents);
-  const originalLines = normalizeToLF(originalContents).split("\n");
+  // Normalizing mixed endings would rewrite untouched lines across the file.
+  // Keep the existing localized behavior unless every terminator is CRLF.
+  const preserveCrlf = hasOnlyCrlfLineEndings(originalContents);
+  const matchingContents = preserveCrlf ? normalizeToLF(originalContents) : originalContents;
+  const originalLines = matchingContents.split("\n");
   if (originalLines.length > 0 && originalLines[originalLines.length - 1] === "") {
     originalLines.pop();
   }
@@ -45,7 +48,8 @@ export async function applyUpdateHunk(
   if (newLines.length === 0 || newLines[newLines.length - 1] !== "") {
     newLines = [...newLines, ""];
   }
-  return restoreLineEndings(newLines.join("\n"), lineEnding);
+  const updatedContents = newLines.join("\n");
+  return preserveCrlf ? restoreLineEndings(updatedContents, "\r\n") : updatedContents;
 }
 
 function computeReplacements(
