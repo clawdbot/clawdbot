@@ -394,7 +394,7 @@ const saveSessionToMemory: HookHandler = (event) => {
     event.action === "auto-reset" &&
     isSessionAutoResetReason(event.context.reason);
   if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
-    return;
+    return undefined;
   }
 
   let capturedEvents: TranscriptEvent[] | undefined;
@@ -441,7 +441,10 @@ const saveSessionToMemory: HookHandler = (event) => {
   });
   // Automatic rollover dispatch is already detached from the successor turn.
   // Keep its gateway admission alive until nested slug/model work finishes.
-  return isAutoReset ? writePromise : undefined;
+  if (isAutoReset) {
+    return writePromise;
+  }
+  return undefined;
 };
 
 export default saveSessionToMemory;
