@@ -62,9 +62,10 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
         if (!openedChannelId) {
           return;
         }
+        const channelId = openedChannelId;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           try {
-            await context.sutReadClient.conversations.close({ channel: openedChannelId });
+            await context.sutReadClient.conversations.close({ channel: channelId });
             openedChannelId = undefined;
             return;
           } catch (error) {
