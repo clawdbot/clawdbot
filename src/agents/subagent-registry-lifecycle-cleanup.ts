@@ -73,10 +73,49 @@ export function createSubagentRegistryLifecycleCleanup(
     entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
     entry.outcome?.status === "ok";
 
+  const finalizeTerminalSubagentCleanup = async (cleanupParams: {
+    runId: string;
+    entry: SubagentRunRecord;
+    cleanup: "delete" | "keep";
+    cleanupGeneration?: number;
+    completedAt?: number;
+    giveUpReason?: "retry-limit" | "expiry";
+  }) => {
+    const { runId, entry, cleanup, cleanupGeneration, giveUpReason } = cleanupParams;
+    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
+      await safeRemoveAttachmentsDir(entry);
+    }
+    if (
+      cleanupGeneration !== undefined &&
+      !isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
+    ) {
+      await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+      return;
+    }
+    const completionReason = resolveCleanupCompletionReason(entry);
+    if (giveUpReason) {
+      logAnnounceGiveUp(entry, giveUpReason);
+    }
+    // Durable cleanup must settle before a best-effort plugin hook can stall.
+    completeCleanupBookkeeping({
+      runId,
+      entry,
+      cleanup,
+      completedAt: cleanupParams.completedAt ?? Date.now(),
+    });
+    await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
+      isEndedHookOwnerCurrent(runId, entry),
+    );
+  };
+
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
+    cleanup?: "delete" | "keep";
+    cleanupGeneration?: number;
+    retryCount?: number;
+    completedAt?: number;
   }) => {
     if (shouldSuspendPendingFinalDelivery(giveUpParams.entry)) {
       suspendPendingFinalDelivery({
@@ -92,6 +131,10 @@ export function createSubagentRegistryLifecycleCleanup(
     const failedDelivery = ensureDeliveryState(giveUpParams.entry);
     failedDelivery.status = "failed";
     failedDelivery.lastError = deliveryError;
+    if (giveUpParams.retryCount != null) {
+      failedDelivery.attemptCount = giveUpParams.retryCount;
+      failedDelivery.lastAttemptAt = giveUpParams.completedAt ?? Date.now();
+    }
     safeSetSubagentTaskDeliveryStatus({
       entry: giveUpParams.entry,
       deliveryStatus: "failed",
@@ -105,24 +148,14 @@ export function createSubagentRegistryLifecycleCleanup(
     const completion = ensureCompletionState(giveUpParams.entry);
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
-    const shouldDeleteAttachments =
-      giveUpParams.entry.cleanup === "delete" || !giveUpParams.entry.retainAttachmentsOnKeep;
-    if (shouldDeleteAttachments) {
-      await safeRemoveAttachmentsDir(giveUpParams.entry);
-    }
-    const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
-    logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
-    // Retry-limit / expiry give-up should not leave cleanup stuck behind the
-    // best-effort ended hook. Mark the run cleaned first, then fire the hook.
-    completeCleanupBookkeeping({
+    await finalizeTerminalSubagentCleanup({
       runId: giveUpParams.runId,
       entry: giveUpParams.entry,
-      cleanup: giveUpParams.entry.cleanup,
-      completedAt: Date.now(),
+      cleanup: giveUpParams.cleanup ?? giveUpParams.entry.cleanup,
+      cleanupGeneration: giveUpParams.cleanupGeneration,
+      completedAt: giveUpParams.completedAt,
+      giveUpReason: giveUpParams.reason,
     });
-    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason, () =>
-      isEndedHookOwnerCurrent(giveUpParams.runId, giveUpParams.entry),
-    );
   };
 
   const retryDeferredCompletedAnnounces = (excludeRunId?: string) => {
@@ -200,23 +233,12 @@ export function createSubagentRegistryLifecycleCleanup(
         entry.suppressCompletionDelivery = undefined;
       }
       entry.wakeOnDescendantSettle = undefined;
-      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-      if (shouldDeleteAttachments) {
-        await safeRemoveAttachmentsDir(entry);
-      }
-      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
-        return;
-      }
-      completeCleanupBookkeeping({
+      await finalizeTerminalSubagentCleanup({
         runId,
         entry,
         cleanup,
-        completedAt: Date.now(),
+        cleanupGeneration,
       });
-      await emitCompletionEndedHookIfNeeded(entry, resolveCleanupCompletionReason(entry), () =>
-        isEndedHookOwnerCurrent(runId, entry),
-      );
       return;
     }
     if (didAnnounce) {
@@ -254,26 +276,12 @@ export function createSubagentRegistryLifecycleCleanup(
       const completion = ensureCompletionState(entry);
       completion.fallbackResultText = undefined;
       completion.fallbackCapturedAt = undefined;
-      const completionReason = resolveCleanupCompletionReason(entry);
-      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-      if (shouldDeleteAttachments) {
-        await safeRemoveAttachmentsDir(entry);
-      }
-      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
-        return;
-      }
-      completeCleanupBookkeeping({
+      await finalizeTerminalSubagentCleanup({
         runId,
         entry,
         cleanup,
-        completedAt: Date.now(),
+        cleanupGeneration,
       });
-      // Hook loading is best-effort; durable delivery and cleanup must already
-      // be terminal before plugin code can fail or stall.
-      await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
-        isEndedHookOwnerCurrent(runId, entry),
-      );
       return;
     }
 
@@ -300,58 +308,16 @@ export function createSubagentRegistryLifecycleCleanup(
     }
 
     if (deferredDecision.kind === "give-up") {
-      if (shouldSuspendPendingFinalDelivery(entry)) {
-        suspendPendingFinalDelivery({
-          runId,
-          entry,
-          reason: deferredDecision.reason,
-          error: getDeliveryLastError(entry),
-        });
-        return;
-      }
-      const deliveryError = getDeliveryLastError(entry) ?? deferredDecision.reason;
-      clearPendingFinalDelivery(entry);
-      const failedDelivery = ensureDeliveryState(entry);
-      failedDelivery.status = "failed";
-      failedDelivery.lastError = deliveryError;
-      if (deferredDecision.retryCount != null) {
-        failedDelivery.attemptCount = deferredDecision.retryCount;
-        failedDelivery.lastAttemptAt = now;
-      }
-      safeSetSubagentTaskDeliveryStatus({
-        entry,
-        deliveryStatus: "failed",
-        deliveryError,
-      });
-      safeMarkRequiredCompletionDeliveryBlocked({
-        entry,
-        reason: deliveryError,
-      });
       entry.wakeOnDescendantSettle = undefined;
-      const completion = ensureCompletionState(entry);
-      completion.fallbackResultText = undefined;
-      completion.fallbackCapturedAt = undefined;
-      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-      if (shouldDeleteAttachments) {
-        await safeRemoveAttachmentsDir(entry);
-      }
-      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
-        return;
-      }
-      const completionReason = resolveCleanupCompletionReason(entry);
-      logAnnounceGiveUp(entry, deferredDecision.reason);
-      // Giving up on announce delivery is terminal for cleanup even if the
-      // best-effort hook is still resolving.
-      completeCleanupBookkeeping({
+      await finalizeResumedAnnounceGiveUp({
         runId,
         entry,
         cleanup,
+        cleanupGeneration,
+        reason: deferredDecision.reason,
+        retryCount: deferredDecision.retryCount,
         completedAt: now,
       });
-      await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
-        isEndedHookOwnerCurrent(runId, entry),
-      );
       return;
     }
 

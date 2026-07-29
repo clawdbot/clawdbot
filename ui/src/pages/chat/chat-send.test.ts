@@ -486,6 +486,59 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function createTerminalChatEvent(
+  runId: string,
+  sessionKey: string,
+  options: { text?: string; timestamp?: number } = {},
+): Parameters<typeof handlePageGatewayEvent>[1] {
+  return {
+    event: "chat",
+    payload: {
+      state: "final",
+      runId,
+      sessionKey,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: options.text ?? "done" }],
+        timestamp: options.timestamp ?? 2,
+      },
+    },
+  } as Parameters<typeof handlePageGatewayEvent>[1];
+}
+
+function createSplitPaneTerminalDelivery(
+  item: Parameters<typeof admitQueuedMessageForSession>[2] & {
+    sendRunId: string;
+    sessionKey: string;
+  },
+) {
+  const client = clientWithRequest(vi.fn());
+  const visible = makeHost({
+    chatQueue: [item],
+    chatRunId: item.sendRunId,
+    client,
+    sessionKey: item.sessionKey,
+  });
+  const inactive = makeHost({
+    chatQueue: [],
+    client,
+    sessionKey: "agent:main:inactive",
+  });
+  for (const host of [visible, inactive]) {
+    Object.assign(host, {
+      chatMessagesBySession: new Map(),
+      connectionEpoch: 1,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+    });
+  }
+  expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
+  const event = createTerminalChatEvent(item.sendRunId, item.sessionKey, {
+    text: "terminal reply",
+  });
+  return { visible, inactive, event };
+}
+
 const neverSettlesPromise: Promise<never> = Promise.race([]);
 
 function pendingPromise<T = unknown>(): Promise<T> {
@@ -3938,40 +3991,7 @@ describe("handleSendChat", () => {
       sendState: "sending" as const,
       sessionKey: "agent:main:visible",
     };
-    const client = clientWithRequest(vi.fn());
-    const visible = makeHost({
-      chatQueue: [item],
-      chatRunId: item.sendRunId,
-      client,
-      sessionKey: item.sessionKey,
-    });
-    const inactive = makeHost({
-      chatQueue: [],
-      client,
-      sessionKey: "agent:main:inactive",
-    });
-    for (const host of [visible, inactive]) {
-      Object.assign(host, {
-        chatMessagesBySession: new Map(),
-        connectionEpoch: 1,
-        pendingSessionMessageReloadSessionKey: null,
-        requestUpdate: vi.fn(),
-      });
-    }
-    expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
-    const event = {
-      event: "chat",
-      payload: {
-        state: "final",
-        runId: item.sendRunId,
-        sessionKey: item.sessionKey,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "terminal reply" }],
-          timestamp: 2,
-        },
-      },
-    } as Parameters<typeof handlePageGatewayEvent>[1];
+    const { visible, inactive, event } = createSplitPaneTerminalDelivery(item);
 
     handlePageGatewayEvent(asChatPageHost(inactive), event);
     handlePageGatewayEvent(asChatPageHost(visible), event);
@@ -4035,40 +4055,7 @@ describe("handleSendChat", () => {
       sendState: "sending" as const,
       sessionKey: "agent:main:visible",
     };
-    const client = clientWithRequest(vi.fn());
-    const visible = makeHost({
-      chatQueue: [item],
-      chatRunId: item.sendRunId,
-      client,
-      sessionKey: item.sessionKey,
-    });
-    const inactive = makeHost({
-      chatQueue: [],
-      client,
-      sessionKey: "agent:main:inactive",
-    });
-    for (const host of [visible, inactive]) {
-      Object.assign(host, {
-        chatMessagesBySession: new Map(),
-        connectionEpoch: 1,
-        pendingSessionMessageReloadSessionKey: null,
-        requestUpdate: vi.fn(),
-      });
-    }
-    expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
-    const event = {
-      event: "chat",
-      payload: {
-        state: "final",
-        runId: item.sendRunId,
-        sessionKey: item.sessionKey,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "terminal reply" }],
-          timestamp: 2,
-        },
-      },
-    } as Parameters<typeof handlePageGatewayEvent>[1];
+    const { visible, inactive, event } = createSplitPaneTerminalDelivery(item);
 
     handlePageGatewayEvent(asChatPageHost(inactive), event);
     handlePageGatewayEvent(asChatPageHost(visible), event);
@@ -7029,14 +7016,37 @@ describe("handleSendChat", () => {
     expect(restored?.text).toBe(original.text);
   });
 
-  it("materializes a steered user turn before a terminal event clears its chip", () => {
+  it.each([
+    {
+      name: "materializes a steered user turn before a terminal event clears its chip",
+      id: "terminal-steer",
+      text: "keep this visible",
+      createdAt: 1,
+      timestamp: 2,
+      initialAssistant: undefined,
+    },
+    {
+      name: "still materializes the user turn when an assistant entry carries the steer's run key",
+      id: "assistant-key-steer",
+      text: "user turn must still appear",
+      createdAt: 2,
+      timestamp: 3,
+      initialAssistant: {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant reply for the same run" }],
+        timestamp: 1,
+        __openclaw: { idempotencyKey: "steer-send-run" },
+      },
+    },
+  ])("$name", ({ id, text, createdAt, timestamp, initialAssistant }) => {
     const host = makeHost({
       chatRunId: "active-run",
+      ...(initialAssistant ? { chatMessages: [initialAssistant] } : {}),
       chatQueue: [
         {
-          id: "terminal-steer",
-          text: "keep this visible",
-          createdAt: 1,
+          id,
+          text,
+          createdAt,
           kind: "steered",
           pendingRunId: "active-run",
           sendRunId: "steer-send-run",
@@ -7046,76 +7056,24 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
     });
 
-    handlePageGatewayEvent(asChatPageHost(host), {
-      event: "chat",
-      payload: {
-        state: "final",
-        runId: "active-run",
-        sessionKey: "agent:main:main",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          timestamp: 2,
-        },
-      },
-    } as Parameters<typeof handlePageGatewayEvent>[1]);
-
-    expect(host.chatQueue).toEqual([]);
-    expect(host.chatMessages).toHaveLength(2);
-    expect(host.chatMessages[0]).toMatchObject({
-      role: "user",
-      __openclaw: { idempotencyKey: "steer-send-run:user" },
-    });
-    expect(JSON.stringify(host.chatMessages[0])).toContain("keep this visible");
-  });
-
-  it("still materializes the user turn when an assistant entry carries the steer's run key", () => {
-    const assistantWithRunKey = {
-      role: "assistant",
-      content: [{ type: "text", text: "assistant reply for the same run" }],
-      timestamp: 1,
-      __openclaw: { idempotencyKey: "steer-send-run" },
-    };
-    const host = makeHost({
-      chatRunId: "active-run",
-      chatMessages: [assistantWithRunKey],
-      chatQueue: [
-        {
-          id: "assistant-key-steer",
-          text: "user turn must still appear",
-          createdAt: 2,
-          kind: "steered",
-          pendingRunId: "active-run",
-          sendRunId: "steer-send-run",
-          sessionKey: "agent:main:main",
-        },
-      ],
-      sessionKey: "agent:main:main",
-    });
-
-    handlePageGatewayEvent(asChatPageHost(host), {
-      event: "chat",
-      payload: {
-        state: "final",
-        runId: "active-run",
-        sessionKey: "agent:main:main",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          timestamp: 3,
-        },
-      },
-    } as Parameters<typeof handlePageGatewayEvent>[1]);
+    handlePageGatewayEvent(
+      asChatPageHost(host),
+      createTerminalChatEvent("active-run", "agent:main:main", { timestamp }),
+    );
 
     expect(host.chatQueue).toEqual([]);
     const userTurn = host.chatMessages.find(
       (message) => (message as { role?: string }).role === "user",
     );
+    if (!initialAssistant) {
+      expect(host.chatMessages).toHaveLength(2);
+      expect(host.chatMessages[0]).toBe(userTurn);
+    }
     expect(userTurn).toMatchObject({
       role: "user",
       __openclaw: { idempotencyKey: "steer-send-run:user" },
     });
-    expect(JSON.stringify(userTurn)).toContain("user turn must still appear");
+    expect(JSON.stringify(userTurn)).toContain(text);
   });
 
   it("materializes an attachment-only steered chip from store-backed payload bytes", () => {
@@ -7151,19 +7109,10 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
     });
 
-    handlePageGatewayEvent(asChatPageHost(host), {
-      event: "chat",
-      payload: {
-        state: "final",
-        runId: "active-run",
-        sessionKey: "agent:main:main",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          timestamp: 2,
-        },
-      },
-    } as Parameters<typeof handlePageGatewayEvent>[1]);
+    handlePageGatewayEvent(
+      asChatPageHost(host),
+      createTerminalChatEvent("active-run", "agent:main:main"),
+    );
 
     expect(host.chatQueue).toEqual([]);
     expect(host.chatMessages[0]).toMatchObject({
@@ -7202,19 +7151,10 @@ describe("handleSendChat", () => {
     });
     expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
 
-    handlePageGatewayEvent(asChatPageHost(host), {
-      event: "chat",
-      payload: {
-        state: "final",
-        runId: "active-run",
-        sessionKey: "agent:main:main",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          timestamp: 3,
-        },
-      },
-    } as Parameters<typeof handlePageGatewayEvent>[1]);
+    handlePageGatewayEvent(
+      asChatPageHost(host),
+      createTerminalChatEvent("active-run", "agent:main:main", { timestamp: 3 }),
+    );
 
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(host.chatQueue).toEqual([]);
