@@ -82,8 +82,19 @@ function redactStructuredSecretLine(text: string, key: string) {
   );
 }
 
+function redactStructuredSecretArray(text: string, key: string) {
+  const escapedKey = escapeRegExp(key);
+  const jsonString = `"(?:\\\\.|[^"\\\\])*"`;
+  const jsonStringArray = `\\[\\s*${jsonString}(?:\\s*,\\s*${jsonString})*\\s*\\]`;
+  return text.replace(
+    new RegExp(`("?${escapedKey}"?\\s*[:=]\\s*)${jsonStringArray}`, "gi"),
+    `$1<redacted>`,
+  );
+}
+
 export function redactQaGatewayDebugText(text: string) {
   let redacted = redactSensitiveText(redactTelegramBotTokens(text), { mode: "tools" });
+  redacted = redactStructuredSecretArray(redacted, "authTag");
   for (const key of QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS) {
     const escapedKey = escapeRegExp(key);
     redacted = redacted.replace(
