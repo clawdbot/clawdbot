@@ -4,20 +4,17 @@ use crate::gateway_device_identity::{
 };
 use crate::quickchat::QUICKCHAT_LABEL;
 use futures_util::{SinkExt, StreamExt};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, WebPkiSupportedAlgorithms};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme};
+use openclaw_gateway_core::{
+    pinned_tls_config, reconnect_backoff as gateway_reconnect_backoff, tls_trust,
+    ConnectErrorDetails, TlsTrust, TLS_PIN_MISMATCH_ERROR,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fmt;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use subtle::ConstantTimeEq;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
@@ -40,8 +37,6 @@ const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
 const AUTH_TOKEN_MISSING_DETAIL_CODE: &str = "AUTH_TOKEN_MISSING";
 const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
-const AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE: &str = "AUTH_DEVICE_TOKEN_MISMATCH";
-const TLS_PIN_MISMATCH_ERROR: &str = "Gateway TLS certificate fingerprint mismatch";
 
 // Mirrors packages/gateway-protocol/src/version.ts. The Gateway rejects other ranges.
 const MIN_PROTOCOL_VERSION: u32 = 4;
@@ -70,109 +65,6 @@ impl GatewayWsConfig {
             tls_fingerprint,
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum TlsTrustDecision {
-    SystemRoots,
-    Pinned([u8; 32]),
-}
-
-fn tls_trust_decision(fingerprint: Option<&str>) -> Result<TlsTrustDecision, String> {
-    fingerprint
-        .map(parse_tls_fingerprint)
-        .transpose()
-        .map(|fingerprint| {
-            fingerprint.map_or(TlsTrustDecision::SystemRoots, TlsTrustDecision::Pinned)
-        })
-}
-
-fn parse_tls_fingerprint(raw: &str) -> Result<[u8; 32], String> {
-    let value = raw.trim();
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
-    }
-    let mut fingerprint = [0_u8; 32];
-    for (index, byte) in fingerprint.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|_| "Gateway TLS fingerprint is invalid.".to_string())?;
-    }
-    Ok(fingerprint)
-}
-
-fn pinned_fingerprint_matches(expected: &[u8; 32], certificate_der: &[u8]) -> bool {
-    let observed: [u8; 32] = Sha256::digest(certificate_der).into();
-    bool::from(expected.as_slice().ct_eq(observed.as_slice()))
-}
-
-struct GatewayTlsPinVerifier {
-    expected: [u8; 32],
-    supported_algorithms: WebPkiSupportedAlgorithms,
-}
-
-impl fmt::Debug for GatewayTlsPinVerifier {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GatewayTlsPinVerifier")
-            .finish_non_exhaustive()
-    }
-}
-
-impl ServerCertVerifier for GatewayTlsPinVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        // The local CLI authenticates this exact leaf-certificate hash before handing it to the
-        // app. A present pin replaces CA/hostname trust, matching OpenClawKit; the signature
-        // methods below still prove the peer owns the certificate's private key.
-        if pinned_fingerprint_matches(&self.expected, end_entity.as_ref()) {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(RustlsError::General(TLS_PIN_MISMATCH_ERROR.to_string()))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        verify_tls12_signature(message, cert, signature, &self.supported_algorithms)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        verify_tls13_signature(message, cert, signature, &self.supported_algorithms)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.supported_algorithms.supported_schemes()
-    }
-}
-
-fn pinned_tls_connector(expected: [u8; 32]) -> Result<Connector, String> {
-    let provider = rustls::crypto::ring::default_provider();
-    let verifier = GatewayTlsPinVerifier {
-        expected,
-        supported_algorithms: provider.signature_verification_algorithms,
-    };
-    let config = ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_safe_default_protocol_versions()
-        .map_err(|error| format!("Could not configure Gateway TLS: {error}"))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth();
-    Ok(Connector::Rustls(Arc::new(config)))
 }
 
 #[derive(Clone, Deserialize)]
@@ -299,30 +191,6 @@ impl GatewayConnectionState {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ConnectErrorDetails {
-    code: Option<String>,
-    device_id: Option<String>,
-    remediation_hint: Option<String>,
-    retryable: Option<bool>,
-    pause_reconnect: Option<bool>,
-}
-
-impl ConnectErrorDetails {
-    fn from_value(value: Option<&Value>) -> Self {
-        let Some(value) = value else {
-            return Self::default();
-        };
-        Self {
-            code: connect_detail_text(value.get("code"), 80),
-            device_id: connect_detail_text(value.get("deviceId"), 128),
-            remediation_hint: connect_detail_text(value.get("remediationHint"), 240),
-            retryable: value.get("retryable").and_then(Value::as_bool),
-            pause_reconnect: value.get("pauseReconnect").and_then(Value::as_bool),
-        }
-    }
-}
-
 struct RequestFailure {
     message: String,
     disconnect: bool,
@@ -363,8 +231,7 @@ impl RequestFailure {
     }
 
     fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
-        self.connect_state =
-            classify_connect_failure(self.connect_details.code.as_deref(), !auth.is_none());
+        self.connect_state = classify_connect_failure(self.connect_details.code(), !auth.is_none());
         self
     }
 }
@@ -658,7 +525,7 @@ impl GatewayClient {
                 })
                 .unwrap_or(GatewayConnectionState::Down);
             let pause_reconnect = failure
-                .map(|failure| should_pause_reconnect(&failure.connect_details))
+                .map(|failure| failure.connect_details.should_pause_reconnect())
                 .unwrap_or(false);
             let notice = failure.and_then(|failure| {
                 connection_notice(
@@ -698,7 +565,7 @@ impl GatewayClient {
             if app.get_webview_window(QUICKCHAT_LABEL).is_none() {
                 continue;
             }
-            let delay = reconnect_backoff(reconnect_attempt);
+            let delay = gateway_reconnect_backoff(reconnect_attempt, MAX_RECONNECT_DELAY);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 command = receiver.recv() => {
@@ -1005,18 +872,6 @@ fn routing_target(scope: &str, selected_agent_id: &str, main_key: &str) -> ChatR
     }
 }
 
-fn connect_detail_text(value: Option<&Value>, max_chars: usize) -> Option<String> {
-    let normalized = value
-        .and_then(Value::as_str)?
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if normalized.is_empty() {
-        return None;
-    }
-    Some(normalized.chars().take(max_chars).collect())
-}
-
 fn classify_connect_failure(
     detail_code: Option<&str>,
     has_local_credential: bool,
@@ -1031,10 +886,6 @@ fn classify_connect_failure(
                 || (code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
         });
     credential_required.then_some(GatewayConnectionState::CredentialRequired)
-}
-
-fn should_pause_reconnect(details: &ConnectErrorDetails) -> bool {
-    details.pause_reconnect == Some(true) || details.retryable == Some(false)
 }
 
 fn short_device_id(device_id: &str) -> Option<String> {
@@ -1062,11 +913,11 @@ fn connection_notice(
     // The Gateway owns recovery semantics and can give more precise operator guidance than this
     // client. Keep only its bounded plain-text hint, then add the safe pairing identifier.
     let mut notice = details
-        .remediation_hint
-        .clone()
+        .remediation_hint()
+        .map(ToOwned::to_owned)
         .unwrap_or_else(|| fallback.to_string());
     if state == GatewayConnectionState::PairingRequired {
-        if let Some(device_id) = details.device_id.as_deref().and_then(short_device_id) {
+        if let Some(device_id) = details.device_id().and_then(short_device_id) {
             notice.push_str(" · Device ");
             notice.push_str(&device_id);
         }
@@ -1074,14 +925,9 @@ fn connection_notice(
     Some(notice)
 }
 
-fn reconnect_backoff(attempt: u32) -> Duration {
-    let shift = attempt.saturating_sub(1).min(5);
-    Duration::from_secs((1_u64 << shift).min(MAX_RECONNECT_DELAY.as_secs()))
-}
-
 fn should_clear_stored_device_token(failure: &RequestFailure, auth: &GatewayAuth) -> bool {
     matches!(auth, GatewayAuth::DeviceToken(_))
-        && failure.connect_details.code.as_deref() == Some(AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE)
+        && failure.connect_details.invalidates_device_token()
 }
 
 fn connect_params(
@@ -1367,17 +1213,18 @@ fn ack_error_message(ack: &ChatSendAck) -> String {
 type GatewaySocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn connect_gateway_socket(config: &GatewayWsConfig) -> Result<GatewaySocket, RequestFailure> {
-    let trust =
-        tls_trust_decision(config.tls_fingerprint.as_deref()).map_err(RequestFailure::tls)?;
+    let trust = tls_trust(config.tls_fingerprint.as_deref()).map_err(RequestFailure::tls)?;
     let result = match trust {
-        TlsTrustDecision::SystemRoots => connect_async(config.ws_url.as_str()).await,
-        TlsTrustDecision::Pinned(expected) => {
+        TlsTrust::SystemRoots => connect_async(config.ws_url.as_str()).await,
+        TlsTrust::Pinned(expected) => {
             if !config.ws_url.starts_with("wss://") {
                 return Err(RequestFailure::tls(
                     "Gateway TLS fingerprint requires a wss:// URL.",
                 ));
             }
-            let connector = pinned_tls_connector(expected).map_err(RequestFailure::tls)?;
+            let connector = Connector::Rustls(Arc::new(
+                pinned_tls_config(expected).map_err(RequestFailure::tls)?,
+            ));
             connect_async_tls_with_config(config.ws_url.as_str(), None, false, Some(connector))
                 .await
         }
@@ -1557,27 +1404,6 @@ mod tests {
     }
 
     #[test]
-    fn tls_trust_decision_uses_system_roots_or_an_exact_pin() {
-        assert_eq!(
-            tls_trust_decision(None).expect("system trust"),
-            TlsTrustDecision::SystemRoots
-        );
-        assert_eq!(
-            tls_trust_decision(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrustDecision::Pinned([0xab; 32])
-        );
-        assert!(tls_trust_decision(Some("sha256:abc")).is_err());
-
-        let certificate = b"fixture gateway leaf certificate";
-        let expected: [u8; 32] = Sha256::digest(certificate).into();
-        assert!(pinned_fingerprint_matches(&expected, certificate));
-        assert!(!pinned_fingerprint_matches(
-            &expected,
-            b"different gateway leaf certificate"
-        ));
-    }
-
-    #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let tls_error = TungsteniteError::Io(std::io::Error::new(
             ErrorKind::InvalidData,
@@ -1589,15 +1415,6 @@ mod tests {
             GatewayConnectionState::TlsFailure.event_name(),
             "tls-failure"
         );
-    }
-
-    #[test]
-    fn reconnect_backoff_is_exponential_and_capped() {
-        assert_eq!(reconnect_backoff(1), Duration::from_secs(1));
-        assert_eq!(reconnect_backoff(2), Duration::from_secs(2));
-        assert_eq!(reconnect_backoff(5), Duration::from_secs(16));
-        assert_eq!(reconnect_backoff(6), MAX_RECONNECT_DELAY);
-        assert_eq!(reconnect_backoff(100), MAX_RECONNECT_DELAY);
     }
 
     #[test]
@@ -1783,7 +1600,8 @@ mod tests {
                 .classify_connect(&GatewayAuth::SharedToken("configured".to_string()));
         assert_eq!(mismatch_with_auth.connect_state, None);
 
-        let stale_device_details = json!({ "code": AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE });
+        let stale_device_details =
+            json!({ "code": openclaw_gateway_core::AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE });
         let stale_device_auth = RequestFailure::method_with_details(
             "device token mismatch",
             Some(&stale_device_details),
@@ -1793,24 +1611,6 @@ mod tests {
         assert!(should_clear_stored_device_token(
             &stale_device_auth,
             &GatewayAuth::DeviceToken("stale".to_string())
-        ));
-    }
-
-    #[test]
-    fn reconnect_pause_requires_explicit_server_policy() {
-        let pause_details = json!({ "pauseReconnect": true });
-        let paused = RequestFailure::method_with_details("pause", Some(&pause_details));
-        assert!(should_pause_reconnect(&paused.connect_details));
-
-        let terminal_details = json!({ "retryable": false });
-        let terminal = RequestFailure::method_with_details("terminal", Some(&terminal_details));
-        assert!(should_pause_reconnect(&terminal.connect_details));
-
-        let retry_details = json!({ "retryable": true, "pauseReconnect": false });
-        let retry = RequestFailure::method_with_details("retry", Some(&retry_details));
-        assert!(!should_pause_reconnect(&retry.connect_details));
-        assert!(!should_pause_reconnect(
-            &RequestFailure::transport("transport").connect_details
         ));
     }
 
