@@ -162,7 +162,6 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     let resolveReady!: () => void;
     let rejectReady!: (error: Error) => void;
     let readySettled = false;
-    let readyTimeout: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener = () => {};
     const readyPromise = new Promise<void>((resolve, reject) => {
       resolveReady = resolve;
@@ -203,7 +202,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       failReady(error);
       this.closeSocket(reason, connected.socket);
     };
-    readyTimeout = setTimeout(() => {
+    const readyTimeout = setTimeout(() => {
       failStartup(
         new Error("GPT-Live WebSocket did not emit session.started"),
         "session-start timeout",
@@ -409,7 +408,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         },
         (error: unknown) => {
           cleanup();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         },
       );
     });

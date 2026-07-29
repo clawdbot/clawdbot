@@ -687,7 +687,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       let reachedReady = false;
       let startupFailureClosing = false;
       let activeWs: WebSocket | undefined;
-      let connectTimeout: ReturnType<typeof setTimeout> | undefined;
       let removeAbortListener = () => {};
       const settleResolve = () => {
         if (settled) {
@@ -711,7 +710,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         removeAbortListener();
         reject(error);
       };
-      connectTimeout = setTimeout(() => {
+      const connectTimeout = setTimeout(() => {
         if (
           this.lifecycle.isCurrent(lifecycleConnection) &&
           !reachedReady &&
