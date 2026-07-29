@@ -1,23 +1,24 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { createInternalHookEvent } from "../../internal-hooks.js";
 import handler, { flushSessionMemoryWritesForTest } from "./handler.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("session-memory automatic reset", () => {
   let tempDir = "";
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-auto-"));
+  beforeEach(() => {
+    tempDir = tempDirs.make("openclaw-session-memory-auto-");
   });
 
   afterEach(async () => {
     await flushSessionMemoryWritesForTest();
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it.each(["daily", "idle"] as const)(
