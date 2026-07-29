@@ -17,7 +17,6 @@ import {
   type CodexNativeSkillIsolation,
 } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
 import {
   attestCodexPluginThreadApps,
   discardUnattestedCodexPluginThread,

@@ -18,7 +18,7 @@ import {
   mergeCodexThreadConfigs,
   shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { CodexAppsInstalledParams, JsonObject, v2 } from "./protocol.js";
+import type { CodexAppServerRequestParams, JsonObject, v2 } from "./protocol.js";
 
 describe("Codex plugin thread config", () => {
   beforeEach(() => {
@@ -797,7 +797,7 @@ describe("Codex plugin thread config", () => {
       },
     };
     expect(shouldBuildCodexPluginThreadConfig(pluginConfig)).toBe(true);
-    const installedParams: CodexAppsInstalledParams[] = [];
+    const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     const accountApps = [
       { ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" },
       appInfo("disabled-account-app", true, false),
@@ -816,7 +816,7 @@ describe("Codex plugin thread config", () => {
           throw new Error(`unexpected request ${method}`);
         }
         if (method === "app/installed") {
-          installedParams.push(rawParams as CodexAppsInstalledParams);
+          installedParams.push(rawParams as CodexAppServerRequestParams<"app/installed">);
         }
         return codexAppInventoryResponse(method, accountApps);
       },
@@ -1433,7 +1433,7 @@ describe("Codex plugin thread config", () => {
 
   it("waits for the initial app inventory before exposing plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
-    const installedParams: CodexAppsInstalledParams[] = [];
+    const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config/read") {
         expect(params).toEqual({ includeLayers: true });
@@ -1441,7 +1441,7 @@ describe("Codex plugin thread config", () => {
       }
       if (method === "app/installed" || method === "app/read") {
         if (method === "app/installed") {
-          installedParams.push(params as CodexAppsInstalledParams);
+          installedParams.push(params as CodexAppServerRequestParams<"app/installed">);
         }
         return codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)]);
       }
@@ -1759,7 +1759,7 @@ describe("Codex plugin thread config", () => {
 
   it("refreshes missing app inventory when plugin activation becomes unnecessary", async () => {
     const appCache = new CodexAppInventoryCache();
-    const installedParams: CodexAppsInstalledParams[] = [];
+    const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     let pluginListCalls = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config/read") {
@@ -1778,7 +1778,7 @@ describe("Codex plugin thread config", () => {
       }
       if (method === "app/installed" || method === "app/read") {
         if (method === "app/installed") {
-          installedParams.push(params as CodexAppsInstalledParams);
+          installedParams.push(params as CodexAppServerRequestParams<"app/installed">);
         }
         return codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)]);
       }
@@ -1924,7 +1924,7 @@ describe("Codex plugin thread config", () => {
       nowMs: 0,
       request: async (method, params) => codexAppInventoryResponse(method, [], params),
     });
-    const installedParams: CodexAppsInstalledParams[] = [];
+    const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config/read") {
         expect(params).toEqual({ includeLayers: true });
@@ -1938,7 +1938,7 @@ describe("Codex plugin thread config", () => {
       }
       if (method === "app/installed" || method === "app/read") {
         if (method === "app/installed") {
-          installedParams.push(params as CodexAppsInstalledParams);
+          installedParams.push(params as CodexAppServerRequestParams<"app/installed">);
         }
         return codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)]);
       }
@@ -1999,7 +1999,7 @@ describe("Codex plugin thread config", () => {
         codexAppInventoryResponse(method, [appInfo("google-calendar-app", true, false)], params),
     });
     let enabled = false;
-    const installedParams: CodexAppsInstalledParams[] = [];
+    const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config/read") {
         expect(params).toEqual({ includeLayers: true });
@@ -2026,7 +2026,7 @@ describe("Codex plugin thread config", () => {
       }
       if (method === "app/installed" || method === "app/read") {
         if (method === "app/installed") {
-          installedParams.push(params as CodexAppsInstalledParams);
+          installedParams.push(params as CodexAppServerRequestParams<"app/installed">);
         }
         return codexAppInventoryResponse(method, [appInfo("google-calendar-app", true, enabled)]);
       }

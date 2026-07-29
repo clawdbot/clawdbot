@@ -1,9 +1,4 @@
-import type {
-  CodexAppServerRequestParams,
-  CodexAppServerRequestResult,
-  CodexAppsReadParams,
-  v2,
-} from "./protocol.js";
+import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 type CodexAppInventoryMethod = "app/installed" | "app/read";
 
@@ -25,7 +20,7 @@ export function codexAppInventoryResponse<Method extends CodexAppInventoryMethod
     } as CodexAppServerRequestResult<Method>;
   }
 
-  const requestedIds = (params as CodexAppsReadParams | undefined)?.appIds;
+  const requestedIds = (params as CodexAppServerRequestParams<"app/read"> | undefined)?.appIds;
   const requestedIdSet = requestedIds ? new Set(requestedIds) : undefined;
   const matchingApps = apps.filter(
     (app) => app.isAccessible && (!requestedIdSet || requestedIdSet.has(app.id)),

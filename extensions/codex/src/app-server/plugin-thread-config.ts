@@ -39,7 +39,7 @@ import {
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import { isJsonObject, type CodexConfigEdit, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
 export type PluginAppPolicyContextEntry = {
@@ -583,15 +583,16 @@ async function clearPersistedAppToolApprovalOverrides(params: {
     if (overrideNames.length === 0) {
       return true;
     }
-    const response = await params.request("config/batchWrite", {
-      edits: overrideNames.map((toolName) => ({
+    const edits = overrideNames.map(
+      (toolName): CodexConfigEdit => ({
         keyPath: `apps.${quoteConfigKeyPathSegment(params.app.id)}.tools.${quoteConfigKeyPathSegment(
           toolName,
         )}.approval_mode`,
         value: null,
         mergeStrategy: "replace",
-      })),
-    });
+      }),
+    );
+    const response = await params.request("config/batchWrite", { edits });
     if (
       !isJsonObject(response) ||
       (response.status !== "ok" && response.status !== "okOverridden")

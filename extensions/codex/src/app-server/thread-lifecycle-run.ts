@@ -161,7 +161,6 @@ export async function startOrResumeThread(
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
-        provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         throwIfAborted,
         lifecycleTiming,
         normalizeBindingModelProvider,

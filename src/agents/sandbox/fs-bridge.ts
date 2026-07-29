@@ -4,8 +4,8 @@
  * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
  */
 import fs from "node:fs";
-import { readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,

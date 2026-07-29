@@ -173,7 +173,7 @@ export function resolveCodexThreadConfigAppsForRecord(params: {
   return params.inventory.appInventory?.state === "missing" ? [] : params.record.apps;
 }
 
-export type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";
+type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";
 
 export function resolveCodexPluginAppThreadAdmission(
   app: CodexPluginOwnedApp,

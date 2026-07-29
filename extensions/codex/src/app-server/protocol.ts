@@ -7,23 +7,14 @@ import type {
   CodexAppsListResponse,
   CodexAppsReadParams,
   CodexAppsReadResponse,
-  CodexAppToolSummary,
   CodexConfigBatchWriteParams,
-  CodexConfigEdit,
-  CodexConfigLayerMetadata,
-  CodexConfigLayerSource,
-  CodexConfigMergeStrategy,
-  CodexConfigOverriddenMetadata,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
   CodexConfigValueWriteParams,
   CodexConfigWriteResponse,
-  CodexConfigWriteStatus,
-  CodexConnectorMetadata,
   CodexHooksListParams,
   CodexHooksListResponse,
   CodexInstalledApp,
-  CodexMarketplaceLoadErrorInfo,
   CodexPluginDetail,
   CodexPluginInstalledParams,
   CodexPluginInstalledResponse,
@@ -42,30 +33,10 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
 export type {
-  CodexAppInfo,
-  CodexAppsInstalledParams,
-  CodexAppsInstalledResponse,
-  CodexAppsListParams,
-  CodexAppsListResponse,
-  CodexAppsReadParams,
-  CodexAppsReadResponse,
-  CodexAppToolSummary,
-  CodexConfigBatchWriteParams,
   CodexConfigEdit,
-  CodexConfigLayerMetadata,
-  CodexConfigLayerSource,
-  CodexConfigMergeStrategy,
-  CodexConfigOverriddenMetadata,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
-  CodexConfigValueWriteParams,
-  CodexConfigWriteResponse,
-  CodexConfigWriteStatus,
-  CodexConnectorMetadata,
-  CodexInstalledApp,
   CodexPluginDetail,
-  CodexPluginInstalledParams,
-  CodexPluginInstalledResponse,
   CodexPluginListResponse,
   CodexPluginReadResponse,
 } from "./protocol-control-plane.js";
@@ -633,26 +604,10 @@ export type CodexRequestObject = Record<string, unknown>;
 export declare namespace v2 {
   export type AppInfo = CodexAppInfo;
   export type AppSummary = CodexAppSummary;
-  export type AppToolSummary = CodexAppToolSummary;
-  export type AppsInstalledParams = CodexAppsInstalledParams;
   export type AppsInstalledResponse = CodexAppsInstalledResponse;
-  export type AppsListParams = CodexAppsListParams;
-  export type AppsListResponse = CodexAppsListResponse;
-  export type AppsReadParams = CodexAppsReadParams;
-  export type AppsReadResponse = CodexAppsReadResponse;
-  export type ConfigBatchWriteParams = CodexConfigBatchWriteParams;
-  export type ConfigEdit = CodexConfigEdit;
-  export type ConfigLayerMetadata = CodexConfigLayerMetadata;
-  export type ConfigLayerSource = CodexConfigLayerSource;
-  export type ConfigValueWriteParams = CodexConfigValueWriteParams;
-  export type ConfigWriteResponse = CodexConfigWriteResponse;
-  export type ConnectorMetadata = CodexConnectorMetadata;
   export type HooksListParams = CodexHooksListParams;
   export type HooksListResponse = CodexHooksListResponse;
   export type InstalledApp = CodexInstalledApp;
-  export type MarketplaceLoadErrorInfo = CodexMarketplaceLoadErrorInfo;
-  export type MergeStrategy = CodexConfigMergeStrategy;
-  export type OverriddenMetadata = CodexConfigOverriddenMetadata;
   export type PluginDetail = CodexPluginDetail;
   export type PluginInstalledParams = CodexPluginInstalledParams;
   export type PluginInstalledResponse = CodexPluginInstalledResponse;
@@ -666,7 +621,6 @@ export declare namespace v2 {
   export type PluginSummary = CodexPluginSummary;
   export type SkillsListParams = CodexSkillsListParams;
   export type SkillsListResponse = CodexSkillsListResponse;
-  export type WriteStatus = CodexConfigWriteStatus;
 }
 
 type CodexAppServerRequestParamsOverride = {

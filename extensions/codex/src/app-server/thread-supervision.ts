@@ -13,7 +13,6 @@ import {
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
 import {
   attestCodexPluginThreadApps,
   discardUnattestedCodexPluginThread,
@@ -675,37 +674,6 @@ async function archiveSupervisionArtifact(
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
     });
     embeddedAgentLog.warn("failed to archive temporary Codex supervision thread", {
-      threadId,
-      error,
-    });
-    return false;
-  }
-}
-
-async function cleanUnmaterializedSupervisionThread(
-  client: CodexAppServerClient,
-  threadId: string,
-  ephemeral: boolean,
-): Promise<boolean> {
-  if (ephemeral) {
-    return unsubscribeCodexThreadBestEffort(client, {
-      threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-  }
-  try {
-    await client.request(
-      "thread/delete",
-      { threadId },
-      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
-    );
-    return true;
-  } catch (error) {
-    await unsubscribeCodexThreadBestEffort(client, {
-      threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-    embeddedAgentLog.warn("failed to delete unmaterialized Codex supervision thread", {
       threadId,
       error,
     });

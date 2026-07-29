@@ -269,6 +269,7 @@ async function checkMaintainedProtocolTypes(sourceRoot: string): Promise<void> {
 import type {
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
+  CodexConfigEdit,
   CodexDynamicToolSpec,
   CodexDynamicToolCallParams,
   CodexErrorNotification,
@@ -331,7 +332,7 @@ declare const openClawAppSummary: v2.AppSummary;
 const generatedAppSummary: AppSummary = openClawAppSummary;
 declare const openClawConfigBatchWriteParams: CodexAppServerRequestParams<"config/batchWrite">;
 const generatedConfigBatchWriteParams: ConfigBatchWriteParams = openClawConfigBatchWriteParams;
-declare const openClawConfigEdit: v2.ConfigEdit;
+declare const openClawConfigEdit: CodexConfigEdit;
 const generatedConfigEdit: ConfigEdit = openClawConfigEdit;
 declare const openClawConfigValueWriteParams: CodexAppServerRequestParams<"config/value/write">;
 const generatedConfigValueWriteParams: ConfigValueWriteParams = openClawConfigValueWriteParams;
