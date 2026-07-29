@@ -56,7 +56,9 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
  */
 function formatDispatchErrorFallback(err: unknown): string {
   const detail = formatErrorMessage(err).trim();
-  if (!detail) return "Something went wrong while processing your request. Please try again.";
+  if (!detail) {
+    return "Something went wrong while processing your request. Please try again.";
+  }
   const truncated = detail.length > 400 ? `${detail.slice(0, 400)}…` : detail;
   return `⚠️ ${truncated}\n\nPlease try again, or use /new to start a fresh session.`;
 }
