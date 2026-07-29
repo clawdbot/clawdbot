@@ -275,7 +275,7 @@ export class CodexAppInventoryCache {
       // while this request was in flight.
       if (this.refreshTokens.get(params.key) === refreshToken) {
         const existingEntry = this.entries.get(params.key);
-        const published = resolvePublishedInventorySnapshot(existingEntry, snapshot);
+        const published = resolvePublishedInventorySnapshot(existingEntry, snapshot, nowMs);
         // An uncovered invalidation keeps its remaining scope and diagnostic
         // until covering or complete refreshes prove the entry current again.
         const remaining = resolveRemainingInvalidationScope(existingEntry, snapshot);
@@ -320,25 +320,26 @@ export class CodexAppInventoryCache {
 function resolvePublishedInventorySnapshot(
   existing: CodexAppInventorySnapshot | undefined,
   snapshot: CodexAppInventorySnapshot,
+  nowMs: number,
 ): CodexAppInventorySnapshot {
   if (!snapshot.targetAppIds?.length || !existing) {
     return snapshot;
   }
+  // Merging preserves rows the refresh never re-read, which is only safe while
+  // the existing entry is within TTL. An expired entry is replaced outright so
+  // freshness restarts from this refresh; keeping expired rows would pin the
+  // entry stale no matter how many targeted refreshes cover it.
+  if (!isFutureDateTimestampMs(existing.expiresAtMs, { nowMs })) {
+    return snapshot;
+  }
   const refreshedTargetIds = new Set(snapshot.targetAppIds);
   const { targetAppIds: snapshotTargetAppIds, ...snapshotBase } = snapshot;
-  // Freshness belongs to the newest refresh that re-read every retained row: a
-  // merge keeps the existing timestamps while unrefreshed rows remain (they
-  // must not be renewed), but a targeted refresh covering the whole cached
-  // targeted scope adopts the new ones, or an expired targeted-only entry
-  // could never regain freshness from targeted refreshes.
-  const coversWholeCachedScope =
-    (existing.targetAppIds?.length ?? 0) > 0 &&
-    (existing.targetAppIds ?? []).every((appId) => refreshedTargetIds.has(appId));
   return {
     ...snapshotBase,
-    ...(coversWholeCachedScope
-      ? {}
-      : { fetchedAtMs: existing.fetchedAtMs, expiresAtMs: existing.expiresAtMs }),
+    // Freshness belongs to the still-valid prior fetch: the merge must not
+    // renew rows it never re-read.
+    fetchedAtMs: existing.fetchedAtMs,
+    expiresAtMs: existing.expiresAtMs,
     apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
     installedApps: mergeRefreshedRows(
       existing.installedApps,

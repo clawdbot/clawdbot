@@ -603,6 +603,39 @@ describe("Codex app inventory cache", () => {
     expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
   });
 
+  it("replaces an expired union entry on the next single-target refresh", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
+
+    // Past TTL nothing is preserved; the single-target refresh replaces the
+    // union entry and freshness recovers without a complete fetch.
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1_500,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    const read = cache.read({ key, request, nowMs: 1_600, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.targetAppIds).toEqual(["calendar-app"]);
+    expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
+  });
+
   it("renews freshness when a targeted refresh re-covers the whole cached scope", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
