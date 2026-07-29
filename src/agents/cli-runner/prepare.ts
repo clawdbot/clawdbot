@@ -354,6 +354,7 @@ function describeCliAuthProfileResolutionFailure(
     case "unmaterialized":
       return `could not materialize selected auth profile "${profileId}"`;
   }
+  return failure satisfies never;
 }
 
 function buildCliAuthProfileResolutionError(params: {
