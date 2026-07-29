@@ -44,16 +44,14 @@ import {
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
 } from "./realtime-provider-shared.js";
+import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_CAPABILITIES,
   resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
-import {
-  isOpenAIGptLiveModel,
-  OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
-} from "./realtime-quicksilver.js";
+import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 type OpenAIRealtimeVoice =
   | "alloy"
@@ -1685,7 +1683,34 @@ async function createOpenAIRealtimeBrowserSession(
     cfg: req.cfg,
   });
   if (auth.status === "missing") {
-    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    if (
+      hasOpenAIRealtimePlatformAuthInput({
+        configuredApiKey: config.apiKey,
+        cfg: req.cfg,
+      })
+    ) {
+      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    }
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
+      cfg: req.cfg,
+      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
+    });
+    if (!subscriptionAuth) {
+      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    }
+    if (!quicksilverBroker) {
+      throw new Error("OpenAI realtime browser session broker is unavailable");
+    }
+    const session = await quicksilverBroker.createBrowserSession(
+      {
+        ...req,
+        model,
+        voice: normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy",
+      },
+      subscriptionAuth,
+    );
+    quicksilverBrokerBySession.set(session, quicksilverBroker);
+    return session;
   }
 
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
@@ -1784,8 +1809,28 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      if (isOpenAIGptLiveModel(config.model)) {
-        throw new Error(OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE);
+      const model = config.model;
+      if (model && isOpenAIGptLiveModel(model)) {
+        if (config.azureEndpoint || config.azureDeployment) {
+          throw new Error(
+            "GPT-Live backend WebSocket sessions do not support Azure endpoints or deployments",
+          );
+        }
+        return new OpenAIQuicksilverVoiceBridge({
+          ...req,
+          model,
+          voice: config.voice,
+          instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+          resolveAuth: async () => ({
+            type: "api-key",
+            token: (
+              await requireOpenAIRealtimePlatformAuth({
+                configuredApiKey: config.apiKey,
+                cfg: req.cfg,
+              })
+            ).value,
+          }),
+        });
       }
       return new OpenAIRealtimeVoiceBridge({
         ...req,
@@ -1828,7 +1873,10 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
             hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
         );
       }
-      return false;
+      return (
+        options?.quicksilverBrowserSessionBroker !== undefined &&
+        hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId })
+      );
     },
     resolveBrowserSessionCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);

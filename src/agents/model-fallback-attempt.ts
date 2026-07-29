@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import { findAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -213,6 +214,10 @@ function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+function isAgentRunTerminalTimeout(err: unknown): boolean {
+  return findAgentRunTerminalOutcome(err)?.status === "timeout";
+}
+
 function buildFallbackSuccess<T>(params: {
   result: T;
   provider: string;
@@ -243,6 +248,7 @@ async function runFallbackCandidate<T>(params: {
     return { ok: true, result };
   } catch (err) {
     if (
+      isAgentRunTerminalTimeout(err) ||
       isCommandLaneTaskTimeoutError(err) ||
       isAgentHarnessPreflightError(err) ||
       isSandboxProvisioningError(err)
@@ -645,6 +651,7 @@ export function shouldDiscardDeferredSessionSuspension(params: {
   return (
     isTerminalAbort(params.abortSignal) ||
     isCallerAbortSignal(params.abortSignal) ||
+    isAgentRunTerminalTimeout(params.error) ||
     isAgentRunDirectAbortReason(params.error) ||
     isAgentRunRestartAbortReason(params.error) ||
     isTerminalAbortFromError(params.error) ||

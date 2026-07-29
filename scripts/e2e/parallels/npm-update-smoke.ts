@@ -11,7 +11,7 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
-import { formatDurationCompact } from "../../../src/infra/format-time/format-duration.ts";
+import prettyMilliseconds from "pretty-ms";
 import {
   die,
   ensureValue,
@@ -532,7 +532,17 @@ function platformRecord<T>(value: T): Record<Platform, T> {
 }
 
 function formatDuration(durationMs: number): string {
-  return formatDurationCompact(durationMs, { spaced: true }) ?? "0ms";
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "0ms";
+  }
+  const roundedMs = Math.round(durationMs);
+  if (roundedMs < 1000) {
+    return prettyMilliseconds(roundedMs);
+  }
+  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
+    hideYear: true,
+    unitCount: 2,
+  });
 }
 
 function readHarnessCheckoutVersion(): string {

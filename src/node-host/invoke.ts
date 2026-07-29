@@ -747,7 +747,13 @@ async function dispatchInvoke(
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
     const invokeContext =
-      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+      context && (frame.sessionKey || runtime.signal)
+        ? {
+            ...context,
+            ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
+            ...(runtime.signal ? { signal: runtime.signal } : {}),
+          }
+        : context;
     const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     if (pluginResult !== null) {
       await sendRawPayloadResult(client, frame, pluginResult);

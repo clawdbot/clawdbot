@@ -116,6 +116,10 @@ import {
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import {
+  resolveBundledCliBackendAuthPolicy,
+  type BundledCliBackendAuthPolicy,
+} from "./cli-backend-auth-policy.js";
 import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
@@ -321,12 +325,12 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function shouldRefreshAuthProfileForExecution(params: {
-  backendId: string;
+  policy?: BundledCliBackendAuthPolicy;
   authProfileId?: string;
   authCredential?: AuthProfileCredential;
 }): boolean {
   return Boolean(
-    (params.backendId === "google-gemini-cli" || params.backendId === "claude-cli") &&
+    params.policy &&
     params.authProfileId &&
     (params.authCredential?.type === "oauth" ||
       params.authCredential?.type === "api_key" ||
@@ -423,6 +427,7 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
   const canEnforceExactToolAvailability =
     backendResolved.nativeToolMode === "selectable" &&
     ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
@@ -556,9 +561,9 @@ export async function prepareCliRunContext(
   // from refreshing itself, so verify the live login matches the selected
   // identity and let Claude authenticate natively (it refreshes in place).
   const nativeClaudeCliCredential =
-    backendResolved.id === "claude-cli" &&
+    backendAuthPolicy?.nativePassthroughProviderId !== undefined &&
     authCredential?.type === "oauth" &&
-    authCredential.provider === "claude-cli"
+    authCredential.provider === backendAuthPolicy.nativePassthroughProviderId
       ? authCredential
       : undefined;
   if (effectiveAuthProfileId && authStore && nativeClaudeCliCredential) {
@@ -591,7 +596,7 @@ export async function prepareCliRunContext(
   } else if (
     effectiveAuthProfileId &&
     shouldRefreshAuthProfileForExecution({
-      backendId: backendResolved.id,
+      policy: backendAuthPolicy,
       authProfileId: effectiveAuthProfileId,
       authCredential,
     })
@@ -605,9 +610,9 @@ export async function prepareCliRunContext(
       agentDir,
       // Claude's selected profile is an account boundary. Never refresh or
       // substitute a sibling account while preparing this run.
-      ...(backendResolved.id === "claude-cli" ? { allowProfileFallback: false } : {}),
+      ...(backendAuthPolicy?.strictSelectedProfile ? { allowProfileFallback: false } : {}),
     });
-    if (!resolvedAuth && backendResolved.id === "claude-cli") {
+    if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
       throw buildCliAuthProfileResolutionError({
         backendId: backendResolved.id,
         profileId: authProfileId,
@@ -617,7 +622,7 @@ export async function prepareCliRunContext(
     }
     if (
       resolvedAuth &&
-      backendResolved.id === "claude-cli" &&
+      backendAuthPolicy?.strictSelectedProfile &&
       resolvedAuth.profileId !== authProfileId
     ) {
       throw buildCliAuthProfileResolutionError({
@@ -631,7 +636,7 @@ export async function prepareCliRunContext(
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
     authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
     if (
-      backendResolved.id === "claude-cli" &&
+      backendAuthPolicy?.strictSelectedProfile &&
       (!authCredential ||
         (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
     ) {
@@ -1021,12 +1026,11 @@ export async function prepareCliRunContext(
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     preparedExecution =
       (await backendResolved.prepareExecution?.(
-        (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
+        (backendAuthPolicy
           ? {
               ...prepareExecutionContext,
-              // Private bridge for bundled auth-owning CLI backends. This is intentionally not
-              // part of the public Plugin SDK until a credential-forwarding
-              // contract exists.
+              // Private bridge for bundled auth-owning CLI backends. The core-internal auth
+              // policy table owns membership until a public forwarding contract exists.
               authCredential,
             }
           : prepareExecutionContext) as typeof prepareExecutionContext & {

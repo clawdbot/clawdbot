@@ -66,6 +66,10 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import {
+  prepareCodexRemoteWorkspaceMessageMedia,
+  type CodexRemoteWorkspaceFileReader,
+} from "./remote-workspace-media.js";
 import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -73,6 +77,8 @@ type CodexDynamicToolHookContext = {
   agentId?: string;
   config?: EmbeddedRunAttemptParams["config"];
   workspaceDir?: string;
+  remoteWorkspaceRoot?: string;
+  remoteWorkspaceRequestTimeoutMs?: number;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -356,6 +362,8 @@ export type CodexDynamicToolBridge = {
   consumeToolExecutionSnapshot?: (
     toolCallId: string,
   ) => { executedArguments: Record<string, unknown>; executionStarted: boolean } | undefined;
+  /** Bind the authenticated app-server client once remote thread startup completes. */
+  setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
@@ -524,6 +532,7 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
+  let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
@@ -536,6 +545,9 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
     }),
     telemetry,
+    setRemoteWorkspaceFileReader: (reader) => {
+      readRemoteWorkspaceFile = reader;
+    },
     consumeToolExecutionSnapshot: (toolCallId) => {
       const state = executionSnapshotStates.get(toolCallId);
       executionSnapshotStates.delete(toolCallId);
@@ -606,7 +618,18 @@ export function createCodexDynamicToolBridge(params: {
         }
       };
       try {
-        const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const toolArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const preparedArgs =
+          toolName === "message" && isRecord(toolArgs)
+            ? await prepareCodexRemoteWorkspaceMessageMedia({
+                args: toolArgs,
+                localWorkspaceRoot: params.hookContext?.workspaceDir,
+                remoteWorkspaceRoot: params.hookContext?.remoteWorkspaceRoot,
+                readRemoteFile: readRemoteWorkspaceFile,
+                timeoutMs: params.hookContext?.remoteWorkspaceRequestTimeoutMs,
+                signal,
+              })
+            : toolArgs;
         const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
         executedArgs = structuredClone(telemetryArgs);
         const messagingContext = {

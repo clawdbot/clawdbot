@@ -26,6 +26,7 @@ import {
   logCronDeliveryWarn,
   normalizeDeliveryTarget,
 } from "./delivery-dispatch-policy.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads } from "./helpers.js";
 import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
@@ -335,7 +336,7 @@ function canonicalizeDirectCronRouteSessionKey(params: {
 // outbound session exists before cron awareness or transcript code references it.
 async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
-  jobId: string;
+  job: CronJob;
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
@@ -350,7 +351,12 @@ async function resolveCronDeliveryRouteSessionKey(params: {
       agentId: params.agentId,
       accountId: params.delivery.accountId,
       target: params.delivery.to,
-      currentSessionKey: params.agentSessionKey,
+      currentSessionKey: selectCronRouteCurrentSessionKey(
+        params.job,
+        params.agentSessionKey,
+        params.delivery.channel,
+        params.delivery.to,
+      ),
       threadId: params.delivery.threadId,
     });
     const routeSessionKey = route?.sessionKey?.trim();
@@ -387,7 +393,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
     return canonicalRouteSessionKey;
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.jobId}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
+      `[cron:${params.job.id}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
     );
     return params.agentSessionKey;
   }
@@ -409,7 +415,7 @@ export async function resolveDirectCronDeliverySessionKey(params: {
 
   return await resolveCronDeliveryRouteSessionKey({
     cfg: params.cfg,
-    jobId: params.job.id,
+    job: params.job,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     delivery: params.delivery,
@@ -497,7 +503,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
     seen.add(dedupeKey);
     const targetSessionKey = await resolveCronDeliveryRouteSessionKey({
       cfg: params.cfg,
-      jobId: params.job.id,
+      job: params.job,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
       delivery: target,

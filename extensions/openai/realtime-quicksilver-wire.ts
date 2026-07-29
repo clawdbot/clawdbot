@@ -2,12 +2,14 @@
 import { randomBytes } from "node:crypto";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
+import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
+const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
 const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 const OPENAI_QUICKSILVER_VOICES = [
@@ -52,6 +54,11 @@ type OpenAIQuicksilverSession = {
   }>;
 };
 
+type OpenAIQuicksilverSessionUpdate = {
+  type: "session.update";
+  session: Omit<OpenAIQuicksilverSession, "model">;
+};
+
 const eventEnvelopeSchema = z.object({ type: z.string() }).passthrough();
 const sessionStartedSchema = z
   .object({
@@ -62,6 +69,12 @@ const sessionStartedSchema = z
 const transcriptAddedSchema = z
   .object({
     item: z.object({ text: z.string() }).passthrough(),
+  })
+  .passthrough();
+const outputAudioDeltaSchema = z
+  .object({
+    type: z.literal("output_audio.delta"),
+    audio: z.string(),
   })
   .passthrough();
 const turnDoneSchema = z
@@ -100,6 +113,7 @@ const delegationSchema = z
 export type OpenAIQuicksilverInboundEvent =
   | { kind: "ignored"; eventType: string }
   | { kind: "session-started"; expiresAt?: number }
+  | { kind: "audio"; data: string }
   | { kind: "transcript-delta"; role: "user" | "assistant"; text: string }
   | { kind: "transcript-done"; role: "user" | "assistant"; text: string }
   | { kind: "delegation"; id: string; prompt: string }
@@ -153,6 +167,26 @@ export function buildOpenAIQuicksilverSession(params: {
   };
 }
 
+/** Builds the direct Frameless Bidi WebSocket handshake used by Codex realtime v3. */
+export function buildOpenAIQuicksilverSessionUpdate(params: {
+  instructions?: string;
+  voice?: string;
+  initialItems?: readonly OpenAIQuicksilverInitialItem[];
+}): OpenAIQuicksilverSessionUpdate {
+  const { model: _model, ...session } = buildOpenAIQuicksilverSession({
+    model: "direct-websocket",
+    ...params,
+  });
+  return { type: "session.update", session };
+}
+
+export function buildOpenAIQuicksilverWebSocketUrl(model: string): string {
+  const url = new URL(OPENAI_QUICKSILVER_CALL_URL);
+  url.protocol = "wss:";
+  url.searchParams.set("model", model);
+  return url.toString();
+}
+
 function truncateOpenAIQuicksilverContextText(text: string, maxBytes: number): string {
   let result = "";
   let bytes = 0;
@@ -200,10 +234,24 @@ export function openAIQuicksilverAuthHeaders(
   auth: OpenAIQuicksilverAuth,
   requestIds: OpenAIQuicksilverRequestIds,
 ): Record<string, string> {
+  return openAIRealtimeAuthHeaders({
+    auth,
+    requestIds,
+    baseUrl: OPENAI_QUICKSILVER_CALL_URL,
+    includeQuicksilverAlpha: true,
+  });
+}
+
+function openAIRealtimeAuthHeaders(params: {
+  auth: OpenAIQuicksilverAuth;
+  requestIds: OpenAIQuicksilverRequestIds;
+  baseUrl: string;
+  includeQuicksilverAlpha: boolean;
+}): Record<string, string> {
   const attributionHeaders =
     resolveProviderRequestHeaders({
       provider: "openai",
-      baseUrl: "https://api.openai.com/v1/live",
+      baseUrl: params.baseUrl,
       capability: "audio",
       transport: "http",
       defaultHeaders: {},
@@ -211,14 +259,14 @@ export function openAIQuicksilverAuthHeaders(
   // x-oai-attestation is optional and intentionally omitted on unsupported clients.
   return {
     ...attributionHeaders,
-    Authorization: `Bearer ${auth.token}`,
-    "OpenAI-Alpha": "quicksilver=v2",
-    "session-id": requestIds.sessionId,
-    "thread-id": requestIds.threadId,
-    "x-session-id": requestIds.realtimeSessionId,
-    ...(auth.type === "oauth"
+    Authorization: `Bearer ${params.auth.token}`,
+    ...(params.includeQuicksilverAlpha ? { "OpenAI-Alpha": "quicksilver=v2" } : {}),
+    "session-id": params.requestIds.sessionId,
+    "thread-id": params.requestIds.threadId,
+    "x-session-id": params.requestIds.realtimeSessionId,
+    ...(params.auth.type === "oauth"
       ? {
-          "chatgpt-account-id": auth.accountId,
+          "chatgpt-account-id": params.auth.accountId,
         }
       : {}),
   };
@@ -322,32 +370,62 @@ export async function createOpenAIQuicksilverCall(params: {
   requestIds: OpenAIQuicksilverRequestIds;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
-}): Promise<{ status: number; answerSdp: string; callId: string; sidebandUrl: string }> {
-  const authHeaders = openAIQuicksilverAuthHeaders(params.auth, params.requestIds);
-  const multipart = buildOpenAIQuicksilverMultipartBody({
-    sdp: params.sdp,
-    session: params.session,
-  });
+}): Promise<
+  | {
+      kind: "gpt-live";
+      status: number;
+      answerSdp: string;
+      callId: string;
+      sidebandUrl: string;
+    }
+  | { kind: "ga-realtime"; status: number; answerSdp: string }
+> {
+  const isGptLive = isOpenAIGptLiveModel(params.session.model);
+  const authHeaders = isGptLive
+    ? openAIQuicksilverAuthHeaders(params.auth, params.requestIds)
+    : openAIRealtimeAuthHeaders({
+        auth: params.auth,
+        requestIds: params.requestIds,
+        baseUrl: OPENAI_REALTIME_CALL_URL,
+        includeQuicksilverAlpha: false,
+      });
+  const multipart = isGptLive
+    ? buildOpenAIQuicksilverMultipartBody({
+        sdp: params.sdp,
+        session: params.session,
+      })
+    : undefined;
+  const callUrl = isGptLive
+    ? OPENAI_QUICKSILVER_CALL_URL
+    : `${OPENAI_REALTIME_CALL_URL}?model=${encodeURIComponent(params.session.model)}`;
 
-  const response = await (params.fetchImpl ?? fetch)(OPENAI_QUICKSILVER_CALL_URL, {
+  const response = await (params.fetchImpl ?? fetch)(callUrl, {
     method: "POST",
-    headers: { ...authHeaders, "Content-Type": multipart.contentType },
-    body: multipart.body,
+    headers: {
+      ...authHeaders,
+      "Content-Type": multipart?.contentType ?? "application/sdp",
+    },
+    body: multipart?.body ?? params.sdp,
     signal: params.signal,
   });
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).trim().slice(0, 500);
     throw new OpenAIQuicksilverCallError(
-      describeOpenAIQuicksilverCallError(response.status, detail),
+      isGptLive
+        ? describeOpenAIQuicksilverCallError(response.status, detail)
+        : `OpenAI Realtime call creation failed (${response.status})${detail ? `: ${detail}` : ""}`,
       response.status,
     );
   }
   const answerSdp = await response.text();
   if (!answerSdp.trim()) {
     throw new OpenAIQuicksilverCallError(
-      "GPT-Live call creation returned an empty SDP answer",
+      `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} call creation returned an empty SDP answer`,
       response.status,
     );
+  }
+  if (!isGptLive) {
+    return { kind: "ga-realtime", status: response.status, answerSdp };
   }
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
@@ -355,6 +433,7 @@ export async function createOpenAIQuicksilverCall(params: {
     callUrl: OPENAI_QUICKSILVER_CALL_URL,
   });
   return {
+    kind: "gpt-live",
     status: response.status,
     answerSdp,
     callId,
@@ -454,7 +533,13 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
       ? { kind: "transcript-done", role: turn.data.turn.role, text: turn.data.turn.transcript }
       : { kind: "ignored", eventType };
   }
-  if (eventType === "session.updated" || eventType === "output_audio.delta") {
+  if (eventType === "output_audio.delta") {
+    const audio = outputAudioDeltaSchema.safeParse(decoded);
+    return audio.success
+      ? { kind: "audio", data: audio.data.audio }
+      : { kind: "ignored", eventType };
+  }
+  if (eventType === "session.updated") {
     return { kind: "ignored", eventType };
   }
   if (eventType === "delegation.created") {

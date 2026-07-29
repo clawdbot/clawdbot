@@ -4524,6 +4524,7 @@ describe("chat model controls", () => {
     expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     expect(reset).toBeInstanceOf(HTMLButtonElement);
+    expect(reset?.textContent?.trim()).toBe("Use default");
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
   });
@@ -4896,7 +4897,11 @@ describe("chat model controls", () => {
     expect(defaultOption?.dataset.chatModelOption).toBe("openai/gpt-5.5");
     expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
     expect(defaultOption?.textContent).toContain("GPT-5.5");
-    expect(defaultOption?.textContent).toContain("Default");
+    expect(defaultOption?.textContent).toContain("Current");
+    expect(defaultOption?.textContent).not.toContain("Default");
+    expect(
+      defaultOption?.querySelector(".chat-controls__model-state-label--current"),
+    ).not.toBeNull();
     expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
   });
 
@@ -4938,6 +4943,14 @@ describe("chat model controls", () => {
     );
     expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
     expect(defaultOption?.getAttribute("aria-selected")).toBe(selected);
+    expect(defaultOption?.textContent).toContain(selected === "true" ? "Current" : "Default");
+    expect(defaultOption?.textContent).not.toContain(selected === "true" ? "Default" : "Current");
+    const currentOption = container.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    expect(currentOption?.textContent).toContain("Current");
+    expect(currentOption?.textContent).not.toContain("Default");
+    expect(
+      currentOption?.querySelector(".chat-controls__model-state-label--current"),
+    ).not.toBeNull();
     defaultOption?.click();
 
     await waitForFast(() => {

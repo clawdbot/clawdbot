@@ -1908,6 +1908,21 @@ class OpenClawShell extends OpenClawLightDomElement {
             void this.handleSettingsSearchQueryChange(nextQuery);
           },
           preloadTimers: this.settingsPreloadTimers,
+          saveIndicator: {
+            status: runtimeConfig.configAutoSaveStatus,
+            lastError: runtimeConfig.lastError,
+            needsApply: runtimeConfig.configNeedsApply,
+            applying: runtimeConfig.configApplying,
+            applyDisabled:
+              runtimeConfig.configLoading ||
+              runtimeConfig.configSaving ||
+              (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
+              overlaySnapshot.updateRunning ||
+              overlaySnapshot.updateReconciliationPending,
+            onRetry: () => void context.runtimeConfig.save(),
+            onReload: () => void context.runtimeConfig.discardDraft(),
+            onApply: () => void context.runtimeConfig.apply(),
+          },
         })
       : this.navigationSidebar;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
