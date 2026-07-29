@@ -168,11 +168,9 @@ enum GatewayEnvironment {
                     message: "openclaw CLI not found in PATH; install the CLI.")
             }
 
-            let installedRaw = if let gatewayBin {
-                await self.readGatewayVersion(binary: gatewayBin)
-            } else {
-                self.readLocalGatewayVersion(projectRoot: projectRoot)
-            }
+            let installedRaw = await self.installedGatewayVersion(
+                gatewayBin: gatewayBin,
+                projectRoot: projectRoot)
             let installed = Semver.parse(installedRaw)
 
             if let expected, let installedRaw, installed != nil,
@@ -285,6 +283,13 @@ enum GatewayEnvironment {
             normalized = String(normalized[normalized.startIndex..<parenRange.lowerBound])
         }
         return normalized
+    }
+
+    static func installedGatewayVersion(gatewayBin: String?, projectRoot: URL) async -> String? {
+        if let gatewayBin, let version = await self.readGatewayVersion(binary: gatewayBin) {
+            return version
+        }
+        return self.readLocalGatewayVersion(projectRoot: projectRoot)
     }
 
     private static func readGatewayVersion(binary: String) async -> String? {
