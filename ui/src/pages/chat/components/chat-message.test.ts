@@ -10,6 +10,7 @@ import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import {
+  getAssistantAttachmentAvailabilityRenderVersion,
   dismissConfirmedActionPopovers,
   renderMessageGroup,
   renderStreamGroup,
@@ -584,8 +585,21 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
   };
 }
 
+async function requireAudioPlayer(container: HTMLElement) {
+  const player = expectElement(
+    container,
+    "openclaw-chat-audio-player",
+    HTMLElement,
+  ) as HTMLElement & { updateComplete: Promise<unknown> };
+  await player.updateComplete;
+  return player;
+}
+
 afterEach(() => {
   markdownRenderMock.mockClear();
+  document.querySelectorAll("[data-media-player-test-fixture]").forEach((element) => {
+    element.remove();
+  });
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
     element.remove();
@@ -3028,8 +3042,9 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("renders assistant MEDIA attachments, voice-note badge, and reply pill", () => {
-    const container = document.createElement("div");
+  it("renders assistant MEDIA attachments, voice-note badge, and reply pill", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
     const onOpenImage = vi.fn();
     renderAssistantMessage(
       container,
@@ -3055,7 +3070,8 @@ describe("grouped chat rendering", () => {
       src: "https://example.com/photo.png",
       title: "photo.png",
     });
-    expect(expectElement(container, "audio", HTMLAudioElement).src).toBe(
+    const audioPlayer = await requireAudioPlayer(container);
+    expect(expectElement(audioPlayer, "audio", HTMLAudioElement).src).toBe(
       "https://example.com/voice.ogg",
     );
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
@@ -3063,8 +3079,9 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("notifies when assistant audio and video attachment metadata loads", () => {
-    const container = document.createElement("div");
+  it("notifies when assistant audio and video attachment metadata loads", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
     const onAssistantAttachmentLoaded = vi.fn();
 
     renderAssistantMessage(
@@ -3079,7 +3096,8 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false, onAssistantAttachmentLoaded },
     );
 
-    expectElement(container, "audio", HTMLAudioElement).dispatchEvent(
+    const audioPlayer = await requireAudioPlayer(container);
+    expectElement(audioPlayer, "audio", HTMLAudioElement).dispatchEvent(
       new Event("loadedmetadata", { bubbles: true }),
     );
     expectElement(container, "video", HTMLVideoElement).dispatchEvent(
@@ -3087,6 +3105,235 @@ describe("grouped chat rendering", () => {
     );
 
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks local assistant audio against server metadata while preview roots load", async () => {
+    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-audio") };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-audio-bootstrap-roots",
+          role: "assistant",
+          content: `Your recording\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const audioPlayer = await requireAudioPlayer(container);
+    const audio = expectElement(audioPlayer, "audio", HTMLAudioElement);
+    expect(audio.getAttribute("src")).toBe(
+      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
+    );
+  });
+
+  it("checks local assistant images against server metadata while preview roots load", async () => {
+    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.png`;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-image") };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-image-bootstrap-roots",
+          role: "assistant",
+          content: [{ type: "image", url: source, alt: "Local bootstrap image" }],
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const image = expectElement(container, ".chat-message-image", HTMLImageElement);
+    expect(image.getAttribute("src")).toBe(
+      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-image`,
+    );
+  });
+
+  it.each([
+    {
+      code: "outside-allowed-folders",
+      reason: "Outside allowed folders",
+      source: "/home/node/private/bootstrap-secret.mp3",
+    },
+    {
+      code: "file-not-found",
+      reason: "File not found",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
+    },
+  ] as const)(
+    "keeps server-rejected $code media blocked while preview roots load",
+    async ({ code, reason, source }) => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toContain("meta=1");
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+        return { ok: true, json: async () => ({ available: false, code, reason }) };
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      const container = document.createElement("div");
+      const renderMessage = () =>
+        renderAssistantMessage(
+          container,
+          {
+            id: `assistant-bootstrap-blocked-${code}`,
+            role: "assistant",
+            content: `Unavailable recording\nMEDIA:${source}`,
+            timestamp: Date.now(),
+          },
+          {
+            showToolCalls: false,
+            basePath: "/openclaw",
+            assistantAttachmentAuthToken: "session-token",
+            localMediaPreviewRoots: [],
+            onRequestUpdate: renderMessage,
+          },
+        );
+
+      renderMessage();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await flushAssistantAttachmentAvailabilityChecks();
+
+      await vi.waitFor(() => {
+        expect(
+          container.querySelector(
+            ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__reason",
+          )?.textContent,
+        ).toContain(reason);
+      });
+      expect(container.querySelector("audio")).toBeNull();
+      expect(container.querySelector(".chat-assistant-attachment-card__link")).toBeNull();
+    },
+  );
+
+  it("shows the download fallback when the video element emits an error", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-video-unplayable",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://example.com/clip.mp4",
+              kind: "video",
+              label: "clip.mp4",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    const card = expectElement(container, ".chat-assistant-attachment-card--video", HTMLElement);
+    expectElement(card, "video", HTMLVideoElement).dispatchEvent(new Event("error"));
+    expect(card.hasAttribute("data-unplayable")).toBe(true);
+    expect(card.querySelector(".chat-assistant-video-fallback")?.textContent).toContain(
+      "Can't play this format — download instead.",
+    );
+    expect(card.querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")?.href).toBe(
+      "https://example.com/clip.mp4",
+    );
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("clip.mp4");
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")
+        ?.getAttribute("download"),
+    ).toBe("clip.mp4");
+  });
+
+  it("omits attachment anchors for unsafe transcript URLs", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-unsafe-attachment-links",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "javascript:audio()",
+              kind: "audio",
+              label: "unsafe.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+          {
+            type: "attachment",
+            attachment: {
+              url: "data:text/html,video",
+              kind: "video",
+              label: "unsafe.mp4",
+              mimeType: "video/mp4",
+            },
+          },
+          {
+            type: "attachment",
+            attachment: {
+              url: "vbscript:document",
+              kind: "document",
+              label: "unsafe.pdf",
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    await requireAudioPlayer(container);
+    expect(container.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
+    expect(container.textContent).toContain("unsafe.pdf");
   });
 
   it("renders verified local assistant attachments through the authenticated media route", async () => {
@@ -3230,13 +3477,78 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-old");
+    const renderVersionBeforeRefresh = getAssistantAttachmentAvailabilityRenderVersion();
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getAssistantAttachmentAvailabilityRenderVersion()).not.toBe(renderVersionBeforeRefresh);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-new");
+  });
+
+  it("queues refreshed audio tickets until playback needs a new source", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
+    const source = `/tmp/openclaw/${crypto.randomUUID()}-refresh.mp3`;
+    const fetchMock = vi
+      .fn<
+        (url: string, init?: RequestInit) => Promise<{ ok: true; json: () => Promise<unknown> }>
+      >()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-old", 31_000),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-new"),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-audio-ticket-refresh",
+          role: "assistant",
+          content: `Local audio\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    const player = await requireAudioPlayer(container);
+    const audio = expectElement(player, "audio", HTMLAudioElement);
+    Object.defineProperties(audio, {
+      paused: { configurable: true, value: true },
+      currentTime: { configurable: true, writable: true, value: 24 },
+      duration: { configurable: true, value: 90 },
+    });
+    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-old");
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await player.updateComplete;
+
+    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-old");
+    expect(
+      player.querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")?.href,
+    ).toContain("mediaTicket=ticket-new");
+
+    audio.dispatchEvent(new Event("error"));
+    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-new");
+    audio.currentTime = 0;
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    expect(audio.currentTime).toBe(24);
   });
 
   it("rechecks local assistant media when its auth token changes", async () => {

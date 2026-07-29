@@ -66,6 +66,7 @@ import { createEmbeddedRunProgressController } from "./run/progress-controller.j
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
+import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
@@ -234,10 +235,15 @@ async function runEmbeddedAgentInternal(
             cwd: rebound.runParams.cwd,
           }) ?? null;
         const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
+        const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
+          params.sessionId,
+          projectKey,
+        );
         const preparedModelRuntime = Object.freeze({
           ...preparedModelRuntimeOwnerSnapshot,
           repoRoot,
           projectKey,
+          activeProjectKeys,
         });
         const preparedAgentId = workspaceResolution.agentId;
         const resolvedWorkspace = workspaceResolution.workspaceDir;

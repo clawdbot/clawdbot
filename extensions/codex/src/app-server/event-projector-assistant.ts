@@ -315,13 +315,17 @@ export class CodexAssistantProjection {
       return;
     }
     const turnItems = turn.items ?? [];
-    const authoritativeIndex = turnItems.findLastIndex(
-      (item) =>
-        item.type === "agentMessage" &&
-        readItemString(item, "phase") === "final_answer" &&
-        typeof item.text === "string" &&
-        item.text.trim().length > 0,
-    );
+    const authoritativeIndex = turnItems.findLastIndex((item) => {
+      if (
+        item.type !== "agentMessage" ||
+        typeof item.text !== "string" ||
+        item.text.trim().length === 0
+      ) {
+        return false;
+      }
+      const phase = readItemString(item, "phase");
+      return phase === "final_answer" || phase === undefined;
+    });
     const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
     const invalidatedByLaterTool = turnItems
       .slice(authoritativeIndex + 1)

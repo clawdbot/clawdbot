@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  stripMemoryAnnotationCarriers,
+  type MemorySearchResult,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildPromptPrefix } from "./prompt.js";
@@ -119,7 +122,10 @@ export function buildTriggerRecallContext(matches: TriggerRecallMatch[]): string
     return undefined;
   }
   const summary = matches
-    .map((entry) => `- ${entry.snippet.trim()} (Source: ${entry.path}#L${String(entry.startLine)})`)
+    .map(
+      (entry) =>
+        `- ${stripMemoryAnnotationCarriers(entry.snippet).trim()} (Source: ${entry.path}#L${String(entry.startLine)})`,
+    )
     .join("\n");
   return buildPromptPrefix(truncateUtf16Safe(summary, MAX_TRIGGER_CONTEXT_CHARS));
 }

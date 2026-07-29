@@ -254,7 +254,7 @@ export async function runQaFlowSuiteStandard(
       const scenarioRetryCount =
         scenario.execution.kind === "flow" ? scenario.execution.retryCount : undefined;
       let result: QaSuiteScenarioResult =
-        scenarioRetryCount === 0
+        params?.captureRuntimeParityCell || scenarioRetryCount === 0
           ? await runSelectedScenario()
           : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
               writeQaSuiteProgress(

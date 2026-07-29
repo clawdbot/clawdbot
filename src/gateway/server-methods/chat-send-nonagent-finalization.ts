@@ -5,7 +5,7 @@ import {
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
-import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
+import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -246,14 +246,11 @@ export async function finalizeChatSendNonAgentReplies(params: {
     sessionKey,
     agentId,
     payloads: finalPayloads,
-    managedImageLocalRoots: mediaLocalRoots,
+    managedMediaLocalRoots: mediaLocalRoots,
     includeSensitiveMedia: false,
     includeSensitiveDisplay: true,
-    onLocalAudioAccessDenied: (message) => {
-      context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-    },
-    onManagedImagePrepareError: (message) => {
-      context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+    onManagedMediaPrepareError: (message) => {
+      context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
     },
     onSensitiveDisplayPrepareError: (message) => {
       context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
@@ -275,13 +272,10 @@ export async function finalizeChatSendNonAgentReplies(params: {
           sessionKey,
           agentId,
           payloads: finalPayloads,
-          managedImageLocalRoots: mediaLocalRoots,
+          managedMediaLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: false,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-          onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+          onManagedMediaPrepareError: (message) => {
+            context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
           },
         })
       : assistantContent,
@@ -325,7 +319,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        await attachManagedOutgoingImagesToMessage({
+        await attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });

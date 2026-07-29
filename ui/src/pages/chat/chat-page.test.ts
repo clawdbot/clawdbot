@@ -432,7 +432,7 @@ describe("chat page split layout host", () => {
     document.body.append(page);
     await page.updateComplete;
 
-    window.history.replaceState({}, "", "/settings/general");
+    window.history.replaceState({}, "", "/settings/appearance");
     canonicalLocation.resolve({ pathname: "/chat/research", search: "", hash: "" });
     await canonicalLocation.promise;
     await Promise.resolve();

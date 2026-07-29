@@ -904,6 +904,11 @@ export async function prepareCliRunContext(
     };
   }
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const resultContentSourceByToolName = new Map(
+    promptTools.flatMap((tool) =>
+      tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
+    ),
+  );
   // A restricted selectable tool surface must also bound the MCP bundle:
   // CLI-side --allowedTools is advisory under bypass permission modes, so
   // user/plugin MCP servers must not be merged into the run's config at all.
@@ -981,6 +986,7 @@ export async function prepareCliRunContext(
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      toolOverrides: params.toolOverrides,
       agentDir,
       // Restricted runs serve only the loopback server; merging user/plugin
       // MCP servers would let the run reach tools outside its allowlist.
@@ -1491,6 +1497,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         messageToolPolicyHash,
         promptToolNamesHash,
+        ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
         cwdHash,
         ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
       };
@@ -1568,6 +1575,7 @@ export async function prepareCliRunContext(
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
+      ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };

@@ -457,7 +457,7 @@ enum class GatewayMethod(
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
   PluginsRefresh("plugins.refresh"),
-  ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
+  ControlUiSessionPullRequestsSubscribe("controlUi.sessionPullRequests.subscribe"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
   GatewaySuspendResume("gateway.suspend.resume"),
@@ -501,6 +501,8 @@ enum class GatewayMethod(
   SessionsCompanionState("sessions.companion.state"),
   SessionsCompanionReset("sessions.companion.reset"),
   MemorySearch("memory.search"),
+  SkillsProposalsEventsList("skills.proposals.events.list"),
+  SkillsProposalsEvaluate("skills.proposals.evaluate"),
 }
 
 enum class GatewayEvent(
@@ -519,6 +521,7 @@ enum class GatewayEvent(
   SessionTyping("session.typing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
+  ControlUiSessionPullRequestsChanged("controlUi.sessionPullRequests.changed"),
   Presence("presence"),
   Tick("tick"),
   TalkMode("talk.mode"),

@@ -30,7 +30,7 @@ import type {
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
 
-type MeetingChromeTransportConfig = MeetingRealtimeEngineConfig & {
+export type MeetingChromeTransportConfig = MeetingRealtimeEngineConfig & {
   chrome: MeetingRealtimeEngineConfig["chrome"] & {
     audioInputCommand: string[];
     audioOutputCommand: string[];
@@ -60,7 +60,7 @@ type MeetingBrowserNodeAdapter = Pick<
   "displayName" | "nodeCommandName" | "nodeConfigPath"
 >;
 
-type MeetingChromeTransportOptions<
+export type MeetingChromeTransportOptions<
   Mode extends string,
   Health extends MeetingBrowserHealth,
   Transcript extends MeetingTranscriptSnapshot,

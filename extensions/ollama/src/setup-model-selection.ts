@@ -1,13 +1,11 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
   buildDefaultOllamaCloudModelDefinition,
-  buildOllamaBaseUrlSsrFPolicy,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
 } from "./provider-models.js";
@@ -84,33 +82,6 @@ export function buildOllamaModelsConfig(
   });
 }
 
-function parseOllamaSetupShowInfo(data: {
-  model_info?: Record<string, unknown>;
-  capabilities?: unknown;
-  parameters?: unknown;
-}): Pick<OllamaModelWithContext, "contextWindow" | "capabilities"> {
-  let contextWindow: number | undefined;
-  for (const [key, value] of Object.entries(data.model_info ?? {})) {
-    if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
-      contextWindow = Math.floor(value);
-      break;
-    }
-  }
-  if (typeof data.parameters === "string") {
-    for (const line of data.parameters.split(/\r?\n/)) {
-      const match = line.trim().match(/^num_ctx\s+(-?\d+)\b/);
-      const parsed = match?.[1] ? Number.parseInt(match[1], 10) : undefined;
-      if (parsed && parsed > 0 && (contextWindow === undefined || parsed > contextWindow)) {
-        contextWindow = parsed;
-      }
-    }
-  }
-  const capabilities = Array.isArray(data.capabilities)
-    ? data.capabilities.filter((value): value is string => typeof value === "string")
-    : undefined;
-  return { contextWindow, capabilities };
-}
-
 export async function inspectOllamaModelsForSetup(
   baseUrl: string,
   models: OllamaModelWithContext[],
@@ -125,34 +96,12 @@ export async function inspectOllamaModelsForSetup(
     const results = await Promise.all(
       batch.map(async (model) => {
         try {
-          const requestSignal = signal
-            ? AbortSignal.any([AbortSignal.timeout(3000), signal])
-            : AbortSignal.timeout(3000);
-          const { response, release } = await fetchWithSsrFGuard({
-            url: `${apiBase}/api/show`,
-            init: {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: model.name }),
-              signal: requestSignal,
-            },
-            signal: requestSignal,
-            policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+          const showInfo = await readOllamaModelShowInfo(apiBase, model.name, {
+            timeoutMs: 3000,
+            signal,
             auditContext: "ollama-setup.tools-scan",
           });
-          try {
-            if (!response.ok) {
-              throw new Error(`Ollama model inspection failed with HTTP ${response.status}`);
-            }
-            const data = await readProviderJsonResponse<{
-              model_info?: Record<string, unknown>;
-              capabilities?: unknown;
-              parameters?: unknown;
-            }>(response, "ollama-setup.tools-scan");
-            return Object.assign({}, model, parseOllamaSetupShowInfo(data));
-          } finally {
-            await release();
-          }
+          return Object.assign({}, model, showInfo);
         } catch (error) {
           signal?.throwIfAborted();
           // A failed inspection must not inherit the optimistic tools default

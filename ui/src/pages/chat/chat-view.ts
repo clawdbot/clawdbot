@@ -31,6 +31,7 @@ import type {
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
+import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
@@ -40,6 +41,7 @@ import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
+import type { ChatComposerPlusMenuProps } from "./components/chat-composer-plus-menu.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
@@ -148,6 +150,8 @@ export type ChatProps = {
   canSend: boolean;
   disabledReason: string | null;
   disabledBanner?: ChatComposerDisabledBanner;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
@@ -158,6 +162,18 @@ export type ChatProps = {
   workspaceConflict?: WorkspaceResultConflict;
   onDismissWorkspaceConflict?: () => void;
   sessions: SessionsListResult | null;
+  toolOverrides?: SessionToolOverrides;
+  capabilityMenu?: Omit<
+    ChatComposerPlusMenuProps,
+    | "attachments"
+    | "disabled"
+    | "open"
+    | "view"
+    | "toolOverrides"
+    | "onOpenChange"
+    | "onViewChange"
+    | "showCapabilities"
+  >;
   swarmSessions?: readonly GatewaySessionRow[];
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -281,6 +297,13 @@ export function renderChat(props: ChatProps) {
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
+  const showModelSetupSplash =
+    props.modelSetupRequired === true &&
+    props.messages.length === 0 &&
+    props.toolMessages.length === 0 &&
+    props.streamSegments.length === 0 &&
+    !props.stream &&
+    props.queue.length === 0;
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) => {
         if (requestVersion === undefined) {
@@ -360,6 +383,8 @@ export function renderChat(props: ChatProps) {
       onCompanionPrefill:
         props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,
+      modelSetupRequired: props.modelSetupRequired,
+      onModelSetup: props.onModelSetup,
       backgroundTasks: props.backgroundTasks,
       onFocusComposer: () =>
         chatSection
@@ -393,6 +418,8 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
+    toolOverrides: props.toolOverrides,
+    capabilityMenu: props.capabilityMenu,
     providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
@@ -592,7 +619,7 @@ export function renderChat(props: ChatProps) {
                   sessions: props.swarmSessions ?? [],
                   sessionKey: props.sessionKey,
                 })}
-                ${chatColumnFooter}
+                ${showModelSetupSplash ? nothing : chatColumnFooter}
               </div>
               ${props.sessionRailReady
                 ? html`

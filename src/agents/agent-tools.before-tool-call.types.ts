@@ -13,12 +13,14 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
+import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 export type ToolOutcomeObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
+  resultContentSource?: AgentTool["resultContentSource"];
   /** Monotonic model-call order within the owning embedded run. */
   toolCallOrdinal?: number;
   terminalPresentation?: string;

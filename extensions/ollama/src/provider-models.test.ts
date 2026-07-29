@@ -13,6 +13,7 @@ import {
   isOllamaCloudModel,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
+  readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
@@ -507,6 +508,19 @@ describe("ollama provider models", () => {
 
     await expect(queryOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).resolves.toEqual(
       {},
+    );
+    expect(showResponse.wasCanceled()).toBe(true);
+  });
+
+  it("reports failed strict model inspections while releasing their response bodies", async () => {
+    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => showResponse.response),
+    );
+
+    await expect(readOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).rejects.toThrow(
+      "Ollama model inspection failed with HTTP 503",
     );
     expect(showResponse.wasCanceled()).toBe(true);
   });

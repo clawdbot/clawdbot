@@ -1,4 +1,6 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -13,6 +15,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -224,6 +227,125 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(async () => page.locator(".model-setup__success").textContent())
         .toContain("provider/verified-model");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("turns an unverifiable Gemini CLI login into direct recovery actions", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "openclaw.setup.detect",
+        "openclaw.setup.auth.start",
+      ],
+      methodResponses: {
+        "openclaw.setup.detect": {
+          candidates: [],
+          unavailableCandidates: [
+            {
+              id: "gemini-cli",
+              brandId: "google-gemini-cli",
+              label: "Gemini CLI",
+              detail: "installed; login status unavailable",
+              reason:
+                "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
+              authOptionId: "google-gemini-cli",
+              manualProviderId: "gemini-api-key",
+            },
+          ],
+          manualProviders: [
+            {
+              id: "openai-api-key",
+              brandId: "openai",
+              label: "OpenAI API key",
+            },
+            {
+              id: "gemini-api-key",
+              brandId: "google",
+              label: "Google Gemini API key",
+              hint: "Use an AI Studio API key.",
+            },
+          ],
+          authOptions: [
+            {
+              id: "google-gemini-cli",
+              brandId: "google-gemini-cli",
+              label: "Gemini CLI OAuth",
+              groupLabel: "Google",
+              kind: "oauth",
+              featured: true,
+            },
+          ],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: false,
+        },
+        "openclaw.setup.auth.start": {
+          sessionId: "gemini-oauth-session",
+          done: false,
+          status: "running",
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/model-setup`);
+      expect(response?.status()).toBe(200);
+      await page.getByRole("heading", { name: "Found, but needs attention" }).waitFor();
+      await page.getByRole("button", { name: "Sign in with Google" }).waitFor();
+      await page.getByRole("button", { name: "Use API key" }).waitFor();
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "after-desktop.png"),
+        });
+        await page.setViewportSize({ height: 844, width: 390 });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "after-mobile.png"),
+        });
+        await page.setViewportSize({ height: 1000, width: 1440 });
+      }
+
+      const accessValue = page.locator('.model-setup__manual input[type="password"]');
+      await accessValue.fill("sk-old-provider-secret");
+      await page.getByRole("button", { name: "Use API key" }).click();
+      const provider = page.locator(".model-setup__manual select");
+      await expect.poll(() => provider.inputValue()).toBe("gemini-api-key");
+      await expect.poll(() => accessValue.inputValue()).toBe("");
+      await expect
+        .poll(() => accessValue.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+
+      await accessValue.fill("gemini-secret");
+      await provider.selectOption("openai-api-key");
+      await expect.poll(() => accessValue.inputValue()).toBe("");
+      await page.getByRole("button", { name: "Use API key" }).click();
+
+      const detectCount = (await gateway.getRequests("openclaw.setup.detect")).length;
+      await page
+        .locator('[data-unavailable-candidate="gemini-cli"]')
+        .getByRole("button", { name: "Check again" })
+        .click();
+      await expect
+        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
+        .toBe(detectCount + 1);
+
+      await page.getByRole("button", { name: "Sign in with Google" }).click();
+      const start = await gateway.waitForRequest("openclaw.setup.auth.start");
+      expect(start.params).toMatchObject({ authChoice: "google-gemini-cli" });
     } finally {
       await context.close();
     }

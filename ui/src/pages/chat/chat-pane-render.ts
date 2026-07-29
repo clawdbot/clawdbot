@@ -21,6 +21,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderBoardSessionSurface } from "./board-session-surface.ts";
 import { clearChatHistory } from "./chat-history.ts";
+import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
   SESSION_RAIL_DOCK_MIN_WIDTH,
@@ -107,18 +108,18 @@ export class ChatPane extends ChatPaneHeader {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    const runtimeConfigState = this.context.runtimeConfig.state;
-    const configSnapshot = runtimeConfigState.configSnapshot;
-    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
-      configNeedsApply: runtimeConfigState.configNeedsApply,
-      effectiveMode: state.chatEffectiveQueueMode,
-      sessionMetadataLoaded:
-        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-      sessionMode: state.chatQueueModeOverride,
-    });
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
-      serverQueueMode,
+      resolveControlUiServerQueueMode(
+        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
+        {
+          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
+          effectiveMode: state.chatEffectiveQueueMode,
+          sessionMetadataLoaded:
+            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+          sessionMode: state.chatQueueModeOverride,
+        },
+      ),
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
@@ -140,6 +141,13 @@ export class ChatPane extends ChatPaneHeader {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelSetupRequired = requiresChatModelSetup({
+      catalog: catalogKey !== null,
+      connected: state.connected,
+      agentsLoaded: this.context.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: agentDefaultModel,
+    });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
@@ -183,10 +191,9 @@ export class ChatPane extends ChatPaneHeader {
       column.panels.some((panel) => panel.slot === "chat"),
     );
     const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
-    const primaryWidth = sidebarPrimaryWidth(sidebarLayout, this.paneWidth);
     const chatLayoutWidth = sidebarRegionCollapsed
       ? this.paneWidth
-      : (sidebarChatColumn?.width ?? primaryWidth);
+      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -195,8 +202,7 @@ export class ChatPane extends ChatPaneHeader {
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // The workspace rail claims the side slot first; the tasks rail needs
-    // room for both columns before it may side-dock next to it.
+    // The workspace rail claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:
         chatLayoutWidth <
@@ -206,8 +212,7 @@ export class ChatPane extends ChatPaneHeader {
       },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    // Side-docked workspace surfaces narrow the conversation region; bottom
-    // strips do not affect whether the session rail can dock beside it.
+    // Only side-docked rails narrow the conversation region.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const selectedSessionRailMode =
@@ -223,7 +228,6 @@ export class ChatPane extends ChatPaneHeader {
       activeRunIds: selectedSession?.activeRunIds,
       usageByRun: state.chatRunUsageById,
     });
-    const loadSidebarFullMessage = createSidebarFullMessageLoader(state, Boolean(catalogKey));
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -324,7 +328,9 @@ export class ChatPane extends ChatPaneHeader {
       onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
-        : !selectedSessionArchived && (!sessionParticipationBlocked || suggestionViewer),
+        : !modelSetupRequired &&
+          !selectedSessionArchived &&
+          (!sessionParticipationBlocked || suggestionViewer),
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
@@ -334,7 +340,11 @@ export class ChatPane extends ChatPaneHeader {
               actionLabel: t("common.unarchive"),
               onAction: () => void this.restoreArchivedSession(state.sessionKey),
             }
-          : undefined,
+          : modelSetupRequired
+            ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+            : undefined,
+      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
+      onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
@@ -357,6 +367,10 @@ export class ChatPane extends ChatPaneHeader {
             }
           : undefined,
       sessions: state.sessionsResult,
+      toolOverrides: selectedSession?.toolOverrides,
+      capabilityMenu: catalogKey
+        ? undefined
+        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -601,7 +615,7 @@ export class ChatPane extends ChatPaneHeader {
             detail: html`<openclaw-chat-detail-panel
               class="chat-sidebar"
               .content=${state.sidebarContent}
-              .loadFullMessage=${loadSidebarFullMessage}
+              .loadFullMessage=${createSidebarFullMessageLoader(state, Boolean(catalogKey))}
               .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
               .embedSandboxMode=${state.embedSandboxMode}
               .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}

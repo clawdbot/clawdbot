@@ -1265,6 +1265,14 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
             try {
+              // Feishu creates title-only docs; flattened tool schemas can still expose
+              // sibling `content`, so reject it before creating an empty document.
+              if (p.action === "create" && Object.hasOwn(p, "content")) {
+                return json({
+                  error:
+                    'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
+                });
+              }
               const client = getClient(p, defaultAccountId);
               switch (p.action) {
                 case "read":

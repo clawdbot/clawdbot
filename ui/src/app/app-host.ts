@@ -132,6 +132,7 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { resolveControlUiRefreshRequiredBanner } from "./update-overlay-helpers.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -1270,7 +1271,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
-      this.navigate("config");
+      this.navigate("appearance");
       return;
     }
     const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
@@ -1908,6 +1909,21 @@ class OpenClawShell extends OpenClawLightDomElement {
             void this.handleSettingsSearchQueryChange(nextQuery);
           },
           preloadTimers: this.settingsPreloadTimers,
+          saveIndicator: {
+            status: runtimeConfig.configAutoSaveStatus,
+            lastError: runtimeConfig.lastError,
+            needsApply: runtimeConfig.configNeedsApply,
+            applying: runtimeConfig.configApplying,
+            applyDisabled:
+              runtimeConfig.configLoading ||
+              runtimeConfig.configSaving ||
+              (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
+              overlaySnapshot.updateRunning ||
+              overlaySnapshot.updateReconciliationPending,
+            onRetry: () => void context.runtimeConfig.save(),
+            onReload: () => void context.runtimeConfig.discardDraft(),
+            onApply: () => void context.runtimeConfig.apply(),
+          },
         })
       : this.navigationSidebar;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
@@ -2058,10 +2074,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             : html`<openclaw-update-banner
                 .props=${{
                   statusBanner: overlaySnapshot.controlUiRefreshRequired
-                    ? {
-                        tone: "info",
-                        text: "Server updated — refresh for full capabilities",
-                      }
+                    ? resolveControlUiRefreshRequiredBanner()
                     : null,
                   action: overlaySnapshot.controlUiRefreshRequired
                     ? { label: t("common.refresh"), onClick: this.refreshControlUi }

@@ -69,6 +69,11 @@
       "import": "./dist/string-normalization.mjs",
       "default": "./dist/string-normalization.mjs"
     },
+    "./stable-node-path": {
+      "types": "./dist/stable-node-path.d.mts",
+      "import": "./dist/stable-node-path.mjs",
+      "default": "./dist/stable-node-path.mjs"
+    },
     "./utf16-slice": {
       "types": "./dist/utf16-slice.d.mts",
       "import": "./dist/utf16-slice.mjs",
@@ -76,7 +81,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "libphonenumber-js": "1.13.9"

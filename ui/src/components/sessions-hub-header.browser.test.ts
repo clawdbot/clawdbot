@@ -55,9 +55,9 @@ describe.skipIf(!hasBrowserLayout)("Sessions hub header browser layout", () => {
     async (width) => {
       await useViewport(width);
       const sessions = await mount("sessions", true);
-      const sessionsTitle = sessions.querySelector<HTMLElement>(".sessions-hub-header__title");
+      const sessionsTitle = sessions.querySelector<HTMLElement>(".hub-page-header__title");
       const sessionsTabs = sessions.querySelector<HTMLElement>(".sessions-hub-tabs");
-      const sessionsActions = sessions.querySelector<HTMLElement>(".sessions-hub-header__actions");
+      const sessionsActions = sessions.querySelector<HTMLElement>(".hub-page-header__actions");
       const sessionsLeft = sessionsTabs?.getBoundingClientRect().left;
       expect(sessionsLeft).toBeTypeOf("number");
       expect(sessionsTabs?.getBoundingClientRect().width).toBeGreaterThan(0);
@@ -74,7 +74,7 @@ describe.skipIf(!hasBrowserLayout)("Sessions hub header browser layout", () => {
       const worktreesTabs = worktrees.querySelector<HTMLElement>(".sessions-hub-tabs");
       const worktreesLeft = worktreesTabs?.getBoundingClientRect().left;
       expect(worktreesLeft).toBeTypeOf("number");
-      expect(worktrees.querySelector(".sessions-hub-header__actions")?.childElementCount).toBe(0);
+      expect(worktrees.querySelector(".hub-page-header__actions")?.childElementCount).toBe(0);
       expect(Math.abs((sessionsLeft ?? 0) - (worktreesLeft ?? 0))).toBeLessThanOrEqual(1);
     },
   );
@@ -82,7 +82,7 @@ describe.skipIf(!hasBrowserLayout)("Sessions hub header browser layout", () => {
   it("keeps the page header hidden on mobile", async () => {
     await useViewport(414, 800);
     const sessions = await mount("sessions", true);
-    const header = sessions.querySelector<HTMLElement>(".sessions-hub-header");
+    const header = sessions.querySelector<HTMLElement>(".hub-page-header");
     expect(getComputedStyle(header!).display).toBe("none");
   });
 });

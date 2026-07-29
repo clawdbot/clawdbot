@@ -22,6 +22,7 @@ export const SessionLifecycleProtocolSchemas = {
   SessionFileBrowserResult: sessions.SessionFileBrowserResultSchema,
   SessionFileKind: sessions.SessionFileKindSchema,
   SessionFileEntry: sessions.SessionFileEntrySchema,
+  SessionFilePreviewKind: sessions.SessionFilePreviewKindSchema,
   SessionFileRelevance: sessions.SessionFileRelevanceSchema,
   SessionsFilesListParams: sessions.SessionsFilesListParamsSchema,
   SessionsFilesListResult: sessions.SessionsFilesListResultSchema,

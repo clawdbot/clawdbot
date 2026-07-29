@@ -349,6 +349,175 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
+    { name: "rewritten", replacementText: "final answer" },
+    { name: "shortened", replacementText: "dra" },
+    { name: "cleared", replacementText: "" },
+  ])(
+    "fails an official SDK Responses stream when streamed text is $name",
+    async ({ replacementText }) => {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: "draft answer", delta: "draft answer" },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: replacementText, replace: true, phase: "commentary" },
+        });
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return {
+          payloads: [{ text: replacementText }],
+          meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
+        };
+      }) as never);
+
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      const events = await client.responses.create({
+        model: "openclaw",
+        input: "Reject an incompatible replacement snapshot.",
+        stream: true,
+      });
+
+      const deltas: string[] = [];
+      const failures: Array<{
+        status: string | undefined;
+        code: string | undefined;
+        usage: { input_tokens: number; output_tokens: number; total_tokens: number } | undefined;
+      }> = [];
+      let completionCount = 0;
+      for await (const event of events) {
+        if (event.type === "response.output_text.delta") {
+          deltas.push(event.delta);
+        } else if (event.type === "response.failed") {
+          failures.push({
+            status: event.response.status,
+            code: event.response.error?.code,
+            usage: event.response.usage
+              ? {
+                  input_tokens: event.response.usage.input_tokens,
+                  output_tokens: event.response.usage.output_tokens,
+                  total_tokens: event.response.usage.total_tokens,
+                }
+              : undefined,
+          });
+        } else if (event.type === "response.completed") {
+          completionCount += 1;
+        }
+      }
+
+      expect(deltas).toEqual(["draft answer"]);
+      expect(failures).toEqual([
+        {
+          status: "failed",
+          code: "server_error",
+          usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+        },
+      ]);
+      expect(completionCount).toBe(0);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    {
+      name: "a producer replacement snapshot without a delta",
+      previousDelta: undefined,
+      replacementDelta: undefined,
+      expectedDeltas: "final answer",
+    },
+    {
+      name: "a producer replacement snapshot with its own delta",
+      previousDelta: undefined,
+      replacementDelta: "final answer",
+      expectedDeltas: "final answer",
+    },
+    {
+      name: "an append-compatible replacement after streamed partial text",
+      previousDelta: "final ",
+      replacementDelta: "answer",
+      expectedDeltas: "final answer",
+    },
+  ])(
+    "keeps official SDK Responses text consistent for $name",
+    async ({ previousDelta, replacementDelta, expectedDeltas }) => {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        if (previousDelta) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { text: previousDelta, delta: previousDelta },
+          });
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: {
+            text: "final answer",
+            replace: true,
+            phase: "commentary",
+            ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
+          },
+        });
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return { payloads: [{ text: "final answer" }] };
+      }) as never);
+
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      const events = await client.responses.create({
+        model: "openclaw",
+        input: "Stream a replacement snapshot exactly once.",
+        stream: true,
+      });
+
+      const deltas: string[] = [];
+      const doneTexts: string[] = [];
+      const completedTexts: string[] = [];
+      for await (const event of events) {
+        if (event.type === "response.output_text.delta") {
+          deltas.push(event.delta);
+        } else if (event.type === "response.output_text.done") {
+          doneTexts.push(event.text);
+        } else if (event.type === "response.completed") {
+          completedTexts.push(
+            ...event.response.output.flatMap((item) =>
+              item.type === "message"
+                ? item.content.flatMap((part) => (part.type === "output_text" ? [part.text] : []))
+                : [],
+            ),
+          );
+        }
+      }
+
+      expect(deltas.join("")).toBe(expectedDeltas);
+      expect(doneTexts).toEqual(["final answer"]);
+      expect(completedTexts).toEqual(["final answer"]);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
     { name: "JSON-object output", text: { format: { type: "json_object" } } },
     {
       name: "JSON-schema output",
@@ -1680,6 +1849,81 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[1]?.name).toBe("get_weather");
   });
+
+  it.each([
+    { name: "an initial replacement", previousDelta: undefined, replacementDelta: undefined },
+    { name: "a replacement after buffered text", previousDelta: "draft", replacementDelta: "" },
+    {
+      name: "a replacement with an explicit delta",
+      previousDelta: "draft",
+      replacementDelta: "final answer",
+    },
+  ])(
+    "buffers $name until the required client tool is validated",
+    async ({ previousDelta, replacementDelta }) => {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        if (previousDelta) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { text: previousDelta, delta: previousDelta },
+          });
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: {
+            text: "final answer",
+            replace: true,
+            phase: "commentary",
+            ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
+          },
+        });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
+            ],
+          },
+        };
+      }) as never);
+
+      const res = await postResponses(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+        tool_choice: "required",
+      });
+
+      expect(res.status).toBe(200);
+      const events = parseSseEvents(await res.text());
+      const deltas = events
+        .filter((event) => event.event === "response.output_text.delta")
+        .map((event) => (parseSseData(event) as { delta?: string }).delta);
+      expect(deltas).toEqual(["final answer"]);
+
+      const completed = parseSseData(findSseEvent(events, "response.completed")) as {
+        response?: {
+          status?: string;
+          output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
+        };
+      };
+      expect(completed.response?.status).toBe("incomplete");
+      expect(completed.response?.output?.map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+      ]);
+      expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("final answer");
+    },
+  );
 
   it("buffers replaceable assistant events for streaming responses", async () => {
     const port = enabledPort;

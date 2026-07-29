@@ -54,7 +54,7 @@ function waitForFast<T>(
 
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
-vi.mock("../../commands/status.js", () => ({
+vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
@@ -1133,6 +1133,71 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(JSON.stringify(result)).not.toContain("private upstream");
     expect(JSON.stringify(result)).not.toContain("private_error");
   });
+
+  it.each([
+    {
+      name: "structured context_overflow code",
+      fields: {
+        errorCode: "context_overflow",
+        errorMessage: "400 The prompt is too long: 203557, model maximum context length: 196607",
+      },
+    },
+    {
+      name: "provider request_too_large code",
+      fields: {
+        errorCode: "request_too_large",
+        errorMessage: "private upstream body: 203557 tokens sent",
+      },
+    },
+    {
+      name: "provider context-window message",
+      fields: {
+        errorType: "invalid_request_error",
+        errorMessage: "Request size exceeds model context window",
+      },
+    },
+    {
+      name: "embedded context_overflow message",
+      fields: {
+        errorMessage: "Unhandled stop reason: context_overflow",
+      },
+    },
+    {
+      name: "provider maximum-token input message",
+      fields: {
+        errorMessage: "Input exceeds the maximum number of tokens for this model.",
+      },
+    },
+  ])(
+    "projects empty context-overflow assistant errors with recovery guidance: $name",
+    ({ fields }) => {
+      const result = projectRecentChatDisplayMessages([
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          ...fields,
+          timestamp: 1,
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.",
+            },
+          ],
+          stopReason: "error",
+          timestamp: 1,
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain("203557");
+      expect(JSON.stringify(result)).not.toContain("196607");
+    },
+  );
 
   it.each([
     ["output_text", ""],
@@ -2402,8 +2467,30 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   it.each([
     {
       name: "passes through string content",
-      attachments: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
-      expected: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+      attachments: [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "a.png",
+          content: "Zm9v",
+          sizeBytes: 3,
+          durationMs: 10,
+          width: 1,
+          height: 1,
+        },
+      ],
+      expected: [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "a.png",
+          content: "Zm9v",
+          sizeBytes: 3,
+          durationMs: 10,
+          width: 1,
+          height: 1,
+        },
+      ],
     },
     {
       name: "converts Uint8Array content to base64",
@@ -4668,11 +4755,11 @@ describe("exec approval handlers", () => {
 });
 
 describe("gateway healthHandlers.status scope handling", () => {
-  let statusModule: typeof import("../../commands/status.js");
+  let statusModule: typeof import("../../status/summary.js");
   let healthHandlers: typeof import("./health.js").healthHandlers;
 
   beforeAll(async () => {
-    statusModule = await import("../../commands/status.js");
+    statusModule = await import("../../status/summary.js");
     ({ healthHandlers } = await import("./health.js"));
   });
 
@@ -4763,6 +4850,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
     runtimeSnapshot?: Record<string, unknown>;
     context?: Record<string, unknown>;
     refreshHealthSnapshot?: ReturnType<typeof vi.fn>;
+    requestParams?: Record<string, unknown>;
+    scopes?: string[];
   }) {
     const respond = vi.fn();
     const refreshHealthSnapshot =
@@ -4771,7 +4860,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       healthHandlers,
       {
         req: {} as never,
-        params: {} as never,
+        params: (params.requestParams ?? {}) as never,
         respond: respond as never,
         context: {
           getHealthCache: () => params.cached,
@@ -4780,7 +4869,9 @@ describe("gateway healthHandlers.health cache freshness", () => {
           logHealth: { error: vi.fn() },
           ...params.context,
         } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        client: {
+          connect: { role: "operator", scopes: params.scopes ?? ["operator.read"] },
+        } as never,
         isWebchatConnect: () => false,
       },
     );
@@ -4831,6 +4922,38 @@ describe("gateway healthHandlers.health cache freshness", () => {
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses a fresh cache for explicit admin probes", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ ts: cached.ts + 1 });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      requestParams: { probe: true },
+      scopes: ["operator.admin"],
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: true,
+      includeSensitive: true,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("maps health collection failures to UNAVAILABLE", async () => {
+    const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
+    const { respond } = await requestHealthSnapshot({
+      cached: null,
+      refreshHealthSnapshot,
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expect(mockCallArg(respond, 0, 2)).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "Error: collector failed",
+    });
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {

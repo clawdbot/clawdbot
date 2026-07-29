@@ -344,6 +344,48 @@ describe("Telegram durable ingress coalescing", () => {
     await telegramTransport.close();
   });
 
+  it("dispatches sustained forwarded messages before their ingress stream falls quiet", async () => {
+    const { monitor, telegramTransport } = await createMonitor();
+    const messageCount = 24;
+    const updateIds = Array.from({ length: messageCount }, (_, index) => 501 + index);
+    monitor.start();
+
+    for (let index = 0; index < messageCount; index += 1) {
+      await monitor.admit(
+        forwardedTextUpdate({
+          updateId: 501 + index,
+          messageId: index + 1,
+          text: `sustained-forward-${String(index).padStart(2, "0")}`,
+        }),
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+
+    expect(downstreamTurns.mock.calls.length).toBeGreaterThan(0);
+
+    await vi.waitFor(
+      () => {
+        const deliveredMessageIds = downstreamTurns.mock.calls.flatMap(([context]) => {
+          const turn = context as MsgContext;
+          return Array.from(
+            (turn.BodyForAgent ?? turn.Body ?? "").matchAll(/sustained-forward-(\d{2})/g),
+            (match) => match[1],
+          );
+        });
+        expect(deliveredMessageIds).toEqual(
+          Array.from({ length: messageCount }, (_, index) => String(index).padStart(2, "0")),
+        );
+      },
+      { timeout: 5_000, interval: 5 },
+    );
+    await assertSpoolTombstoned({ spoolDir, updateIds });
+
+    await monitor.stop();
+    await telegramTransport.close();
+  });
+
   it("coalesces a forwarded burst replayed from a durable restart backlog", async () => {
     await writeTelegramSpooledUpdate({
       spoolDir,

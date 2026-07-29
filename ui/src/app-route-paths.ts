@@ -1,13 +1,22 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
+export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
 export type PluginsHubRouteTab = "installed" | "discover";
+
+type AgentRoutePath = {
+  agentId: string;
+  panel: AgentsPanel;
+  panelSegment: AgentsPanel | null;
+  invalidPanel: boolean;
+};
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
@@ -98,6 +107,49 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
 }
 
+export function pathForAgentPanel(
+  agentId: string,
+  panel: AgentsPanel | null = null,
+  basePath = "",
+): string {
+  if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
+    throw new Error("Invalid agent id for a route path.");
+  }
+  const encodedAgentId = encodeURIComponent(agentId).replaceAll(".", "%2E");
+  const agentPath = `${pathForRoute("agents", basePath)}/${encodedAgentId}`;
+  return panel ? `${agentPath}/${panel}` : agentPath;
+}
+
+export function agentRouteFromPath(pathname: string, basePath = ""): AgentRoutePath | null {
+  const normalizedPath = normalizePath(pathname);
+  const agentsPath = pathForRoute("agents", basePath);
+  const prefix = `${agentsPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const segments = normalizedPath.slice(prefix.length).split("/");
+  if (segments.length > 2 || !segments[0]) {
+    return null;
+  }
+  let agentId: string;
+  try {
+    agentId = decodeURIComponent(segments[0]);
+  } catch {
+    return null;
+  }
+  if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
+    return null;
+  }
+  const rawPanel = segments[1] ?? null;
+  const panelSegment = rawPanel && isAgentsPanel(rawPanel) ? rawPanel : null;
+  return {
+    agentId,
+    panel: panelSegment ?? DEFAULT_AGENT_PANEL,
+    panelSegment,
+    invalidPanel: rawPanel !== null && panelSegment === null,
+  };
+}
+
 export function pathForMemoryTab(tab: MemoryRouteTab, basePath = ""): string {
   const memoryPath = pathForRoute("memory", basePath);
   return tab === "overview" ? memoryPath : `${memoryPath}/${tab}`;
@@ -185,6 +237,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (agentRouteFromPath(normalizedPath, normalizedBasePath)) {
+    return "agents";
+  }
   if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
     return "workboard";
   }
@@ -257,6 +312,7 @@ export function inferBasePathFromPathname(pathname: string): string {
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
+    const dynamicAgentRoute = agentRouteFromPath(candidate) !== null;
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
     const dynamicMemoryRoute = memoryTabFromPath(candidate) !== null;
     const dynamicPluginsRoute = pluginsHubTabFromPath(candidate) !== null;
@@ -264,6 +320,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     const dynamicSessionRoute = sessionNamespace !== null;
     if (
       !routePath &&
+      !dynamicAgentRoute &&
       !dynamicWorkboardRoute &&
       !dynamicMemoryRoute &&
       !dynamicPluginsRoute &&
@@ -272,20 +329,23 @@ export function inferBasePathFromPathname(pathname: string): string {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const dynamicRoutePath = dynamicWorkboardRoute
-      ? APP_ROUTE_DEFINITIONS.workboard.path
-      : dynamicMemoryRoute
-        ? APP_ROUTE_DEFINITIONS.memory.path
-        : dynamicPluginsRoute
-          ? APP_ROUTE_DEFINITIONS.plugins.path
-          : sessionNamespace
-            ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
-            : null;
+    const dynamicRoutePath = dynamicAgentRoute
+      ? APP_ROUTE_DEFINITIONS.agents.path
+      : dynamicWorkboardRoute
+        ? APP_ROUTE_DEFINITIONS.workboard.path
+        : dynamicMemoryRoute
+          ? APP_ROUTE_DEFINITIONS.memory.path
+          : dynamicPluginsRoute
+            ? APP_ROUTE_DEFINITIONS.plugins.path
+            : sessionNamespace
+              ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
+              : null;
     const firstRouteSegment = (routePath ?? dynamicRoutePath ?? "").split("/").find(Boolean);
     if (
       index > 0 &&
       previousSegment === firstRouteSegment &&
       (candidate === routePath ||
+        dynamicAgentRoute ||
         dynamicWorkboardRoute ||
         dynamicMemoryRoute ||
         dynamicPluginsRoute ||

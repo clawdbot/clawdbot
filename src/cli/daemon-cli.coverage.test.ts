@@ -30,6 +30,19 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const inspectPortUsages = vi.fn(async (ports: readonly number[]) => {
+  return new Map(
+    ports.map((port) => [
+      port,
+      {
+        port,
+        status: "free",
+        listeners: [],
+        hints: [],
+      },
+    ]),
+  );
+});
 const inspectPortConnections = vi.fn(async (port: number) => ({
   port,
   connections: [],
@@ -123,6 +136,7 @@ vi.mock("../daemon/inspect.js", () => ({
 vi.mock("../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsages: (ports: readonly number[]) => inspectPortUsages(ports),
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
@@ -201,6 +215,8 @@ describe("daemon-cli coverage", () => {
     resolveGatewayProbeAuthSafeWithSecretInputs.mockClear();
     findExtraGatewayServices.mockClear();
     inspectPortConnections.mockClear();
+    inspectPortUsage.mockClear();
+    inspectPortUsages.mockClear();
     buildGatewayInstallPlan.mockClear();
   });
 
@@ -226,7 +242,6 @@ describe("daemon-cli coverage", () => {
   it("derives probe URL from service args + env (json)", async () => {
     runtimeLogs.length = 0;
     probeGatewayStatus.mockClear();
-    inspectPortUsage.mockClear();
 
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
@@ -244,7 +259,8 @@ describe("daemon-cli coverage", () => {
     expect(requireMockCallArg(probeGatewayStatus, "probeGatewayStatus").url).toBe(
       "ws://127.0.0.1:19001",
     );
-    expect(inspectPortUsage).toHaveBeenCalledWith(19001);
+    expect(inspectPortUsages).toHaveBeenCalledWith([19001, 18789]);
+    expect(inspectPortUsage).not.toHaveBeenCalled();
 
     const parsed = parseFirstJsonRuntimeLine<{
       gateway?: { port?: number; portSource?: string; probeUrl?: string; version?: string | null };

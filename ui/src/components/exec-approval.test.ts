@@ -271,6 +271,31 @@ describe("openclaw-exec-approval", () => {
     expect(onDecision).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { reason: "a decision is in flight", busy: true, allowedDecisions: undefined },
+    { reason: "denial is unavailable", busy: false, allowedDecisions: ["allow-once"] as const },
+  ])("keeps the pending approval visible when $reason", async ({ busy, allowedDecisions }) => {
+    const { onDecision } = await renderApproval(
+      createExecRequest({
+        request: {
+          command: "echo hello",
+          ...(allowedDecisions ? { allowedDecisions: [...allowedDecisions] } : {}),
+        },
+      }),
+      { busy },
+    );
+    const { modal } = await getRenderedModalDialog(container);
+    const cancel = new CustomEvent("modal-cancel", {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+
+    expect(modal.dispatchEvent(cancel)).toBe(false);
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
   it("suppresses the automatic modal for the inline request but opens it on demand", async () => {
     const { approval } = await renderApproval(createExecRequest(), {
       inlineApprovalId: "approval-1",

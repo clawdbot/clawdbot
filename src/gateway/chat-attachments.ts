@@ -1,14 +1,15 @@
 // Gateway chat attachment parser.
 // Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
+import { extensionForMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
+import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
@@ -19,6 +20,10 @@ export type ChatAttachment = {
   mimeType?: string;
   fileName?: string;
   content?: unknown;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 export type ChatImageContent = {
@@ -31,9 +36,13 @@ export type OffloadedRef = {
   mediaRef: string;
   id: string;
   path: string;
+  kind: MediaKind;
   mimeType: string;
   label: string;
   sizeBytes: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 type ParsedMessageWithImages = {
@@ -58,12 +67,36 @@ type NormalizedAttachment = {
 type SavedMediaRef = {
   id: string;
   path: string;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
+const MAX_CHAT_ATTACHMENT_MEDIA_PROBES = 8;
+const CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY = 2;
+const CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS = 3000;
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+
+async function enrichOffloadedMediaMetadata(refs: OffloadedRef[]): Promise<void> {
+  const candidates = refs.flatMap((ref) => {
+    const kind = kindFromMime(ref.mimeType);
+    return kind === "audio" || kind === "video" ? [{ kind, ref }] : [];
+  });
+  const metadata = await probeMediaFilesWithinBudget(
+    candidates.map(({ kind, ref }) => ({ filePath: ref.path, kind })),
+    {
+      budgetMs: CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS,
+      concurrency: CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY,
+      maxProbes: MAX_CHAT_ATTACHMENT_MEDIA_PROBES,
+    },
+  );
+  for (const [index, candidate] of candidates.entries()) {
+    Object.assign(candidate.ref, metadata[index]);
+  }
+}
 
 export function logAttachmentFailure(
   log: Pick<SubsystemLogger, "error">,
@@ -501,9 +534,21 @@ export async function parseMessageWithAttachments(
         mediaRef,
         id: savedMedia.id,
         path: savedMedia.path,
+        kind: kindFromMime(finalMime) ?? "unknown",
         mimeType: finalMime,
         label,
         sizeBytes,
+        ...(typeof att.durationMs === "number" &&
+        Number.isFinite(att.durationMs) &&
+        att.durationMs >= 0
+          ? { durationMs: att.durationMs }
+          : {}),
+        ...(typeof att.width === "number" && Number.isFinite(att.width) && att.width >= 0
+          ? { width: att.width }
+          : {}),
+        ...(typeof att.height === "number" && Number.isFinite(att.height) && att.height >= 0
+          ? { height: att.height }
+          : {}),
       });
       if (isImage) {
         imageOrder.push("offloaded");
@@ -519,6 +564,8 @@ export async function parseMessageWithAttachments(
     throw err;
   }
 
+  await enrichOffloadedMediaMetadata(offloadedRefs);
+
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
@@ -527,6 +574,12 @@ export async function parseMessageWithAttachments(
       path: ref.path,
       url: ref.mediaRef,
       contentType: ref.mimeType,
+      kind: ref.kind,
+      fileName: ref.label,
+      sizeBytes: ref.sizeBytes,
+      ...(ref.durationMs ? { durationMs: ref.durationMs } : {}),
+      ...(ref.width ? { width: ref.width } : {}),
+      ...(ref.height ? { height: ref.height } : {}),
     })),
     offloadedRefs,
   };
