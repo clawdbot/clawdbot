@@ -100,6 +100,50 @@ describe("memory session directory ownership", () => {
     }
   });
 
+  it("finds the canonical owner past a nested case-variant sessions directory", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const sessionFile = path.join(
+        tmpDir,
+        "agents",
+        "main",
+        "sessions",
+        "archive",
+        "SESSIONS",
+        "active.jsonl",
+      );
+      expect(sessionPathForFile(sessionFile)).toBe("sessions/main/active.jsonl");
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("indexes an explicit custom transcript below its agent directory", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+      const sessionFile = path.join(tmpDir, "agents", "main", "custom", "active.jsonl");
+      fsSync.mkdirSync(sessionsDir, { recursive: true });
+      fsSync.mkdirSync(path.dirname(sessionFile), { recursive: true });
+      fsSync.writeFileSync(sessionFile, "");
+      fsSync.writeFileSync(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:chat:custom-transcript": {
+            sessionFile,
+            sessionId: "active",
+          },
+        }),
+      );
+
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+        expect.objectContaining({ agentId: "main", sessionFile, sessionId: "active" }),
+      );
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it.each(invalidWindowsAgentIds)(
     "never aliases an invalid Windows session owner into another agent: %s",
     (owner) => {
