@@ -1,4 +1,4 @@
-import { createMeetingPluginShellEntry } from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   ZOOM_MEETINGS_CONFIG_SCHEMA,
@@ -10,7 +10,7 @@ import { createZoomMeetingsNodeInvokePolicy } from "./src/node-invoke-policy.js"
 import { ZoomMeetingsRuntime } from "./src/runtime.js";
 import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./src/transports/zoom-meetings-platform-adapter.js";
 
-export default createMeetingPluginShellEntry({
+export default MeetingPlatformAdapter.createPluginShellEntry({
   platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
   browserGuestLabel: "Zoom meeting",
   sessionLabel: "Zoom meeting",

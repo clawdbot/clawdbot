@@ -1,7 +1,7 @@
-import { createMeetingPluginCliMetadata } from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
 export const { descriptor: ZOOM_MEETINGS_CLI_DESCRIPTOR, entry: ZOOM_MEETINGS_CLI_METADATA } =
-  createMeetingPluginCliMetadata({
+  MeetingPlatformAdapter.createCliMetadata({
     commandName: "zoommeetings",
     description: "Join and manage Zoom meeting guests",
     id: "zoom-meetings",

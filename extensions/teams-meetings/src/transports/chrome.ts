@@ -1,14 +1,11 @@
-import {
-  createMeetingChromeRuntimeBindings,
-  createMeetingPluginChromeTransport,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 
-const chromeTransport = createMeetingPluginChromeTransport({
+const chromeTransport = MeetingPlatformAdapter.createPluginChromeTransport({
   meetingLabel: "Microsoft Teams meeting",
   platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
   preserveTrackedBrowserOnEngineFailure: false,
-  runtime: createMeetingChromeRuntimeBindings(),
+  runtime: MeetingPlatformAdapter.createChromeRuntimeBindings(),
 });
 
 export const assertBlackHole2chAvailable = chromeTransport.assertAudioDeviceAvailable;

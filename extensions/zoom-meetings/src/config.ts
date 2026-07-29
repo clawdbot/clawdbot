@@ -1,17 +1,8 @@
-import {
-  createMeetingPluginConfigSchema,
-  type MeetingPluginConfig,
-  type MeetingPluginMode,
-  type MeetingPluginTransport,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/realtime-voice";
 
-export type ZoomMeetingsMode = MeetingPluginMode;
-export type ZoomMeetingsTransport = MeetingPluginTransport;
-export type ZoomMeetingsConfig = MeetingPluginConfig;
-
-const zoomMeetingsConfig = createMeetingPluginConfigSchema({
+const zoomMeetingsConfig = MeetingPlatformAdapter.createPluginConfigSchema({
   defaultRealtimeInstructions: `You are joining a private Zoom meeting as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} for deeper reasoning, current information, or tools.`,
   resolveGatewayOperationTimeoutMs: (config) =>
     Math.max(
@@ -23,6 +14,10 @@ const zoomMeetingsConfig = createMeetingPluginConfigSchema({
     ),
   resolveSoxAudioDevice: () => ({ device: "BlackHole 2ch", deviceType: "coreaudio" }),
 });
+
+export type ZoomMeetingsConfig = ReturnType<typeof zoomMeetingsConfig.resolveConfig>;
+export type ZoomMeetingsMode = ZoomMeetingsConfig["defaultMode"];
+export type ZoomMeetingsTransport = "chrome" | "chrome-node";
 
 export const ZOOM_MEETINGS_CONFIG_SCHEMA = zoomMeetingsConfig.configSchema;
 export const DEFAULT_ZOOM_MEETINGS_AUDIO_INPUT_COMMAND =

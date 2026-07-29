@@ -1,9 +1,6 @@
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  registerMeetingPluginCli,
-  resolveMeetingProbeTimeoutMs,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ZoomMeetingsConfig } from "./config.js";
 import { resolveZoomMeetingsGatewayOperationTimeoutMs } from "./config.js";
@@ -15,7 +12,7 @@ export function resolveZoomMeetingsCliGatewayTimeoutMs(
 ): number {
   const operationTimeoutMs = resolveZoomMeetingsGatewayOperationTimeoutMs(config);
   const probeTimeoutMs = options.probe
-    ? resolveMeetingProbeTimeoutMs(
+    ? MeetingPlatformAdapter.resolveProbeTimeoutMs(
         options.requestedTimeoutMs,
         config.chrome.joinTimeoutMs,
         zoomMeetingsInvalidRequest,
@@ -30,7 +27,7 @@ export function registerZoomMeetingsCli(params: {
   program: Command;
   config: ZoomMeetingsConfig;
 }): void {
-  registerMeetingPluginCli({
+  MeetingPlatformAdapter.registerPluginCli({
     ...params,
     callGateway: callGatewayFromCli,
     commandName: "zoommeetings",

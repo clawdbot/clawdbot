@@ -1,4 +1,4 @@
-import { createMeetingPluginShellEntry } from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   TEAMS_MEETINGS_CONFIG_SCHEMA,
@@ -11,7 +11,7 @@ import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./src/transports/teams-meetings
 
 class TeamsMeetingsInvalidRequestError extends Error {}
 
-export default createMeetingPluginShellEntry({
+export default MeetingPlatformAdapter.createPluginShellEntry({
   platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
   browserGuestLabel: "Microsoft Teams meeting",
   configSchema: TEAMS_MEETINGS_CONFIG_SCHEMA,

@@ -1,18 +1,5 @@
-import type {
-  MeetingBrowserTab,
-  MeetingPluginChromeHealth,
-  MeetingPluginJoinRequest,
-  MeetingPluginJoinResult,
-  MeetingPluginSession,
-  MeetingTranscriptSnapshot,
-} from "openclaw/plugin-sdk/meeting-runtime";
-import type { ZoomMeetingsMode, ZoomMeetingsTransport } from "../config.js";
-
-export type ZoomMeetingsTranscriptSnapshot = MeetingTranscriptSnapshot;
-export type ZoomMeetingsJoinRequest = MeetingPluginJoinRequest<
-  ZoomMeetingsTransport,
-  ZoomMeetingsMode
->;
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "../config.js";
 
 type ZoomMeetingsManualActionReason =
   | "zoom-login-required"
@@ -33,14 +20,19 @@ type ZoomMeetingsSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "zoom-microphone-muted";
 
-export type ZoomMeetingsChromeHealth = MeetingPluginChromeHealth<
-  ZoomMeetingsManualActionReason,
-  ZoomMeetingsSpeechBlockedReason
-> & { meetingEnded?: boolean };
-export type ZoomMeetingsBrowserTab = MeetingBrowserTab;
-export type ZoomMeetingsSession = MeetingPluginSession<
-  ZoomMeetingsTransport,
-  ZoomMeetingsMode,
-  ZoomMeetingsChromeHealth
+export type ZoomMeetingsPluginTypes = ReturnType<
+  typeof MeetingPlatformAdapter.pluginTypes<
+    ZoomMeetingsConfig,
+    ZoomMeetingsTransport,
+    ZoomMeetingsMode,
+    ZoomMeetingsManualActionReason,
+    ZoomMeetingsSpeechBlockedReason,
+    { meetingEnded?: boolean }
+  >
 >;
-export type ZoomMeetingsJoinResult = MeetingPluginJoinResult<ZoomMeetingsSession>;
+export type ZoomMeetingsTranscriptSnapshot = ZoomMeetingsPluginTypes["TranscriptSnapshot"];
+export type ZoomMeetingsJoinRequest = ZoomMeetingsPluginTypes["JoinRequest"];
+export type ZoomMeetingsChromeHealth = ZoomMeetingsPluginTypes["ChromeHealth"];
+export type ZoomMeetingsBrowserTab = ZoomMeetingsPluginTypes["BrowserTab"];
+export type ZoomMeetingsSession = ZoomMeetingsPluginTypes["Session"];
+export type ZoomMeetingsJoinResult = ZoomMeetingsPluginTypes["JoinResult"];

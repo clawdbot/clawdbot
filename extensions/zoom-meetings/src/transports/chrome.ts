@@ -1,14 +1,11 @@
-import {
-  createMeetingChromeRuntimeBindings,
-  createMeetingPluginChromeTransport,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./zoom-meetings-platform-adapter.js";
 
-const chromeTransport = createMeetingPluginChromeTransport({
+const chromeTransport = MeetingPlatformAdapter.createPluginChromeTransport({
   meetingLabel: "Zoom meeting",
   platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
   preserveTrackedBrowserOnEngineFailure: true,
-  runtime: createMeetingChromeRuntimeBindings(),
+  runtime: MeetingPlatformAdapter.createChromeRuntimeBindings(),
 });
 
 export const assertBlackHole2chAvailable = chromeTransport.assertAudioDeviceAvailable;

@@ -1,24 +1,14 @@
-import {
-  MeetingPlatformAdapter,
-  resolveMeetingProbeTimeoutMs,
-  type MeetingProbeContext,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "./config.js";
 import { zoomMeetingsInvalidRequest } from "./errors.js";
 import type {
   ZoomMeetingsChromeHealth,
   ZoomMeetingsJoinRequest,
+  ZoomMeetingsPluginTypes,
   ZoomMeetingsSession,
 } from "./transports/types.js";
 
-export type ZoomMeetingsProbeContext = MeetingProbeContext<
-  ZoomMeetingsConfig,
-  ZoomMeetingsMode,
-  ZoomMeetingsTransport,
-  ZoomMeetingsChromeHealth,
-  ZoomMeetingsSession,
-  ZoomMeetingsJoinRequest
->;
+export type ZoomMeetingsProbeContext = ZoomMeetingsPluginTypes["ProbeContext"];
 
 const probes = MeetingPlatformAdapter.createRuntimeProbes<
   ZoomMeetingsConfig,
@@ -31,7 +21,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   defaultSpeechMessage: "Say exactly: Zoom speech test complete.",
   invalidRequest: zoomMeetingsInvalidRequest,
   resolveTimeoutMs: (input, fallback) =>
-    resolveMeetingProbeTimeoutMs(input, fallback, zoomMeetingsInvalidRequest),
+    MeetingPlatformAdapter.resolveProbeTimeoutMs(input, fallback, zoomMeetingsInvalidRequest),
   shouldWaitForListening: (session) => Boolean(session.chrome?.browserTab?.targetId),
   talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });

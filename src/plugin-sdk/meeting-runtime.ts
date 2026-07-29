@@ -1,6 +1,34 @@
+import { MeetingPlatformAdapter as MeetingPlatformAdapterCore } from "../meeting-bot/platform-adapter.js";
 /**
  * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
  */
+import { registerMeetingPluginCli } from "../meeting-bot/plugin-cli.js";
+import { createMeetingPluginConfigSchema } from "../meeting-bot/plugin-config.js";
+import {
+  createMeetingChromeRuntimeBindings,
+  createMeetingPluginChromeTransport,
+  createMeetingPluginCliMetadata,
+  createMeetingPluginNodeHostHandler,
+  createMeetingPluginNodeInvokePolicy,
+  createMeetingPluginShellEntry,
+  createMeetingPluginTypes,
+} from "../meeting-bot/plugin-shell.js";
+import { resolveMeetingProbeTimeoutMs } from "../meeting-bot/runtime-probes.js";
+
+export const MeetingPlatformAdapter = {
+  ...MeetingPlatformAdapterCore,
+  createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
+  createCliMetadata: createMeetingPluginCliMetadata,
+  createPluginChromeTransport: createMeetingPluginChromeTransport,
+  createPluginConfigSchema: createMeetingPluginConfigSchema,
+  createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
+  createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
+  createPluginShellEntry: createMeetingPluginShellEntry,
+  pluginTypes: createMeetingPluginTypes,
+  registerPluginCli: registerMeetingPluginCli,
+  resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
+};
+
 export {
   startMeetingRealtimeEngine,
   type MeetingAgentConsultParams,
@@ -33,39 +61,16 @@ export {
   type MeetingSessionRuntimeOptions,
 } from "../meeting-bot/session-runtime.js";
 export { createMeetingSession } from "../meeting-bot/session-factory.js";
-export {
-  createMeetingPluginConfigSchema,
-  type MeetingPluginConfig,
-  type MeetingPluginMode,
-  type MeetingPluginTransport,
-} from "../meeting-bot/plugin-config.js";
-export { registerMeetingPluginCli } from "../meeting-bot/plugin-cli.js";
-export {
-  createMeetingChromeRuntimeBindings,
-  createMeetingPluginCliMetadata,
-  createMeetingPluginChromeTransport,
-  createMeetingPluginNodeHostHandler,
-  createMeetingPluginNodeInvokePolicy,
-  createMeetingPluginShellEntry,
-} from "../meeting-bot/plugin-shell.js";
 export type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,
   MeetingBrowserTab,
-  MeetingPluginChromeHealth,
-  MeetingPluginJoinRequest,
-  MeetingPluginJoinResult,
-  MeetingPluginSession,
   MeetingRealtimeSessionBlock,
   MeetingSessionRecord,
   MeetingSessionState,
   MeetingTranscriptLine,
   MeetingTranscriptSnapshot,
 } from "../meeting-bot/session-types.js";
-export {
-  resolveMeetingProbeTimeoutMs,
-  type MeetingProbeContext,
-} from "../meeting-bot/runtime-probes.js";
 export {
   openMeetingWithBrowser,
   recoverMeetingBrowserTab,
@@ -97,7 +102,6 @@ export type {
   MeetingManualAction,
   MeetingManualActionCategory,
 } from "../meeting-bot/platform-adapter.js";
-export { MeetingPlatformAdapter } from "../meeting-bot/platform-adapter.js";
 export { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
 export {
   createMeetingVoiceCallGateway,

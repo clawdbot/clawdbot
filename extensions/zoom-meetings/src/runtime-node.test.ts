@@ -21,20 +21,23 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
   return {
     ...original,
-    createMeetingChromeRuntimeBindings: () => ({
-      createBindings: original.createMeetingRealtimeEngineBindings,
-      createLocalAudioTransport: original.createLocalMeetingRealtimeAudioTransport,
-      createNodeAudioTransport: () => ({
-        clearOutput: vi.fn(async () => {}),
-        dispose: vi.fn(async () => {}),
-        onFatal: vi.fn(),
-        startInput: vi.fn(),
-        stop: vi.fn(async () => {}),
-        writeOutput: vi.fn(async () => {}),
+    MeetingPlatformAdapter: {
+      ...original.MeetingPlatformAdapter,
+      createChromeRuntimeBindings: () => ({
+        createBindings: original.createMeetingRealtimeEngineBindings,
+        createLocalAudioTransport: original.createLocalMeetingRealtimeAudioTransport,
+        createNodeAudioTransport: () => ({
+          clearOutput: vi.fn(async () => {}),
+          dispose: vi.fn(async () => {}),
+          onFatal: vi.fn(),
+          startInput: vi.fn(),
+          stop: vi.fn(async () => {}),
+          writeOutput: vi.fn(async () => {}),
+        }),
+        startAgentRealtimeEngine: realtimeMocks.startAgent,
+        startRealtimeEngine: original.startMeetingRealtimeEngine,
       }),
-      startAgentRealtimeEngine: realtimeMocks.startAgent,
-      startRealtimeEngine: original.startMeetingRealtimeEngine,
-    }),
+    },
   };
 });
 

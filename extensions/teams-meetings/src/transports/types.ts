@@ -1,18 +1,5 @@
-import type {
-  MeetingBrowserTab,
-  MeetingPluginChromeHealth,
-  MeetingPluginJoinRequest,
-  MeetingPluginJoinResult,
-  MeetingPluginSession,
-  MeetingTranscriptSnapshot,
-} from "openclaw/plugin-sdk/meeting-runtime";
-import type { TeamsMeetingsMode, TeamsMeetingsTransport } from "../config.js";
-
-export type TeamsMeetingsTranscriptSnapshot = MeetingTranscriptSnapshot;
-export type TeamsMeetingsJoinRequest = MeetingPluginJoinRequest<
-  TeamsMeetingsTransport,
-  TeamsMeetingsMode
->;
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "../config.js";
 
 type TeamsMeetingsManualActionReason =
   | "teams-login-required"
@@ -31,14 +18,18 @@ type TeamsMeetingsSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "teams-microphone-muted";
 
-export type TeamsMeetingsChromeHealth = MeetingPluginChromeHealth<
-  TeamsMeetingsManualActionReason,
-  TeamsMeetingsSpeechBlockedReason
+export type TeamsMeetingsPluginTypes = ReturnType<
+  typeof MeetingPlatformAdapter.pluginTypes<
+    TeamsMeetingsConfig,
+    TeamsMeetingsTransport,
+    TeamsMeetingsMode,
+    TeamsMeetingsManualActionReason,
+    TeamsMeetingsSpeechBlockedReason
+  >
 >;
-export type TeamsMeetingsBrowserTab = MeetingBrowserTab;
-export type TeamsMeetingsSession = MeetingPluginSession<
-  TeamsMeetingsTransport,
-  TeamsMeetingsMode,
-  TeamsMeetingsChromeHealth
->;
-export type TeamsMeetingsJoinResult = MeetingPluginJoinResult<TeamsMeetingsSession>;
+export type TeamsMeetingsTranscriptSnapshot = TeamsMeetingsPluginTypes["TranscriptSnapshot"];
+export type TeamsMeetingsJoinRequest = TeamsMeetingsPluginTypes["JoinRequest"];
+export type TeamsMeetingsChromeHealth = TeamsMeetingsPluginTypes["ChromeHealth"];
+export type TeamsMeetingsBrowserTab = TeamsMeetingsPluginTypes["BrowserTab"];
+export type TeamsMeetingsSession = TeamsMeetingsPluginTypes["Session"];
+export type TeamsMeetingsJoinResult = TeamsMeetingsPluginTypes["JoinResult"];

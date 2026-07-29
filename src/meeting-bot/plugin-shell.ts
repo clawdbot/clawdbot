@@ -12,10 +12,11 @@ import {
 import { createMeetingConfiguredNodeHost } from "./node-host.js";
 import { createMeetingBrowserNodeInvokePolicy } from "./node-invoke-policy.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./platform-adapter.js";
+import type { MeetingPluginConfig } from "./plugin-config.js";
 import {
   createMeetingPluginEntryOptions,
   type MeetingJoinRequest,
-  type MeetingPluginConfig,
+  type MeetingPluginConfig as MeetingEntryConfig,
   type MeetingPluginEntryOptions,
   type MeetingPluginRuntime,
 } from "./plugin-entry.js";
@@ -23,7 +24,16 @@ import { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
 import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 import { createLocalMeetingRealtimeAudioTransport } from "./realtime-local-audio-transport.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
-import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
+import type { MeetingProbeContext } from "./runtime-probes.js";
+import type {
+  MeetingBrowserHealth,
+  MeetingBrowserTab,
+  MeetingPluginChromeHealth,
+  MeetingPluginJoinRequest,
+  MeetingPluginJoinResult,
+  MeetingPluginSession,
+  MeetingTranscriptSnapshot,
+} from "./session-types.js";
 
 const SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
 
@@ -156,7 +166,7 @@ export function createMeetingPluginChromeTransport<
 }
 
 type MeetingPluginShellEntryOptions<
-  Config extends MeetingPluginConfig,
+  Config extends MeetingEntryConfig,
   Request extends MeetingJoinRequest,
   Runtime extends MeetingPluginRuntime<Request>,
 > = Omit<
@@ -194,7 +204,7 @@ type MeetingPluginShellEntryOptions<
 };
 
 export function createMeetingPluginShellEntry<
-  Config extends MeetingPluginConfig,
+  Config extends MeetingEntryConfig,
   Request extends MeetingJoinRequest,
   Runtime extends MeetingPluginRuntime<Request>,
 >(options: MeetingPluginShellEntryOptions<Config, Request, Runtime>) {
@@ -247,4 +257,26 @@ export function createMeetingPluginShellEntry<
       });
     },
   });
+}
+
+export function createMeetingPluginTypes<
+  Config extends MeetingPluginConfig,
+  Transport extends string,
+  Mode extends string,
+  ManualReason extends string,
+  SpeechBlockedReason extends string,
+  ExtraHealth extends object = object,
+>() {
+  type Health = MeetingPluginChromeHealth<ManualReason, SpeechBlockedReason> & ExtraHealth;
+  type Request = MeetingPluginJoinRequest<Transport, Mode>;
+  type Session = MeetingPluginSession<Transport, Mode, Health>;
+  return null as unknown as {
+    BrowserTab: MeetingBrowserTab;
+    ChromeHealth: Health;
+    JoinRequest: Request;
+    JoinResult: MeetingPluginJoinResult<Session>;
+    ProbeContext: MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>;
+    Session: Session;
+    TranscriptSnapshot: MeetingTranscriptSnapshot;
+  };
 }
