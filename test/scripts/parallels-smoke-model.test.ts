@@ -2558,10 +2558,14 @@ setInterval(() => {}, 1000);
     const macos = readFileSync(TS_PATHS.macos, "utf8");
     const windows = readFileSync(TS_PATHS.windows, "utf8");
 
-    for (const script of [macos, windows]) {
-      expect(script).toContain("update --channel dev --yes --json --no-restart");
-      expect(script).toContain("--install-daemon");
-    }
+    expect(macos).toContain(
+      "update --channel dev --yes --json --no-restart --timeout ${this.updateDevTimeoutSeconds}",
+    );
+    expect(windows).toContain(
+      "update --channel dev --yes --json --no-restart --timeout ${this.updateTimeoutSeconds}",
+    );
+    expect(macos).toContain("--install-daemon");
+    expect(windows).toContain("--install-daemon");
   });
 
   it("writes Parallels phase timing artifacts", () => {
