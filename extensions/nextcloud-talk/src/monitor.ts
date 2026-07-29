@@ -13,6 +13,8 @@ import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
 
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+const NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE = "durable";
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
@@ -182,6 +184,12 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         // Nextcloud retries only a few times. Acknowledge only after the raw
         // envelope is durably admitted; append failure must remain retryable.
         await onWebhook(body);
+        // The spool persisted the envelope above; mark the ack as durable so
+        // proxies can distinguish it from other 200s (same marker as #104407).
+        res.setHeader(
+          NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER,
+          NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE,
+        );
         writeJsonResponse(res, 200);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
