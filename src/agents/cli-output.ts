@@ -281,8 +281,14 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const totalInput = pick("input_tokens") ?? pick("inputTokens");
-  const output = pick("output_tokens") ?? pick("outputTokens");
+  // Chat Completions calls these prompt/completion tokens; preserve existing CLI-field precedence.
+  const totalInput =
+    pick("input_tokens") ?? pick("inputTokens") ?? pick("prompt_tokens") ?? pick("promptTokens");
+  const output =
+    pick("output_tokens") ??
+    pick("outputTokens") ??
+    pick("completion_tokens") ??
+    pick("completionTokens");
   const nestedCached =
     readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
   const cacheRead =

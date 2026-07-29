@@ -4,6 +4,7 @@ import type { QaProviderMode } from "./model-selection.js";
 import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
+  resolveQaScenarioLaneChannels,
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -69,6 +70,18 @@ describe("QA scenario lane matching", () => {
       );
     },
   );
+
+  it("keeps multi-channel metadata as OR eligibility while exposing every supported lane", () => {
+    const scenario = readQaScenarioById("thread-isolation");
+
+    expect(
+      resolveQaScenarioLaneChannels({
+        scenario,
+        channelDriver: "live",
+        supportsChannel: (channel) => channel === "slack" || channel === "matrix",
+      }),
+    ).toEqual(["slack", "matrix"]);
+  });
 
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {

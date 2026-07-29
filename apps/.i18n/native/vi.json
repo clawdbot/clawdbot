@@ -1199,6 +1199,11 @@
       "translated": "Đang tìm kiếm…"
     },
     {
+      "id": "native.android.60062377f4798a11",
+      "source": "Accept",
+      "translated": "Chấp nhận"
+    },
+    {
       "id": "native.android.1cbaba9cbffb2f97",
       "source": "Connecting…",
       "translated": "Đang kết nối…"
@@ -7719,6 +7724,11 @@
       "translated": "Đang nói…"
     },
     {
+      "id": "native.android.010f1a1fdd158ba0",
+      "source": "Image",
+      "translated": "Hình ảnh"
+    },
+    {
       "id": "native.android.71ef7f8dbe2b0dbe",
       "source": "Preview · $domain",
       "translated": "Xem trước · $domain"
@@ -7849,6 +7859,21 @@
       "translated": "Tệp đính kèm"
     },
     {
+      "id": "native.android.09720189ba712747",
+      "source": "Unsupported attachment",
+      "translated": "Tệp đính kèm không được hỗ trợ"
+    },
+    {
+      "id": "native.android.df7c0abff7557f23",
+      "source": "Image unavailable · Tap to retry",
+      "translated": "Hình ảnh không khả dụng · Nhấn để thử lại"
+    },
+    {
+      "id": "native.android.3fdc2798b6eada4a",
+      "source": "Loading image…",
+      "translated": "Đang tải hình ảnh…"
+    },
+    {
       "id": "native.android.316927b46135a7ab",
       "source": "Open image preview",
       "translated": "Mở xem trước hình ảnh"
@@ -7862,11 +7887,6 @@
       "id": "native.android.7f8cf7bee5cc491f",
       "source": "Close image preview",
       "translated": "Đóng xem trước hình ảnh"
-    },
-    {
-      "id": "native.android.09720189ba712747",
-      "source": "Unsupported attachment",
-      "translated": "Tệp đính kèm không được hỗ trợ"
     },
     {
       "id": "native.android.bf40f9f9a508155d",
@@ -8087,6 +8107,16 @@
       "id": "native.android.25d8575c0063aee5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.b18964167dbb3c02",
+      "source": "Image",
+      "translated": "Hình ảnh"
+    },
+    {
+      "id": "native.android.952a88e71b4aaee4",
+      "source": "Additional images hidden: ${omittedImageCount}",
+      "translated": "Hình ảnh bổ sung đã bị ẩn: ${omittedImageCount}"
     },
     {
       "id": "native.android.5aafbef3744d86f3",
@@ -9284,6 +9314,11 @@
       "translated": "Luồng"
     },
     {
+      "id": "native.android.fc73a8c21e6a7b16",
+      "source": "Open thread",
+      "translated": "Mở chuỗi hội thoại"
+    },
+    {
       "id": "native.android.4863e4958bf9a886",
       "source": "← Swipe →",
       "translated": "← Vuốt →"
@@ -9302,6 +9337,11 @@
       "id": "native.android.9f7fe0147a0b571a",
       "source": "Double tap",
       "translated": "Nhấn đúp"
+    },
+    {
+      "id": "native.android.75a41b3ed302ff41",
+      "source": "Show new messages",
+      "translated": "Hiển thị tin nhắn mới"
     },
     {
       "id": "native.android.65caac394b5e4871",
@@ -19149,6 +19189,31 @@
       "translated": "Nhà phát hành"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "Đã cấp quyền"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "Thiếu quyền"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "Quyền Trợ năng có thể đã hết hiệu lực"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "Đã cấp quyền Trợ năng, Đăng sự kiện và Ghi màn hình."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "Thiếu: \\(buckets.map(\\.displayName).joined(separator: \", \")). Hãy cấp quyền truy cập trong Cài đặt hệ thống → Quyền riêng tư & Bảo mật, sau đó mở lại OpenClaw."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "Không có phần cấu hình nào."
@@ -20589,9 +20654,14 @@
       "translated": "Cho phép điều khiển máy tính"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "Cho phép một tác nhân được ủy quyền di chuyển con trỏ, nhấp và gõ trên máy Mac này. Cũng yêu cầu Trợ năng, Ghi màn hình và ủy quyền lệnh gateway. Rủi ro cao."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "Được bật khi khởi động. Sau khi máy Mac này được ghép nối và quyền truy cập macOS được cấp, Gateway đã ghép nối có thể di chuyển con trỏ, nhấp và nhập mà không cần xác nhận cho từng thao tác. Rủi ro cao."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "Quyền Điều khiển máy tính"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -25059,6 +25129,31 @@
       "translated": "Image"
     },
     {
+      "id": "native.apple.8b0faa2f4f38e339",
+      "source": "Loading image…",
+      "translated": "Đang tải hình ảnh…"
+    },
+    {
+      "id": "native.apple.e776a9e0e3ef1ae7",
+      "source": "Opens image preview",
+      "translated": "Mở bản xem trước hình ảnh"
+    },
+    {
+      "id": "native.apple.cc336983da1cd070",
+      "source": "Close image preview",
+      "translated": "Đóng bản xem trước hình ảnh"
+    },
+    {
+      "id": "native.apple.4f97faec43e8e366",
+      "source": "Image unavailable",
+      "translated": "Hình ảnh không khả dụng"
+    },
+    {
+      "id": "native.apple.2c50b099878d7c96",
+      "source": "Retry",
+      "translated": "Thử lại"
+    },
+    {
       "id": "native.apple.14da4c958ae30949",
       "source": "%@ avatar",
       "translated": "Ảnh đại diện của %@"
@@ -25067,6 +25162,11 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "Ảnh đại diện của tác tử"
+    },
+    {
+      "id": "native.apple.2bf58bad40fc4ae6",
+      "source": "Additional images hidden: %lld",
+      "translated": "Đã ẩn thêm hình ảnh: %lld"
     },
     {
       "id": "native.apple.9d4cffc5588d8730",
@@ -25097,6 +25197,11 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
+    },
+    {
+      "id": "native.apple.eca473edeb132a44",
+      "source": "Attachment",
+      "translated": "Tệp đính kèm"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -26564,9 +26669,29 @@
       "translated": "Không hoạt động"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "Đã dừng"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "Thất bại"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "Đang chờ"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "Thiết lập"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "Đang tìm kiếm…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

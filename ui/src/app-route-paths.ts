@@ -4,8 +4,10 @@ import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { BoardFace } from "./lib/board/settings.ts";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
+export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
+export type PluginsHubRouteTab = "installed" | "discover";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
@@ -115,6 +117,20 @@ export function memoryTabFromPath(pathname: string, basePath = ""): MemoryRouteT
   return segment === "memories" || segment === "dreams" || segment === "settings" ? segment : null;
 }
 
+export function pathForPluginsHubTab(tab: PluginsHubRouteTab, basePath = ""): string {
+  const pluginsPath = pathForRoute("plugins", basePath);
+  return tab === "installed" ? pluginsPath : `${pluginsPath}/discover`;
+}
+
+export function pluginsHubTabFromPath(pathname: string, basePath = ""): PluginsHubRouteTab | null {
+  const normalizedPath = normalizePath(pathname);
+  const pluginsPath = pathForRoute("plugins", basePath);
+  if (normalizedPath === pluginsPath) {
+    return "installed";
+  }
+  return normalizedPath === `${pluginsPath}/discover` ? "discover" : null;
+}
+
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
   return routeId === "chat" || routeId === "dashboard";
 }
@@ -174,6 +190,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   }
   if (memoryTabFromPath(normalizedPath, normalizedBasePath)) {
     return "memory";
+  }
+  if (pluginsHubTabFromPath(normalizedPath, normalizedBasePath)) {
+    return "plugins";
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
   if (sessionNamespace) {
@@ -240,9 +259,16 @@ export function inferBasePathFromPathname(pathname: string): string {
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
     const dynamicMemoryRoute = memoryTabFromPath(candidate) !== null;
+    const dynamicPluginsRoute = pluginsHubTabFromPath(candidate) !== null;
     const sessionNamespace = sessionRouteNamespaceFromPath(candidate);
     const dynamicSessionRoute = sessionNamespace !== null;
-    if (!routePath && !dynamicWorkboardRoute && !dynamicMemoryRoute && !dynamicSessionRoute) {
+    if (
+      !routePath &&
+      !dynamicWorkboardRoute &&
+      !dynamicMemoryRoute &&
+      !dynamicPluginsRoute &&
+      !dynamicSessionRoute
+    ) {
       continue;
     }
     const previousSegment = segments[index - 1];
@@ -250,14 +276,20 @@ export function inferBasePathFromPathname(pathname: string): string {
       ? APP_ROUTE_DEFINITIONS.workboard.path
       : dynamicMemoryRoute
         ? APP_ROUTE_DEFINITIONS.memory.path
-        : sessionNamespace
-          ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
-          : null;
+        : dynamicPluginsRoute
+          ? APP_ROUTE_DEFINITIONS.plugins.path
+          : sessionNamespace
+            ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
+            : null;
     const firstRouteSegment = (routePath ?? dynamicRoutePath ?? "").split("/").find(Boolean);
     if (
       index > 0 &&
       previousSegment === firstRouteSegment &&
-      (candidate === routePath || dynamicWorkboardRoute || dynamicSessionRoute)
+      (candidate === routePath ||
+        dynamicWorkboardRoute ||
+        dynamicMemoryRoute ||
+        dynamicPluginsRoute ||
+        dynamicSessionRoute)
     ) {
       return "";
     }
