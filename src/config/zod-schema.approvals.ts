@@ -24,10 +24,18 @@ const ExecApprovalForwardingSchema = z
   .strict()
   .optional();
 
+const SystemAgentApprovalSchema = z
+  .object({
+    mode: z.union([z.literal("prompt"), z.literal("always")]).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
     plugin: ExecApprovalForwardingSchema,
+    systemAgent: SystemAgentApprovalSchema,
   })
   .strict()
   .optional();

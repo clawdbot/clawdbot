@@ -362,6 +362,32 @@ describe("SystemAgentChatEngine", () => {
     expect(runConfigSet).toHaveBeenCalledOnce();
   });
 
+  it("honours the always policy for delegated persistent writes", async () => {
+    useTempStateDir();
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const armed: boolean[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      yes: true,
+      runAgentTurn: async (params) => {
+        armed.push(params.approvalArmed);
+        return {
+          text: "Applying.",
+          directive: { kind: "approved-operation", operation },
+        };
+      },
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("Change port.");
+
+    expect(reply.text).toContain("Applying.");
+    expect(armed).toEqual([true]);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(engine.getPendingOperatorProposal()).toBeNull();
+  });
+
   it("refuses delegated hosted-setup directives instead of starting wizards", async () => {
     useTempStateDir();
     const runChannelSetupWizard = vi.fn(async () => {});

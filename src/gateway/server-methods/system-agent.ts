@@ -21,6 +21,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shouldAlwaysApproveDelegatedSystemAgentOperations } from "../../system-agent/approval-policy.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import {
@@ -565,10 +566,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           }
           // The gateway surface must never install/restart its own daemon; the
           // engine's setup path honors this via surface: "gateway".
+          const delegated = params.delegation !== undefined;
           const engine = new SystemAgentChatEngine({
             surface: "gateway",
             verifiedInference: inference.binding,
-            operatorApprovalOnly: params.delegation !== undefined,
+            operatorApprovalOnly: delegated,
+            yes: shouldAlwaysApproveDelegatedSystemAgentOperations({
+              config: context.getRuntimeConfig(),
+              delegated,
+            }),
           });
           // `reset: true` keeps the durable logbook but deliberately starts
           // model context clean; only ordinary fresh sessions receive its tail.

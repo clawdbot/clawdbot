@@ -27,7 +27,18 @@ export type ExecApprovalForwardingConfig = {
   targets?: ExecApprovalForwardTarget[];
 };
 
+export type SystemAgentApprovalMode = "prompt" | "always";
+
+export type SystemAgentApprovalConfig = {
+  /**
+   * Approval policy for persistent operations proposed by delegated agents.
+   * Default: prompt.
+   */
+  mode?: SystemAgentApprovalMode;
+};
+
 export type ApprovalsConfig = {
   exec?: ExecApprovalForwardingConfig;
   plugin?: ExecApprovalForwardingConfig;
+  systemAgent?: SystemAgentApprovalConfig;
 };

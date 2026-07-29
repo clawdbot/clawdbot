@@ -20,6 +20,9 @@ export function collectCoreInsecureOrDangerousFlags(cfg: OpenClawConfig): string
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
+  if (cfg.approvals?.systemAgent?.mode === "always") {
+    enabledFlags.push("approvals.systemAgent.mode=always");
+  }
   // Suppressions are not insecure by themselves, but they hide audit findings
   // and should be visible in dangerous-flag snapshots.
   const auditSuppressionCount = cfg.security?.audit?.suppressions?.length ?? 0;
