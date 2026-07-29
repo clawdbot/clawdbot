@@ -52,7 +52,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **macOS SSH tunnel readiness:** inspect the managed SSH child's listener sockets in-process instead of launching `lsof` and `ps` every 100 ms, removing repeated subprocess overhead while remote-node tunnels start.
 - **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
 - **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
 - **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.
