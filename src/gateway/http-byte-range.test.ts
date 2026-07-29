@@ -1,6 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { createByteEtag, resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
 
@@ -66,7 +66,7 @@ describe("resolveByteResponse", () => {
   );
 
   it("honors a matching If-Range ETag", () => {
-    const etag = createByteEtag(FILE);
+    const etag = resolveByteResponse({ file: FILE }).etag;
     expect(
       resolveByteResponse({
         file: FILE,
@@ -89,12 +89,14 @@ describe("resolveByteResponse", () => {
   });
 });
 
-describe("createByteEtag", () => {
+describe("byte ETag generation", () => {
   it("is stable for the same file identity and changes with size or mtime", () => {
-    const etag = createByteEtag(FILE);
-    expect(createByteEtag({ ...FILE })).toBe(etag);
-    expect(createByteEtag({ ...FILE, size: FILE.size + 1 })).not.toBe(etag);
-    expect(createByteEtag({ ...FILE, mtimeMs: FILE.mtimeMs + 1 })).not.toBe(etag);
+    const etag = resolveByteResponse({ file: FILE }).etag;
+    expect(resolveByteResponse({ file: { ...FILE } }).etag).toBe(etag);
+    expect(resolveByteResponse({ file: { ...FILE, size: FILE.size + 1 } }).etag).not.toBe(etag);
+    expect(resolveByteResponse({ file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag).not.toBe(
+      etag,
+    );
     expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
   });
 });

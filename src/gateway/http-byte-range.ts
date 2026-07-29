@@ -11,7 +11,7 @@ type ByteSlice = {
   end: number;
 };
 
-export type ByteResponsePlan =
+type ByteResponsePlan =
   | {
       kind: "full";
       statusCode: 200;
@@ -34,7 +34,7 @@ export type ByteResponsePlan =
       size: number;
     };
 
-export function createByteEtag(file: FileIdentity): string {
+function createByteEtag(file: FileIdentity): string {
   // Gateway media files are write-once, so size + mtimeMs uniquely version their bytes here.
   // Serving mutable files with a strong validator would instead require a content hash.
   const digest = createHash("sha256").update(`${file.size}:${file.mtimeMs}`).digest("base64url");
