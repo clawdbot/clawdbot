@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { compileSafeRegex } from "../security/safe-regex.js";
 import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { expandHomePrefix } from "./home-dir.js";
 
@@ -78,7 +79,9 @@ function compileGlobRegex(pattern: string): RegExp {
   }
   regex += "$";
 
-  const compiled = new RegExp(regex, process.platform === "win32" ? "i" : "");
+  const compiled =
+    compileSafeRegex(regex, process.platform === "win32" ? "i" : "") ??
+    new RegExp(escapeRegExpLiteral(regex), process.platform === "win32" ? "i" : "");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
