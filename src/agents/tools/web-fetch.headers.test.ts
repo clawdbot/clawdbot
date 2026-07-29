@@ -102,6 +102,7 @@ describe("web_fetch configured request headers", () => {
       accept: "text/plain",
       "user-agent": "operator-agent/1.0",
       "Accept-Language": "de-DE",
+      "Sec-Fetch-Mode": "same-origin",
     });
 
     await tool?.execute?.("call", { url: "https://example.com/precedence" });
@@ -111,6 +112,7 @@ describe("web_fetch configured request headers", () => {
     expect(headers["Accept-Language"]).toBe("en-US,en;q=0.9");
     // Positive assertion: a dropped User-Agent must fail this test too.
     expect(headers["User-Agent"]).toContain("Mozilla/5.0");
+    expect(Object.keys(headers)).not.toContain("Sec-Fetch-Mode");
   });
 
   it("refuses credential headers, which would reach model-chosen hosts", async () => {
@@ -120,6 +122,7 @@ describe("web_fetch configured request headers", () => {
     const tool = createToolWithHeaders({
       Authorization: "Bearer operator-token",
       Cookie: "session=abc",
+      Cookie2: "legacy=abc",
       "Proxy-Authorization": "Basic abc",
       "X-Api-Key": "live-key",
       apikey: "live-key",
@@ -132,6 +135,7 @@ describe("web_fetch configured request headers", () => {
     expect(names).toContain("X-Routing-Target");
     expect(names).not.toContain("Authorization");
     expect(names).not.toContain("Cookie");
+    expect(names).not.toContain("Cookie2");
     expect(names).not.toContain("Proxy-Authorization");
     expect(names).not.toContain("X-Api-Key");
     expect(names).not.toContain("apikey");

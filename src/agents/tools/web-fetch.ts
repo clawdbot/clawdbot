@@ -72,11 +72,18 @@ const DEFAULT_FETCH_USER_AGENT =
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
-// Accept and Accept-Language are part of the fetch/readability contract, and
-// User-Agent has its own tools.web.fetch.userAgent key. Cookie is reserved here
-// rather than by the shared credential policy, which classifies model-provider
-// auth headers.
-const FETCH_RESERVED_HEADER_NAMES = ["accept", "accept-language", "user-agent", "cookie"] as const;
+// Accept and Accept-Language are part of the fetch/readability contract,
+// User-Agent has its own tools.web.fetch.userAgent key, and Undici owns
+// Sec-Fetch-Mode. Cookie headers are reserved here rather than by the shared
+// credential policy, which classifies model-provider auth headers.
+const FETCH_RESERVED_HEADER_NAMES = [
+  "accept",
+  "accept-language",
+  "user-agent",
+  "sec-fetch-mode",
+  "cookie",
+  "cookie2",
+] as const;
 
 const WebFetchSchema = Type.Object({
   url: Type.String({ description: "HTTP(S) URL." }),
