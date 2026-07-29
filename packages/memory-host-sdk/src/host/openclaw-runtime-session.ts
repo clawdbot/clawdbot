@@ -65,7 +65,12 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
     const isSessionsDir =
       (process.platform === "win32" ? currentSegment.toLowerCase() : currentSegment) === "sessions";
     if (isSessionsDir) {
-      return extractAgentIdFromSessionsDir(currentDir);
+      const agentId = extractAgentIdFromSessionsDir(currentDir);
+      // Nested transcript folders may also be named `sessions`; only a
+      // canonical agents/<id>/sessions ancestor establishes ownership.
+      if (agentId) {
+        return agentId;
+      }
     }
     const parentDir = path.dirname(currentDir);
     if (parentDir === currentDir) {

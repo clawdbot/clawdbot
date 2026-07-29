@@ -200,11 +200,13 @@ function resolveSessionStoreTranscriptCorpusSource(
       relativeAgentPath !== ".." &&
       !relativeAgentPath.startsWith(`..${path.sep}`) &&
       !path.isAbsolute(relativeAgentPath);
+    const isCanonicalSessionsPath =
+      isUnderCanonicalAgentsRoot && relativeAgentPath.split(path.sep).at(1) === "sessions";
     const pathAgentId = extractAgentIdFromSessionPath(sessionFile);
-    // Nested and malformed canonical transcripts still have an owner; never
-    // treat them as an unowned custom store and leak across agent corpora.
+    // Reject malformed canonical owners without dropping legitimate custom
+    // transcripts stored elsewhere below the same agents root.
     if (
-      (!pathAgentId && isUnderCanonicalAgentsRoot) ||
+      (!pathAgentId && isCanonicalSessionsPath) ||
       (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId))
     ) {
       return null;
