@@ -20,6 +20,16 @@ export const SystemAgentChatParamsSchema = closedObject({
   ),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
+  /** Ephemeral Control UI location hint for interpreting the current user turn. */
+  context: Type.Optional(
+    closedObject({
+      page: Type.String({
+        minLength: 1,
+        maxLength: 64,
+        pattern: "^[A-Za-z0-9/_-]{1,64}$",
+      }),
+    }),
+  ),
   /** Host-only regular-agent delegation context. Never model-authored. */
   delegation: Type.Optional(
     closedObject({
@@ -54,6 +64,8 @@ export const SystemAgentChatQuestionSchema = closedObject({
   ),
   /** Free-text answers are also accepted for this question. */
   isOther: Type.Optional(Type.Boolean()),
+  /** Client-owned action for the visible skip control; omitted means send a reply. */
+  skipAction: Type.Optional(Type.Literal("exit")),
 });
 
 /** One OpenClaw reply; `action` tells clients about conversation handoffs. */
@@ -62,6 +74,8 @@ export const SystemAgentChatResultSchema = closedObject({
   reply: NonEmptyString,
   /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
   sensitive: Type.Optional(Type.Boolean()),
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending: Type.Optional(Type.Boolean()),
   action: Type.Union([
     Type.Literal("none"),
     // The user asked to talk to their agent; clients should move to their
@@ -76,6 +90,57 @@ export const SystemAgentChatResultSchema = closedObject({
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
   question: Type.Optional(SystemAgentChatQuestionSchema),
+});
+
+export const SystemAgentChatHistoryParamsSchema = closedObject({
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 100 })),
+});
+
+export const SystemAgentChatHistoryTurnSchema = closedObject({
+  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  text: Type.String(),
+  at: Type.Number(),
+});
+
+export const SystemAgentChatHistoryResultSchema = closedObject({
+  turns: Type.Array(SystemAgentChatHistoryTurnSchema),
+});
+
+export const SystemChangeKindSchema = Type.Union([
+  Type.Literal("operation"),
+  Type.Literal("config-write"),
+  Type.Literal("external-edit"),
+]);
+
+export const SystemChangeSourceSchema = Type.Union([
+  Type.Literal("system-agent"),
+  Type.Literal("doctor"),
+  Type.Literal("config-rpc"),
+  Type.Literal("cli"),
+  Type.Literal("plugin-install"),
+  Type.Literal("external"),
+  Type.Literal("unknown"),
+]);
+
+export const SystemChangeEntrySchema = closedObject({
+  id: NonEmptyString,
+  at: Type.Number(),
+  kind: SystemChangeKindSchema,
+  source: SystemChangeSourceSchema,
+  summary: Type.String(),
+  changedPaths: Type.Optional(Type.Array(Type.String())),
+  invalid: Type.Optional(Type.Boolean()),
+  opaqueChange: Type.Optional(Type.Boolean()),
+});
+
+export const SystemChangesListParamsSchema = closedObject({
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 50 })),
+  beforeCursor: Type.Optional(NonEmptyString),
+});
+
+export const SystemChangesListResultSchema = closedObject({
+  entries: Type.Array(SystemChangeEntrySchema),
+  nextCursor: Type.Optional(NonEmptyString),
 });
 
 /**
@@ -132,6 +197,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
   candidates: Type.Array(
     closedObject({
       kind: SetupInferenceKind,
+      /** Canonical provider identity for clients with bundled brand artwork. */
+      brandId: Type.Optional(NonEmptyString),
       label: NonEmptyString,
       detail: Type.String(),
       modelRef: NonEmptyString,
@@ -146,9 +213,15 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         detail: Type.String(),
         reason: NonEmptyString,
+        authOptionId: Type.Optional(NonEmptyString),
+        manualProviderId: Type.Optional(NonEmptyString),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
       }),
     ),
   ),
@@ -157,6 +230,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     closedObject({
       /** Opaque provider-auth choice sent back during activation. */
       id: NonEmptyString,
+      /** Canonical provider identity for clients with bundled brand artwork. */
+      brandId: Type.Optional(NonEmptyString),
       label: NonEmptyString,
       hint: Type.Optional(Type.String()),
       icon: Type.Optional(SetupInferenceHttpsUrl),
@@ -168,6 +243,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         hint: Type.Optional(Type.String()),
         groupLabel: Type.Optional(Type.String()),
@@ -182,6 +259,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider or tool identity for bundled client artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         hint: NonEmptyString,
         website: SetupInferenceHttpsUrl,
@@ -258,6 +337,14 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
 export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
+export type SystemAgentChatHistoryParams = Static<typeof SystemAgentChatHistoryParamsSchema>;
+export type SystemAgentChatHistoryTurn = Static<typeof SystemAgentChatHistoryTurnSchema>;
+export type SystemAgentChatHistoryResult = Static<typeof SystemAgentChatHistoryResultSchema>;
+export type SystemChangeEntry = Static<typeof SystemChangeEntrySchema>;
+export type SystemChangeKind = Static<typeof SystemChangeKindSchema>;
+export type SystemChangeSource = Static<typeof SystemChangeSourceSchema>;
+export type SystemChangesListParams = Static<typeof SystemChangesListParamsSchema>;
+export type SystemChangesListResult = Static<typeof SystemChangesListResultSchema>;
 export type SystemAgentSetupDetectParams = Static<typeof SystemAgentSetupDetectParamsSchema>;
 export type SystemAgentSetupDetectResult = Static<typeof SystemAgentSetupDetectResultSchema>;
 export type SystemAgentSetupActivateParams = Static<typeof SystemAgentSetupActivateParamsSchema>;

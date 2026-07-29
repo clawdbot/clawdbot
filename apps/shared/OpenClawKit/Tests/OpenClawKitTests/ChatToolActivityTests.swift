@@ -1,3 +1,4 @@
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
@@ -12,7 +13,9 @@ struct ChatToolActivityTests {
             id: "call-1",
             name: "exec",
             arguments: nil,
+            details: nil,
             resultText: "done",
+            isError: false,
             isPending: false)])
     }
 
@@ -25,7 +28,9 @@ struct ChatToolActivityTests {
             id: "result-0",
             name: "read",
             arguments: nil,
+            details: nil,
             resultText: "orphaned",
+            isError: false,
             isPending: false)])
     }
 
@@ -53,15 +58,50 @@ struct ChatToolActivityTests {
             id: "call-0",
             name: "search",
             arguments: nil,
+            details: nil,
             resultText: nil,
+            isError: false,
             isPending: false)])
+    }
+
+    @Test func `threads paired result details`() {
+        let details = AnyCodable(["diff": AnyCodable("+1 added")])
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "edit")],
+            results: [self.content(
+                type: "toolResult",
+                text: "done",
+                id: "call-1",
+                name: "edit",
+                details: details)])
+
+        #expect(items.first?.details == details)
+    }
+
+    @Test func `threads paired and orphan result errors`() {
+        let paired = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "edit")],
+            results: [self.content(
+                type: "toolResult",
+                text: "failed",
+                id: "call-1",
+                name: "edit",
+                isError: true)])
+        let orphan = ChatToolActivity.items(
+            calls: [],
+            results: [self.content(type: "toolResult", text: "failed", isError: true)])
+
+        #expect(paired.first?.isError == true)
+        #expect(orphan.first?.isError == true)
     }
 
     private func content(
         type: String,
         text: String? = nil,
         id: String? = nil,
-        name: String? = nil) -> OpenClawChatMessageContent
+        name: String? = nil,
+        details: AnyCodable? = nil,
+        isError: Bool? = nil) -> OpenClawChatMessageContent
     {
         OpenClawChatMessageContent(
             type: type,
@@ -70,6 +110,8 @@ struct ChatToolActivityTests {
             fileName: nil,
             content: nil,
             id: id,
-            name: name)
+            name: name,
+            details: details,
+            isError: isError)
     }
 }

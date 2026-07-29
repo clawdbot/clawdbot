@@ -28,4 +28,16 @@ describe("SnapshotSchema", () => {
   it("keeps presence user identity optional", () => {
     expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1 }))).toBe(true);
   });
+
+  it("accepts optional watched session keys", () => {
+    expect(
+      Value.Check(
+        SnapshotSchema,
+        snapshotWithPresence({
+          ts: 1,
+          watchedSessions: ["agent:main:main", "agent:main:work"],
+        }),
+      ),
+    ).toBe(true);
+  });
 });

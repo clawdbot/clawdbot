@@ -4,6 +4,33 @@ import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
+  it("preserves root machine-output metadata", () => {
+    const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerCli(() => {}, {
+          descriptors: [
+            {
+              name: "captured-machine",
+              description: "Captured machine output",
+              hasSubcommands: true,
+              machineOutput,
+            },
+          ],
+        });
+      },
+    });
+
+    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
+    expect(descriptor?.machineOutput).toBe(machineOutput);
+    expect(
+      descriptor?.machineOutput?.({
+        argv: ["node", "openclaw", "captured-machine"],
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a complete plugin API surface available while capturing supported capabilities", () => {
     const capturedTool = {
       name: "captured-tool",

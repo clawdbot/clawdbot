@@ -19,7 +19,7 @@ extension OnboardingView {
         case 4:
             self.memoryImportPage(contentHeight: contentHeight)
         case 5:
-            self.permissionsPage(contentHeight: contentHeight)
+            self.permissionsPage()
         case 9:
             self.readyPage()
         default:
@@ -118,11 +118,10 @@ extension OnboardingView {
                         self.gatewayDiscoverySection()
 
                         if self.shouldShowRemoteConnectionSection {
-                            Divider().padding(.vertical, 4)
                             self.remoteConnectionSection()
+                        } else {
+                            self.advancedConnectionSection()
                         }
-
-                        self.advancedConnectionSection()
                     }
                 }
             }
@@ -185,11 +184,14 @@ extension OnboardingView {
     }
 
     private var remoteChoiceSubtitle: String {
-        let count = gatewayDiscovery.gateways.count
+        Self.remoteChoiceSubtitle(discoveredGatewayCount: gatewayDiscovery.gateways.count)
+    }
+
+    static func remoteChoiceSubtitle(discoveredGatewayCount count: Int) -> String {
         if count > 0 {
             return count == 1
-                ? "1 gateway found on your network — click to choose it."
-                : "\(count) gateways found on your network — click to choose one."
+                ? String(localized: "1 gateway found on your network — click to choose it.")
+                : String(localized: "\(count) gateways found on your network — click to choose one.")
         }
         return "For advanced setups — use a gateway that runs elsewhere."
     }
@@ -237,104 +239,18 @@ extension OnboardingView {
         }
     }
 
-    @ViewBuilder
     private func advancedConnectionSection() -> some View {
-        Button(showAdvancedConnection ? "Hide Advanced" : "Advanced…") {
+        // Open-only: this button renders only while the remote panel (and its
+        // Hide toggle) is absent, so it never needs to collapse anything.
+        Button("Advanced…") {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                self.showAdvancedConnection.toggle()
+                self.showAdvancedConnection = true
             }
-            if self.showAdvancedConnection, self.state.connectionMode != .remote {
+            if self.state.connectionMode != .remote {
                 self.state.connectionMode = .remote
             }
         }
         .buttonStyle(.link)
-
-        if showAdvancedConnection {
-            let labelWidth: CGFloat = 110
-            let fieldWidth: CGFloat = 320
-
-            VStack(alignment: .leading, spacing: 10) {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                    GridRow {
-                        Text("Transport")
-                            .font(.callout.weight(.semibold))
-                            .frame(width: labelWidth, alignment: .leading)
-                        Picker("Transport", selection: self.manualRemoteTransportBinding) {
-                            Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                            Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: fieldWidth)
-                    }
-                    if self.state.remoteTransport == .direct {
-                        GridRow {
-                            Text("Gateway URL")
-                                .font(.callout.weight(.semibold))
-                                .frame(width: labelWidth, alignment: .leading)
-                            TextField("wss://gateway.example.ts.net", text: self.manualRemoteURLBinding)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: fieldWidth)
-                        }
-                    }
-                    if self.state.remoteTransport == .ssh {
-                        GridRow {
-                            Text("SSH target")
-                                .font(.callout.weight(.semibold))
-                                .frame(width: labelWidth, alignment: .leading)
-                            TextField("user@host[:port]", text: self.manualRemoteTargetBinding)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: fieldWidth)
-                        }
-                        if let message = CommandResolver
-                            .sshTargetValidationMessage(self.state.remoteTarget)
-                        {
-                            GridRow {
-                                Text("")
-                                    .frame(width: labelWidth, alignment: .leading)
-                                Text(message)
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                                    .frame(width: fieldWidth, alignment: .leading)
-                            }
-                        }
-                        GridRow {
-                            Text("Identity file")
-                                .font(.callout.weight(.semibold))
-                                .frame(width: labelWidth, alignment: .leading)
-                            TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: fieldWidth)
-                        }
-                        GridRow {
-                            Text("Project root")
-                                .font(.callout.weight(.semibold))
-                                .frame(width: labelWidth, alignment: .leading)
-                            TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: fieldWidth)
-                        }
-                        GridRow {
-                            Text("CLI path")
-                                .font(.callout.weight(.semibold))
-                                .frame(width: labelWidth, alignment: .leading)
-                            TextField(
-                                "/Applications/OpenClaw.app/.../openclaw",
-                                text: self.$state.remoteCliPath)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: fieldWidth)
-                        }
-                    }
-                }
-
-                Text(self.state.remoteTransport == .direct
-                    ? "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert."
-                    : "Tip: keep Tailscale enabled so your gateway stays reachable.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .transition(.opacity.combined(with: .move(edge: .top)))
-        }
     }
 
     private var manualRemoteTransportBinding: Binding<AppState.RemoteTransport> {
@@ -421,9 +337,7 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return """
-                Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts.
-                """
+                return GatewayRemoteConfig.directGatewayUrlValidationMessage
             }
             return nil
         case .ssh:
@@ -440,12 +354,15 @@ extension OnboardingView {
     }
 
     private func remoteConnectionSection() -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let labelWidth: CGFloat = 110
+        let fieldWidth: CGFloat = 320
+
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Remote connection")
                         .font(.callout.weight(.semibold))
-                    Text("Checks the real remote websocket and auth handshake.")
+                    Text("Verify OpenClaw can reach this gateway.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -466,10 +383,8 @@ extension OnboardingView {
                 .disabled(!self.canProbeRemoteConnection)
             }
 
-            if self.shouldShowRemoteTokenField {
-                self.remoteTokenField()
-            }
-
+            // Probe feedback sits with the Check connection button it explains,
+            // above the form rows, so grid growth never pushes it out of view.
             if let message = self.remoteProbePreflightMessage, self.remoteProbeState != .checking {
                 Text(message)
                     .font(.caption)
@@ -482,23 +397,64 @@ extension OnboardingView {
             if let issue = self.remoteAuthIssue {
                 self.remoteAuthPromptView(issue: issue)
             }
+
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                if self.shouldShowRemoteTokenField {
+                    self.remoteTokenField(labelWidth: labelWidth, fieldWidth: fieldWidth)
+                }
+                if self.showAdvancedConnection {
+                    self.advancedConnectionFields(labelWidth: labelWidth, fieldWidth: fieldWidth)
+                }
+            }
+
+            Button {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                    self.showAdvancedConnection.toggle()
+                }
+                if self.showAdvancedConnection, self.state.connectionMode != .remote {
+                    self.state.connectionMode = .remote
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: self.showAdvancedConnection ? "chevron.up" : "chevron.down")
+                    Text(self.showAdvancedConnection ? "Hide advanced options" : "Advanced options")
+                }
+            }
+            .buttonStyle(.link)
         }
+        .padding(12)
+        .background(
+            // controlBackgroundColor matches the card fill, so the hairline
+            // stroke is what makes this read as a contained panel.
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color(NSColor.separatorColor))))
     }
 
-    private func remoteTokenField() -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 12) {
-                Text("Gateway token")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: 110, alignment: .leading)
-                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
-            }
-            Text("Used when the remote gateway requires token auth.")
+    @ViewBuilder
+    private func remoteTokenField(labelWidth: CGFloat, fieldWidth: CGFloat) -> some View {
+        GridRow {
+            Text("Gateway token")
+                .font(.callout.weight(.semibold))
+                .frame(width: labelWidth, alignment: .leading)
+            SecureField("Paste the token from your gateway", text: self.$state.remoteToken)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: fieldWidth)
+        }
+        GridRow {
+            Text("")
+                .frame(width: labelWidth, alignment: .leading)
+            Text("Only needed when the gateway requires token auth.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if self.state.remoteTokenUnsupported {
+                .frame(width: fieldWidth, alignment: .leading)
+        }
+        if self.state.remoteTokenUnsupported {
+            GridRow {
+                Text("")
+                    .frame(width: labelWidth, alignment: .leading)
                 Text(
                     "The current gateway.remote.token value is not plain text. "
                         + "OpenClaw for macOS cannot use it directly; "
@@ -506,7 +462,93 @@ extension OnboardingView {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: fieldWidth, alignment: .leading)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func advancedConnectionFields(labelWidth: CGFloat, fieldWidth: CGFloat) -> some View {
+        GridRow {
+            Text("Transport")
+                .font(.callout.weight(.semibold))
+                .frame(width: labelWidth, alignment: .leading)
+            Picker("Transport", selection: self.manualRemoteTransportBinding) {
+                Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
+                Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: fieldWidth)
+        }
+        if self.state.remoteTransport == .direct {
+            GridRow {
+                Text("Gateway URL")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: labelWidth, alignment: .leading)
+                TextField("wss://gateway.example.ts.net", text: self.manualRemoteURLBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: fieldWidth)
+            }
+        }
+        if self.state.remoteTransport == .ssh {
+            GridRow {
+                Text("SSH target")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: labelWidth, alignment: .leading)
+                TextField("user@host[:port]", text: self.manualRemoteTargetBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: fieldWidth)
+            }
+            if let message = CommandResolver
+                .sshTargetValidationMessage(self.state.remoteTarget)
+            {
+                GridRow {
+                    Text("")
+                        .frame(width: labelWidth, alignment: .leading)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(width: fieldWidth, alignment: .leading)
+                }
+            }
+            GridRow {
+                Text("Identity file")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: labelWidth, alignment: .leading)
+                TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: fieldWidth)
+            }
+            GridRow {
+                Text("Project root")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: labelWidth, alignment: .leading)
+                TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: fieldWidth)
+            }
+            GridRow {
+                Text("CLI path")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: labelWidth, alignment: .leading)
+                TextField(
+                    "/Applications/OpenClaw.app/.../openclaw",
+                    text: self.$state.remoteCliPath)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: fieldWidth)
+            }
+        }
+        GridRow {
+            Text("")
+                .frame(width: labelWidth, alignment: .leading)
+            Text(self.state.remoteTransport == .direct
+                ? "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert."
+                : "Tip: keep Tailscale enabled so your gateway stays reachable.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: fieldWidth, alignment: .leading)
         }
     }
 
@@ -712,41 +754,41 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func permissionsPage(contentHeight: CGFloat) -> some View {
-        // Fixed layout (no ScrollView): sorted by importance and sized so all
-        // permissions stay visible at once — no scrollbars during onboarding.
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Text("Grant permissions")
-                    .font(.largeTitle.weight(.semibold))
-                if self.isRequesting {
-                    ProgressView()
-                        .controlSize(.small)
+    func permissionsPage() -> some View {
+        onboardingPage {
+            VStack(spacing: 12) {
+                // Keep intro and rows in one document so short windows can reveal every permission.
+                HStack(spacing: 8) {
+                    Text("Grant permissions")
+                        .font(.largeTitle.weight(.semibold))
+                    if self.isRequesting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                 }
-            }
-            Text(
-                "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
-                    "Status updates automatically.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
+                        "Status updates automatically.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 4, padding: 12) {
-                ForEach(Capability.importanceOrdered, id: \.self) { cap in
-                    PermissionRow(
-                        capability: cap,
-                        status: self.permissionMonitor.status[cap] ?? false,
-                        compact: true)
-                    {
-                        Task { await self.request(cap) }
+                self.onboardingCard(spacing: 4, padding: 12) {
+                    ForEach(Capability.importanceOrdered, id: \.self) { cap in
+                        PermissionRow(
+                            capability: cap,
+                            status: self.permissionMonitor.status[cap] ?? .notGranted,
+                            compact: true)
+                        {
+                            Task { await self.request(cap) }
+                        }
                     }
                 }
             }
         }
-        .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
+        // The root onboarding layout keeps navigation outside this scrollable document.
     }
 
     func cliPage() -> some View {

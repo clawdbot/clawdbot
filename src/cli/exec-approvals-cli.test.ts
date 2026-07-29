@@ -38,40 +38,47 @@ const mocks = vi.hoisted(() => {
     }),
   };
   return {
-    callGatewayFromCli: vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-      if (method.endsWith(".get")) {
-        if (method === "config.get") {
-          return {
-            config: {
-              tools: {
-                exec: {
-                  security: "full",
-                  ask: "off",
+    callGatewayFromCli: vi.fn(
+      async (
+        method: string,
+        _opts: unknown,
+        params?: unknown,
+        _extra?: unknown,
+      ): Promise<unknown> => {
+        if (method.endsWith(".get")) {
+          if (method === "config.get") {
+            return {
+              config: {
+                tools: {
+                  exec: {
+                    security: "full",
+                    ask: "off",
+                  },
                 },
               },
-            },
+            };
+          }
+          const snapshot = {
+            path: "/tmp/exec-approvals.json",
+            exists: true,
+            hash: "hash-1",
+            file: { version: 1, agents: {} },
           };
+          return method === "exec.approvals.node.get"
+            ? {
+                ...snapshot,
+                resolvedDefaults: {
+                  security: "allowlist" as const,
+                  ask: "on-miss" as const,
+                  askFallback: "deny" as const,
+                  autoAllowSkills: false,
+                },
+              }
+            : snapshot;
         }
-        const snapshot = {
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          hash: "hash-1",
-          file: { version: 1, agents: {} },
-        };
-        return method === "exec.approvals.node.get"
-          ? {
-              ...snapshot,
-              resolvedDefaults: {
-                security: "allowlist" as const,
-                ask: "on-miss" as const,
-                askFallback: "deny" as const,
-                autoAllowSkills: false,
-              },
-            }
-          : snapshot;
-      }
-      return { method, params };
-    }),
+        return { method, params };
+      },
+    ),
     defaultRuntime,
     readBestEffortConfig,
     runtimeErrors,
@@ -162,13 +169,14 @@ function scopeByLabel(label: string, output: Record<string, unknown> = writtenJs
 }
 
 function resetLocalSnapshot() {
+  localSnapshot.exists = true;
   localSnapshot.hash = "hash-local";
   localSnapshot.file = { version: 1, agents: {} };
 }
 
 vi.mock("./gateway-rpc.js", () => ({
-  callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
-    mocks.callGatewayFromCli(method, opts, params),
+  callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
+    mocks.callGatewayFromCli(method, opts, params, extra),
 }));
 
 vi.mock("./nodes-cli/rpc.js", async () => {
@@ -302,6 +310,17 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
+    localSnapshot.exists = false;
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    expect(output).toContain("State");
+    expect(output).toContain("defaults (no stored overrides)");
+    expect(output).not.toContain("Exists");
+  });
+
   it("adds effective policy to json output", async () => {
     localSnapshot.file = {
       version: 1,
@@ -322,7 +341,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(String(policy.note)).toContain(
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy.",
     );
     expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
@@ -423,7 +442,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(String(policy.note)).toContain(
-      "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy.",
     );
     expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
@@ -779,7 +798,7 @@ describe("exec approvals CLI", () => {
         },
       },
       agents: {
-        list: [{ id: "runner" }],
+        list: [{ id: "main", default: true }, { id: "runner" }],
       },
     });
 

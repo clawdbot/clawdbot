@@ -29,15 +29,20 @@ type SqliteAuditRecordEntry<T> = {
   createdAt: number;
 };
 
+export type SequencedSqliteAuditRecordEntry<T> = SqliteAuditRecordEntry<T> & {
+  sequence: number;
+};
+
 function getAuditRecordKysely(database: DatabaseSync) {
   return getNodeSqliteKysely<AuditRecordDatabase>(database);
 }
 
-function parseAuditRecord<T>(row: DiagnosticEventRow): SqliteAuditRecordEntry<T> {
+function parseAuditRecord<T>(row: DiagnosticEventRow): SequencedSqliteAuditRecordEntry<T> {
   return {
     key: row.event_key,
     value: JSON.parse(row.payload_json) as T,
     createdAt: row.created_at,
+    sequence: row.sequence,
   };
 }
 
@@ -281,6 +286,31 @@ export function createSqliteAuditRecordStore<T>(
           .select(["event_key", "payload_json", "created_at", "sequence"])
           .where("scope", "=", scope)
           .orderBy("sequence", "asc"),
+      ).rows.map((row) => {
+        const { sequence: _sequence, ...entry } = parseAuditRecord<T>(row);
+        return entry;
+      });
+    },
+    latest(params: {
+      limit: number;
+      beforeSequence?: number;
+    }): SequencedSqliteAuditRecordEntry<T>[] {
+      const limit = Math.max(0, Math.floor(params.limit));
+      if (limit === 0) {
+        return [];
+      }
+      const database = openOpenClawStateDatabase(options);
+      const baseQuery = getAuditRecordKysely(database.db)
+        .selectFrom("diagnostic_events")
+        .select(["event_key", "payload_json", "created_at", "sequence"])
+        .where("scope", "=", scope);
+      const query =
+        params.beforeSequence === undefined
+          ? baseQuery
+          : baseQuery.where("sequence", "<", params.beforeSequence);
+      return executeSqliteQuerySync(
+        database.db,
+        query.orderBy("sequence", "desc").limit(limit),
       ).rows.map((row) => parseAuditRecord<T>(row));
     },
   };

@@ -11,8 +11,45 @@ import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "./ingress-retry-policy.js";
+import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
+
+type ChannelIngressErrorClass<TError extends Error, TArgs extends unknown[]> = {
+  new (...args: TArgs): TError;
+  readonly name: string;
+  readonly prototype: TError;
+};
+
+export function createChannelIngressError(
+  name: string,
+): ChannelIngressErrorClass<Error, [message: string, options?: ErrorOptions]>;
+export function createChannelIngressError<TReason extends string>(
+  name: string,
+  options: { withReason: true },
+): ChannelIngressErrorClass<
+  Error & { readonly reason: TReason },
+  [reason: TReason, message: string, errorOptions?: ErrorOptions]
+>;
+export function createChannelIngressError(
+  name: string,
+  options?: { withReason?: boolean },
+): unknown {
+  const IngressError = class extends Error {
+    declare readonly reason?: string;
+
+    constructor(first: string, second?: string | ErrorOptions, third?: ErrorOptions) {
+      const reasoned = options?.withReason === true;
+      super(reasoned ? (second as string) : first, reasoned ? third : (second as ErrorOptions));
+      this.name = name;
+      if (reasoned) {
+        this.reason = first;
+      }
+    }
+  };
+  Object.defineProperty(IngressError, "name", { configurable: true, value: name });
+  return IngressError;
+}
 
 /** Stable identity and serialization lane extracted before durable admission. */
 type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
@@ -27,6 +64,7 @@ export type ChannelIngressMonitorLifecycle = {
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
+  onFailed?: (error: unknown) => void | Promise<void>;
   onAbandoned: () => void | Promise<void>;
 };
 
@@ -74,11 +112,22 @@ type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> =
 
 type ChannelIngressMonitorRetention = {
   pruneIntervalMs: number;
+  pendingTtlMs?: number;
+  pendingMaxEntries?: number;
   completedTtlMs?: number;
   completedMaxEntries?: number;
   failedTtlMs?: number;
   failedMaxEntries?: number;
 };
+
+/** Replay-guard retention defaults; changing a value requires a per-channel keyspace audit. */
+export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
+  pruneIntervalMs: 60 * 60 * 1_000,
+  completedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  completedMaxEntries: 20_000,
+  failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  failedMaxEntries: 20_000,
+} satisfies ChannelIngressMonitorRetention);
 
 type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
@@ -103,19 +152,29 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
     | ChannelIngressMonitorDeliveryResult
     | void;
   pollIntervalMs: number;
-  retention: ChannelIngressMonitorRetention;
+  retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];
   onDurableAdmission?: (
     raw: TRaw,
     context: { facts: ChannelIngressMonitorFacts; receivedAt: number },
   ) => void | Promise<void>;
   onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
+  /** False lets repeated requests fill drain capacity while earlier claims remain active. */
+  waitForDeliveryIdleBeforeRepump?: boolean;
+  /** Runs each pump under a channel-owned async context such as a detached request root. */
+  runPumpTask?: (work: () => Promise<void>) => Promise<void>;
+  /** False lets a channel apply its own bounded delivery grace before final disposal. */
+  waitForDeliveryIdleOnStop?: boolean;
+  /** Tracks deferred reply ownership through stop, abort, or an explicit channel-owned wait. */
+  deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
   drain?: ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata>;
   abortSignal?: AbortSignal;
   now?: () => number;
   onError?: (error: unknown) => void;
+  onActivityChange?: (active: boolean) => void;
   createStoppedError?: () => Error;
-  admissionMode?: "until-stopped" | "while-running";
+  /** Durable-after-stop preserves append-only admission for handlers selected before unregister. */
+  admissionMode?: "until-stopped" | "while-running" | "durable-after-stop";
 };
 
 /**
@@ -127,12 +186,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 ) {
   const now = options.now ?? Date.now;
   const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
-  const { pruneIntervalMs, ...pruneOptions } = options.retention;
+  const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
+  const retention =
+    options.retention === "standard"
+      ? CHANNEL_INGRESS_RETENTION_DEFAULTS
+      : { ...CHANNEL_INGRESS_RETENTION_DEFAULTS, ...options.retention };
+  const { pruneIntervalMs, ...pruneOptions } = retention;
   const shutdown = new AbortController();
   const drainAbortSignal = options.abortSignal
     ? AbortSignal.any([shutdown.signal, options.abortSignal])
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
+  const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
   const queueFactory: () => Queue =
     typeof options.queue === "function" ? options.queue : () => options.queue as Queue;
@@ -142,12 +207,36 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let stopped = false;
   let requested = false;
   let pumping: Promise<void> | undefined;
+  let drainIdleWake: Promise<void> | undefined;
+  let drainIdleWakeRequested = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
   let admissionClaimLocked = false;
   const admissionClaimWaiters: Array<() => void> = [];
   let stopTask: Promise<void> | undefined;
+  let lastReportedActive = false;
+
+  const reportError = (error: unknown): void => {
+    try {
+      options.onError?.(error);
+    } catch {
+      // Observers must not be able to corrupt ingress bookkeeping.
+    }
+  };
+
+  const publishActivity = (): void => {
+    const active = activeDeliveries.size > 0 || (running && (requested || pumping !== undefined));
+    if (active === lastReportedActive) {
+      return;
+    }
+    lastReportedActive = active;
+    try {
+      options.onActivityChange?.(active);
+    } catch (error) {
+      reportError(error);
+    }
+  };
 
   const withAdmissionClaimLock = <T>(task: () => Promise<T>): Promise<T> => {
     const run = (): Promise<T> => {
@@ -182,6 +271,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const getQueue = (): Queue => (queue ??= queueFactory());
 
+  const ensureQueueAvailable = (): void => {
+    try {
+      getQueue();
+    } catch (error) {
+      throw new ChannelIngressUnavailableError(
+        `Channel ingress queue is unavailable: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+  };
+
   const isAborted = () => drainAbortSignal.aborted;
 
   const waitForActiveDeliveries = async (): Promise<void> => {
@@ -197,6 +297,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         return;
       }
       await activePump;
+    }
+  };
+
+  const waitForDeferredClaims = async (): Promise<void> => {
+    while (deferredClaims.size > 0) {
+      await Promise.allSettled(deferredClaims.values());
     }
   };
 
@@ -241,16 +347,46 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
         let handedOff = false;
         let deferredHandoff = false;
+        let resolveDeferredClaim = () => {};
+        const deferredClaim = options.deferredClaims
+          ? new Promise<void>((resolve) => {
+              resolveDeferredClaim = resolve;
+            })
+          : undefined;
+        let deferredClaimSettled = false;
+        const settleDeferredClaim = () => {
+          if (!deferredClaim || deferredClaimSettled) {
+            return;
+          }
+          deferredClaimSettled = true;
+          lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
+          deferredClaims.delete(deferredClaim);
+          resolveDeferredClaim();
+        };
+        if (options.deferredClaims === "settle-on-abort") {
+          lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
+          if (lifecycle.abortSignal.aborted) {
+            settleDeferredClaim();
+          }
+        }
         const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
           ...lifecycle,
           admission: "exclusive",
           onAdopted: async () => {
             handedOff = true;
-            await lifecycle.onAdopted();
+            try {
+              await lifecycle.onAdopted();
+              requestDrain();
+            } finally {
+              settleDeferredClaim();
+            }
           },
           onDeferred: () => {
             handedOff = true;
             deferredHandoff = true;
+            if (deferredClaim && !deferredClaimSettled) {
+              deferredClaims.add(deferredClaim);
+            }
             lifecycle.onDeferred();
           },
           onAdoptionFinalizing: () => {
@@ -258,10 +394,25 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             deferredHandoff = true;
             lifecycle.onAdoptionFinalizing();
           },
+          onFailed: async (error) => {
+            handedOff = true;
+            deferredHandoff = true;
+            try {
+              await lifecycle.onFailed?.(error);
+              requestDrain();
+            } finally {
+              settleDeferredClaim();
+            }
+          },
           onAbandoned: async () => {
             handedOff = true;
             deferredHandoff = true;
-            await lifecycle.onAbandoned();
+            try {
+              await lifecycle.onAbandoned();
+              requestDrain();
+            } finally {
+              settleDeferredClaim();
+            }
           },
         };
 
@@ -271,6 +422,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           options.deliver(raw, wrappedLifecycle, claim),
         );
         activeDeliveries.add(delivery);
+        publishActivity();
         let result: ChannelIngressMonitorDeliveryResult | void;
         try {
           result = await delivery;
@@ -281,12 +433,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           throw error;
         } finally {
           activeDeliveries.delete(delivery);
+          publishActivity();
         }
         if (result?.kind === "failed-retryable") {
           return result;
         }
         if (isAborted() || lifecycle.abortSignal.aborted) {
           return { kind: "failed-retryable", error: createStoppedError() };
+        }
+        if (result?.kind === "completed") {
+          return result;
         }
         if (result?.kind === "deferred") {
           if (!deferredHandoff) {
@@ -313,6 +469,37 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     lastPrunedAt = currentTime;
   };
 
+  const scheduleDrainIdleWake = (activeDrain: ChannelIngressDrain): void => {
+    if (drainIdleWake) {
+      drainIdleWakeRequested = true;
+      return;
+    }
+    drainIdleWakeRequested = false;
+    const wake = activeDrain.waitForIdle();
+    drainIdleWake = wake;
+    void wake.then(
+      () => {
+        if (drainIdleWake !== wake) {
+          return;
+        }
+        const shouldRearm = drainIdleWakeRequested && running && !isAborted();
+        drainIdleWake = undefined;
+        drainIdleWakeRequested = false;
+        if (shouldRearm) {
+          scheduleDrainIdleWake(activeDrain);
+        }
+        requestDrain();
+      },
+      (error: unknown) => {
+        if (drainIdleWake === wake) {
+          drainIdleWake = undefined;
+          drainIdleWakeRequested = false;
+        }
+        reportError(error);
+      },
+    );
+  };
+
   const runPump = async (): Promise<void> => {
     try {
       for (;;) {
@@ -334,28 +521,47 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
                 activeDeliveries.size >= options.drain.startLimit),
           }),
         );
-        await waitForActiveDeliveries();
-        await activeDrain.waitForIdle();
-        if (!running || isAborted() || (!requested && started === 0)) {
+        if (waitForDeliveryIdleBeforeRepump) {
+          await waitForActiveDeliveries();
+          await activeDrain.waitForIdle();
+        } else if (started > 0) {
+          // Failed-retryable delivery settles after the channel callback returns.
+          // Wake once the drain has released or failed those claims.
+          scheduleDrainIdleWake(activeDrain);
+        }
+        if (
+          !running ||
+          isAborted() ||
+          (!requested && (!waitForDeliveryIdleBeforeRepump || started === 0))
+        ) {
           break;
         }
       }
     } catch (error) {
-      options.onError?.(error);
+      reportError(error);
     } finally {
       pumping = undefined;
-      if (running && !isAborted() && requested) {
+      if (!running || isAborted()) {
+        requested = false;
+      } else if (requested) {
         requestDrain();
       }
+      publishActivity();
     }
   };
 
   const requestDrain = (): void => {
-    requested = true;
-    if (!running || isAborted() || pumping) {
+    if (!running || isAborted()) {
+      publishActivity();
       return;
     }
-    pumping = runPump();
+    requested = true;
+    if (pumping) {
+      publishActivity();
+      return;
+    }
+    pumping = options.runPumpTask ? options.runPumpTask(runPump) : runPump();
+    publishActivity();
   };
 
   const clearPollTimer = () => {
@@ -367,6 +573,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     running = false;
     requested = false;
     clearPollTimer();
+    publishActivity();
     await waitForPumpIdle();
   };
 
@@ -374,18 +581,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     facts: ChannelIngressMonitorFacts;
     payload: TStoredPayload;
     receivedAt: number;
-  }): Promise<void> => {
+  }): Promise<Awaited<ReturnType<Queue["enqueue"]>>> => {
     let lastError: unknown;
     for (const delayMs of appendRetryDelaysMs) {
       if (delayMs > 0) {
         await sleep(delayMs);
       }
       try {
-        await getQueue().enqueue(params.facts.eventId, params.payload, {
+        const result = await getQueue().enqueue(params.facts.eventId, params.payload, {
           receivedAt: params.receivedAt,
           laneKey: params.facts.laneKey,
         });
-        return;
+        return result;
       } catch (error) {
         lastError = error;
       }
@@ -402,62 +609,125 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     );
   };
 
+  const assertAdmissionOpen = (): void => {
+    if (
+      (stopped && options.admissionMode !== "durable-after-stop") ||
+      (options.admissionMode === "while-running" && !running) ||
+      (options.abortSignal?.aborted && options.admissionMode !== "durable-after-stop")
+    ) {
+      throw createStoppedError();
+    }
+  };
+
+  const admitRaw = async (
+    raw: TRaw,
+    admitOptions: {
+      receivedAt: number;
+      facts?: ChannelIngressMonitorFacts;
+      onDurablyAdmitted: () => void;
+    },
+  ) => {
+    try {
+      const facts = admitOptions.facts ?? options.inspect(raw, { phase: "admission" });
+      if (!facts) {
+        return { kind: "ignored" } as const;
+      }
+      const body = options.payload.serialize(raw, { facts, receivedAt: admitOptions.receivedAt });
+      const payload =
+        options.payload.storage === "raw-event"
+          ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
+          : options.payload.encode({ version: options.payload.version, body });
+      const queueResult = await admitOnce({
+        facts,
+        payload,
+        receivedAt: admitOptions.receivedAt,
+      });
+      admitOptions.onDurablyAdmitted();
+      await options.onDurableAdmission?.(raw, { facts, receivedAt: admitOptions.receivedAt });
+      return { kind: "durable", queueResult } as const;
+    } catch (error) {
+      await options.onAdmissionFailure?.(raw, error);
+      throw error;
+    }
+  };
+
+  const scheduleAdmission = <T>(work: () => Promise<T>): Promise<T> => {
+    // Append retries stay serialized so backoff cannot invert one lane's arrival order.
+    const admission = admissionTail.then(() => withAdmissionClaimLock(work));
+    admissionTail = admission.then(
+      () => undefined,
+      () => undefined,
+    );
+    return admission;
+  };
+
   return {
     admit: async (
       raw: TRaw,
       admitOptions?: { receivedAt?: number; facts?: ChannelIngressMonitorFacts },
     ) => {
-      if (
-        stopped ||
-        (options.admissionMode === "while-running" && !running) ||
-        options.abortSignal?.aborted
-      ) {
-        throw createStoppedError();
-      }
+      assertAdmissionOpen();
       const receivedAt = admitOptions?.receivedAt ?? now();
-      const admission = admissionTail.then(() =>
-        withAdmissionClaimLock(async () => {
-          let durablyAdmitted = false;
-          try {
-            const facts = admitOptions?.facts ?? options.inspect(raw, { phase: "admission" });
-            if (!facts) {
-              return { kind: "ignored" } as const;
-            }
-            const body = options.payload.serialize(raw, { facts, receivedAt });
-            const payload =
-              options.payload.storage === "raw-event"
-                ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
-                : options.payload.encode({ version: options.payload.version, body });
-            await admitOnce({ facts, payload, receivedAt });
-            durablyAdmitted = true;
-            await options.onDurableAdmission?.(raw, { facts, receivedAt });
-            return { kind: "durable" } as const;
-          } catch (error) {
-            await options.onAdmissionFailure?.(raw, error);
-            throw error;
-          } finally {
-            // A lost transport acknowledgement must not strand an already durable row.
-            if (durablyAdmitted) {
-              requestDrain();
-            }
+      let durablyAdmitted = false;
+      try {
+        return await scheduleAdmission(() =>
+          admitRaw(raw, {
+            receivedAt,
+            ...(admitOptions?.facts ? { facts: admitOptions.facts } : {}),
+            onDurablyAdmitted: () => {
+              durablyAdmitted = true;
+            },
+          }),
+        );
+      } finally {
+        // A lost transport acknowledgement must not strand an already durable row.
+        if (durablyAdmitted) {
+          requestDrain();
+        }
+      }
+    },
+    admitBatch: async (rawEvents: readonly TRaw[], admitOptions?: { receivedAt?: number }) => {
+      assertAdmissionOpen();
+      const receivedAt = admitOptions?.receivedAt ?? now();
+      let durablyAdmitted = false;
+      try {
+        return await scheduleAdmission(async () => {
+          const results = [];
+          for (const raw of rawEvents) {
+            results.push(
+              await admitRaw(raw, {
+                receivedAt,
+                onDurablyAdmitted: () => {
+                  durablyAdmitted = true;
+                },
+              }),
+            );
           }
-        }),
-      );
-      admissionTail = admission.then(
-        () => undefined,
-        () => undefined,
-      );
-      return await admission;
+          return results;
+        });
+      } finally {
+        if (durablyAdmitted) {
+          requestDrain();
+        }
+      }
     },
     start: () => {
       if (running || stopped || isAborted()) {
         return;
       }
+      // Open the durable queue before arming the poll timer. A monitor without a queue can
+      // neither admit nor drain, so channel start must fail through the caller instead of
+      // running a timer that reports the same unrecoverable error on every tick. The typed
+      // rethrow is what lets the gateway record the failure as dead ingress rather than as
+      // one more anonymous channel crash.
+      ensureQueueAvailable();
       running = true;
       pollTimer = setInterval(requestDrain, options.pollIntervalMs);
       pollTimer.unref?.();
       requestDrain();
     },
+    ensureQueueAvailable,
+    requestDrain,
     pause,
     stop: () => {
       stopTask ??= (async () => {
@@ -465,24 +735,38 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         running = false;
         requested = false;
         clearPollTimer();
+        publishActivity();
         // Every transport callback accepted before stop keeps its durable-append guarantee.
         await admissionTail;
         shutdown.abort(createStoppedError());
-        drain?.dispose();
         await waitForPumpIdle();
-        await waitForActiveDeliveries();
+        if (options.waitForDeliveryIdleOnStop !== false) {
+          await waitForActiveDeliveries();
+        }
         // A pump may have created the lazy drain just before observing running=false.
         drain?.dispose();
-        await drain?.waitForIdle();
+        if (options.waitForDeliveryIdleOnStop !== false) {
+          await drain?.waitForIdle();
+        }
+        if (options.deferredClaims && options.deferredClaims !== "manual") {
+          await waitForDeferredClaims();
+        }
       })();
       return stopTask;
     },
     waitForIdle: async () => {
-      await admissionTail;
-      await waitForPumpIdle();
-      await waitForActiveDeliveries();
-      await drain?.waitForIdle();
+      for (;;) {
+        await admissionTail;
+        await waitForPumpIdle();
+        await waitForActiveDeliveries();
+        await drain?.waitForIdle();
+        if (!pumping && activeDeliveries.size === 0 && !requested) {
+          return;
+        }
+      }
     },
+    waitForDeferredClaims,
+    waitForPumpIdle,
     isRunning: () => running,
     isStopped: () => stopped,
   };

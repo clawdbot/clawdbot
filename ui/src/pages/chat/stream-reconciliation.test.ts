@@ -1,11 +1,14 @@
+// @vitest-environment node
 // Control UI tests cover stream reconciliation behavior.
 import { describe, expect, it } from "vitest";
 import {
   appendTerminalAssistantMessage,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
+  persistedCurrentToolStreamIds,
   prunePersistedToolStreamMessages,
 } from "./stream-reconciliation.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 type StreamReconciliationState = Parameters<typeof materializeVisibleStreamState>[1];
 
@@ -22,6 +25,39 @@ function messageText(message: unknown): string | null {
   }
   const first = content[0] as { text?: unknown } | undefined;
   return typeof first?.text === "string" ? first.text : null;
+}
+
+function createConcurrentToolStreamState() {
+  const toolCallId = "call-shared";
+  const foregroundIdentity = buildToolStreamIdentity("run-foreground", toolCallId);
+  const backgroundIdentity = buildToolStreamIdentity("run-background", toolCallId);
+  const foregroundMessage = {
+    role: "assistant",
+    runId: "run-foreground",
+    toolCallId,
+    content: [{ type: "toolcall", name: "read", arguments: { path: "foreground.txt" } }],
+  };
+  const backgroundMessage = {
+    role: "assistant",
+    runId: "run-background",
+    toolCallId,
+    content: [{ type: "toolcall", name: "exec", arguments: { command: "background" } }],
+  };
+  const state = {
+    chatStream: "foreground still running",
+    chatStreamStartedAt: 5,
+    chatStreamSegments: [
+      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
+      { text: "before background", ts: 3, runId: "run-background", toolCallId },
+    ],
+    chatToolMessages: [foregroundMessage, backgroundMessage],
+    toolStreamById: new Map<string, unknown>([
+      [foregroundIdentity, { runId: "run-foreground", toolCallId, message: foregroundMessage }],
+      [backgroundIdentity, { runId: "run-background", toolCallId, message: backgroundMessage }],
+    ]),
+    toolStreamOrder: [foregroundIdentity, backgroundIdentity],
+  };
+  return { state, toolCallId, foregroundIdentity, backgroundIdentity, foregroundMessage };
 }
 
 describe("stream reconciliation", () => {
@@ -79,6 +115,78 @@ describe("stream reconciliation", () => {
     ]);
   });
 
+  it("does not replay a keyed preamble across a same-run steer boundary", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "already visible", ts: 2, itemId: "preamble-1" },
+        { text: "distinct item", ts: 4, itemId: "preamble-2" },
+        { text: "already visible", ts: 5 },
+      ],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId?: string }>;
+    };
+    const messages = [
+      { role: "user", content: "original ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "already visible" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          itemId: "preamble-1",
+          replacementText: "already visible",
+          source: "segment",
+        },
+      },
+      { role: "user", content: "steer this run", timestamp: 3 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      keyedStartIndex: 1,
+    });
+
+    expect(next.map(messageText)).toEqual([
+      "original ask",
+      "already visible",
+      "steer this run",
+      "distinct item",
+      "already visible",
+    ]);
+  });
+
+  it("recomputes the unkeyed boundary after keyed insertions before a steer", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "first keyed", ts: 2, itemId: "preamble-1" },
+        { text: "repeatable", ts: 3, itemId: "preamble-2" },
+        { text: "repeatable", ts: 5 },
+      ],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId?: string }>;
+    };
+    const messages = [
+      { role: "user", content: "original ask", timestamp: 1 },
+      { role: "user", content: "steer this run", timestamp: 4 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      keyedStartIndex: 1,
+    });
+
+    expect(next.map(messageText)).toEqual([
+      "original ask",
+      "first keyed",
+      "repeatable",
+      "steer this run",
+      "repeatable",
+    ]);
+  });
+
   it("does not prune keyed preambles by live tool index", () => {
     const state = {
       chatStream: null,
@@ -110,6 +218,51 @@ describe("stream reconciliation", () => {
     expect(state.chatToolMessages).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
+  });
+
+  it("prunes only the persisted run when sibling tools share a call id", () => {
+    const { state, toolCallId, foregroundIdentity, backgroundIdentity, foregroundMessage } =
+      createConcurrentToolStreamState();
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      {
+        role: "toolResult",
+        runId: "run-background",
+        toolCallId,
+        content: "background complete",
+      },
+    ];
+
+    const persisted = persistedCurrentToolStreamIds(messages, state);
+
+    expect(persisted).toEqual(new Set([backgroundIdentity]));
+    prunePersistedToolStreamMessages(state, persisted);
+
+    expect(state.toolStreamOrder).toEqual([foregroundIdentity]);
+    expect(state.toolStreamById.has(foregroundIdentity)).toBe(true);
+    expect(state.toolStreamById.has(backgroundIdentity)).toBe(false);
+    expect(state.chatToolMessages).toEqual([foregroundMessage]);
+    expect(state.chatStreamSegments).toEqual([
+      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
+    ]);
+  });
+
+  it("does not attribute an unscoped persisted result to either colliding run", () => {
+    const { state, toolCallId, foregroundIdentity, backgroundIdentity } =
+      createConcurrentToolStreamState();
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      { role: "toolResult", toolCallId, content: "unscoped output" },
+    ];
+
+    const persisted = persistedCurrentToolStreamIds(messages, state);
+
+    expect(persisted).toEqual(new Set());
+    prunePersistedToolStreamMessages(state, persisted);
+    expect(state.toolStreamOrder).toEqual([foregroundIdentity, backgroundIdentity]);
+    expect(state.toolStreamById.size).toBe(2);
+    expect(state.chatToolMessages).toHaveLength(2);
+    expect(state.chatStreamSegments).toHaveLength(2);
   });
 
   it("prunes persisted tool messages across current tool id shapes", () => {

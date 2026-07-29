@@ -73,6 +73,7 @@ function createGatewayContext(
       channels: {
         clickclack: {
           baseUrl: "https://clickclack.example",
+          apiBaseUrl: "http://127.0.0.1:8484",
           token: "test-token",
           workspace: "main",
           reconnectMs: 1,
@@ -158,6 +159,23 @@ describe("ClickClack gateway", () => {
         },
       },
     ]);
+  });
+
+  it("uses the private API base for REST and realtime startup", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    expect(mocks.createClickClackClient).toHaveBeenCalledWith({
+      baseUrl: "http://127.0.0.1:8484",
+      token: "test-token",
+    });
+
+    abort.abort();
+    await run;
   });
 
   it.each([
@@ -485,7 +503,7 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({
-      baseUrl: "https://clickclack.example",
+      baseUrl: "http://127.0.0.1:8484",
       token: "test-token",
       correlationId: "fakeco.case_1",
     });

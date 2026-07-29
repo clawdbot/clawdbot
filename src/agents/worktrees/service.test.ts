@@ -1112,17 +1112,8 @@ describe("ManagedWorktreeService", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("maps cleanup config onto limits with 0 and unset disabling each bound", () => {
-    expect(resolveWorktreeCleanupLimits(undefined)).toEqual({});
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 0, maxTotalSizeGb: 0 } })).toEqual(
-      {},
-    );
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 25, maxTotalSizeGb: 50 } })).toEqual(
-      { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
-    );
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxTotalSizeGb: 0.5 } })).toEqual({
-      maxTotalSizeBytes: 512 * 1024 ** 2,
-    });
+  it("uses the fixed no-limit cleanup policy", () => {
+    expect(resolveWorktreeCleanupLimits()).toEqual({});
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

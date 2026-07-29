@@ -124,8 +124,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 /* A session dashboard keeps the board primary on narrow shells. Every desktop
    edge becomes one bounded bottom sheet; the stored tab preference is left
    untouched and returns when the viewport widens. */
-.shell--mobile-nav .board-session-surface--dock-left,
-.shell--mobile-nav .board-session-surface--dock-right,
 .shell--mobile-nav .board-session-surface--dock-bottom {
   flex-direction: column;
 }
@@ -173,23 +171,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   pointer-events: auto;
 }
 
-.shell--mobile-nav .shell-nav-backdrop {
-  display: block;
-  position: fixed;
-  inset: 0;
-  z-index: 65;
-  border: 0;
-  background: color-mix(in srgb, black 52%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 /* Inside the drawer there is no Escape key to hint at. */
 .shell--mobile-nav .settings-sidebar__esc {
   display: none;
@@ -233,13 +214,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   height: 38px;
   min-height: 38px;
   padding: 0;
-}
-
-/* Drawer brand row keeps only the new-thread action: search lives in the
-   topbar and the drawer dismisses via backdrop, so their buttons stay hidden. */
-.shell--mobile-nav .sidebar-brand .sidebar-search,
-.shell--mobile-nav .sidebar-brand .sidebar-brand__collapse {
-  display: none;
 }
 
 .shell--mobile-nav .sidebar {

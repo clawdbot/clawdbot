@@ -287,12 +287,10 @@ describe("config shared auth disconnects", () => {
 
   it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
     const submittedConfig: OpenClawConfig = {
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
@@ -306,7 +304,7 @@ describe("config shared auth disconnects", () => {
           ownerId: "tts",
           state: "unavailable",
           degradationState: "cold",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret reference was not found",
         },
@@ -355,12 +353,10 @@ describe("config shared auth disconnects", () => {
     "secret reference is not allowed for this provider",
   ])("rejects non-retryable SecretRef degradation before config writes: %s", async (reason) => {
     const submittedConfig: OpenClawConfig = {
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
@@ -374,7 +370,7 @@ describe("config shared auth disconnects", () => {
           ownerId: "tts",
           state: "unavailable",
           degradationState: "cold",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason,
         },
@@ -519,42 +515,13 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
+  it("defers restart-required changes to the watcher after legacy hot mode normalizes", async () => {
     mockPreviousConfig(hotReloadConfig());
 
     await runConfigPatch({ gateway: { port: 19001 } });
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.stats?.requiresRestart).toBe(true);
-  });
-
-  it("marks hot-reloaded config.patch writes as not restart required", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        channelHealthCheckMinutes: 10,
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
-
-    const { options } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({ gateway: { channelHealthCheckMinutes: 15 } }),
-        restartDelayMs: 1_000,
-      },
-    });
-
-    await expectDefined(
-      configHandlers["config.patch"],
-      'configHandlers["config.patch"] test invariant',
-    )(options);
-    await flushConfigHandlerMicrotasks();
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.stats?.requiresRestart).toBe(false);
+    expectNoDirectRestart();
+    expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
   });
 
   it("does not schedule a direct restart for hot-mode browser profile config.patch writes", async () => {
@@ -596,7 +563,7 @@ describe("config shared auth disconnects", () => {
     );
 
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
-    expect(payload?.sessionKey).toBe("agent:main:main");
+    expect(payload?.sessionKey).toBeUndefined();
     expect(payload?.continuation).toBeUndefined();
   });
 });

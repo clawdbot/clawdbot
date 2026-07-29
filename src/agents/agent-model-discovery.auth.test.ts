@@ -302,6 +302,53 @@ describe("discoverAuthStorage", () => {
     });
   });
 
+  it("uses the lifecycle owner's explicit inherited auth directory", async () => {
+    await withAgentDir(async (inheritedAuthDir) => {
+      await withAgentDir(async (agentDir) => {
+        writeAuthProfilesSqlite(inheritedAuthDir, {
+          version: 1,
+          profiles: {
+            "inherited-provider:default": {
+              type: "api_key",
+              provider: "inherited-provider",
+              key: "inherited-key",
+            },
+            "shared-provider:inherited": {
+              type: "api_key",
+              provider: "shared-provider",
+              key: "inherited-shared-key",
+            },
+          },
+        });
+        writeAuthProfilesSqlite(agentDir, {
+          version: 1,
+          profiles: {
+            "shared-provider:local": {
+              type: "api_key",
+              provider: "shared-provider",
+              key: "local-shared-key",
+            },
+          },
+        });
+
+        const storage = discoverAuthStorage(agentDir, {
+          inheritedAuthDir,
+          skipExternalAuthProfiles: true,
+          env: {},
+        });
+
+        expect(storage.get("inherited-provider")).toEqual({
+          type: "api_key",
+          key: "inherited-key",
+        });
+        expect(storage.get("shared-provider")).toEqual({
+          type: "api_key",
+          key: "local-shared-key",
+        });
+      });
+    });
+  });
+
   it("includes env-backed provider auth when no auth profile exists", () => {
     const previousMistral = process.env.MISTRAL_API_KEY;
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

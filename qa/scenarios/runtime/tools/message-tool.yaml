@@ -3,10 +3,10 @@ title: "Runtime tool fixture — direct message tool"
 scenario:
   id: runtime-tool-message-tool
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
-      - tools.message-tool
+      - channels.message-tool-outbound
   objective: Report whether a direct message tool is present. The coding-profile session surface normally uses sessions_send instead.
   successCriteria:
     - The fixture is report-only when the coding profile does not expose a direct message tool.

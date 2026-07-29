@@ -452,6 +452,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   action: "warn" | "block";
   detector:
     | "generic_repeat"
+    | "argument_churn"
     | "unknown_tool_repeat"
     | "known_poll_no_progress"
     | "global_circuit_breaker"
@@ -482,6 +483,8 @@ type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   toolOwner?: string;
   toolCallId?: string;
   paramsSummary?: DiagnosticToolParamsSummary;
+  /** Deterministic mutation classification computed before tool execution. */
+  mutatingAction?: boolean;
 };
 
 export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {

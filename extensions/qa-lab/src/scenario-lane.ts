@@ -1,6 +1,5 @@
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
-import { getQaProvider } from "./providers/index.js";
 import type { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
@@ -8,6 +7,48 @@ type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenari
 
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveQaScenarioLaneChannels(params: {
+  scenario: QaSeedScenario;
+  channelDriver: QaScorecardChannelDriver;
+  channel?: string | null;
+  defaultChannel?: string;
+  supportsChannel?: (channel: string) => boolean;
+}): Array<string | undefined> {
+  if (params.channelDriver === "qa-channel") {
+    return ["qa-channel"];
+  }
+  const selectedChannel = params.channel?.trim().toLowerCase();
+  if (selectedChannel) {
+    return [selectedChannel];
+  }
+  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
+  if (scenarioChannel) {
+    return [scenarioChannel];
+  }
+  if (params.scenario.execution.kind === "flow") {
+    const driverChannels = params.scenario.execution.channels?.filter(
+      (channel) => channel !== "qa-channel",
+    );
+    const supportedChannels = driverChannels?.filter(
+      (channel) => !params.supportsChannel || params.supportsChannel(channel),
+    );
+    if (supportedChannels?.length) {
+      return supportedChannels;
+    }
+    if (driverChannels?.length) {
+      return driverChannels;
+    }
+  }
+  const defaultChannel = params.defaultChannel?.trim().toLowerCase();
+  return [defaultChannel];
+}
+
+export function resolveQaScenarioLaneChannel(
+  params: Parameters<typeof resolveQaScenarioLaneChannels>[0],
+): string | undefined {
+  return resolveQaScenarioLaneChannels(params)[0];
 }
 
 export function describeQaProviderLaneMismatches(params: {
@@ -19,16 +60,16 @@ export function describeQaProviderLaneMismatches(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const mismatches: string[] = [];
-  const provider = getQaProvider(params.providerMode);
-  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
-    mismatches.push("live provider mode");
-  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
+    mismatches.push(`channelDriver=${requiredChannelDriver}`);
+  }
   const effectiveChannel =
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"
@@ -36,6 +77,11 @@ export function describeQaProviderLaneMismatches(params: {
   const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
   if (scenarioChannel && effectiveChannel !== scenarioChannel) {
     mismatches.push(`channel=${scenarioChannel}`);
+  }
+  const allowedChannels =
+    params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
+  if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
+    mismatches.push(`channel=${allowedChannels.join("|")}`);
   }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);

@@ -21,32 +21,25 @@ describe("gateway trusted-proxy device auto-approval config", () => {
     expect(result.success).toBe(true);
   });
 
-  test.each(["operator.admin", " operator.admin "])("rejects %j", (adminScope) => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            deviceAutoApprove: {
-              enabled: true,
-              scopes: ["operator.read", adminScope],
+  test.each(["operator.admin", " operator.admin "])(
+    "accepts %j as an explicit admin opt-in",
+    (adminScope) => {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              deviceAutoApprove: {
+                enabled: true,
+                scopes: ["operator.read", adminScope],
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: ["gateway", "auth", "trustedProxy", "deviceAutoApprove", "scopes"],
-            message: expect.stringContaining("operator.admin is not allowed"),
-          }),
-        ]),
-      );
-    }
-  });
+      expect(result.success).toBe(true);
+    },
+  );
 });

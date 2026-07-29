@@ -35,7 +35,7 @@ describe("stale subagent allowlist doctor repair", () => {
         normalizedAgentId: "stale-default",
       },
       {
-        pathLabel: "agents.list.0.subagents.allowAgents",
+        pathLabel: "agents.list.main.subagents.allowAgents",
         agentId: "stale-main",
         normalizedAgentId: "stale-main",
       },
@@ -100,7 +100,7 @@ describe("stale subagent allowlist doctor repair", () => {
     expect(result.config.agents?.list?.[0]?.subagents?.allowAgents).toStrictEqual(["*", "planner"]);
     expect(result.changes).toStrictEqual([
       "- agents.defaults.subagents.allowAgents: removed 1 stale subagent target id (stale)",
-      "- agents.list.0.subagents.allowAgents: removed 1 stale subagent target id (stale-main)",
+      "- agents.list.main.subagents.allowAgents: removed 1 stale subagent target id (stale-main)",
     ]);
   });
 

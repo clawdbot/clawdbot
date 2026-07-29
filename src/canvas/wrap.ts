@@ -79,8 +79,16 @@ code{padding:1px 5px}pre{padding:10px;overflow-x:auto}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .svg-widget{display:grid;place-items:center}.svg-widget>svg{max-width:100%}`;
 
+type WidgetDocumentOptions = {
+  connectOrigins?: readonly string[];
+};
+
 /** Wraps agent-authored widget markup in the stable isolated Canvas document shell. */
-export function buildWidgetDocument(title: string, widgetCode: string): string {
+export function buildWidgetDocument(
+  title: string,
+  widgetCode: string,
+  options: WidgetDocumentOptions = {},
+): string {
   const isSvg = /^<svg/i.test(widgetCode);
   const bodyClass = isSvg ? ' class="svg-widget"' : "";
   // Inline scripts may drive the widget; CSP blocks resource loads, while preview metadata
@@ -96,30 +104,59 @@ export function buildWidgetDocument(title: string, widgetCode: string): string {
     'if(h&&h!==last){last=h;window.parent.postMessage({type:"openclaw:widget-size",height:h},"*");}};' +
     "addEventListener('load',report);new ResizeObserver(report).observe(document.body);" +
     "setTimeout(report,50);setTimeout(report,500);})();</script>";
-  // The prompt bridge precedes widget code so inline handlers can reference
-  // sendPrompt() immediately. It creates the prompt channel itself and offers
-  // one endpoint to the embedding chat at parse time — before any widget code
-  // can run, steal the endpoint, or navigate the frame — so the chat's
-  // first-offer-wins adoption is always bound to this document. The send
-  // endpoint stays private to this closure, and sendPrompt requires transient
-  // user activation, so widget code cannot auto-send without a real user
-  // gesture; the chat additionally validates, requires a focused visible
-  // frame, and rate limits every prompt.
-  // Everything sendPrompt later touches is snapshotted here, before widget
-  // code exists, so prototype patches (MessagePort.postMessage, the
-  // userActivation getter) by widget code cannot leak the endpoint or fake a
-  // gesture. Fail closed: no observable transient user activation, no send.
-  const promptBridge =
-    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+  // This bridge precedes widget code and snapshots every authority-bearing
+  // primitive. Inline chat keeps its private prompt port; board hosting adopts
+  // the view ticket and routes every host API over one request channel.
+  const widgetBridge =
+    '<script>(()=>{if(!window.parent||window.parent===window||Object.prototype.hasOwnProperty.call(window,"openclaw"))return;' +
+    "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
+    "const P=Promise;const then=P.prototype.then;const ErrorCtor=Error;" +
+    "const stringify=String;const freeze=Object.freeze;const define=Object.defineProperty;" +
+    "const push=Array.prototype.push;const shift=Array.prototype.shift;" +
+    "const later=setTimeout.bind(window);const cancel=clearTimeout.bind(window);" +
     "const c=new MessageChannel();" +
-    "const post=c.port1.postMessage.bind(c.port1);" +
+    "const promptPost=c.port1.postMessage.bind(c.port1);" +
+    "const b=new MessageChannel();const bridgePost=b.port1.postMessage.bind(b.port1);" +
+    "const promptWaiting=[];let inlinePromptReady=false;" +
+    'c.port1.addEventListener("message",event=>{if(event.data?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +
+    "inlinePromptReady=true;while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.inline();}});c.port1.start();" +
     "let act=null;" +
     "try{const ua=navigator.userActivation;" +
     'const d=ua&&Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ua),"isActive");' +
     "if(d&&d.get)act=d.get.bind(ua);}catch{}" +
-    'window.parent.postMessage({type:"openclaw:widget-prompt-offer"},"*",[c.port2]);' +
-    "window.sendPrompt=text=>{if(!act||act()!==true)return;" +
-    'post({type:"openclaw:widget-prompt",prompt:String(text)});};})();</script>';
+    'post({type:"openclaw:widget-prompt-offer"},"*",[c.port2]);' +
+    'post({type:"openclaw:widget-bridge-port-offer"},"*",[b.port2]);' +
+    "let ticket=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
+    'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
+    'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
+    'b.port1.addEventListener("message",event=>{const data=event.data;' +
+    'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
+    'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +
+    "while(waiting.length){const entry=shift.call(waiting);if(entry)entry.send();}" +
+    "while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.send();}return;}" +
+    'if(data?.type!=="openclaw:widget-bridge-response"||typeof data.id!=="string")return;' +
+    "const entry=pending.get(data.id);if(!entry)return;pending.delete(data.id);" +
+    'if(data.ok===true)entry.resolve(data.result);else entry.reject(new ErrorCtor(typeof data.error==="string"?data.error:"widget host request failed"));});b.port1.start();' +
+    'const request=(method,params)=>new P((resolve,reject)=>{const send=()=>{const id="widget-"+(++sequence);' +
+    "pending.set(id,{resolve,reject});" +
+    'try{bridgePost({type:"openclaw:widget-bridge-request",id,method,params,ticket});}' +
+    "catch(error){pending.delete(id);reject(error);}};" +
+    'if(ticket)send();else if(hostInitExpired)reject(new ErrorCtor("widget host capabilities unavailable"));' +
+    "else push.call(waiting,{send,reject});});" +
+    "const sendPrompt=text=>{if(!act||act()!==true)return P.resolve(false);const value=stringify(text);" +
+    'if(ticket)return request("prompt.send",{text:value});return new P((resolve,reject)=>{' +
+    'const send=()=>{const result=request("prompt.send",{text:value});then.call(result,resolve,reject);};' +
+    'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
+    'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
+    "else push.call(promptWaiting,{send,inline,reject});});};" +
+    "const api=freeze({" +
+    'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
+    'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
+    'define(window,"openclaw",{value:api,writable:false,configurable:false});' +
+    "window.sendPrompt=text=>{void sendPrompt(text);};" +
+    'define(window,"sendPrompt",{value:window.sendPrompt,writable:false,configurable:false});' +
+    'post({type:"openclaw:widget-bridge-ready"},"*");})();</script>';
   /*
    * The host may push a new theme after every theme change. Each message is a
    * full snapshot: omitted or invalid tokens are removed so a theme switch
@@ -197,6 +234,9 @@ export function buildWidgetDocument(title: string, widgetCode: string): string {
     "fill.call(context,0,0,canvasWidth,canvasHeight);draw.call(context,image,0,0,canvasWidth,canvasHeight);" +
     'post({type:"openclaw:widget-snapshot",id:data.id,dataUrl:toDataURL.call(canvas,"image/png"),width,height},"*");' +
     '}catch(error){post({type:"openclaw:widget-snapshot",id:data.id,error:stringify(error)},"*");}})();});})();</script>';
+  const connectSources = options.connectOrigins?.length
+    ? options.connectOrigins.join(" ")
+    : "'none'";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${promptBridge}${themeBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
 }

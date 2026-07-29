@@ -5,10 +5,10 @@ import { editSlackMessage } from "../../actions.js";
 import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
 import { buildSlackEditTextPayload } from "../../edit-text.js";
 import { normalizeSlackOutboundText } from "../../format.js";
-import { SLACK_EDIT_TEXT_LIMIT } from "../../limits.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { hasSlackNativeDataBlock } from "../../native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "../../native-data-fallback.js";
-import { truncateSlackText } from "../../truncate.js";
+import { truncateSlackTextByUtf8Bytes } from "../../truncate.js";
 
 type SlackReadbackMessage = {
   ts?: string;
@@ -37,7 +37,7 @@ function buildAcceptedSlackEditTexts(params: {
   const expected = buildExpectedSlackEditText(params);
   const texts = new Set([
     expected,
-    normalizeSlackOutboundText(truncateSlackText(expected, SLACK_EDIT_TEXT_LIMIT)),
+    normalizeSlackOutboundText(truncateSlackTextByUtf8Bytes(expected, SLACK_EDIT_TEXT_MAX_BYTES)),
     normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks)),
   ]);
   if (params.blocks?.length && hasSlackNativeDataBlock(params.blocks)) {

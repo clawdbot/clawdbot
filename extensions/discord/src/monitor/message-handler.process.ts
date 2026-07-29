@@ -1,6 +1,6 @@
 // Discord plugin module implements message handler.process behavior.
 import type { APIAllowedMentions } from "discord-api-types/v10";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
   hasFinalInboundReplyDispatch,
@@ -41,6 +41,7 @@ import {
   formatDiscordReplySkip,
 } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
+import { resolveDiscordWebhookId } from "./sender-identity.js";
 
 const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
@@ -103,7 +104,7 @@ async function processDiscordMessageInner(
     return;
   }
   const text = messageText;
-  if (!text) {
+  if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
   }
@@ -126,9 +127,9 @@ async function processDiscordMessageInner(
     },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const configuredTypingMode = cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
-  const configuredTypingInterval =
-    cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const routedAgentConfig = resolveAgentConfig(cfg, route.agentId);
+  const configuredTypingMode = routedAgentConfig?.typingMode ?? cfg.agents?.defaults?.typingMode;
+  const configuredTypingInterval = cfg.agents?.defaults?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
     sourceRepliesAreToolOnly &&
     configuredTypingMode === undefined &&
@@ -315,7 +316,7 @@ async function processDiscordMessageInner(
       if (!replies.length) {
         return { visibleReplySent: false };
       }
-      await deliverDiscordReply({
+      const result = await deliverDiscordReply({
         cfg,
         replies,
         target: deliverTarget,
@@ -334,8 +335,10 @@ async function processDiscordMessageInner(
         mediaLocalRoots,
         kind: "block",
       });
-      replyReference.markSent();
-      return { visibleReplySent: true };
+      if (result.visibleReplySent) {
+        replyReference.markSent();
+      }
+      return result;
     }
     if (
       isFinal &&
@@ -463,7 +466,7 @@ async function processDiscordMessageInner(
             : undefined;
           const replyToId = replyReference.use();
           notifyFinalReplyStart();
-          await deliverDiscordReply({
+          const deliveryResult = await deliverDiscordReply({
             cfg,
             replies: [fallbackPayload],
             target: deliverTarget,
@@ -483,7 +486,7 @@ async function processDiscordMessageInner(
             allowedMentions,
             kind: info.kind,
           });
-          return true;
+          return deliveryResult.visibleReplySent;
         },
         onNormalDelivered: () => {
           markUserFacingFinalDelivered();
@@ -522,7 +525,7 @@ async function processDiscordMessageInner(
             : receiptLine,
         }
       : deliverablePayload;
-    await deliverDiscordReply({
+    const result = await deliverDiscordReply({
       cfg,
       replies: [payloadForDelivery],
       target: deliverTarget,
@@ -541,6 +544,9 @@ async function processDiscordMessageInner(
       mediaLocalRoots,
       kind: info.kind,
     });
+    if (!result.visibleReplySent) {
+      return result;
+    }
     replyReference.markSent();
     if (isFinal && deliverablePayload.isError !== true) {
       if (receiptLine) {
@@ -558,7 +564,7 @@ async function processDiscordMessageInner(
         await draftStream?.clear();
       }
     }
-    return { visibleReplySent: true };
+    return result;
   };
   const onDiscordDeliveryError = (err: unknown, info: { kind: string }) => {
     if (info.kind === "final" && finalReplyStartNotified && !userFacingFinalDelivered) {
@@ -607,6 +613,7 @@ async function processDiscordMessageInner(
       cfg,
       channel: "discord",
       accountId: route.accountId,
+      outboundEchoSourceId: resolveDiscordWebhookId(message) ?? undefined,
       route: { agentId: route.agentId, sessionKey: persistedSessionKey },
       ctxPayload,
       afterRecord: reactions.queueInitialAckReactionAfterRecord,
@@ -623,7 +630,7 @@ async function processDiscordMessageInner(
         onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
       },
       delivery: {
-        deliver: deliverDiscordPayload,
+        deliverWithProviderMessageSending: deliverDiscordPayload,
         onError: onDiscordDeliveryError,
       },
       record: turn.record,

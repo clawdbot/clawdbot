@@ -9,13 +9,18 @@ import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
+  getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import {
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController,
+  getSubagentRunsSnapshotForRead,
+} from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
@@ -42,7 +47,7 @@ export function buildLatestSubagentRunReadIndex(): LatestSubagentRunReadIndex {
 /** Lists runs controlled by a session key. */
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
     controllerSessionKey,
   );
 }
@@ -60,14 +65,6 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
   return listDescendantRunsForRequesterFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
-  );
-}
-
-/** Returns the preferred run for a child session, favoring active over ended runs. */
-function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-  return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    childSessionKey,
   );
 }
 
@@ -90,36 +87,23 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
     return null;
   }
 
-  let latestInMemoryActive: SubagentRunRecord | null = null;
-  let latestInMemoryEnded: SubagentRunRecord | null = null;
+  let latestInMemory: SubagentRunRecord | null = null;
   for (const entry of subagentRuns.values()) {
     if (entry.childSessionKey !== key) {
       continue;
     }
-    if (typeof entry.endedAt === "number") {
-      if (!latestInMemoryEnded || compareSubagentRunGeneration(entry, latestInMemoryEnded) > 0) {
-        latestInMemoryEnded = entry;
-      }
-      continue;
-    }
-    if (!latestInMemoryActive || compareSubagentRunGeneration(entry, latestInMemoryActive) > 0) {
-      latestInMemoryActive = entry;
+    if (!latestInMemory || compareSubagentRunGeneration(entry, latestInMemory) > 0) {
+      latestInMemory = entry;
     }
   }
-
-  if (latestInMemoryEnded || latestInMemoryActive) {
-    // Fresh in-memory terminal state is more accurate than an older active snapshot row.
-    if (
-      latestInMemoryEnded &&
-      (!latestInMemoryActive ||
-        compareSubagentRunGeneration(latestInMemoryEnded, latestInMemoryActive) > 0)
-    ) {
-      return latestInMemoryEnded;
-    }
-    return latestInMemoryActive ?? latestInMemoryEnded;
-  }
-
-  return getSubagentRunByChildSessionKey(key);
+  // Fresh in-memory terminal state is more accurate than an older active snapshot row.
+  return (
+    latestInMemory ??
+    getSubagentRunByChildSessionKeyFromRuns(
+      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
+      key,
+    )
+  );
 }
 
 /** Returns the most recently created run for a child session from readable registry state. */
@@ -131,15 +115,10 @@ export function getLatestSubagentRunByChildSessionKey(
     return null;
   }
 
-  let latest: SubagentRunRecord | null = null;
-  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
-      latest = entry;
-    }
-  }
-
-  return latest;
+  return (
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
+      key,
+    ) ?? null
+  );
 }

@@ -3,6 +3,7 @@ import {
   assertGatewayServiceMutationAllowed,
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
+  NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON,
 } from "./gateway-supervision.js";
 
 // The env variable name is part of the observable contract the messages
@@ -31,6 +32,20 @@ describe("gateway supervision", () => {
     ).toThrow(
       "OpenClaw gateway lifecycle is managed by an external supervisor " +
         "(OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to restart the gateway.",
+    );
+  });
+
+  it.each([
+    { OPENCLAW_STATE_DIR: "/tmp/copied-state" },
+    { OPENCLAW_CONFIG_PATH: "/tmp/copied-openclaw.json" },
+  ])("blocks native service mutation for non-default install identity %#", (override) => {
+    expect(() =>
+      assertGatewayServiceMutationAllowed("restart the gateway", {
+        HOME: "/home/operator",
+        ...override,
+      }),
+    ).toThrow(
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home and without OPENCLAW_HOME, OPENCLAW_STATE_DIR, or OPENCLAW_CONFIG_PATH overrides to restart the gateway.`,
     );
   });
 

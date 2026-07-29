@@ -247,7 +247,10 @@ describe("LINE webhook spool", () => {
       await vi.waitFor(() => expect(firstDeliver).toHaveBeenCalledTimes(1));
 
       let stopSettled = false;
-      const stopping = first.stop().then(() => {
+      const firstStop = first.stop();
+      const secondStop = first.stop();
+      expect(secondStop).toBe(firstStop);
+      const stopping = firstStop.then(() => {
         stopSettled = true;
       });
       await new Promise<void>((resolve) => {
@@ -317,6 +320,7 @@ describe("LINE webhook spool", () => {
       try {
         await vi.advanceTimersByTimeAsync(4_999);
         expect(stopSettled).toBe(false);
+        expect(lateLifecycle?.abortSignal.aborted).toBe(false);
         await vi.advanceTimersByTimeAsync(1);
         await stopping;
         expect(firstRuntime.log).toHaveBeenCalledWith(
@@ -325,6 +329,7 @@ describe("LINE webhook spool", () => {
         if (!lateLifecycle) {
           throw new Error("LINE delivery did not expose its adoption lifecycle");
         }
+        expect(lateLifecycle.abortSignal.aborted).toBe(true);
         lateLifecycle.onDeferred();
         await vi.waitFor(async () => expect(await queue.listClaims()).toEqual([]));
       } finally {

@@ -55,7 +55,7 @@ vi.mock("../infra/executable-path.js", () => ({
 
 const { runGmailService } = await import("./gmail-ops.js");
 
-function createGmailConfig(account = "me@example.com") {
+function createGmailConfig(account = "me@example.com", renewEveryMinutes?: number) {
   return {
     hooks: {
       enabled: true,
@@ -65,6 +65,7 @@ function createGmailConfig(account = "me@example.com") {
         topic: "projects/demo/topics/gmail",
         pushToken: "push-token",
         tailscale: { mode: "off" as const },
+        renewEveryMinutes,
       },
     },
   };
@@ -111,6 +112,45 @@ describe("runGmailService", () => {
       expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
         "gmail watch renew failed: Error: renewal failed",
       );
+    } finally {
+      shutdown?.();
+    }
+  });
+
+  it("keeps a stalled foreground renewal single-flight", async () => {
+    vi.useFakeTimers();
+    let resolveRenewal!: (value: { code: number; stdout: string; stderr: string }) => void;
+    const renewal = new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      resolveRenewal = resolve;
+    });
+    mocks.getRuntimeConfig.mockReturnValue(createGmailConfig("me@example.com", 1));
+    mocks.runCommandWithTimeout
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockImplementation(async () => await renewal);
+
+    const child = new EventEmitter();
+    const kill = vi.fn(() => {
+      child.emit("exit", null, "SIGTERM");
+      return true;
+    });
+    mocks.spawn.mockReturnValue(Object.assign(child, { kill, killed: false }));
+
+    const existingSigintListeners = new Set(process.rawListeners("SIGINT"));
+    let shutdown: (() => void) | undefined;
+    try {
+      await runGmailService({});
+      shutdown = process
+        .rawListeners("SIGINT")
+        .find((listener) => !existingSigintListeners.has(listener)) as (() => void) | undefined;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhileStalled = mocks.runCommandWithTimeout.mock.calls.length;
+      resolveRenewal({ code: 0, stdout: "", stderr: "" });
+      await Promise.resolve();
+
+      expect(callsWhileStalled).toBe(2);
     } finally {
       shutdown?.();
     }

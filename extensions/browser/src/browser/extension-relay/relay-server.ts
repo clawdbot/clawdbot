@@ -18,6 +18,7 @@ import { isLoopbackHost } from "../../gateway/net.js";
 import { rawDataToString } from "../../infra/ws.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
+import type { PageSharePayload } from "./relay-protocol.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
@@ -120,8 +121,12 @@ export async function startExtensionRelayServer(params: {
   port: number;
   token: string;
   onStateChange?: () => void;
+  onPageShare?: (payload: PageSharePayload) => Promise<void>;
 }): Promise<ExtensionRelayHandle> {
-  const bridge = new ExtensionRelayBridge({ onStateChange: params.onStateChange });
+  const bridge = new ExtensionRelayBridge({
+    onStateChange: params.onStateChange,
+    onPageShare: params.onPageShare,
+  });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,

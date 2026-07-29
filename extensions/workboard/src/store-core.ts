@@ -122,13 +122,14 @@ export class WorkboardCoreStore {
   protected async updateMetadata(
     id: string,
     mutate: (existing: WorkboardCard) => WorkboardMetadata,
+    options: { preserveProofId?: string } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.get(id);
       if (!existing) {
         throw new Error(`card not found: ${id}`);
       }
-      return await this.updateCard(id, { metadata: mutate(existing) });
+      return await this.updateCard(id, { metadata: mutate(existing) }, options);
     });
   }
 
@@ -269,7 +270,7 @@ export class WorkboardCoreStore {
       if (card.metadata?.archivedAt) {
         archived += 1;
       }
-      if (card.status === "ready") {
+      if (card.status === "ready" && !card.metadata?.archivedAt) {
         oldestReadyAt = Math.min(oldestReadyAt ?? card.updatedAt, card.updatedAt);
       }
       updatedAt = Math.max(updatedAt ?? 0, card.updatedAt);
@@ -461,7 +462,11 @@ export class WorkboardCoreStore {
   protected async updateCard(
     id: string,
     patch: WorkboardCardPatch,
-    options: { allowMetadataDependencyLinks?: boolean; enforceStatusHolds?: boolean } = {},
+    options: {
+      allowMetadataDependencyLinks?: boolean;
+      enforceStatusHolds?: boolean;
+      preserveProofId?: string;
+    } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
     if (!existing) {
@@ -519,6 +524,7 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       // Status patches often spread existing metadata. Only a newly supplied
@@ -543,10 +549,13 @@ export class WorkboardCoreStore {
       }
     }
     if (Object.keys(automationPatch).length > 0) {
-      metadata = trimMetadataToBudget({
-        ...metadata,
-        automation: normalizeAutomationPatch(automationPatch, metadata.automation),
-      });
+      metadata = trimMetadataToBudget(
+        {
+          ...metadata,
+          automation: normalizeAutomationPatch(automationPatch, metadata.automation),
+        },
+        options,
+      );
     }
     const next = removeUndefinedCardFields({
       ...existing,
@@ -595,6 +604,7 @@ export class WorkboardCoreStore {
     });
     next.metadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      options,
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
@@ -906,6 +916,9 @@ export class WorkboardCoreStore {
     const card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
+    }
+    if (card.metadata?.archivedAt) {
+      return card;
     }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {

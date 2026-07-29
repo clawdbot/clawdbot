@@ -525,7 +525,7 @@ struct ChatSessionGroupsSheet: View {
 }
 
 @MainActor
-struct ChatNewSessionOptionsPopover: View {
+public struct ChatNewSessionOptionsPopover: View {
     @Bindable var viewModel: OpenClawChatViewModel
     let onComplete: () -> Void
 
@@ -537,6 +537,11 @@ struct ChatNewSessionOptionsPopover: View {
     @State private var isCreating = false
     @State private var routeLease: OpenClawChatNewSessionRouteLease?
     @State private var errorText: String?
+
+    public init(viewModel: OpenClawChatViewModel, onComplete: @escaping () -> Void) {
+        self.viewModel = viewModel
+        self.onComplete = onComplete
+    }
 
     private var selectedAgent: OpenClawChatAgentChoice? {
         self.agents.first { $0.id == self.selectedAgentID }
@@ -565,7 +570,7 @@ struct ChatNewSessionOptionsPopover: View {
         }
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New Thread Options")
                 .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .headline))

@@ -12,7 +12,7 @@ const pendingRecord = {
   status: "pending",
   questions: [
     {
-      id: "deploy_target",
+      questionId: "deploy_target",
       header: "Target",
       question: "Where should this deploy?",
       options: [{ label: "Staging" }, { label: "Production" }],
@@ -37,7 +37,7 @@ describe("resolveQuestionOverGateway", () => {
   it("maps the rendered option value to the canonical question id", async () => {
     hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord }).mockResolvedValueOnce({
       status: "answered",
-      answers: { answers: { deploy_target: { answers: ["Production"] } } },
+      answers: { answers: { deploy_target: ["Production"] } },
     });
 
     await expect(
@@ -65,7 +65,7 @@ describe("resolveQuestionOverGateway", () => {
           method: "question.resolve",
           params: {
             id: recordId,
-            answers: { answers: { deploy_target: { answers: ["Production"] } } },
+            answers: { answers: { deploy_target: ["Production"] } },
             resolvedBy: "telegram:42",
           },
         }),
@@ -127,7 +127,7 @@ describe("resolveQuestionOverGateway", () => {
         questions: [
           ...pendingRecord.questions,
           {
-            id: "region",
+            questionId: "region",
             header: "Region",
             question: "Which region?",
             options: [{ label: "EU" }, { label: "US" }],

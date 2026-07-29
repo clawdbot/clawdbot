@@ -32,6 +32,7 @@ export type SystemPresence = {
     name?: string;
     avatarUrl?: string;
   };
+  watchedSessions?: string[];
   text: string;
   ts: number;
 };
@@ -181,7 +182,7 @@ type SystemPresencePayload = {
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
-  lastInputSeconds?: number;
+  lastInputSeconds?: number | null;
   mode?: string;
   reason?: string;
   roles?: string[];
@@ -229,7 +230,9 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
-      payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
+      payload.lastInputSeconds === null
+        ? undefined
+        : (payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds),
     reason: payload.reason ?? parsed.reason ?? existing.reason,
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),
@@ -280,6 +283,20 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
       }`,
   };
   entries.set(normalizedKey, merged);
+}
+
+/** Renews an existing connection-owned presence row without recreating expired metadata. */
+export function touchPresence(key: string): boolean {
+  const normalizedKey = normalizePresenceKey(key);
+  if (!normalizedKey) {
+    return false;
+  }
+  const existing = entries.get(normalizedKey);
+  if (!existing) {
+    return false;
+  }
+  entries.set(normalizedKey, { ...existing, ts: Date.now() });
+  return true;
 }
 
 export function listSystemPresence(): SystemPresence[] {

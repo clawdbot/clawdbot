@@ -2,6 +2,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -18,6 +19,7 @@ import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import {
   formatPortDiagnostics,
   inspectPortConnections,
@@ -193,6 +195,10 @@ export async function maybeRepairGatewayDaemon(params: {
   healthOk: boolean;
   healthSkipped?: boolean;
 }) {
+  if (!isDefaultInstallIdentity(process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients({
       cfg: params.cfg,

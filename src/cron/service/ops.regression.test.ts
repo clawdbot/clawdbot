@@ -8,6 +8,7 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
@@ -24,9 +25,12 @@ import {
 import { CommandLane } from "../../process/lanes.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { enqueueRun, remove, run, start, update } from "./ops.js";
+import { start } from "./ops-lifecycle.js";
+import { remove, update } from "./ops-mutations.js";
+import { enqueueRun, run } from "./ops-run.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
+import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 
 const FAST_TIMEOUT_SECONDS = 1;
@@ -411,6 +415,55 @@ describe("cron service ops regressions", () => {
     expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
   });
 
+  it("force-runs a due paced job without consuming its pending slot", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.parse("2026-07-19T09:00:00.000Z");
+    const dueSlot = nowMs - 1_000;
+    const job = createIsolatedRegressionJob({
+      id: "manual-paced-due-slot",
+      name: "manual paced due slot",
+      scheduledAt: nowMs,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs - 60_000 },
+      payload: { kind: "agentTurn", message: "manual paced due slot" },
+      state: { nextRunAtMs: dueSlot, pacedNextRunAtMs: dueSlot },
+    });
+    job.pacing = { min: "15m", max: "4h" };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+
+    const stored = state.store?.jobs.find((entry) => entry.id === job.id);
+    expect(stored?.state.nextRunAtMs).toBe(dueSlot);
+    expect(stored?.state.pacedNextRunAtMs).toBe(dueSlot);
+    expect(stored?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
+
+    const restarted = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs + 5_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await ensureLoaded(restarted);
+
+    const reloaded = restarted.store?.jobs.find((entry) => entry.id === job.id);
+    expect(reloaded?.state.nextRunAtMs).toBe(dueSlot);
+    expect(reloaded?.state.pacedNextRunAtMs).toBe(dueSlot);
+    expect(reloaded?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
+  });
+
   it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const nowMs = Date.now();
@@ -610,7 +663,6 @@ describe("cron service ops regressions", () => {
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
-      cronConfig: { maxConcurrentRuns: 1 },
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -622,6 +674,7 @@ describe("cron service ops regressions", () => {
         }
       },
     });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
 
     const firstAck = await enqueueRun(state, first.id, "force");
     const secondAck = await enqueueRun(state, second.id, "force");
@@ -673,7 +726,7 @@ describe("cron service ops regressions", () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
       cronEnabled: true,
-      cronConfig: { triggers: { enabled: true, minIntervalMs: 30_000 } },
+      cronConfig: { triggers: { enabled: true } },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => dueAt,
@@ -853,7 +906,6 @@ describe("cron service ops regressions", () => {
     let peakInFlight = 0;
     const state = createCronServiceState({
       cronEnabled: true,
-      cronConfig: { maxConcurrentRuns: 2 },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
@@ -907,7 +959,6 @@ describe("cron service ops regressions", () => {
     let dispatchCount = 0;
     const state = createCronServiceState({
       cronEnabled: true,
-      cronConfig: { maxConcurrentRuns: 2 },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,

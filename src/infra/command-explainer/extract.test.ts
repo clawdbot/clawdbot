@@ -470,6 +470,14 @@ describe("command explainer tree-sitter runtime", () => {
     ]);
     expectRisk(continuedArgument.risks, { kind: "line-continuation" });
 
+    const escapedWordBoundary = await explainShellCommand("tr x\n\\id");
+    expect(escapedWordBoundary.topLevelCommands).toHaveLength(1);
+    expect(escapedWordBoundary.topLevelCommands[0]?.argv).toEqual(["tr", "x", "\nid"]);
+    expectRisk(escapedWordBoundary.risks, {
+      kind: "line-continuation",
+      text: "\n\\id",
+    });
+
     const invalidObfuscation = await explainShellCommand("e'c'h'o hi");
     expect(invalidObfuscation.ok).toBe(false);
     expectRisk(invalidObfuscation.risks, { kind: "syntax-error" });

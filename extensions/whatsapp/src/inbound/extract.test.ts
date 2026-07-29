@@ -1,7 +1,7 @@
 // Whatsapp tests cover extract plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractMentionedJids, hasInboundUserContent } from "./extract.js";
+import { describeReplyContext, extractMentionedJids, hasInboundUserContent } from "./extract.js";
 
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
@@ -100,6 +100,56 @@ describe("extractMentionedJids", () => {
       },
     };
     expect(extractMentionedJids(message)).toEqual([botJid]);
+  });
+});
+
+describe("describeReplyContext", () => {
+  it("preserves a native reply reference when WhatsApp omits the quoted message", () => {
+    expect(
+      describeReplyContext({
+        extendedTextMessage: {
+          text: "yes",
+          contextInfo: {
+            stanzaId: "original-message",
+            participant: "15555550123@s.whatsapp.net",
+          },
+        },
+      }),
+    ).toMatchObject({
+      id: "original-message",
+      body: "[quoted message unavailable]",
+      sender: {
+        jid: "15555550123@s.whatsapp.net",
+        e164: "+15555550123",
+        label: "+15555550123",
+      },
+    });
+  });
+
+  it("preserves an unavailable reply reference without a quoted sender", () => {
+    expect(
+      describeReplyContext({
+        extendedTextMessage: {
+          text: "yes",
+          contextInfo: { stanzaId: "original-message" },
+        },
+      }),
+    ).toMatchObject({
+      id: "original-message",
+      body: "[quoted message unavailable]",
+      sender: { label: "unknown sender" },
+    });
+  });
+
+  it("does not invent a reply from unrelated context metadata", () => {
+    expect(
+      describeReplyContext({
+        extendedTextMessage: {
+          text: "hello",
+          contextInfo: { participant: "15555550123@s.whatsapp.net" },
+        },
+      }),
+    ).toBeNull();
   });
 });
 

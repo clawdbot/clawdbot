@@ -3,11 +3,12 @@ import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
@@ -23,7 +24,7 @@ import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
+describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("passes the reply abort signal to fallback orchestration and candidates", async () => {
     const { replyOperation } = createMockReplyOperation();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -31,8 +32,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
     });
@@ -48,6 +49,36 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("records diagnostic progress from global-lane wait notifications", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:global-lane-progress",
+      sessionId: "global-lane-progress",
+      resetTriggered: false,
+    });
+    replyOperation.markWaitingForGlobalLane();
+    let progressReasonDuringWait: string | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onLaneWait?.({ waitMs: 5_000, queuedAhead: 4, waiting: true });
+      progressReasonDuringWait = getDiagnosticSessionActivitySnapshot({
+        sessionId: replyOperation.sessionId,
+        sessionKey: replyOperation.key,
+      }).lastProgressReason;
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+
+      expect(progressReasonDuringWait).toBe("global_lane:waiting");
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("revalidates thinking for each main-chat fallback candidate without mutating the run", async () => {
@@ -72,8 +103,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     });
     state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
     });
 
@@ -86,6 +117,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
 
   it("freezes abort ownership only after model fallback settles", async () => {
     const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    const followupRun = createFollowupRun();
+    followupRun.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       expect(freezeAbortMock).not.toHaveBeenCalled();
       await params.run("anthropic", "claude").catch(() => undefined);
@@ -106,13 +139,17 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
         meta: {},
       });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams(),
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
       replyOperation,
     });
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.media)).toEqual([
+      followupRun.media,
+      followupRun.media,
+    ]);
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
   });
 
@@ -162,8 +199,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const pending = runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const pending = executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
       pendingToolTasks,
@@ -223,8 +260,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     });
 
     try {
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const pending = runAgentTurnWithFallback({
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const pending = executeAgentTurn({
         ...createMinimalRunAgentTurnParams(),
         replyOperation,
       });
@@ -277,8 +314,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     });
 
     try {
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const pending = runAgentTurnWithFallback({
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const pending = executeAgentTurn({
         ...createMinimalRunAgentTurnParams(),
         replyOperation,
       });
@@ -289,8 +326,7 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       await expect(pending).resolves.toEqual({
         kind: "final",
         payload: {
-          isError: true,
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: SILENT_REPLY_TOKEN,
         },
       });
     } finally {
@@ -310,8 +346,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     followupRun.originatingAccountId = "work";
     followupRun.originatingChatType = "direct";
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         sessionCtx: {
@@ -340,8 +376,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           onAgentRunStart,
@@ -371,13 +407,13 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       commandBody: "show details",
       transcriptCommandBody: "show details",
     });
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       commandBody: "next question",
       transcriptCommandBody: "next question",
@@ -401,8 +437,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     );
     state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await expect(runAgentTurnWithFallback(createMinimalRunAgentTurnParams())).rejects.toThrow(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await expect(executeAgentTurn(createMinimalRunAgentTurnParams())).rejects.toThrow(
       "invalid image",
     );
     state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({});
@@ -410,7 +446,7 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       params.onExecutionPhase?.({ phase: "model_call_started" });
       return { payloads: [{ text: "ok" }], meta: {} };
     });
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("still pending");
   });
@@ -436,10 +472,11 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
+    followupRun.media = [{ path: "/tmp/cli.png", contentType: "image/png" }];
     const typingSignals = createMockTypingSignaler();
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         typingSignals,
@@ -452,6 +489,7 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       provider: "codex-cli",
       model: "gpt-5.4",
       clientCaps: ["tool-events", "inline-widgets"],
+      media: followupRun.media,
     });
   });
 
@@ -480,8 +518,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
       }),
@@ -517,8 +555,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     });
     params.isHeartbeat = true;
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(params);
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(params);
 
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       trigger: "heartbeat",
@@ -542,8 +580,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const runPromise = runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(registerAgentRunContext).toHaveBeenCalledWith(
       expect.any(String),
@@ -563,9 +601,9 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     const clearAgentRunContext = vi.mocked(agentEvents.clearAgentRunContext);
     state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     await expect(
-      runAgentTurnWithFallback(
+      executeAgentTurn(
         createMinimalRunAgentTurnParams({
           opts: { runId: "preflight-failure" },
         }),
@@ -582,8 +620,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         opts: {
           toolsAllow: ["message"],

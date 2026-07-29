@@ -533,21 +533,23 @@ describe("loadOpenClawPlugins", () => {
               id: "snapshot",
               create: async () => ({ provider: null }),
             });
-            api.registerMemoryPromptSection(() => ["snapshot memory section"]);
-            api.registerMemoryFlushPlan(() => ({
-              softThresholdTokens: 10,
-              forceFlushTranscriptBytes: 20,
-              reserveTokensFloor: 30,
-              prompt: "snapshot",
-              systemPrompt: "snapshot",
-              relativePath: "memory/snapshot.md",
-            }));
-            api.registerMemoryRuntime({
-              async getMemorySearchManager() {
-                return { manager: null, error: "snapshot" };
-              },
-              resolveMemoryBackendConfig() {
-                return { backend: "qmd", qmd: {} };
+            api.registerMemoryCapability({
+              promptBuilder: () => ["snapshot memory section"],
+              flushPlanResolver: () => ({
+                softThresholdTokens: 10,
+                forceFlushTranscriptBytes: 20,
+                reserveTokensFloor: 30,
+                prompt: "snapshot",
+                systemPrompt: "snapshot",
+                relativePath: "memory/snapshot.md",
+              }),
+              runtime: {
+                async getMemorySearchManager() {
+                  return { manager: null, error: "snapshot" };
+                },
+                resolveMemoryBackendConfig() {
+                  return { backend: "qmd", qmd: {} };
+                },
               },
             });
           },
@@ -727,28 +729,30 @@ describe("loadOpenClawPlugins", () => {
               id: "failed",
               create: async () => ({ provider: null }),
             });
-            api.registerMemoryPromptSection(() => ["stale failure section"]);
+            api.registerMemoryCapability({
+              promptBuilder: () => ["stale failure section"],
+              flushPlanResolver: () => ({
+                softThresholdTokens: 10,
+                forceFlushTranscriptBytes: 20,
+                reserveTokensFloor: 30,
+                prompt: "failed",
+                systemPrompt: "failed",
+                relativePath: "memory/failed.md",
+              }),
+              runtime: {
+                async getMemorySearchManager() {
+                  return { manager: null, error: "failed" };
+                },
+                resolveMemoryBackendConfig() {
+                  return { backend: "builtin" };
+                },
+              },
+            });
             api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
             api.registerMemoryPromptPreparation(async () => ["stale prepared supplement"]);
             api.registerMemoryCorpusSupplement({
               search: async () => [],
               get: async () => null,
-            });
-            api.registerMemoryFlushPlan(() => ({
-              softThresholdTokens: 10,
-              forceFlushTranscriptBytes: 20,
-              reserveTokensFloor: 30,
-              prompt: "failed",
-              systemPrompt: "failed",
-              relativePath: "memory/failed.md",
-            }));
-            api.registerMemoryRuntime({
-              async getMemorySearchManager() {
-                return { manager: null, error: "failed" };
-              },
-              resolveMemoryBackendConfig() {
-                return { backend: "builtin" };
-              },
             });
             throw new Error("memory register failed");
           },
@@ -909,6 +913,49 @@ describe("loadOpenClawPlugins", () => {
     loadOpenClawPlugins(loadOptions);
 
     expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+  });
+
+  it("restores cached legacy internal hook registrations on cache hits", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-legacy-hook",
+      filename: "cached-legacy-hook.cjs",
+      body: `module.exports = {
+          id: "cached-legacy-hook",
+          register(api) {
+            api.registerHook(
+              "gateway:startup",
+              (event) => {
+                event.messages.push("cached-hook-fired");
+              },
+              { name: "cached-legacy-hook" },
+            );
+          },
+        };`,
+    });
+
+    const loadOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-legacy-hook"],
+        },
+      },
+      onlyPluginIds: ["cached-legacy-hook"],
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    loadOpenClawPlugins(loadOptions);
+    const firstEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(firstEvent);
+    expect(firstEvent.messages).toEqual(["cached-hook-fired"]);
+
+    clearInternalHooks();
+    loadOpenClawPlugins(loadOptions);
+
+    const cachedEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(cachedEvent);
+    expect(cachedEvent.messages).toEqual(["cached-hook-fired"]);
   });
 
   it("restores cached command and interactive handler registrations on cache hits", () => {

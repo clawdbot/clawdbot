@@ -33,8 +33,12 @@ actor RemoteTunnelManager {
         else {
             self.createInFlight?.task.cancel()
             self.createInFlight = nil
-            self.controlTunnel?.tunnel.terminate()
+            let tunnel = self.controlTunnel?.tunnel
             self.controlTunnel = nil
+            if tunnel != nil {
+                self.tunnelGeneration &+= 1
+            }
+            await tunnel?.terminate()
             return nil
         }
         return await self.controlTunnelRouteIfRunning(configuration: configuration)
@@ -54,19 +58,19 @@ actor RemoteTunnelManager {
         if let active = controlTunnel {
             guard Self.canReuse(active.configuration, for: configuration) else {
                 self.logger.info("configured SSH route changed; replacing control tunnel")
-                active.tunnel.terminate()
                 self.controlTunnel = nil
                 self.tunnelGeneration &+= 1
+                await active.tunnel.terminate()
                 return nil
             }
-            guard active.tunnel.process.isRunning,
+            guard active.tunnel.isRunning,
                   let local = active.tunnel.localPort
             else {
                 self.controlTunnel = nil
                 self.tunnelGeneration &+= 1
                 return nil
             }
-            let pid = active.tunnel.process.processIdentifier
+            let pid = active.tunnel.processIdentifier
             let isListening = await PortGuardian.shared.isListening(port: Int(local), pid: pid)
             // PortGuardian suspends this actor. A concurrent stop or replacement
             // must win; never return or retire the captured tunnel afterward.
@@ -81,10 +85,10 @@ actor RemoteTunnelManager {
             }
             self.logger.error(
                 "active SSH tunnel on port \(local, privacy: .public) is not listening; restarting")
-            await self.beginRestart()
-            active.tunnel.terminate()
             self.controlTunnel = nil
             self.tunnelGeneration &+= 1
+            self.beginRestart()
+            await active.tunnel.terminate()
         }
         return nil
     }
@@ -173,7 +177,7 @@ actor RemoteTunnelManager {
             return active.route
         }
         guard self.createInFlight?.token == token else {
-            tunnel.terminate()
+            await tunnel.terminate()
             throw CancellationError()
         }
         let currentConfiguration: RemotePortTunnel.Configuration
@@ -182,12 +186,12 @@ actor RemoteTunnelManager {
                 remotePort: GatewayEnvironment.gatewayPort())
         } catch {
             self.createInFlight = nil
-            tunnel.terminate()
+            await tunnel.terminate()
             throw error
         }
         guard currentConfiguration == configuration else {
             self.createInFlight = nil
-            tunnel.terminate()
+            await tunnel.terminate()
             return try await self.ensureControlTunnelRoute()
         }
         self.createInFlight = nil
@@ -205,14 +209,15 @@ actor RemoteTunnelManager {
         return route
     }
 
-    func stopAll() {
+    func stopAll() async {
         // Invalidate every captured route before terminating processes. Delayed
         // health checks and create completions cannot resurrect this epoch.
         self.tunnelGeneration &+= 1
         self.createInFlight?.task.cancel()
         self.createInFlight = nil
-        self.controlTunnel?.tunnel.terminate()
+        let tunnel = self.controlTunnel?.tunnel
         self.controlTunnel = nil
+        await tunnel?.terminate()
     }
 
     #if DEBUG
@@ -224,7 +229,7 @@ actor RemoteTunnelManager {
     }
     #endif
 
-    private func beginRestart() async {
+    private func beginRestart() {
         guard !self.restartInFlight else { return }
         self.restartInFlight = true
         self.lastRestartAt = Date()

@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import {
   LLAMA_CPP_PROVIDER_ID,
   LLAMA_CPP_PROVIDER_LABEL,
@@ -53,6 +54,7 @@ export default definePluginEntry({
         source: "local llama.cpp runtime",
         mode: "api-key" as const,
       }),
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
         setup: {
           choiceId: LLAMA_CPP_PROVIDER_ID,

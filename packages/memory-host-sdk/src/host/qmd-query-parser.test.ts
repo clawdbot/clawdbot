@@ -1,5 +1,5 @@
 // Memory Host SDK tests cover qmd query parser behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseQmdQueryJson } from "./qmd-query-parser.js";
 
 describe("parseQmdQueryJson", () => {
@@ -14,6 +14,17 @@ describe("parseQmdQueryJson", () => {
     ]);
   });
 
+  it.each([
+    { name: "null", stdout: "[null]" },
+    { name: "string", stdout: '["noise"]' },
+    { name: "number", stdout: "[1]" },
+    { name: "boolean", stdout: "[true]" },
+    { name: "nested array", stdout: '[[{"docid":"abc"}]]' },
+    { name: "mixed object and primitive", stdout: '[{"docid":"abc"},null]' },
+  ])("rejects a $name QMD result before it reaches memory consumers", ({ stdout }) => {
+    expect(() => parseQmdQueryJson(stdout, "")).toThrow(/qmd query returned invalid JSON/i);
+  });
+
   it("extracts embedded result arrays from noisy stdout", () => {
     const results = parseQmdQueryJson(
       `initializing
@@ -23,6 +34,35 @@ complete`,
       "",
     );
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it.each([
+    {
+      name: "bracketed log prefix",
+      stdout: '[qmd] initializing search\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "bracketed log with an empty array",
+      stdout: '[qmd] filters=[]\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "bracketed log with result-shaped data",
+      stdout: '[qmd] previous=[{"docid":"stale","score":1}]\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "leading no-results marker",
+      stdout: 'warning: no results found\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "trailing no-results marker",
+      stdout: '[{"docid":"abc","score":0.5}]\nwarning: no results found',
+    },
+    {
+      name: "bracketed no-results marker",
+      stdout: '[qmd] warning: no results found\n[{"docid":"abc","score":0.5}]',
+    },
+  ])("preserves query results after a $name", ({ stdout }) => {
+    expect(parseQmdQueryJson(stdout, "")).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
   it("preserves explicit qmd line metadata when present", () => {
@@ -58,6 +98,9 @@ complete`,
   it("treats prefixed no-results marker output as an empty result set", () => {
     expect(parseQmdQueryJson("warning: no results found", "")).toStrictEqual([]);
     expect(parseQmdQueryJson("", "[qmd] warning: no results found\n")).toStrictEqual([]);
+    expect(
+      parseQmdQueryJson("[qmd] initializing search\nwarning: no results found", ""),
+    ).toStrictEqual([]);
   });
 
   it("keeps bounded stderr context UTF-16 safe", () => {
@@ -79,5 +122,29 @@ complete`,
     expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
       /qmd query returned invalid JSON/i,
     );
+  });
+
+  it("rejects malformed bracket-heavy stdout without repeated rescanning", () => {
+    expect(() => parseQmdQueryJson("[".repeat(4_096), "")).toThrow(
+      /qmd query returned invalid JSON/i,
+    );
+  });
+
+  it("routes invalid-output diagnostics through console capture", () => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
+        /qmd query returned invalid JSON/i,
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "qmd query returned invalid JSON: qmd query JSON response was not an array",
+      );
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 });

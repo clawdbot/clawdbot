@@ -2,6 +2,7 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 type PluginEnableOptions = {
@@ -23,20 +24,15 @@ export function enablePluginInConfig(
   options: PluginEnableOptions = {},
 ): PluginEnableResult {
   const builtInChannelId = normalizeChatChannelId(pluginId);
-  const resolvedId = builtInChannelId ?? pluginId;
-  if (cfg.plugins?.enabled === false) {
+  const resolvedId = normalizePluginId(builtInChannelId ?? pluginId);
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  if (!plugins.enabled) {
     return { config: cfg, enabled: false, pluginId: resolvedId, reason: "plugins disabled" };
   }
-  if (cfg.plugins?.deny?.includes(pluginId) || cfg.plugins?.deny?.includes(resolvedId)) {
+  if (plugins.deny.includes(resolvedId)) {
     return { config: cfg, enabled: false, pluginId: resolvedId, reason: "blocked by denylist" };
   }
-  const allow = cfg.plugins?.allow;
-  if (
-    Array.isArray(allow) &&
-    allow.length > 0 &&
-    !allow.includes(pluginId) &&
-    !allow.includes(resolvedId)
-  ) {
+  if (plugins.allow.length > 0 && !plugins.allow.includes(resolvedId)) {
     return { config: cfg, enabled: false, pluginId: resolvedId, reason: "blocked by allowlist" };
   }
   return {

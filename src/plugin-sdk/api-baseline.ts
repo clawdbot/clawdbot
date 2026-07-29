@@ -611,8 +611,7 @@ function buildModuleSurface(params: {
   const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
     ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
     : undefined;
-  const importSpecifier =
-    entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`;
+  const importSpecifier = `openclaw/plugin-sdk/${entrypoint}`;
   const moduleSourcePath = path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`);
   const sourceFile = program.getSourceFile(moduleSourcePath);
   assert(sourceFile, `Missing source file for ${importSpecifier}`);
@@ -683,21 +682,28 @@ export async function renderPluginSdkApiBaseline(params?: {
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   validateMetadata();
   const { checker, printer, program } = createCompilerContext(repoRoot, entrypoints);
-  const modules = entrypoints
-    .map((entrypoint) =>
-      buildModuleSurface({
-        checker,
-        printer,
-        program,
-        repoRoot,
-        entrypoint,
-      }),
-    )
-    .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier));
+  const modules = entrypoints.map((entrypoint) =>
+    buildModuleSurface({
+      checker,
+      printer,
+      program,
+      repoRoot,
+      entrypoint,
+    }),
+  );
 
+  return renderPluginSdkApiBaselineModules(modules);
+}
+
+/** Serialize discovered SDK modules in canonical order without rebuilding declarations. */
+export function renderPluginSdkApiBaselineModules(
+  modules: readonly PluginSdkApiModule[],
+): PluginSdkApiBaselineRender {
   const baseline: PluginSdkApiBaseline = {
     generatedBy: GENERATED_BY,
-    modules,
+    modules: [...modules].toSorted((left, right) =>
+      compareText(left.importSpecifier, right.importSpecifier),
+    ),
   };
 
   return {

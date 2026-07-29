@@ -1,8 +1,15 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import {
+  isAdminOnlyNodeInvokeCommand,
+  isBrowserProxyNodeInvokeCommand,
+} from "../infra/node-commands.js";
+import {
+  getActivePluginHttpRouteRegistry,
+  getActivePluginSessionExtensionRegistry,
+} from "../plugins/runtime.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
@@ -18,6 +25,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -30,6 +38,7 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -46,8 +55,8 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 ];
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
-  // Core descriptors are authoritative, then reserved namespace policy, then active plugin
-  // descriptors. Node/dynamic sentinels are intentionally excluded from operator scopes.
+  // Gateway-pinned plugin descriptors prevent agent-scoped registry loads from
+  // changing gateway authorization. Node/dynamic sentinels are not operator scopes.
   const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;
@@ -56,7 +65,7 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
+  const pluginDescriptor = getActivePluginHttpRouteRegistry()?.gatewayMethodDescriptors?.find(
     (descriptor) => descriptor.name === method,
   );
   const pluginScope = pluginDescriptor?.scope;
@@ -88,6 +97,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "category",
+  "boardFace",
   "icon",
   "pinned",
   "archived",
@@ -108,11 +118,20 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return [WRITE_SCOPE];
   }
-  // cwd targets arbitrary host checkouts; execNode routes exec onto a paired
-  // node host. Both match the sessions.patch execNode admin bar.
-  return Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")
-    ? [ADMIN_SCOPE]
-    : [WRITE_SCOPE];
+  const record = params as { incognito?: unknown; key?: unknown; parentSessionKey?: unknown };
+  // Incognito creation and inheritance expose process-only session state; cwd and
+  // execNode target privileged host resources. All require operator.admin.
+  if (
+    record.incognito === true ||
+    (typeof record.key === "string" && isIncognitoSessionKey(record.key)) ||
+    (typeof record.parentSessionKey === "string" &&
+      isIncognitoSessionKey(record.parentSessionKey)) ||
+    Object.hasOwn(params, "cwd") ||
+    Object.hasOwn(params, "execNode")
+  ) {
+    return [ADMIN_SCOPE];
+  }
+  return [WRITE_SCOPE];
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -124,7 +143,7 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
+  const registration = getActivePluginSessionExtensionRegistry()?.sessionActions?.find(
     (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
   );
   if (!registration) {
@@ -179,7 +198,10 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     const command = record?.command;
     // Invalid persistent-profile mutations must reach the handler's precise fail-closed
     // rejection instead of being disguised as an admin-scope failure.
-    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(record?.params)) {
+    if (
+      isBrowserProxyNodeInvokeCommand(command) &&
+      isForbiddenBrowserProxyMutation(record?.params)
+    ) {
       return [WRITE_SCOPE];
     }
     return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
@@ -190,6 +212,13 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
         ? (params as { includeSecrets?: unknown }).includeSecrets
         : undefined;
     return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
+  }
+  if (method === "channels.pairing.approve") {
+    const bootstrapCommandOwner =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as { bootstrapCommandOwner?: unknown }).bootstrapCommandOwner
+        : undefined;
+    return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
   }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);
@@ -306,6 +335,12 @@ export function authorizeOperatorScopesForRequiredScope(
       return { allowed: true };
     }
     return { allowed: false, missingScope: READ_SCOPE };
+  }
+  if (requiredScope === TALK_SCOPE) {
+    if (scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: TALK_SCOPE };
   }
   if (scopes.includes(requiredScope)) {
     return { allowed: true };

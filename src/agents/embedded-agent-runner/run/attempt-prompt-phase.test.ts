@@ -164,9 +164,7 @@ function createFixture() {
     appendCustomEntry: vi.fn(),
     getEntries: vi.fn(() => []),
   };
-  const sessionLockController = {
-    waitForSessionEvents: vi.fn(async () => undefined),
-  };
+  const sessionLockController = {};
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },
@@ -232,7 +230,6 @@ function createFixture() {
     },
     submission: {
       promptActiveSession: vi.fn(),
-      sessionPromptState: {},
       toolResultPromptProjectionState: {},
       trajectoryRecorder: null,
     },
@@ -297,6 +294,43 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
+  });
+
+  it("skips before_agent_run for settled-turn finalization", async () => {
+    const fixture = createFixture();
+    fixture.input.attempt.operation = "settled-tool-finalization";
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+    expect(fixture.order).toEqual([
+      "assembly",
+      "context",
+      "google-cache",
+      "dispatch",
+      "stop-steering",
+    ]);
+  });
+
+  it("admits the provider prompt when aggregate projection pressure is only heuristic", async () => {
+    const fixture = createFixture();
+    const preparePromptContext = mocks.preparePromptContext.getMockImplementation();
+    mocks.preparePromptContext.mockImplementation(() => ({
+      ...(preparePromptContext?.() as Record<string, unknown>),
+      aggregatePressureEngaged: true,
+    }));
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(mocks.dispatchPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          skipPromptSubmission: false,
+          promptError: null,
+          promptErrorSource: null,
+        }),
+      }),
+    );
   });
 
   it("reads yield state after submission fails and publishes abort state before recovery", async () => {

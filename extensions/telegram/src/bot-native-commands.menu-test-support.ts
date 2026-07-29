@@ -94,20 +94,21 @@ export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
 ): RegisterTelegramNativeCommandsParams {
-  const dispatchResult: Awaited<
-    ReturnType<TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"]>
-  > = {
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  };
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-      async () => dispatchResult,
-    ) as TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    dispatchChannelInboundTurn: vi.fn(async (plan) => ({
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: plan.ctxPayload,
+      routeSessionKey: plan.route.sessionKey,
+      dispatchResult: {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      },
+    })) as TelegramNativeCommandDeps["dispatchChannelInboundTurn"],
     listSkillCommandsForAgents,
     syncTelegramMenuCommands: vi.fn(({ bot, commandsToRegister }) => {
       if (commandsToRegister.length === 0) {
