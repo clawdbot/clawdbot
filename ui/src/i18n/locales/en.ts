@@ -2034,6 +2034,7 @@ export const en: TranslationMap = {
       title: "Your AI is ready",
       detail: "{modelRef} · {latencyMs} ms",
       openChat: "Open Chat",
+      continueSetup: "Continue setup",
       configuredModel: "Configured model",
     },
     failure: {
@@ -2219,6 +2220,11 @@ export const en: TranslationMap = {
       channelDegraded: "{channel} is degraded — ask me what happened",
       channelFallback: "A channel",
       dismiss: "Dismiss this update",
+      channelSetupTitle: "Reach OpenClaw outside this app",
+      channelSetupBody:
+        "The web app already works. Add a channel only if you want to message OpenClaw from another service.",
+      channelSetupAction: "Set up a channel",
+      channelSetupDismiss: "Keep using the web app",
     },
   },
   mcpServers: {

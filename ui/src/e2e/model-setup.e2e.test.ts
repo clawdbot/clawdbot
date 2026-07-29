@@ -108,7 +108,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(async () => page.locator(".model-setup__success").textContent())
         .toContain("openai/gpt-5 · 73 ms");
-      await page.getByRole("button", { name: "Open Chat" }).click();
+      await page.getByRole("button", { name: "Continue setup" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
       expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
       await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();

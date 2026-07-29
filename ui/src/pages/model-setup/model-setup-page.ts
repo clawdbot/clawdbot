@@ -568,6 +568,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       manualApiKey: this.manualApiKey,
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
+      firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),

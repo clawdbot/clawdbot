@@ -104,6 +104,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
+    firstRun: false,
     iconUrls: {
       "https://cdn.example.com/codex.png": "blob:codex",
       "https://cdn.example.com/openai.png": "blob:openai",
@@ -495,6 +496,17 @@ describe("renderModelSetup", () => {
     container.querySelector<HTMLButtonElement>(".model-setup__success button")?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
     expect(container.querySelector(".settings-section")).toBeNull();
+  });
+
+  it("continues first-run setup after the model is ready", () => {
+    const container = mount(
+      props({
+        activation: { phase: "success", modelRef: "openai/gpt-5" },
+        firstRun: true,
+      }),
+    );
+    expect(text(container)).toContain("Continue setup");
+    expect(text(container)).not.toContain("Open Chat");
   });
 
   it("renders an idle current connection and verifies it", () => {
