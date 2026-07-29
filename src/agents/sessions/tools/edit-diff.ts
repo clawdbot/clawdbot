@@ -5,9 +5,9 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
+import { type Change, createPatch, diffLines, FILE_HEADERS_ONLY, structuredPatch } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { normalizeToLF } from "../../line-endings.js";
+import { detectLineEnding, normalizeToLF } from "../../line-endings.js";
 import { resolveToCwd } from "./path-utils.js";
 
 /**
@@ -521,6 +521,76 @@ export function applyEditsToNormalizedContent(
   }
 
   return { baseContent, newContent };
+}
+
+function splitLinesWithTerminators(content: string): string[] {
+  return content.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
+}
+
+type LineTerminator = "\r\n" | "\r" | "\n";
+
+function getLineTerminator(line: string | undefined): LineTerminator | undefined {
+  if (line === undefined) {
+    return undefined;
+  }
+  if (line.endsWith("\r\n")) {
+    return "\r\n";
+  }
+  if (line.endsWith("\n")) {
+    return "\n";
+  }
+  return line.endsWith("\r") ? "\r" : undefined;
+}
+
+function getRemovedLineCount(part: Change | undefined): number {
+  return part?.removed ? (part.count ?? 0) : 0;
+}
+
+function restoreReplacedLineEndings(
+  addedText: string,
+  replacedLines: string[],
+  fallback: LineTerminator,
+): string {
+  let result = "";
+  for (const [index, line] of splitLinesWithTerminators(addedText).entries()) {
+    if (!line.endsWith("\n")) {
+      result += line;
+      continue;
+    }
+    const source = replacedLines[index] ?? replacedLines.at(-1);
+    result += line.replace(/\r?\n$/, "") + (getLineTerminator(source) ?? fallback);
+  }
+  return result;
+}
+
+export function restoreOriginalLineEndings(
+  originalContent: string,
+  updatedContent: string,
+): string {
+  const originalLines = splitLinesWithTerminators(originalContent);
+  const normalizedContent = originalLines.map((line) => line.replace(/\r\n?$/, "\n")).join("");
+  const parts = diffLines(normalizedContent, updatedContent);
+  let ending: LineTerminator = detectLineEnding(originalContent);
+  let originalIndex = 0;
+  let result = "";
+  for (const [index, part] of parts.entries()) {
+    if (part.added) {
+      const removedBefore = getRemovedLineCount(parts[index - 1]);
+      const removedAfter = getRemovedLineCount(parts[index + 1]);
+      const replacedLines = removedBefore
+        ? originalLines.slice(originalIndex - removedBefore, originalIndex)
+        : originalLines.slice(originalIndex, originalIndex + removedAfter);
+      result += restoreReplacedLineEndings(part.value, replacedLines, ending);
+      continue;
+    }
+    const lines = originalLines.slice(originalIndex, originalIndex + (part.count ?? 0));
+    if (!part.removed) {
+      result += lines.join("");
+    }
+    ending = getLineTerminator(lines.at(-1)) ?? ending;
+    originalIndex += lines.length;
+  }
+  return result;
 }
 
 /** Generate a standard unified patch. */

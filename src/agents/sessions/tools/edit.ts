@@ -12,7 +12,7 @@ import {
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
-import { detectLineEnding, normalizeToLF, restoreLineEndings } from "../../line-endings.js";
+import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
@@ -27,6 +27,7 @@ import {
   type EditDiffResult,
   generateDiffString,
   generateUnifiedPatch,
+  restoreOriginalLineEndings,
   splitNoOpEdits,
   stripBom,
   validateNoOpEditTargets,
@@ -443,7 +444,6 @@ export function createEditToolDefinition(
           }
 
           const { bom, text: content } = stripBom(rawContent);
-          const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
           const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
           const noOpEdits = editSets.noOpEdits;
@@ -463,7 +463,7 @@ export function createEditToolDefinition(
             realEdits,
             path,
           );
-          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+          const finalContent = bom + restoreOriginalLineEndings(content, newContent);
           await ops.writeFile(absolutePath, finalContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");

@@ -694,4 +694,111 @@ describe("edit tool", () => {
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
+
+  const lineEndingCases = [
+    {
+      name: "keeps a lone carriage return that carries data",
+      original: "start\n10%\r50%\r100%\ndone\n",
+      edits: [{ oldText: "done", newText: "finished" }],
+      expected: "start\n10%\r50%\r100%\nfinished\n",
+    },
+    {
+      name: "keeps a lone carriage return that terminates the edited line",
+      original: "prefix\rprogress\n",
+      edits: [{ oldText: "prefix", newText: "PREFIX" }],
+      expected: "PREFIX\rprogress\n",
+    },
+    {
+      name: "keeps carriage return separators when a middle record is rewritten",
+      original: "id=1\rid=2\rid=3\nfooter\n",
+      edits: [{ oldText: "id=2", newText: "id=two" }],
+      expected: "id=1\rid=two\rid=3\nfooter\n",
+    },
+    {
+      name: "expands a carriage return terminated line into carriage return terminated lines",
+      original: "id=1\rid=2\nfooter\n",
+      edits: [{ oldText: "id=1", newText: "id=1a\nid=1b" }],
+      expected: "id=1a\rid=1b\rid=2\nfooter\n",
+    },
+    {
+      name: "keeps a lone carriage return at end of file on the edited line",
+      original: "only\r",
+      edits: [{ oldText: "only", newText: "ONLY" }],
+      expected: "ONLY\r",
+    },
+    {
+      name: "keeps trailing CRLF lines when the first line ends with LF",
+      original: "alpha\nbeta\r\ngamma\r\n",
+      edits: [{ oldText: "alpha", newText: "ALPHA" }],
+      expected: "ALPHA\nbeta\r\ngamma\r\n",
+    },
+    {
+      name: "keeps trailing LF lines when the first line ends with CRLF",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "gamma", newText: "GAMMA" }],
+      expected: "alpha\r\nbeta\nGAMMA\n",
+    },
+    {
+      name: "keeps untouched lines between two separate edits",
+      original: "one\r\ntwo\nthree\r75%\rfour\nfive\r\n",
+      edits: [
+        { oldText: "one", newText: "ONE" },
+        { oldText: "five", newText: "FIVE" },
+      ],
+      expected: "ONE\r\ntwo\nthree\r75%\rfour\nFIVE\r\n",
+    },
+    {
+      name: "writes inserted lines with the terminator of the replaced line",
+      original: "alpha\r\nbeta\r\ngamma\r\n",
+      edits: [{ oldText: "beta", newText: "beta1\nbeta2" }],
+      expected: "alpha\r\nbeta1\r\nbeta2\r\ngamma\r\n",
+    },
+    {
+      name: "leaves a uniform CRLF file uniform",
+      original: "alpha\r\nbeta\r\ngamma\r\n",
+      edits: [{ oldText: "beta", newText: "BETA" }],
+      expected: "alpha\r\nBETA\r\ngamma\r\n",
+    },
+    {
+      name: "leaves a uniform LF file uniform",
+      original: "alpha\nbeta\ngamma\n",
+      edits: [{ oldText: "beta", newText: "BETA" }],
+      expected: "alpha\nBETA\ngamma\n",
+    },
+  ];
+
+  for (const testCase of lineEndingCases) {
+    it(testCase.name, async () => {
+      const filePath = await createTempFile(testCase.original);
+      const tool = createEditTool(tmpDir);
+
+      const result = await tool.execute(
+        "call-line-endings",
+        { path: filePath, edits: testCase.edits },
+        undefined,
+      );
+
+      const first = expectDefined(result.content[0], "result.content[0] test invariant");
+      expect("text" in first ? first.text : "").toContain("Successfully replaced");
+      await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(testCase.expected);
+    });
+  }
+
+  it("preserves a lone carriage return on an edited line", async () => {
+    const filePath = await createTempFile("start\nprogress 10%\rprogress 50%\ndone\n");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-cr-line",
+      {
+        path: filePath,
+        edits: [{ oldText: "progress 50%", newText: "progress 90%" }],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+      "start\nprogress 10%\rprogress 90%\ndone\n",
+    );
+  });
 });
