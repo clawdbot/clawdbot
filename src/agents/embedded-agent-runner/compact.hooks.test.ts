@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -75,6 +75,10 @@ const TEST_SESSION_KEY = "agent:main:session-1";
 const TEST_SESSION_FILE = "/tmp/session.jsonl";
 const TEST_WORKSPACE_DIR = "/tmp";
 const TEST_CUSTOM_INSTRUCTIONS = "focus on decisions";
+
+let defaultStoreDir: string;
+let defaultStorePath: string;
+
 type SessionHookEvent = {
   type?: string;
   action?: string;
@@ -227,7 +231,7 @@ function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
       agentId: "main",
       sessionId: TEST_SESSION_ID,
       sessionKey: TEST_SESSION_KEY,
-      storePath: "/tmp/sessions.json",
+      storePath: defaultStorePath,
     },
     workspaceDir: TEST_WORKSPACE_DIR,
     customInstructions: TEST_CUSTOM_INSTRUCTIONS,
@@ -315,6 +319,11 @@ async function runCompactionHooks(params: { sessionKey?: string; messageProvider
 }
 
 beforeAll(async () => {
+  // The default fixture store must be unique per run: an unsuffixed
+  // sessions.json resolves to <dir>/openclaw-agent.sqlite, so a fixed /tmp path
+  // would share one machine-global agent database across runs and suites.
+  defaultStoreDir = await mkdtemp(join(tmpdir(), "openclaw-compact-hooks-store-"));
+  defaultStorePath = join(defaultStoreDir, "sessions.json");
   const loaded = await loadCompactHooksHarness();
   compactEmbeddedAgentSessionDirect = (params) =>
     loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
@@ -323,6 +332,11 @@ beforeAll(async () => {
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
   withOwnedSessionTranscriptWrites = loaded.withOwnedSessionTranscriptWrites;
+});
+
+afterAll(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  await rm(defaultStoreDir, { force: true, recursive: true });
 });
 
 beforeEach(() => {
@@ -4271,7 +4285,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       rewrittenEntries: 0,
     }));
     const delegatedSessionId = "delegated-session";
-    const storePath = "/tmp/custom-active-sessions.json";
+    const storePath = join(defaultStoreDir, "custom-active-sessions.json");
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
@@ -4309,11 +4323,15 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it.each([
-    ["session key", "agent:main:other", "/tmp/active-sessions.json"],
-    ["store path", TEST_SESSION_KEY, "/tmp/other-sessions.json"],
+    // Store names resolve against the per-file temp dir inside the test body:
+    // the it.each table is built at collect time, before the store dir exists.
+    ["session key", "agent:main:other", "active-sessions.json"],
+    ["store path", TEST_SESSION_KEY, "other-sessions.json"],
   ])(
     "rejects a structured successor outside the active %s",
-    async (_label, sessionKey, storePath) => {
+    async (_label, sessionKey, storeName) => {
+      const activeStorePath = join(defaultStoreDir, "active-sessions.json");
+      const storePath = join(defaultStoreDir, storeName);
       resolveContextEngineMock.mockResolvedValue({
         info: { ownsCompaction: false },
         compact: contextEngineCompactMock,
@@ -4338,7 +4356,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
               agentId: "main",
               sessionId: TEST_SESSION_ID,
               sessionKey: TEST_SESSION_KEY,
-              storePath: "/tmp/active-sessions.json",
+              storePath: activeStorePath,
             },
           }),
         ),
@@ -4437,7 +4455,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       rewrittenEntries: 0,
     }));
     const delegatedSessionId = "delegated-marker-session";
-    const storePath = "/tmp/sessions.json";
+    // Legacy marker resolution reads entries from the marker's store, so a
+    // shared fixed path would let another run's entries pick the session key.
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-compaction-marker-legacy-"));
+    const storePath = join(dir, "sessions.json");
     const marker = `sqlite:main:${delegatedSessionId}:${storePath}`;
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
@@ -4453,16 +4474,30 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     } as never);
 
-    await compactEmbeddedAgentSession(wrappedCompactionArgs());
+    try {
+      await compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          sessionTarget: {
+            agentId: "main",
+            sessionId: TEST_SESSION_ID,
+            sessionKey: TEST_SESSION_KEY,
+            storePath,
+          },
+        }),
+      );
 
-    expectRecordFields(mockCallArg(maintain), {
-      sessionFile: marker,
-      sessionId: delegatedSessionId,
-      sessionTarget: expect.objectContaining({
+      expectRecordFields(mockCallArg(maintain), {
+        sessionFile: marker,
         sessionId: delegatedSessionId,
-        storePath,
-      }),
-    });
+        sessionTarget: expect.objectContaining({
+          sessionId: delegatedSessionId,
+          storePath,
+        }),
+      });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await rm(dir, { force: true, recursive: true });
+    }
   });
 
   it("rejects a marker successor that contradicts the reported session id", async () => {
@@ -4572,7 +4607,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           agentId: "other",
           sessionId: "other-session",
           sessionKey: "agent:other:main",
-          storePath: "/tmp/other-sessions.json",
+          storePath: join(defaultStoreDir, "other-sessions.json"),
         },
       }),
     );

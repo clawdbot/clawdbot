@@ -19,6 +19,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type {
@@ -3841,7 +3842,10 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("uses the top-level successor id when resolving a partial compaction session target", async () => {
-    const rotatedStorePath = "/tmp/rotated-sessions.sqlite";
+    // Successor target resolution opens a real store at storePath, so a shared
+    // fixed path would inherit another run's schema/entries and fail here.
+    const rotatedStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rotated-sessions-"));
+    const rotatedStorePath = path.join(rotatedStoreDir, "sessions.sqlite");
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
       .mockResolvedValueOnce(
@@ -3865,20 +3869,25 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
     });
 
-    await runEmbeddedAgent(overflowBaseRunParams);
+    try {
+      await runEmbeddedAgent(overflowBaseRunParams);
 
-    expectMockCallFields(
-      mockedRunEmbeddedAttempt,
-      {
+      expectMockCallFields(
+        mockedRunEmbeddedAttempt,
+        {
+          sessionId: "rotated-session",
+          sessionFile: "test-key",
+        },
+        1,
+      );
+      expectMockCallFields(mockedRunContextEngineMaintenance, {
         sessionId: "rotated-session",
         sessionFile: "test-key",
-      },
-      1,
-    );
-    expectMockCallFields(mockedRunContextEngineMaintenance, {
-      sessionId: "rotated-session",
-      sessionFile: "test-key",
-    });
+      });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(rotatedStoreDir, { force: true, recursive: true });
+    }
   });
 
   it("does not let an old execution rotate a newer same-id run context", async () => {
