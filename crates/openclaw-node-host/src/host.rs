@@ -455,7 +455,7 @@ async fn connect_host_attempt(
     }
     NodeClient::connect(
         NodeClientConfig::new(config.gateway_url.clone()),
-        move |_nonce| async move { Ok::<_, Infallible>(runtime.activate(options)) },
+        move |_challenge| async move { Ok::<_, Infallible>(runtime.activate(options)) },
     )
     .await
 }
@@ -508,10 +508,7 @@ fn emit_connected(session: &crate::NodeSession, identity: &NodeIdentity) {
 }
 
 fn adopt_device_token(session: &crate::NodeSession, credentials: &mut HostCredentials) {
-    if let Some(device_token) = session.hello()["auth"]["deviceToken"]
-        .as_str()
-        .filter(|token| !token.is_empty())
-    {
+    if let Some(device_token) = session.issued_device_token() {
         credentials.issued_device_token = Some(device_token.to_owned());
         emit(
             "info",

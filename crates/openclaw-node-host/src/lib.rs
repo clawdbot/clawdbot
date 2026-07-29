@@ -7,10 +7,11 @@ mod reconnect;
 mod runtime;
 
 pub use host::{run_host, AuthKind, HostConfig, HostCredentials, HostError};
-pub use identity::{IdentityError, NodeIdentity};
+pub use identity::{DeviceSigningRequest, IdentityError, NodeIdentity};
 pub use node::{
-    ClientError, ConnectAuth, DeviceProof, Event, EventSubscription, InvocationResult, NodeClient,
-    NodeClientConfig, NodeConnectOptions, NodeInvocation, NodeSession, NodeSessionEvent,
+    ClientError, ConnectAuth, ConnectChallenge, DeviceProof, Event, EventSubscription,
+    InvocationResult, NodeClient, NodeClientConfig, NodeConnectOptions, NodeInvocation,
+    NodeSession, NodeSessionEvent,
 };
 pub use reconnect::{
     DevicePairingReason, DevicePairingRequest, ReconnectAction, ReconnectPause, ReconnectPolicy,
