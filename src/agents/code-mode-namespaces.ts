@@ -483,27 +483,6 @@ declare function log(message: string): void;
 // Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
 `;
 
-/** Builds virtual API declaration files for visible guest and MCP namespace tools. */
-export function createCodeModeApiVirtualFiles(
-  catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
-): CodeModeApiVirtualFile[] {
-  return createCodeModeApiVirtualFilesFromModel(createMcpNamespaceModel(catalog));
-}
-
-function createCodeModeApiVirtualFilesFromModel(
-  model: McpNamespaceModel | undefined,
-): CodeModeApiVirtualFile[] {
-  return [
-    {
-      path: "agents.d.ts",
-      description: "Swarm collector globals and orchestration idioms.",
-      content: SWARM_AGENTS_API_CONTENT,
-      bytes: Buffer.byteLength(SWARM_AGENTS_API_CONTENT, "utf8"),
-    },
-    ...createMcpApiVirtualFiles(model?.docs ?? []),
-  ];
-}
-
 function createMcpNamespaceEntry(model: McpNamespaceModel): CodeModeNamespaceRuntimeEntry {
   const { root: scope } = model;
   const callablePaths = new Set<string>();
@@ -646,7 +625,15 @@ export function createCodeModeNamespaceRuntime(
   const byId = new Map(entries.map((entry) => [entry.descriptor.id, entry]));
   return {
     descriptors: entries.map((entry) => entry.descriptor),
-    apiFiles: createCodeModeApiVirtualFilesFromModel(model),
+    apiFiles: [
+      {
+        path: "agents.d.ts",
+        description: "Swarm collector globals and orchestration idioms.",
+        content: SWARM_AGENTS_API_CONTENT,
+        bytes: Buffer.byteLength(SWARM_AGENTS_API_CONTENT, "utf8"),
+      },
+      ...createMcpApiVirtualFiles(model?.docs ?? []),
+    ],
     async invoke(namespaceId, path, args, executeTool) {
       const entry = byId.get(namespaceId);
       if (!entry) {

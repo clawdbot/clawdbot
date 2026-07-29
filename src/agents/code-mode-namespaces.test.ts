@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createCodeModeApiVirtualFiles,
-  createCodeModeNamespaceRuntime,
-} from "./code-mode-namespaces.js";
+import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 
 type McpCatalogEntry = NonNullable<Parameters<typeof createCodeModeNamespaceRuntime>[0]>[number];
 
@@ -49,7 +46,7 @@ describe("Code Mode MCP namespace model", () => {
     ];
     const runtime = createCodeModeNamespaceRuntime(catalog);
 
-    expect(runtime.apiFiles).toEqual(createCodeModeApiVirtualFiles(catalog));
+    expect(runtime.descriptors.map((descriptor) => descriptor.globalName)).toEqual(["MCP"]);
     expect(runtime.apiFiles.map((file) => file.path)).toEqual([
       "agents.d.ts",
       "mcp/index.d.ts",
