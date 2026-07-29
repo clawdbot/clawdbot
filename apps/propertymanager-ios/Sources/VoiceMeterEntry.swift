@@ -12,6 +12,8 @@ struct VoiceMeterEntrySheet: View {
     @State private var parseResult: MeterParseResult?
     @State private var isListening = false
     @State private var isSaving = false
+    @State private var pendingPreview: LowerReadingPreview?
+    @State private var correctionReason = "correction"
     @State private var errorMessage: String?
     @State private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     @State private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -47,6 +49,14 @@ struct VoiceMeterEntrySheet: View {
                     .font(.subheadline)
                 }
 
+                if pendingPreview != nil {
+                    Picker("Correction reason", selection: $correctionReason) {
+                        ForEach(pendingPreview?.options ?? ["correction"], id: \.self) { opt in
+                            Text(opt.capitalized).tag(opt)
+                        }
+                    }
+                }
+
                 Spacer()
             }
             .padding()
@@ -56,8 +66,10 @@ struct VoiceMeterEntrySheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Use") { Task { await parseAndConfirm() } }
-                        .disabled(transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button(pendingPreview == nil ? "Use" : "Confirm") {
+                        Task { await parseAndSubmit() }
+                    }
+                    .disabled(transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
                 }
             }
             .alert("Error", isPresented: Binding(
@@ -72,20 +84,38 @@ struct VoiceMeterEntrySheet: View {
         .onDisappear { stopListening() }
     }
 
-    private func parseAndConfirm() async {
+    private func parseAndSubmit() async {
+        isSaving = true
+        defer { isSaving = false }
         do {
-            let result = try await store.client.parseMeterText(transcript)
+            let result = parseResult ?? (try await store.client.parseMeterText(transcript))
             parseResult = result
-            isSaving = true
-            defer { isSaving = false }
-            let updated = try await store.client.submitMeterReading(
-                assetId: result.assetId,
-                value: result.value,
-                note: transcript,
-                entryMethod: "voice"
-            )
-            onSaved(updated)
-            dismiss()
+
+            if let preview = pendingPreview {
+                let updated = try await store.client.confirmMeterReading(
+                    assetId: result.assetId,
+                    preview: preview,
+                    correctionReason: correctionReason,
+                    note: transcript
+                )
+                onSaved(updated)
+                dismiss()
+            } else {
+                let updated = try await store.client.submitMeterReading(
+                    assetId: result.assetId,
+                    value: result.value,
+                    note: transcript,
+                    entryMethod: "voice"
+                )
+                onSaved(updated)
+                dismiss()
+            }
+        } catch PropertyAPIError.lowerReadingConfirmation(let preview) {
+            pendingPreview = preview
+            if parseResult == nil, let result = try? await store.client.parseMeterText(transcript) {
+                parseResult = result
+            }
+            errorMessage = "Reading is lower than current. Choose a reason and tap Confirm."
         } catch {
             errorMessage = error.localizedDescription
         }

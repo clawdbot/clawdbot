@@ -4,6 +4,9 @@ import SwiftUI
 @MainActor
 final class PropertyStore: ObservableObject {
     @AppStorage("propertyManager.apiBaseURL") var apiBaseURL: String = "http://100.85.36.72:5062"
+    @AppStorage("propertyManager.apiKey") var apiKey: String = ""
+    @AppStorage("propertyManager.operatorPIN") var operatorPIN: String = ""
+    @AppStorage("propertyManager.operatorIdentity") var operatorIdentity: String = "ios-operator"
 
     @Published var categories: [MaintenanceCategory] = []
     @Published var tasks: [MaintenanceTask] = []
@@ -20,7 +23,12 @@ final class PropertyStore: ObservableObject {
     @Published var statusMessage: String?
 
     var client: PropertyAPIClient {
-        PropertyAPIClient(baseURLString: apiBaseURL)
+        PropertyAPIClient(
+            baseURLString: apiBaseURL,
+            apiKey: apiKey.isEmpty ? nil : apiKey,
+            operatorPIN: operatorPIN.isEmpty ? nil : operatorPIN,
+            operatorIdentity: operatorIdentity.isEmpty ? nil : operatorIdentity
+        )
     }
 
     var categoryNames: [String] {
@@ -137,13 +145,23 @@ final class PropertyStore: ObservableObject {
         }
     }
 
-    func complete(task: MaintenanceTask, note: String?, meterValue: Double? = nil) async -> Bool {
+    func complete(
+        task: MaintenanceTask,
+        note: String?,
+        meterValue: Double? = nil,
+        confirmCurrentMeter: Bool = false
+    ) async -> Bool {
         isCompleting = true
         errorMessage = nil
         defer { isCompleting = false }
 
         do {
-            let updated = try await client.completeTask(id: task.id, note: note, meterValueAtCompletion: meterValue)
+            let updated = try await client.completeTask(
+                id: task.id,
+                note: note,
+                meterValueAtCompletion: meterValue,
+                confirmCurrentMeter: confirmCurrentMeter
+            )
             if let index = tasks.firstIndex(where: { $0.id == updated.id }) {
                 tasks[index] = updated
             }

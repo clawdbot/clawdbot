@@ -174,11 +174,12 @@ def test_mapping_proposal_flow() -> None:
     task_id = str(uuid.uuid4())
     asset_id = str(uuid.uuid4())
     proposal_id = str(uuid.uuid4())
+    suffix = uuid.uuid4().hex[:6]
     _psql(
         f"""
         INSERT INTO propertymanager.assets
             (id, external_id, name, qr_token, meter_proposed_type, meter_proposed_unit, is_active)
-        VALUES ('{asset_id}', 'MAP-TEST-{uuid.uuid4().hex[:6]}', 'Map Test Asset', '{uuid.uuid4().hex}', 'runtime_hours', 'hrs', true);
+        VALUES ('{asset_id}', 'MAP-TEST-{suffix}', 'Map Test Asset {suffix}', '{uuid.uuid4().hex}', 'runtime_hours', 'hrs', true);
         INSERT INTO propertymanager.asset_meter (asset_id, meter_type, current_value, unit, meter_epoch, row_version)
         VALUES ('{asset_id}', 'none', 0, '', 1, 1);
         INSERT INTO propertymanager.maintenance_tasks
@@ -186,7 +187,7 @@ def test_mapping_proposal_flow() -> None:
              estimated_minutes, last_done, next_due, is_active, schedule_kind, kind,
              completion_history, tools_required, origin,
              send_telegram_update, include_in_daily_briefing, alert_if_overdue)
-        VALUES ('{task_id}', 'Equipment', 'Map Test Asset', 'Equipment', 'Medium', 'Monthly',
+        VALUES ('{task_id}', 'Equipment', 'Map Test Asset {suffix}', 'Equipment', 'Medium', 'Monthly',
                 30, 45, 30, now(), now() + interval '30 days', true, 'calendar', 'Scheduled',
                 '[]'::jsonb, '[]'::jsonb, 'owner', true, true, true);
         INSERT INTO propertymanager.asset_task_mapping_proposals

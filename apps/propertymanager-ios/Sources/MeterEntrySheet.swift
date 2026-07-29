@@ -10,7 +10,7 @@ struct MeterEntrySheet: View {
     @State private var valueText = ""
     @State private var note = ""
     @State private var isSaving = false
-    @State private var showLowerConfirm = false
+    @State private var pendingPreview: LowerReadingPreview?
     @State private var correctionReason = "correction"
     @State private var errorMessage: String?
 
@@ -22,12 +22,17 @@ struct MeterEntrySheet: View {
                         .keyboardType(.decimalPad)
                     TextField("Note (optional)", text: $note)
                 }
-                if showLowerConfirm {
-                    Section("Lower reading") {
+                if let preview = pendingPreview {
+                    Section("Lower reading confirmation") {
+                        if let prev = preview.previousValue, let proposed = preview.proposedValue {
+                            Text("Previous: \(prev) → Proposed: \(proposed)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         Picker("Reason", selection: $correctionReason) {
-                            Text("Correction").tag("correction")
-                            Text("Meter replacement").tag("replacement")
-                            Text("Rollover").tag("rollover")
+                            ForEach(preview.options ?? ["correction", "replacement", "rollover"], id: \.self) { opt in
+                                Text(opt.capitalized).tag(opt)
+                            }
                         }
                     }
                 }
@@ -38,8 +43,10 @@ struct MeterEntrySheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(isSaving || valueText.isEmpty)
+                    Button(pendingPreview == nil ? "Save" : "Confirm") {
+                        Task { await save() }
+                    }
+                    .disabled(isSaving || valueText.isEmpty)
                 }
             }
             .alert("Error", isPresented: Binding(
@@ -61,18 +68,28 @@ struct MeterEntrySheet: View {
         isSaving = true
         defer { isSaving = false }
         do {
-            let updated = try await store.client.submitMeterReading(
-                assetId: asset.id,
-                value: value,
-                note: note.isEmpty ? nil : note,
-                entryMethod: "manual",
-                correctionReason: showLowerConfirm ? correctionReason : nil
-            )
-            onSaved(updated)
-            dismiss()
-        } catch PropertyAPIError.serverMessage(let message) where message == "lower_reading" {
-            showLowerConfirm = true
-            errorMessage = "Reading is lower than current. Choose a reason and save again."
+            if let preview = pendingPreview {
+                let updated = try await store.client.confirmMeterReading(
+                    assetId: asset.id,
+                    preview: preview,
+                    correctionReason: correctionReason,
+                    note: note.isEmpty ? nil : note
+                )
+                onSaved(updated)
+                dismiss()
+            } else {
+                let updated = try await store.client.submitMeterReading(
+                    assetId: asset.id,
+                    value: value,
+                    note: note.isEmpty ? nil : note,
+                    entryMethod: "manual"
+                )
+                onSaved(updated)
+                dismiss()
+            }
+        } catch PropertyAPIError.lowerReadingConfirmation(let preview) {
+            pendingPreview = preview
+            errorMessage = "Reading is lower than current. Choose a reason and tap Confirm."
         } catch {
             errorMessage = error.localizedDescription
         }

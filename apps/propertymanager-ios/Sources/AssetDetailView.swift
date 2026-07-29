@@ -8,12 +8,16 @@ struct AssetDetailView: View {
     @State private var readings: [MeterReading] = []
     @State private var showMeterSheet = false
     @State private var showVoiceSheet = false
+    @State private var isActivating = false
     @State private var errorMessage: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let asset {
+                    if asset.meterNeedsActivation {
+                        proposedMeterBanner(asset)
+                    }
                     meterCard(asset)
                     serviceCard(asset)
                     historyCard
@@ -64,6 +68,34 @@ struct AssetDetailView: View {
         .task {
             await loadAsset()
         }
+    }
+
+    @ViewBuilder
+    private func proposedMeterBanner(_ asset: RanchAsset) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Meter proposed — review and activate")
+                .font(.headline)
+            if let proposed = asset.proposedMeter {
+                Text("Type: \(proposed.meterType ?? "none"), unit: \(proposed.unit ?? "—")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Button {
+                Task { await activateMeter() }
+            } label: {
+                if isActivating {
+                    ProgressView()
+                } else {
+                    Text("Activate meter")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isActivating)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.orange.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder
@@ -165,6 +197,18 @@ struct AssetDetailView: View {
     private func loadReadings() async {
         do {
             readings = try await store.client.fetchMeterReadings(assetId: assetId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func activateMeter() async {
+        isActivating = true
+        defer { isActivating = false }
+        do {
+            let updated = try await store.client.activateMeter(assetId: assetId)
+            asset = updated
+            await store.refreshAssets()
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -1,7 +1,7 @@
 ---
 title: "PropertyManager Foundational Requirements"
 version: "1.1"
-status: "Phase 1 complete — dev VM implementation"
+status: "Phase 2 complete — dev VM acceptance"
 owner: "OpenClaw Operator"
 last_reviewed: "2026-07-29"
 category: "Governance"
@@ -11,7 +11,7 @@ source_document: "PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md"
 # PropertyManager Foundational Requirements
 
 Version: 1.1  
-Status: **Phase 1 complete on development VM** — Phase 2 operator acceptance next  
+Status: **Phase 2 complete on development VM** — Phase 3 production authorization next  
 Owner: OpenClaw Operator  
 Last Updated: 2026-07-29
 
@@ -25,7 +25,17 @@ Implementation details live in [PropertyManager Asset Architecture](../architect
 
 ---
 
-## Phase 0 gate — design approved; Phase 1 implemented on dev VM
+## Phase 0 gate — design approved; Phase 2 accepted on dev VM
+
+**Phase 2 (dev VM) delivered 2026-07-29:**
+
+- iOS/Mac clients wired to `/v1/` asset and meter endpoints
+- Lower-reading preview → confirm flow (preview_token, operator_identity, correction_reason)
+- activate-meter UI for proposed meters
+- Task completion: `meter_value_at_completion` or `confirm_current_meter=true` (no silent default)
+- Phase 2 client contract tests: `tools/property_manager/tests/test_phase2_meters.py`
+- Evidence: `reports/propertymanager/phase2-acceptance-evidence.md`
+- Mac M4: `swift build -c release` passed with Phase 2 AssetAPIClient/AssetViews
 
 **Phase 1 (dev VM) delivered 2026-07-29:**
 
@@ -38,7 +48,7 @@ Implementation details live in [PropertyManager Asset Architecture](../architect
 - Dashboard QR read public / write requires operator PIN or API key
 - Smoke tests: `tools/property_manager/tests/test_phase1_meters.py`
 
-**Production (Intel Mini) remains blocked** until Phase 2 acceptance and explicit Phase 3 authorization.
+**Production (Intel Mini) remains blocked** until Phase 3 explicit operator authorization.
 
 ### Phase 0 design review checklist
 

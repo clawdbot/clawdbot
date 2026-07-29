@@ -1,7 +1,7 @@
 ---
 title: "PropertyManager Asset Architecture"
 version: "1.1"
-status: "Architecture — Phase 1 implemented (dev VM)"
+status: "Architecture — Phase 2 accepted (dev VM)"
 owner: "OpenClaw Architecture"
 last_reviewed: "2026-07-29"
 category: "Architecture"
@@ -11,7 +11,7 @@ source_document: "PROPERTY_MANAGER_ASSET_ARCHITECTURE.md"
 # PropertyManager Asset Architecture
 
 Version: 1.1  
-Status: **Phase 1 implemented on development VM**  
+Status: **Phase 2 accepted on development VM**  
 Authority: Requirements in [PropertyManager Foundational Requirements](../foundation/PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md)  
 Last Updated: 2026-07-29
 
@@ -339,8 +339,8 @@ Lists: cursor pagination `?cursor=<opaque>&limit=50`.
 | Mapping proposals + CLI                         | Implemented                 |
 | Dashboard QR auth policy                        | Implemented (PIN / API key) |
 | Completion confirm-or-enter                     | Implemented on API          |
-| Mac/iOS client wiring                           | Planned Phase 2             |
-| Full test matrix (concurrency, offline sync)    | Phase 2 acceptance          |
+| Mac/iOS client wiring                           | Phase 2 complete (dev VM)   |
+| Full test matrix (concurrency, offline sync)    | Phase 3 prerequisites       |
 
 ---
 
