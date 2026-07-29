@@ -20,9 +20,13 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   });
   return {
     ...original,
-    createLocalMeetingRealtimeAudioTransport: () => transport(engineMocks.localDispose),
-    createNodeMeetingRealtimeAudioTransport: () => transport(engineMocks.nodeDispose),
-    startMeetingAgentRealtimeEngine: engineMocks.startAgent,
+    createMeetingChromeRuntimeBindings: () => ({
+      createBindings: original.createMeetingRealtimeEngineBindings,
+      createLocalAudioTransport: () => transport(engineMocks.localDispose),
+      createNodeAudioTransport: () => transport(engineMocks.nodeDispose),
+      startAgentRealtimeEngine: engineMocks.startAgent,
+      startRealtimeEngine: original.startMeetingRealtimeEngine,
+    }),
   };
 });
 

@@ -363,11 +363,11 @@ function createMeetingPlatformAdapter<
   };
 }
 
-function isMeetingTalkBackMode(mode: string): boolean {
+export function isMeetingTalkBackMode(mode: string): boolean {
   return mode === "agent" || mode === "bidi";
 }
 
-function isMeetingRealtimeRouteReady(
+export function isMeetingRealtimeRouteReady(
   mode: string,
   health:
     | (MeetingBrowserHealth & {

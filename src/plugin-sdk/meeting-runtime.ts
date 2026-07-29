@@ -33,16 +33,40 @@ export {
   type MeetingSessionRuntimeOptions,
 } from "../meeting-bot/session-runtime.js";
 export { createMeetingSession } from "../meeting-bot/session-factory.js";
+export {
+  createMeetingPluginConfigSchema,
+  type MeetingPluginConfig,
+  type MeetingPluginMode,
+  type MeetingPluginTransport,
+} from "../meeting-bot/plugin-config.js";
+export { registerMeetingPluginCli } from "../meeting-bot/plugin-cli.js";
+export {
+  createMeetingChromeRuntimeBindings,
+  createMeetingPluginCliMetadata,
+  createMeetingPluginChromeTransport,
+  createMeetingPluginNodeHostHandler,
+  createMeetingPluginNodeInvokePolicy,
+  createMeetingPluginShellEntry,
+} from "../meeting-bot/plugin-shell.js";
 export type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,
   MeetingBrowserTab,
+  MeetingPluginChromeHealth,
+  MeetingPluginJoinRequest,
+  MeetingPluginJoinResult,
+  MeetingPluginProbeHealth,
+  MeetingPluginSession,
   MeetingRealtimeSessionBlock,
   MeetingSessionRecord,
   MeetingSessionState,
   MeetingTranscriptLine,
   MeetingTranscriptSnapshot,
 } from "../meeting-bot/session-types.js";
+export {
+  resolveMeetingProbeTimeoutMs,
+  type MeetingProbeContext,
+} from "../meeting-bot/runtime-probes.js";
 export {
   openMeetingWithBrowser,
   recoverMeetingBrowserTab,
