@@ -160,16 +160,25 @@ export function toHistoryMediaEntries(
     messageId?: string;
   } = {},
 ): HistoryMediaEntry[] {
-  return toInboundMediaFacts(media, defaults).map((entry) => ({
-    path: entry.path,
-    url: entry.url,
-    contentType: entry.contentType,
-    kind: entry.kind,
-    ...(entry.durationMs ? { durationMs: entry.durationMs } : {}),
-    ...(entry.width ? { width: entry.width } : {}),
-    ...(entry.height ? { height: entry.height } : {}),
-    messageId: entry.messageId,
-  }));
+  return toInboundMediaFacts(media, defaults).map((entry) => {
+    const historyEntry: HistoryMediaEntry = {
+      path: entry.path,
+      url: entry.url,
+      contentType: entry.contentType,
+      kind: entry.kind,
+      messageId: entry.messageId,
+    };
+    if (entry.durationMs) {
+      historyEntry.durationMs = entry.durationMs;
+    }
+    if (entry.width) {
+      historyEntry.width = entry.width;
+    }
+    if (entry.height) {
+      historyEntry.height = entry.height;
+    }
+    return historyEntry;
+  });
 }
 
 /**

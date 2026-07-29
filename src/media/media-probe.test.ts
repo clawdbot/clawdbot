@@ -161,7 +161,9 @@ describe("probeMediaFilesWithinBudget", () => {
     runFfprobe.mockImplementation(async () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       active -= 1;
       return "{}";
     });
