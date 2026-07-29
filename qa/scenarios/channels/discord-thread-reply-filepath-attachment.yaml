@@ -12,7 +12,6 @@ scenario:
     timeoutMs: 45000
     retryCount: 1
     suiteIsolation: isolated
-    config: { discordScenarioId: discord-thread-reply-filepath-attachment }
 flow:
   module: ./live-transports/discord/scenario-runtime.js
   call: runDiscordThreadReplyFilepathAttachmentScenario

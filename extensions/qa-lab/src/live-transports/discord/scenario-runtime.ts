@@ -1,13 +1,22 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import {
+  discordQaCanaryScenario,
+  discordQaMentionGatingScenario,
+  discordQaNativeHelpCommandRegistrationScenario,
+  discordQaScenarioSupport,
+  discordQaStatusReactionsToolOnlyScenario,
+  discordQaThreadReplyFilepathAttachmentScenario,
+  discordQaVoiceAutojoinScenario,
+  type DiscordQaScenarioImplementation,
+} from "./discord-live.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
-async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, scenarioId: string) {
-  const scenario = discordQaScenarioSupport.testing.findScenario([scenarioId])[0];
-  if (!scenario) {
-    throw new Error(`unknown Discord QA scenario id: ${scenarioId}`);
-  }
-  const run = scenario.buildRun(environment.runtimeEnv.sutApplicationId);
+async function runDiscordScenario(
+  environment: DiscordQaScenarioEnvironment,
+  implementation: DiscordQaScenarioImplementation,
+) {
+  const scenario = environment.scenario;
+  const { cfg, run, voiceChannel } = await environment.configureScenario(implementation);
   if (run.kind === "application-command-registration") {
     const registered =
       await discordQaScenarioSupport.testing.assertDiscordApplicationCommandsRegistered({
@@ -19,13 +28,13 @@ async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, sce
     return { details: `native command registered (${registered.commandNames.join(", ")})` };
   }
   if (run.kind === "voice-autojoin") {
-    if (!environment.voiceChannel) {
+    if (!voiceChannel) {
       throw new Error("Discord voice auto-join scenario did not resolve a voice channel.");
     }
     await discordQaScenarioSupport.testing.waitForDiscordVoiceState({
       token: environment.runtimeEnv.sutBotToken,
       guildId: environment.runtimeEnv.guildId,
-      channelId: environment.voiceChannel.id,
+      channelId: voiceChannel.id,
       sutBotId: environment.sutIdentity.id,
       timeoutMs: scenario.timeoutMs,
     });
@@ -34,7 +43,7 @@ async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, sce
   if (run.kind === "thread-reply-filepath-attachment") {
     const result =
       await discordQaScenarioSupport.testing.runDiscordThreadReplyFilePathAttachmentScenario({
-        cfg: environment.cfg,
+        cfg,
         driverBotId: environment.driverIdentity.id,
         outputDir: environment.outputDir,
         runtimeEnv: environment.runtimeEnv,
@@ -118,16 +127,16 @@ async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, sce
 }
 
 export const runDiscordCanaryScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-canary");
+  runDiscordScenario(context, discordQaCanaryScenario);
 export const runDiscordMentionGatingScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-mention-gating");
+  runDiscordScenario(context, discordQaMentionGatingScenario);
 export const runDiscordNativeHelpCommandRegistrationScenario = (
   context: DiscordQaScenarioEnvironment,
-) => runDiscordScenario(context, "discord-native-help-command-registration");
+) => runDiscordScenario(context, discordQaNativeHelpCommandRegistrationScenario);
 export const runDiscordVoiceAutojoinScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-voice-autojoin");
+  runDiscordScenario(context, discordQaVoiceAutojoinScenario);
 export const runDiscordStatusReactionsToolOnlyScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-status-reactions-tool-only");
+  runDiscordScenario(context, discordQaStatusReactionsToolOnlyScenario);
 export const runDiscordThreadReplyFilepathAttachmentScenario = (
   context: DiscordQaScenarioEnvironment,
-) => runDiscordScenario(context, "discord-thread-reply-filepath-attachment");
+) => runDiscordScenario(context, discordQaThreadReplyFilepathAttachmentScenario);

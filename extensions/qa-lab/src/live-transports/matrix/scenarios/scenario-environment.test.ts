@@ -168,6 +168,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-approval",
+      scenarioTitle: "Matrix approval",
       timeoutMs: 1_000,
       waitForConfigRestartSettle,
     });
@@ -285,6 +287,8 @@ describe("matrix scenario environment", () => {
       config: {},
       gateway,
       outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-restart",
+      scenarioTitle: "Matrix restart",
       timeoutMs: 1_000,
       waitForConfigRestartSettle,
     });

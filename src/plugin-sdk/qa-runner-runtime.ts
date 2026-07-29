@@ -42,6 +42,8 @@ type QaRunnerMessageRecorder = {
 
 type QaRunnerTransportFlowPreparationInput = {
   config: Record<string, unknown>;
+  scenarioId: string;
+  scenarioTitle: string;
   gateway: {
     baseUrl: string;
     tempRoot: string;

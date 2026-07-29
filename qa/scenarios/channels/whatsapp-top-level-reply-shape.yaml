@@ -11,7 +11,6 @@ scenario:
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-top-level-reply-shape }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
   call: runWhatsAppTopLevelReplyShapeScenario

@@ -14,7 +14,6 @@ scenario:
     timeoutMs: 180000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-codex-approval-plugin-native }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
   call: runSlackCodexApprovalPluginNativeScenario

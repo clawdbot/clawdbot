@@ -10,7 +10,6 @@ scenario:
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { discordScenarioId: discord-voice-autojoin }
 flow:
   module: ./live-transports/discord/scenario-runtime.js
   call: runDiscordVoiceAutojoinScenario

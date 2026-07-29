@@ -11,7 +11,6 @@ scenario:
     timeoutMs: 90000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-outbound-send-serialization }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
   call: runWhatsAppOutboundSendSerializationScenario
