@@ -136,6 +136,53 @@ describe("Skill Workshop lifecycle hooks", () => {
     );
   });
 
+  it("marks a create proposal stale when its target appears before evaluation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-create-stale-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Create Stale",
+      description: "Record create conflicts before evaluator dispatch",
+      content: "# Create Stale\n",
+    });
+    await writeSkill({
+      dir: proposal.record.target.skillDir,
+      name: "create-stale",
+      description: "Created elsewhere",
+      body: "# Created Elsewhere\n",
+    });
+    hookMocks.proposalChanged.mockClear();
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+        correlationId: "optimizer-run-create-stale",
+      }),
+    ).rejects.toThrow("proposal marked stale");
+
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
+        (event) => event.type,
+      ),
+    ).toEqual(["created", "stale"]);
+    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
+      {
+        record: { status: "stale" },
+      },
+    );
+    expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "stale",
+        correlationId: "optimizer-run-create-stale",
+        proposal: expect.objectContaining({ status: "stale" }),
+      }),
+      { workspaceDir, agentId: "main" },
+    );
+  });
+
   it("rejects apply when an untouched target asset changes after evaluation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-evaluation-race-");
     const skillDir = path.join(workspaceDir, "skills", "existing");

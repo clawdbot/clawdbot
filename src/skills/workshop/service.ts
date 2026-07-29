@@ -38,6 +38,7 @@ import {
   assertExpectedRevisionHash,
   evaluateSkillProposal,
   listSkillProposalEvents,
+  SkillProposalCreateTargetConflictError,
 } from "./service-evaluation.js";
 import { readRequiredProposal } from "./service-query.js";
 import {
@@ -68,6 +69,7 @@ import {
   type SkillProposalActionInput,
   type SkillProposalApplyResult,
   type SkillProposalCreateInput,
+  type SkillProposalEvaluateResult,
   type SkillProposalEvent,
   type SkillProposalOrigin,
   type SkillProposalReadResult,
@@ -657,15 +659,41 @@ export async function applySkillProposal(
     );
   }
   assertExpectedRevisionHash(initial.revisionHash, input.expectedRevisionHash);
-  const evaluated = await evaluateSkillProposal({
-    workspaceDir: input.workspaceDir,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    ...(input.env ? { env: input.env } : {}),
-    proposalId: input.proposalId,
-    expectedRevisionHash: initial.revisionHash,
-    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-    trigger: "apply",
-  });
+  let evaluated: SkillProposalEvaluateResult;
+  try {
+    evaluated = await evaluateSkillProposal({
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.env ? { env: input.env } : {}),
+      proposalId: input.proposalId,
+      expectedRevisionHash: initial.revisionHash,
+      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+      trigger: "apply",
+    });
+  } catch (error) {
+    if (error instanceof SkillProposalCreateTargetConflictError) {
+      const staleTransition = withPendingSkillProposalMutation(
+        input,
+        "applied",
+        async ({ record }) => {
+          if (
+            record.kind === "create" &&
+            (await readWorkspaceSkillFile(record.target.skillFile)) !== null
+          ) {
+            await markProposalStale({
+              record,
+              reason: "Target skill was created after proposal creation.",
+              message: "Target skill was created after proposal creation; proposal marked stale.",
+              input,
+            });
+          }
+          throw error;
+        },
+      );
+      await withSkillProposalTransitionDispatch(input, staleTransition);
+    }
+    throw error;
+  }
   const blocking = evaluated.evaluation.outcomes.find(
     (outcome) => outcome.status === "completed" && outcome.result.decision === "block",
   );

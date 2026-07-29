@@ -568,6 +568,60 @@ describe("Skill Workshop proposal evaluation", () => {
     await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
   });
 
+  it("omits optional evaluator strings that normalize to empty", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-empty-optionals-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Empty Optionals",
+      description: "Normalize optional evaluator metadata",
+      content: "# Empty Optionals\n",
+    });
+    hookMocks.evaluate.mockResolvedValue([
+      {
+        evaluatorId: "optional-fields",
+        pluginId: "evaluation-tests",
+        status: "completed",
+        result: {
+          summary: " ",
+          evaluatorVersion: "\t",
+          mode: "\n",
+          decisionReason: "  ",
+          findings: [
+            {
+              ruleId: "optional-file",
+              severity: "info",
+              message: "No file attribution.",
+              file: " ",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const evaluated = await evaluateSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+
+    expect(evaluated.evaluation.outcomes[0]).toEqual({
+      evaluatorId: "optional-fields",
+      pluginId: "evaluation-tests",
+      status: "completed",
+      result: {
+        findings: [
+          {
+            ruleId: "optional-file",
+            severity: "info",
+            message: "No file attribution.",
+          },
+        ],
+      },
+    });
+  });
+
   it("rejects oversized correlation ids before running evaluators", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-correlation-");
     const proposal = await proposeCreateSkill({

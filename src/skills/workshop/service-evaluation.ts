@@ -36,6 +36,8 @@ const MAX_EVALUATION_OUTCOMES = 64;
 const MAX_EVALUATION_FINDINGS = 200;
 const MAX_EVALUATION_METRICS = 64;
 
+export class SkillProposalCreateTargetConflictError extends Error {}
+
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
 ): Promise<SkillProposalEvaluateResult> {
@@ -71,7 +73,9 @@ export async function evaluateSkillProposal(
         read.record.kind === "create" &&
         (await readWorkspaceSkillFile(read.record.target.skillFile)) !== null
       ) {
-        throw new Error(`Skill proposal ${read.record.id} changed before evaluation started.`);
+        throw new SkillProposalCreateTargetConflictError(
+          `Skill proposal ${read.record.id} changed before evaluation started.`,
+        );
       }
       return {
         read,
@@ -268,18 +272,18 @@ function normalizeEvaluationResult(
   if (result.decision !== undefined && !["pass", "revise", "block"].includes(result.decision)) {
     return null;
   }
+  const summary = boundedOptional(result.summary, 8_000);
+  const evaluatorVersion = boundedOptional(result.evaluatorVersion, 128);
+  const mode = boundedOptional(result.mode, 128);
+  const decisionReason = boundedOptional(result.decisionReason, 2_000);
   return {
-    ...(result.summary ? { summary: boundedRequired(result.summary, 8_000, "") } : {}),
+    ...(summary ? { summary } : {}),
     ...(findings ? { findings } : {}),
     ...(metrics ? { metrics } : {}),
-    ...(result.evaluatorVersion
-      ? { evaluatorVersion: boundedRequired(result.evaluatorVersion, 128, "") }
-      : {}),
-    ...(result.mode ? { mode: boundedRequired(result.mode, 128, "") } : {}),
+    ...(evaluatorVersion ? { evaluatorVersion } : {}),
+    ...(mode ? { mode } : {}),
     ...(result.decision ? { decision: result.decision } : {}),
-    ...(result.decisionReason
-      ? { decisionReason: boundedRequired(result.decisionReason, 2_000, "") }
-      : {}),
+    ...(decisionReason ? { decisionReason } : {}),
   };
 }
 
@@ -304,11 +308,12 @@ function normalizeFindings(
     ) {
       return undefined;
     }
+    const file = boundedOptional(finding.file, 1_024);
     normalized.push({
       ruleId: boundedRequired(finding.ruleId, 256, "unknown"),
       severity: finding.severity,
       message: boundedRequired(finding.message, 4_000, "Invalid finding."),
-      ...(finding.file ? { file: boundedRequired(finding.file, 1_024, "") } : {}),
+      ...(file ? { file } : {}),
       ...(finding.line !== undefined ? { line: finding.line } : {}),
     });
   }
@@ -346,6 +351,10 @@ function normalizeMetrics(
 function boundedRequired(value: string, maxLength: number, fallback: string): string {
   const normalized = normalizeOptionalString(value) ?? fallback;
   return normalized.slice(0, maxLength);
+}
+
+function boundedOptional(value: string | undefined, maxLength: number): string | undefined {
+  return normalizeOptionalString(value)?.slice(0, maxLength);
 }
 
 function storeOptions(env?: NodeJS.ProcessEnv) {
