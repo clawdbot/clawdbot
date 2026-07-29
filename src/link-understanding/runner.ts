@@ -111,6 +111,11 @@ async function fetchLinkContent(params: {
     }
     return { content, finalUrl };
   } finally {
+    // Guard release closes the dispatcher, not an unread response stream.
+    // Error pages leave the body unread; settle it before releasing.
+    if (!response.bodyUsed) {
+      await response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }

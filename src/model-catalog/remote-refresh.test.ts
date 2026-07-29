@@ -194,3 +194,24 @@ describe("remote model catalog refresh", () => {
     ).resolves.toMatchObject({ status: "error" });
   });
 });
+
+describe("guarded fetch cleanup", () => {
+  it("cancels an unread error-page body before releasing the guard", async () => {
+    const events: string[] = [];
+    const stream = new ReadableStream({
+      cancel() {
+        events.push("cancel");
+      },
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(stream, { status: 500 }));
+    await expect(
+      refreshRemoteModelCatalog({
+        config: {},
+        fetchImpl,
+        databaseOptions: options(),
+        force: true,
+      }),
+    ).resolves.toMatchObject({ status: "error" });
+    expect(events).toContain("cancel");
+  });
+});

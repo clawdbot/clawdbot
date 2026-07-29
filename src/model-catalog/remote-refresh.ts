@@ -195,6 +195,11 @@ export async function refreshRemoteModelCatalog(params: {
         ...bundleCounts(bundle),
       };
     } finally {
+      // Guard release closes the dispatcher, not an unread response stream.
+      // Error pages leave the body unread; settle it before releasing.
+      if (!guarded.response.bodyUsed) {
+        await guarded.response.body?.cancel().catch(() => undefined);
+      }
       await guarded.release();
     }
   } catch (error) {
