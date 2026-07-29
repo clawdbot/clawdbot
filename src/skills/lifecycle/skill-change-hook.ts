@@ -153,6 +153,7 @@ export async function dispatchCommittedSkillChangeBestEffort(params: {
   workspaceDir: string;
   before?: PluginHookSkillArtifact;
   after?: PluginHookSkillArtifact;
+  proposal?: PluginHookSkillChangedEvent["proposal"];
   logger?: Logger;
 }): Promise<void> {
   const runner = getGlobalHookRunner();
@@ -167,6 +168,7 @@ export async function dispatchCommittedSkillChangeBestEffort(params: {
         occurredAt: new Date().toISOString(),
         ...(params.before ? { before: params.before } : {}),
         ...(params.after ? { after: params.after } : {}),
+        ...(params.proposal ? { proposal: params.proposal } : {}),
       },
       { workspaceDir: params.workspaceDir },
     );

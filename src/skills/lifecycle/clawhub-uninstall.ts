@@ -137,7 +137,8 @@ export async function applyClawHubSkillUninstall(
   if (!current.ok) {
     return { ok: false, error: current.error };
   }
-  const before = hasCommittedSkillChangeHooks()
+  const shouldDispatchChange = hasCommittedSkillChangeHooks();
+  const before = shouldDispatchChange
     ? await snapshotCommittedSkillArtifactBestEffort({
         skillDir: plan.targetDir,
         skillKey: plan.slug,
@@ -163,7 +164,7 @@ export async function applyClawHubSkillUninstall(
     }
     restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(plan.workspaceDir, plan.slug);
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
-    if (before) {
+    if (shouldDispatchChange) {
       await dispatchCommittedSkillChangeBestEffort({
         action: "removed",
         source: "clawhub",

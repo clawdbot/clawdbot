@@ -226,16 +226,14 @@ export async function installExtractedSkillRoot(params: {
         sourceVersion,
         logger: params.logger,
       });
-      if (after && (effectiveMode === "install" || before)) {
-        await dispatchCommittedSkillChangeBestEffort({
-          action: effectiveMode === "update" ? "updated" : "created",
-          source: changeSource,
-          workspaceDir: params.workspaceDir,
-          before,
-          after,
-          logger: params.logger,
-        });
-      }
+      await dispatchCommittedSkillChangeBestEffort({
+        action: effectiveMode === "update" ? "updated" : "created",
+        source: changeSource,
+        workspaceDir: params.workspaceDir,
+        before,
+        after,
+        logger: params.logger,
+      });
     }
     return { ok: true, targetDir };
   } catch (err) {
