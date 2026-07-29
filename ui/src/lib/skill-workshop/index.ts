@@ -19,7 +19,7 @@ export type SkillWorkshopEvaluationFinding = {
   line?: number;
 };
 
-export type SkillWorkshopEvaluationResult = {
+type SkillWorkshopEvaluationResult = {
   summary?: string;
   findings?: SkillWorkshopEvaluationFinding[];
   metrics?: Record<string, string | number | boolean>;

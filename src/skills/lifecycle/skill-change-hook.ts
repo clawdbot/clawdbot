@@ -11,7 +11,7 @@ import { parseFrontmatter } from "../loading/frontmatter.js";
 const SKILL_FILE_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as const;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
 
-export type CommittedSkillChangeSource = PluginHookSkillChangedEvent["source"];
+type CommittedSkillChangeSource = PluginHookSkillChangedEvent["source"];
 
 type Logger = {
   warn?: (message: string) => void;
@@ -101,7 +101,7 @@ export function resolveCommittedSkillChangeSource(
   return "source-install";
 }
 
-export async function snapshotCommittedSkillArtifact(params: {
+async function snapshotCommittedSkillArtifact(params: {
   skillDir: string;
   skillKey: string;
   source: CommittedSkillChangeSource;

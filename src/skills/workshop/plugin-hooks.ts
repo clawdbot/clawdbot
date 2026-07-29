@@ -13,7 +13,7 @@ import type {
   SkillProposalRecord,
 } from "./types.js";
 
-export const MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH = 256;
+const MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH = 256;
 
 export function normalizeSkillProposalCorrelationId(value: string | undefined): string | undefined {
   const normalized = value?.trim();

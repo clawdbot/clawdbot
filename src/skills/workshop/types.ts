@@ -14,7 +14,7 @@ type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
 type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
 type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
-export type SkillProposalEvaluationTrigger = "manual" | "apply";
+type SkillProposalEvaluationTrigger = "manual" | "apply";
 export type SkillProposalEventType =
   | "created"
   | "revised"
