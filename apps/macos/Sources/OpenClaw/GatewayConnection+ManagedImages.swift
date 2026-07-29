@@ -53,8 +53,7 @@ extension GatewayConnection {
             url.scheme?.lowercased() == "https" &&
             lease.route.tls == nil &&
             declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
-        if canStreamDirectly, playback != .transcode, let declaredMIME
-        {
+        if canStreamDirectly, playback != .transcode, let declaredMIME {
             guard await self.isCurrentServerLease(lease) else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
