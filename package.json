@@ -1666,6 +1666,7 @@
     "qa:observability:smoke": "pnpm qa:otel:smoke && pnpm qa:prometheus:smoke",
     "qa:otel:collector-smoke": "node --import tsx test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts --collector docker",
     "qa:otel:smoke": "node --import tsx test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
+    "qa:code-mode-models": "node --import tsx scripts/code-mode-model-matrix.ts",
     "qa:prometheus:smoke": "node scripts/run-node.mjs qa suite --provider-mode mock-openai --scenario docker-prometheus-smoke --concurrency 1 --fast",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta": "node scripts/release-candidate-checklist.mjs",

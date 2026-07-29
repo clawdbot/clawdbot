@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"听写"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"实时"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"对话串"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"打开话题"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 滑动 →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"按住"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"点按"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"双击"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"显示新消息"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"启动实时模式后，即可在此处查看对话。"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新建"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"输入"</string>

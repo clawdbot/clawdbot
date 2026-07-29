@@ -1,5 +1,6 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
@@ -382,10 +383,18 @@ function createRuntimeCore(
         resolveInboundDebounceMs: () => overrides.inboundDebounceMs ?? 0,
         createInboundDebouncer:
           overrides.createInboundDebouncer ??
-          (<T>(params: { onFlush: (entries: T[]) => Promise<void> | void }) => ({
+          (<T>(params: {
+            onFlush: (
+              entries: T[],
+              createFlush: typeof createTestInboundDebounceFlush,
+            ) => { completion: Promise<void> };
+          }) => ({
             enqueue: async (entry: T) => {
-              await params.onFlush([entry]);
+              await params.onFlush([entry], createTestInboundDebounceFlush).completion;
             },
+            flushKey: async () => {},
+            cancelKey: () => false,
+            drain: async () => {},
           })),
       },
       groups: {

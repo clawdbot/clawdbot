@@ -40,6 +40,49 @@ suite.define(() => {
     }
   });
 
+  it("keeps high-velocity model scrolling inside the picker", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const models = [
+      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ...Array.from({ length: 32 }, (_value, index) => ({
+        id: `scroll-model-${index + 1}`,
+        name: `Scroll Model ${index + 1}`,
+        provider: "openai",
+      })),
+    ];
+    await installMockGateway(page, {
+      models,
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      const modelScroller = main.locator(".chat-controls__provider-models");
+      await page.evaluate(() => {
+        document.documentElement.style.overflowY = "auto";
+        document.body.style.height = "1800px";
+        window.scrollTo(0, 300);
+      });
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
+      await modelScroller.hover();
+      const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
+      expect(outerScrollBeforeFling).toBeGreaterThan(0);
+      await page.mouse.wheel(0, -5_000);
+      await page.waitForTimeout(100);
+
+      expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollBeforeFling);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps a session model override selected after switching away and back", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

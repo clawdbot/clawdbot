@@ -396,9 +396,11 @@ private fun linkPreviewDomain(url: String): String =
 fun ChatTypingIndicatorBubble(
   runKey: String,
   observedAtElapsedMs: Long,
+  outputTokens: Long? = null,
 ) {
   val elapsedMs = rememberWorkingElapsedMs(observedAtElapsedMs)
   val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
+  val tokens = outputTokens?.let { localizedChatOutputTokens(it) }
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
     roleLabel = roleLabel("assistant"),
@@ -414,6 +416,10 @@ fun ChatTypingIndicatorBubble(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         Text(formatLocalizedChatDurationCompact(elapsedMs), style = mobileCallout, color = mobileTextSecondary)
+        tokens?.let {
+          Text(nativeStringResource("·"), style = mobileCallout, color = mobileTextSecondary)
+          Text(it, style = mobileCallout, color = mobileTextSecondary)
+        }
         phrase?.let { Text(nativeStringResource("· \$phrase", it), style = mobileCallout, color = mobileTextSecondary) }
       }
     }

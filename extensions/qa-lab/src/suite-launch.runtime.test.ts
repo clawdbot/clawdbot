@@ -294,27 +294,47 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
-  it("partitions portable scenarios by channel for a pluggable driver", async () => {
+  it("expands profile scenarios across every eligible pluggable channel", async () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-channels-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const result = await defaultFlowImplementation(params);
+      if (params?.channelId === "matrix" && params.scenarioIds?.includes("thread-isolation")) {
+        result.scenarios[0] = {
+          ...result.scenarios[0],
+          status: "fail",
+        };
+      }
+      return result;
+    });
     const adapterFactories = [
       {
         id: "portable-driver",
-        matches: vi.fn(),
+        matches: vi.fn(({ channelId }) => ["matrix", "slack", "telegram"].includes(channelId)),
         create: vi.fn(),
       },
     ];
 
-    await runQaSuite({
+    const result = await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/pluggable-channels",
       providerMode: "mock-openai",
       channelDriver: "live",
       adapterFactories,
-      scenarioIds: ["channel-chat-baseline", "telegram-help-command", "matrix-restart-resume"],
+      expandScenarioChannels: true,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "telegram-help-command",
+        "matrix-restart-resume",
+        "thread-isolation",
+      ],
     });
 
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "pluggable-channels");
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(3);
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(5);
     expect(runQaFlowSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         adapterFactories,
@@ -335,8 +355,65 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         adapterFactories,
         channelId: "matrix",
-        outputDir: path.join(outputDir, "flow", "matrix"),
+        outputDir: path.join(outputDir, "flow", "matrix-isolated"),
         scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "slack",
+        scenarioIds: ["thread-isolation"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "matrix",
+        outputDir: path.join(outputDir, "flow", "matrix-shared"),
+        scenarioIds: ["thread-isolation"],
+      }),
+    );
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(result.result.scenarios.map((scenario) => scenario.name)).toContain(
+      "thread-isolation [slack]",
+    );
+    expect(result.result.scenarios.map((scenario) => scenario.name)).toContain(
+      "thread-isolation [matrix]",
+    );
+    expect(
+      result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [slack]"),
+    ).toMatchObject({ status: "pass" });
+    expect(
+      result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [matrix]"),
+    ).toMatchObject({ status: "fail" });
+  });
+
+  it("uses one eligible channel outside profile execution", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-portable-channel-");
+
+    await runQaSuite({
+      repoRoot,
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [
+        {
+          id: "portable-driver",
+          matches: ({ channelId }) => channelId === "slack" || channelId === "matrix",
+          create: vi.fn(),
+        },
+      ],
+      scenarioIds: ["thread-isolation"],
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "slack",
+        scenarioIds: ["thread-isolation"],
       }),
     );
   });

@@ -4,6 +4,7 @@ import "../../components/agent-select-registration.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
+  renderDocsLink,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -75,6 +76,8 @@ type MemoryViewProps = {
 };
 
 const MEMORY_PANEL_ID = "memory-settings-panel";
+
+const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
 
 const MEMORY_ENGINE_OFF = "";
 
@@ -281,6 +284,9 @@ function renderSettingsTab(props: MemoryViewProps) {
 export function renderMemory(props: MemoryViewProps) {
   return html`
     <section class="memory-page">
+      <p class="settings-page__intro">
+        ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
+      </p>
       ${renderHubTabs<MemoryTab>({
         id: "memory",
         active: props.activeTab,
@@ -292,7 +298,6 @@ export function renderMemory(props: MemoryViewProps) {
         ],
         ariaLabel: t("memoryPage.tablistLabel"),
         panelId: MEMORY_PANEL_ID,
-        userSelectionOnly: true,
         onSelect: (tab) => props.onTabChange(tab),
       })}
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">

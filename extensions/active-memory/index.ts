@@ -23,6 +23,7 @@ import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from ".
 import {
   buildCacheKey,
   buildCircuitBreakerKey,
+  forgetActiveRecallRun,
   getCachedResult,
   getCircuitBreakerEntry,
   isCircuitBreakerOpen,
@@ -459,6 +460,7 @@ export default definePluginEntry({
               currentModelId: ctx.modelId,
               conversationRecall,
               abortSignal: deadlineController.signal,
+              runId: ctx.runId,
             });
             deadlineController.signal.throwIfAborted();
             if (!result.summary) {
@@ -493,6 +495,9 @@ export default definePluginEntry({
       },
       { timeoutMs: beforePromptBuildTimeoutMs },
     );
+    api.on("agent_end", (event, ctx) => {
+      forgetActiveRecallRun(event.runId ?? ctx.runId);
+    });
   },
 });
 

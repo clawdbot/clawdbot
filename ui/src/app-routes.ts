@@ -3,8 +3,10 @@ import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
+  INTERNAL_PLUGINS_PATH_PARAM,
   memoryTabFromPath,
   pathForRoute,
+  pluginsHubTabFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
   workboardBoardIdFromPath,
@@ -95,8 +97,8 @@ export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard ids
-  // and session refs are runtime data, so the app owns those dynamic paths.
+  // The shared router intentionally matches exact paths only. Workboard ids,
+  // hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
     routeIdFromPath,
@@ -113,6 +115,10 @@ function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute 
   const memoryTab = memoryTabFromPath(pathname, basePath);
   if (memoryTab && memoryTab !== "overview") {
     return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
+  }
+  const pluginsTab = pluginsHubTabFromPath(pathname, basePath);
+  if (pluginsTab === "discover") {
+    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
   return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
