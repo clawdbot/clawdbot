@@ -35,7 +35,7 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "doctor-failed": "updates.failureReasons.doctorFailed",
 };
 
-export type UpdateRestartStatusResponse = {
+type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
