@@ -663,6 +663,15 @@ describe("diagnostics-prometheus service", () => {
     metrics.record(
       {
         ...baseEvent(),
+        type: "session.maintenance.pruned",
+        pruned: 3,
+        retentionMs: 86_400_000,
+      },
+      trusted,
+    );
+    metrics.record(
+      {
+        ...baseEvent(),
         type: "talk.event",
         sessionId: "talk-session-should-not-export",
         turnId: "turn-should-not-export",
@@ -684,6 +693,7 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).toContain(
       'openclaw_session_recovery_age_seconds_sum{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 12',
     );
+    expect(rendered).toContain("openclaw_session_maintenance_pruned_total 3");
     expect(rendered).toContain(
       'openclaw_talk_event_total{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 1',
     );

@@ -4534,6 +4534,16 @@ describe("diagnostics-otel service", () => {
       action: "abort-active-run",
     });
     emitTrustedDiagnosticEvent({
+      type: "session.maintenance.pruned",
+      pruned: 3,
+      retentionMs: 86_400_000,
+    });
+    emitDiagnosticEvent({
+      type: "session.maintenance.pruned",
+      pruned: 99,
+      retentionMs: 86_400_000,
+    });
+    emitTrustedDiagnosticEvent({
       type: "talk.event",
       sessionId: "talk-session-should-not-export",
       turnId: "turn-should-not-export",
@@ -4568,6 +4578,8 @@ describe("diagnostics-otel service", () => {
     const recoveryAgeRecord = lastHistogramRecord("openclaw.session.recovery.age_ms");
     expect(recoveryAgeRecord?.[0]).toBe(13_000);
     expect(recoveryAgeRecord?.[1]?.["openclaw.status"]).toBe("released");
+    expect(firstCounterAddCall("openclaw.session.maintenance.pruned")).toStrictEqual([3, {}]);
+    expect(telemetryState.counters.get("openclaw.session.maintenance.pruned")?.add).toHaveBeenCalledTimes(1);
     expect(telemetryState.counters.get("openclaw.talk.event")?.add).toHaveBeenCalledWith(1, {
       "openclaw.talk.brain": "agent-consult",
       "openclaw.talk.event_type": "input.audio.delta",

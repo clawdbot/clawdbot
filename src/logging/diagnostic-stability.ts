@@ -320,6 +320,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       }
       assignReasonCode(record, event.outcomeReason ?? event.reason);
       break;
+    case "session.maintenance.pruned":
+      record.action = "pruned";
+      record.count = event.pruned;
+      record.durationMs = event.retentionMs;
+      break;
     case "session.turn.created":
       record.source = event.agentId;
       record.channel = event.channel;

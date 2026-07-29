@@ -132,6 +132,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_stuck_age_seconds`             | histogram | `reason`, `state`                                                                         |
 | `openclaw_session_recovery_total`                | counter   | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_session_recovery_age_seconds`          | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
+| `openclaw_session_maintenance_pruned_total`      | counter   | none                                                                                      |
 | `openclaw_liveness_warning_total`                | counter   | `reason`                                                                                  |
 | `openclaw_liveness_sessions`                     | gauge     | `state`                                                                                   |
 | `openclaw_liveness_event_loop_delay_p99_seconds` | histogram | `reason`                                                                                  |

@@ -77,11 +77,11 @@ configuration does not use the OTLP transport and continues to work.
 
 ## Signals exported
 
-| Signal      | What goes in it                                                                                                                                                                                              |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Metrics** | Counters/histograms for token usage, cost, run duration, failover, skill usage, message flow, Talk events, queue lanes, session state/recovery, tool execution, exec, memory, liveness, and exporter health. |
-| **Traces**  | Spans for model usage, model calls, harness lifecycle, skill usage, tool execution, exec, webhook/message processing, context assembly, and tool loops.                                                      |
-| **Logs**    | Structured `logging.file` records exported over OTLP or stdout JSONL when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                          |
+| Signal      | What goes in it                                                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Metrics** | Counters/histograms for token usage, cost, run duration, failover, skill usage, message flow, Talk events, queue lanes, session lifecycle, tool execution, exec, memory, liveness, and exporter health. |
+| **Traces**  | Spans for model usage, model calls, harness lifecycle, skill usage, tool execution, exec, webhook/message processing, context assembly, and tool loops.                                                 |
+| **Logs**    | Structured `logging.file` records exported over OTLP or stdout JSONL when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                     |
 
 Toggle `traces`, `metrics`, and `logs` independently. Traces and metrics
 default to on when `diagnostics.otel.enabled` is true; logs default to off
@@ -407,6 +407,7 @@ bounds; content remains off by default.
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
+- `openclaw.session.maintenance.pruned` (counter, attrs: none; adds the number of cron run sessions pruned by session maintenance)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
 ### Session liveness telemetry
@@ -618,6 +619,7 @@ for usage methods and request options.
 
 - `queue.lane.enqueue` / `queue.lane.dequeue`
 - `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
+- `session.maintenance.pruned`
 - `run.attempt` / `run.progress`
 - `run.execution_phase` (public, session-correlated embedded-runner startup milestones)
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)

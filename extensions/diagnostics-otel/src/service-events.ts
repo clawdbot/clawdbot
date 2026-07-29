@@ -46,6 +46,7 @@ export function createDiagnosticsEventHandler(params: {
     recordSessionStuck,
     recordSessionRecoveryRequested,
     recordSessionRecoveryCompleted,
+    recordSessionMaintenancePruned,
     recordRunAttempt,
     recordHeartbeat,
     recordLivenessWarning,
@@ -142,6 +143,9 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "session.recovery.completed":
           recordSessionRecoveryCompleted(evt);
+          return;
+        case "session.maintenance.pruned":
+          recordSessionMaintenancePruned(evt, metadata);
           return;
         case "run.attempt":
           recordRunAttempt(evt);
