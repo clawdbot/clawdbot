@@ -455,20 +455,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let app = try XCTUnwrap(self.app)
         let textField = self.chatMessageInput(in: app)
         XCTAssertTrue(textField.waitForExistence(timeout: 8))
-        let talkButton = try XCTUnwrap(app?.buttons["chat-realtime-control"])
+        let talkButton = app.buttons["chat-realtime-control"]
         XCTAssertTrue(talkButton.waitForExistence(timeout: 5))
-        let attachmentButton = try XCTUnwrap(app?.buttons["chat-attachment-picker"])
+        let attachmentButton = app.buttons["chat-attachment-picker"]
         XCTAssertTrue(attachmentButton.waitForExistence(timeout: 5))
-        let dictationButton = try XCTUnwrap(app?.buttons["chat-dictation-control"])
+        let dictationButton = app.buttons["chat-dictation-control"]
         XCTAssertTrue(dictationButton.waitForExistence(timeout: 5))
-        let composerSurface = try XCTUnwrap(app?.otherElements["chat-composer-surface"])
+        let composerSurface = app.otherElements["chat-composer-surface"]
         XCTAssertTrue(composerSurface.waitForExistence(timeout: 5))
-        let agentIdentity = try XCTUnwrap(app?.otherElements["chat-agent-identity"])
+        let agentIdentity = app.otherElements["chat-agent-identity"]
         XCTAssertTrue(agentIdentity.waitForExistence(timeout: 5))
         XCTAssertEqual(agentIdentity.value as? String, "Collapsed")
         agentIdentity.tap()
         self.waitForValue("Expanded", of: agentIdentity)
-        let sendButton = try XCTUnwrap(app?.buttons["chat-send-message"])
+        let sendButton = app.buttons["chat-send-message"]
         XCTAssertFalse(sendButton.exists)
         XCTAssertLessThanOrEqual(agentIdentity.frame.maxY, composerSurface.frame.minY)
         XCTAssertGreaterThanOrEqual(attachmentButton.frame.minX, composerSurface.frame.minX)
