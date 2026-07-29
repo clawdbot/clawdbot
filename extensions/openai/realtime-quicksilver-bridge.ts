@@ -326,7 +326,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         direction: "server",
         type:
           event.kind === "transcript-done"
-            ? "turn.done"
+            ? event.role === "assistant"
+              ? "response.done"
+              : "turn.done"
             : `${event.role === "user" ? "input" : "output"}_transcript.added`,
       });
       return;

@@ -56,6 +56,7 @@ function createHarness(params?: { audioFormat?: "pcm16" | "g711_ulaw" }) {
   const onReady = vi.fn();
   const onError = vi.fn();
   const onClose = vi.fn();
+  const onEvent = vi.fn();
   const bridge = new OpenAIQuicksilverVoiceBridge({
     providerConfig: {},
     model: "gpt-live-1-codex",
@@ -74,6 +75,7 @@ function createHarness(params?: { audioFormat?: "pcm16" | "g711_ulaw" }) {
     onReady,
     onError,
     onClose,
+    onEvent,
   });
   return {
     bridge,
@@ -81,6 +83,7 @@ function createHarness(params?: { audioFormat?: "pcm16" | "g711_ulaw" }) {
     onAudio,
     onClose,
     onError,
+    onEvent,
     onReady,
     onToolCall,
     onTranscript,
@@ -160,6 +163,29 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       delegation_item_id: "delegation-1",
       channel: "speakable",
       content: [{ type: "input_text", text: "The repository is clean." }],
+    });
+  });
+
+  it("normalizes assistant completion to the shared response lifecycle", async () => {
+    const harness = createHarness();
+    await harness.bridge.connect();
+
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "user", transcript: "hello" },
+    });
+    expect(harness.onEvent).toHaveBeenLastCalledWith({
+      direction: "server",
+      type: "turn.done",
+    });
+
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "assistant", transcript: "hi there" },
+    });
+    expect(harness.onEvent).toHaveBeenLastCalledWith({
+      direction: "server",
+      type: "response.done",
     });
   });
 
