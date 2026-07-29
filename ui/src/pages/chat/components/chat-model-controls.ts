@@ -321,15 +321,6 @@ function renderModelProvenanceRow(params: {
         ${t("chat.selectors.modelSection")}
       </span>
       <span class="chat-controls__model-provenance-state">
-        <span
-          class="chat-controls__model-provenance-value ${params.hasModelOverride
-            ? ""
-            : "chat-controls__model-provenance-value--inherit"}"
-        >
-          ${params.hasModelOverride
-            ? t("chat.modelControls.sessionOverride")
-            : t("chat.modelControls.usingDefault")}
-        </span>
         ${params.hasModelOverride
           ? html`
               <openclaw-tooltip
@@ -354,11 +345,17 @@ function renderModelProvenanceRow(params: {
                     params.onReset();
                   }}
                 >
-                  ${icons.x}
+                  ${t("chat.modelControls.useDefault")}
                 </button>
               </openclaw-tooltip>
             `
-          : ""}
+          : html`
+              <span
+                class="chat-controls__model-provenance-value chat-controls__model-provenance-value--inherit"
+              >
+                ${t("chat.modelControls.usingDefault")}
+              </span>
+            `}
       </span>
     </div>
   `;
@@ -581,11 +578,17 @@ function renderChatModelReasoningSelect(params: {
           <span class="chat-controls__model-option-copy">
             <span class="chat-controls__model-option-title">
               <span class="chat-controls__model-option-name">${modelLabel}</span>
-              ${entry.isDefault
-                ? html`<span class="chat-controls__model-default-label"
-                    >${t("chat.modelControls.default")}</span
+              ${selected
+                ? html`<span
+                    class="chat-controls__model-state-label chat-controls__model-state-label--current"
+                    >${t("chat.modelControls.current")}</span
                   >`
-                : ""}
+                : entry.isDefault
+                  ? html`<span
+                      class="chat-controls__model-state-label chat-controls__model-state-label--default"
+                      >${t("chat.modelControls.default")}</span
+                    >`
+                  : ""}
             </span>
             ${contextLabel
               ? html`<span class="chat-controls__model-option-meta">${contextLabel}</span>`
