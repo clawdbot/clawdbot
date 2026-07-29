@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../extensions/qa-lab/api.js";
 import {
   buildCodeModeMatrixAgentEnv,
   classifyCodeModeMatrixCell,
@@ -12,6 +11,7 @@ import {
   reserveCodeModeMatrixOutputDir,
   resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
+  validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.ts";
 import type { AgentExecEnvelope } from "../../src/commands/agent-exec.ts";
