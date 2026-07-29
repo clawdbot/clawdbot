@@ -37,6 +37,8 @@ function installUpdateTranslations() {
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
     "updates.verificationFailedWithVersions":
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    "updates.outcomeUnknown":
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
   };
   return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
     const template = translations[key] ?? key;
@@ -922,6 +924,186 @@ describe("application update overlays", () => {
       text: "Update skipped: managed-service-handoff-already-running. Another managed update is already running. Wait for it to complete, then refresh update status.",
     });
     overlays.dispose();
+  });
+
+  it("reconciles an update when disconnect wins the update.run response race", async () => {
+    installUpdateTranslations();
+    const updateRun = deferred<{
+      ok: boolean;
+      handoff: { status: string };
+      result: { reason: string; status: string };
+    }>();
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      if (method === "update.run") {
+        return updateRun.promise;
+      }
+      if (method === "update.status") {
+        return Promise.resolve({
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "1.0.0" } },
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(gatewayClient);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      harness.update({
+        hello: {
+          server: { version: "1.0.0" },
+          snapshot: {
+            updateAvailable: {
+              currentVersion: "1.0.0",
+              latestVersion: "2.0.0",
+              channel: "stable",
+            },
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+
+      const running = overlays.runUpdate();
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledWith("update.run", {});
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+
+      expect(request).toHaveBeenCalledWith("update.status", {});
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: expect.stringContaining("Expected v2.0.0, running v1.0.0"),
+      });
+
+      updateRun.resolve({
+        ok: true,
+        handoff: { status: "started" },
+        result: { reason: UPDATE_HANDOFF_STARTED_REASON, status: "skipped" },
+      });
+      await running;
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+    } finally {
+      updateRun.resolve({
+        ok: true,
+        handoff: { status: "started" },
+        result: { reason: UPDATE_HANDOFF_STARTED_REASON, status: "skipped" },
+      });
+      overlays.dispose();
+    }
+  });
+
+  it("reports an explicit unknown outcome when ambiguous reconciliation times out", async () => {
+    vi.useFakeTimers();
+    installUpdateTranslations();
+    const updateRun = deferred();
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      if (method === "update.run") {
+        return updateRun.promise;
+      }
+      return Promise.resolve({});
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(gatewayClient);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      const running = overlays.runUpdate();
+      await flushMicrotasks();
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushMicrotasks();
+
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+      });
+
+      updateRun.resolve({});
+      await running;
+    } finally {
+      updateRun.resolve({});
+      overlays.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a status response from a retired reconnect", async () => {
+    const retiredStatus = deferred();
+    const firstRequest = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      if (method === "update.run") {
+        return Promise.resolve({
+          ok: true,
+          result: { status: "ok", after: { version: "2.0.0" } },
+        });
+      }
+      if (method === "update.status") {
+        return retiredStatus.promise;
+      }
+      return Promise.resolve({});
+    });
+    const replacementRequest = vi.fn<RequestFn>((method) =>
+      Promise.resolve(
+        method === "update.status"
+          ? {
+              sentinel: {
+                kind: "update",
+                status: "ok",
+                stats: { after: { version: "2.0.0" } },
+              },
+            }
+          : [],
+      ),
+    );
+    const harness = createGatewayHarness(client(firstRequest));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      await overlays.runUpdate();
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+      expect(firstRequest).toHaveBeenCalledWith("update.status", {});
+
+      harness.update({ phase: "stopped" });
+      harness.update({ client: client(replacementRequest), phase: "connected" });
+      await flushMicrotasks();
+      expect(replacementRequest).toHaveBeenCalledWith("update.status", {});
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+
+      retiredStatus.resolve({
+        sentinel: {
+          kind: "update",
+          status: "error",
+          stats: { reason: "retired-result" },
+        },
+      });
+      await flushMicrotasks();
+
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+    } finally {
+      retiredStatus.resolve({});
+      overlays.dispose();
+    }
   });
 
   it("verifies on reconnect and survives updates within the connected epoch", async () => {

@@ -380,6 +380,8 @@ export const en: TranslationMap = {
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     handoffTimeout:
       "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+    outcomeUnknown:
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
