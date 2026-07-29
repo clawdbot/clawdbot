@@ -4,7 +4,6 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
-/** Normalizes current-version ownership metadata before persistence or restore. */
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
   entry.taskRunId = taskRunId || undefined;
