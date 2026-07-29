@@ -1,46 +1,6 @@
-import { MeetingPlatformAdapter as MeetingPlatformAdapterCore } from "../meeting-bot/platform-adapter.js";
 /**
  * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
  */
-import { registerMeetingPluginCli } from "../meeting-bot/plugin-cli.js";
-import { createMeetingPluginConfigSchema } from "../meeting-bot/plugin-config.js";
-import {
-  createMeetingChromeRuntimeBindings,
-  createMeetingPluginChromeTransport,
-  createMeetingPluginCliMetadata,
-  createMeetingPluginNodeHostHandler,
-  createMeetingPluginNodeInvokePolicy,
-  createMeetingPluginShellEntry,
-  createMeetingPluginTypes,
-} from "../meeting-bot/plugin-shell.js";
-import { resolveMeetingProbeTimeoutMs } from "../meeting-bot/runtime-probes.js";
-
-type MeetingPlatformAdapterFacade = typeof MeetingPlatformAdapterCore & {
-  createChromeRuntimeBindings: typeof createMeetingChromeRuntimeBindings;
-  createCliMetadata: typeof createMeetingPluginCliMetadata;
-  createPluginChromeTransport: typeof createMeetingPluginChromeTransport;
-  createPluginConfigSchema: typeof createMeetingPluginConfigSchema;
-  createPluginNodeHostHandler: typeof createMeetingPluginNodeHostHandler;
-  createPluginNodeInvokePolicy: typeof createMeetingPluginNodeInvokePolicy;
-  createPluginShellEntry: typeof createMeetingPluginShellEntry;
-  pluginTypes: typeof createMeetingPluginTypes;
-  registerPluginCli: typeof registerMeetingPluginCli;
-  resolveProbeTimeoutMs: typeof resolveMeetingProbeTimeoutMs;
-};
-
-export const MeetingPlatformAdapter: MeetingPlatformAdapterFacade = {
-  ...MeetingPlatformAdapterCore,
-  createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
-  createCliMetadata: createMeetingPluginCliMetadata,
-  createPluginChromeTransport: createMeetingPluginChromeTransport,
-  createPluginConfigSchema: createMeetingPluginConfigSchema,
-  createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
-  createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
-  createPluginShellEntry: createMeetingPluginShellEntry,
-  pluginTypes: createMeetingPluginTypes,
-  registerPluginCli: registerMeetingPluginCli,
-  resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
-};
 
 export {
   startMeetingRealtimeEngine,
@@ -115,6 +75,7 @@ export type {
   MeetingManualAction,
   MeetingManualActionCategory,
 } from "../meeting-bot/platform-adapter.js";
+export { MeetingPlatformAdapter } from "../meeting-bot/platform-adapter.js";
 export { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
 export {
   createMeetingVoiceCallGateway,
