@@ -1,7 +1,7 @@
 ---
 title: "PropertyManager Foundational Requirements"
 version: "1.1"
-status: "Phase 2 complete — dev VM acceptance"
+status: "Phase 3 deployed — post-deploy verification"
 owner: "OpenClaw Operator"
 last_reviewed: "2026-07-29"
 category: "Governance"
@@ -11,7 +11,7 @@ source_document: "PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md"
 # PropertyManager Foundational Requirements
 
 Version: 1.1  
-Status: **Phase 2 complete on development VM** — Phase 3 production authorization next  
+Status: **Phase 3 deployed on production Intel Mini** — post-deploy verification  
 Owner: OpenClaw Operator  
 Last Updated: 2026-07-29
 
@@ -25,7 +25,18 @@ Implementation details live in [PropertyManager Asset Architecture](../architect
 
 ---
 
-## Phase 0 gate — design approved; Phase 2 accepted on dev VM
+## Phase 0 gate — design approved; Phase 3 deployed on production
+
+**Phase 3 (production Intel Mini) deployed 2026-07-29:**
+
+- Operator authorized production rollout ("Page 3 authorized" = Phase 3)
+- Host confirmed: `intelmini` / Tailscale `100.85.36.72`
+- Pre-migration Postgres backup taken; migrations 005/006 already present (`schema_version` `006`)
+- API restarted with auth enabled (`auth_required: true`, `api_version: v1`)
+- RanchBrain import applied (proposed meters; no blind mapping auto-approve)
+- Dashboard QR routes live; dashboard auth EnvironmentFile needs operator sudo helper
+- Evidence: `reports/propertymanager/phase3-production-evidence.md`
+- Remaining: activate meters, rotate secrets if desired, rebuild Mac/iOS against prod URL, Phase 4 monitoring
 
 **Phase 2 (dev VM) delivered 2026-07-29:**
 
@@ -48,7 +59,7 @@ Implementation details live in [PropertyManager Asset Architecture](../architect
 - Dashboard QR read public / write requires operator PIN or API key
 - Smoke tests: `tools/property_manager/tests/test_phase1_meters.py`
 
-**Production (Intel Mini) remains blocked** until Phase 3 explicit operator authorization.
+**Production (Intel Mini) Phase 3 deployed** — see evidence pack; Phase 4 is post-deploy monitoring.
 
 ### Phase 0 design review checklist
 

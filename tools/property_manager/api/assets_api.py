@@ -404,7 +404,7 @@ def list_meter_readings(asset_id: str):
     )
 
 
-@auth_required()
+@auth_required(allow_pin=True)
 def create_meter_reading(asset_id: str):
     asset = fetch_asset_or_404(asset_id)
     if asset is None:
@@ -487,7 +487,7 @@ def create_meter_reading(asset_id: str):
     return jsonify({"asset": updated, "reading_id": result.get("reading_id"), "current_value": result.get("current_value")})
 
 
-@auth_required()
+@auth_required(allow_pin=True)
 def confirm_meter_reading(asset_id: str):
     if fetch_asset_or_404(asset_id) is None:
         return error_response("NOT_FOUND", "Asset not found", status=404)

@@ -1,7 +1,7 @@
 ---
 title: "PropertyManager Asset Architecture"
 version: "1.1"
-status: "Architecture — Phase 2 accepted (dev VM)"
+status: "Architecture — Phase 3 deployed (production)"
 owner: "OpenClaw Architecture"
 last_reviewed: "2026-07-29"
 category: "Architecture"
@@ -11,7 +11,7 @@ source_document: "PROPERTY_MANAGER_ASSET_ARCHITECTURE.md"
 # PropertyManager Asset Architecture
 
 Version: 1.1  
-Status: **Phase 2 accepted on development VM**  
+Status: **Phase 3 deployed on production Intel Mini**  
 Authority: Requirements in [PropertyManager Foundational Requirements](../foundation/PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md)  
 Last Updated: 2026-07-29
 
@@ -21,7 +21,7 @@ Last Updated: 2026-07-29
 
 Track operating meters (runtime hours, mileage, cycles) for ranch equipment and vehicles. Connect preventive-maintenance schedules to meter intervals from manufacturer manuals. Provide one shared REST API for all client surfaces.
 
-**Phase 1 implemented on dev VM (2026-07-29).** Production Intel Mini deployment remains a separate gated checkpoint (Phase 3).
+**Phase 3 deployed on production Intel Mini (2026-07-29).** See `reports/propertymanager/phase3-production-evidence.md`.
 
 ---
 
