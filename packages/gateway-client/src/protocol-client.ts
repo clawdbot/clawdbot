@@ -352,6 +352,10 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     const generation = this.generation + 1;
+    // Outer event sequence is scoped to one connection and resets when the
+    // server opens a replacement socket. Clear it here so gap detection on the
+    // new generation never compares against a retired connection's seq.
+    this.lastSeq = null;
     this.connectNonce = null;
     this.connectSent = false;
     this.connectRequestSent = false;
