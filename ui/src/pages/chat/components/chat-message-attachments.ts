@@ -102,6 +102,14 @@ function scheduleAssistantAttachmentRefresh(
     // budget; ticket refreshes must still invalidate their current generation.
     if (availability.status !== "unavailable") {
       deleteAssistantAttachmentAvailability(cacheKey);
+    } else {
+      // Bump the render version so the chat-thread memo key changes and the
+      // affected attachment row re-renders on the cooldown expiry. Preserving
+      // the cached unavailable entry lets the next resolve() call inherit the
+      // single-attempt budget via the !retryAttempted gate. Without this
+      // version bump, an unrelated rerender would be required before the
+      // retry-check branch in resolve() can run.
+      bumpAssistantAttachmentAvailabilityRenderVersion();
     }
     onRequestUpdate();
   }, refreshInMs);
