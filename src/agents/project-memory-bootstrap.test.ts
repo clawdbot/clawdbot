@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildProjectMemoryWriteInstruction,
+  filterProjectScopedCuratedContextFiles,
   prepareProjectMemoryBootstrap,
 } from "./project-memory-bootstrap.js";
 
@@ -88,6 +89,42 @@ describe("project memory bootstrap", () => {
     await expect(prepareEntries(entries, [])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
     expect(buildProjectMemoryWriteInstruction(undefined)).toBe("");
+  });
+
+  it("filters tagged raw entries fail-closed with the all-keys rule", () => {
+    const contextFiles = [
+      {
+        path: "MEMORY.md",
+        content: [
+          "- Global fact.",
+          "- Alpha fact. <!-- project: github.com/acme/Alpha -->",
+          "- Shared fact. <!-- project: github.com/acme/Alpha; github.com/acme/Beta -->",
+          "- Invalid fact. <!-- project: github.com/acme/Beta< -->",
+          "- Mixed invalid fact. <!-- project: github.com/acme/Alpha; bad< -->",
+          "- Unterminated fact. <!-- project: github.com/acme/Alpha",
+        ].join("\n"),
+      },
+    ];
+    const empty = filterProjectScopedCuratedContextFiles({ contextFiles });
+    const alpha = filterProjectScopedCuratedContextFiles({
+      contextFiles,
+      activeProjectKeys: ["github.com/acme/Alpha"],
+    });
+    const both = filterProjectScopedCuratedContextFiles({
+      contextFiles,
+      activeProjectKeys: ["github.com/acme/Alpha", "github.com/acme/Beta"],
+    });
+
+    expect(empty[0]?.content).toBe("- Global fact.");
+    expect(alpha[0]?.content).toContain("Alpha fact");
+    expect(alpha[0]?.content).not.toContain("Shared fact");
+    expect(alpha[0]?.content).not.toContain("Invalid fact");
+    expect(alpha[0]?.content).not.toContain("Mixed invalid fact");
+    expect(alpha[0]?.content).not.toContain("Unterminated fact");
+    expect(both[0]?.content).toContain("Shared fact");
+    expect(both[0]?.content).not.toContain("Invalid fact");
+    expect(both[0]?.content).not.toContain("Mixed invalid fact");
+    expect(both[0]?.content).not.toContain("Unterminated fact");
   });
 
   it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {

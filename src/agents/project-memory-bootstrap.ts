@@ -1,9 +1,47 @@
+import {
+  extractProjectKeysFromCuratedEntry,
+  normalizeProjectAnnotationKey,
+  splitCuratedMarkdownEntries,
+} from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import { getMemoryRuntime } from "../plugins/memory-state.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 
 const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
 const PROJECT_MEMORY_ENTRY_MAX_CHARS = 600;
+
+function isCuratedProjectContextPath(value: string): boolean {
+  const basename = value.replaceAll("\\", "/").split("/").at(-1)?.toUpperCase();
+  return basename === "MEMORY.MD" || basename === "USER.MD";
+}
+
+export function filterProjectScopedCuratedContextFiles(params: {
+  contextFiles?: EmbeddedContextFile[];
+  activeProjectKeys?: readonly string[];
+}): EmbeddedContextFile[] {
+  const active = new Set(
+    (params.activeProjectKeys ?? [])
+      .map((key) => normalizeProjectAnnotationKey(key))
+      .filter((key): key is string => Boolean(key)),
+  );
+  return (params.contextFiles ?? []).map((file) => {
+    if (!isCuratedProjectContextPath(file.path)) {
+      return file;
+    }
+    const content = splitCuratedMarkdownEntries(file.content)
+      .filter((entry) => {
+        const annotations = extractProjectKeysFromCuratedEntry(entry.text);
+        return (
+          !annotations.annotated ||
+          (annotations.valid && annotations.keys.every((key) => active.has(key)))
+        );
+      })
+      .map((entry) => entry.text)
+      .join("\n");
+    return content === file.content ? file : { path: file.path, content };
+  });
+}
 
 function cleanProjectMemorySnippet(value: string): string {
   return value

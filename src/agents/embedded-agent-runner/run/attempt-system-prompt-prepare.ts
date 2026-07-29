@@ -333,6 +333,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       preparedMemoryPrompt,
       preparedWatchedSessions,
       projectMemoryBootstrap,
+      activeProjectKeys,
       promptContribution,
     },
     providerTransform: {

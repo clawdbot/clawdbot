@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { INVALID_PROJECT_ANNOTATION_KEY } from "./internal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-sqlite.js";
 
 type MemoryRecallMetadataDatabase = {
@@ -92,6 +93,9 @@ function readCuratedMemoryCandidates(params: {
         ?.split(";")
         .map((key) => key.trim())
         .filter(Boolean);
+      if (storedKeys?.includes(INVALID_PROJECT_ANNOTATION_KEY)) {
+        continue;
+      }
       if (
         (active === undefined && !params.requireProject) ||
         (row.project_key === null && !params.requireProject) ||

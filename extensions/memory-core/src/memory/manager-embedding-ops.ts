@@ -13,7 +13,9 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  extractProjectKeysFromCuratedEntry,
   hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -108,24 +110,6 @@ type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
 };
 
-function normalizeProjectAnnotationKey(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
-    return null;
-  }
-  if (trimmed.startsWith("path:")) {
-    return trimmed;
-  }
-  const separator = trimmed.indexOf("/");
-  if (separator < 1) {
-    return trimmed;
-  }
-  // Preserve remote path case so case-sensitive hosts fail closed. Providers
-  // with case-insensitive slugs may miss boosts/digests across casing variants,
-  // but folding paths could cross-inject memory between distinct repositories.
-  return `${trimmed.slice(0, separator).toLowerCase()}${trimmed.slice(separator)}`;
-}
-
 function resolveChunkRecallMetadata(params: {
   curatedRoot: boolean;
   projectScopeEligible: boolean;
@@ -137,12 +121,15 @@ function resolveChunkRecallMetadata(params: {
   }
 
   const phrases = new Set<string>();
-  const projectKeys = new Set<string>();
   let importance: number | null = null;
   const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
   const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
   const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
-  for (const line of lines.slice(annotationStartLine - 1, annotationEndLine)) {
+  const annotationLines = lines.slice(annotationStartLine - 1, annotationEndLine);
+  const projectAnnotations = params.projectScopeEligible
+    ? extractProjectKeysFromCuratedEntry(annotationLines.join("\n"))
+    : { annotated: false, valid: true, keys: [] };
+  for (const line of annotationLines) {
     const annotationSuffix = line.match(
       /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
     )?.[0];
@@ -166,14 +153,6 @@ function resolveChunkRecallMetadata(params: {
         continue;
       }
       if (kind === "project") {
-        if (params.projectScopeEligible) {
-          for (const rawKey of value.split(";")) {
-            const projectKey = normalizeProjectAnnotationKey(rawKey);
-            if (projectKey) {
-              projectKeys.add(projectKey);
-            }
-          }
-        }
         continue;
       }
       if (!params.curatedRoot) {
@@ -193,9 +172,14 @@ function resolveChunkRecallMetadata(params: {
   return {
     importance,
     triggers: phrases.size > 0 ? [...phrases].join("; ") : null,
-    // Preserve every scope on mixed chunks: ranking can boost on any match,
-    // while lane-1 requires all keys active so no sibling project's text leaks.
-    projectKey: projectKeys.size > 0 ? [...projectKeys].join("; ") : null,
+    // Invalid annotations remain scoped but unsatisfiable; treating them as NULL
+    // would make malformed project memory global and leak it into every project.
+    projectKey:
+      projectAnnotations.annotated && !projectAnnotations.valid
+        ? INVALID_PROJECT_ANNOTATION_KEY
+        : projectAnnotations.keys.length > 0
+          ? projectAnnotations.keys.join("; ")
+          : null,
   };
 }
 

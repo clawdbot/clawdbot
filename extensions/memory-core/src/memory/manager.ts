@@ -88,6 +88,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
@@ -411,6 +412,8 @@ async function closeMemoryIndexManagersForScope(params: {
     await closeMemoryIndexManagersForScopeUnlocked(params);
   });
 }
+
+type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
@@ -1108,22 +1111,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
   }
 
-  async search(
+  async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
+    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const minScore = opts?.minScore ?? this.settings.query.minScore;
+    const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
+    const candidateMaxResults = hasActiveProject
+      ? Math.min(200, Math.max(maxResults, maxResults * 4))
+      : maxResults;
+    const candidateMinScore = hasActiveProject ? minScore / 1.15 : minScore;
+    const results = await this.searchUnranked(query, {
+      ...opts,
+      maxResults: candidateMaxResults,
+      minScore: candidateMinScore,
+    });
+    const ranked = applyProjectRanking(results, opts?.activeProjectKeys);
+    return hasActiveProject
+      ? ranked.filter((entry) => entry.score >= minScore).slice(0, maxResults)
+      : ranked;
+  }
+
+  private async searchUnranked(
     query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      /** Keyword/FTS only: skip query embedding and vector search (reply-path contract). */
-      lexicalOnly?: boolean;
-      activeProjectKeys?: string[];
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      /** When set, only these chunk sources are considered (must be enabled for this manager). */
-      sources?: MemorySource[];
-      /** Caller-owned cancellation; aborts in-flight embedding work when the caller stops waiting. */
-      signal?: AbortSignal;
-    },
+    opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       opts?.onDebug?.({ backend: "builtin" });
@@ -1442,7 +1451,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         textWeight: hybrid.textWeight,
         mmr: hybrid.mmr,
         temporalDecay: hybrid.temporalDecay,
-        activeProjectKeys: opts?.activeProjectKeys,
       });
       const strict = merged.filter((entry) => entry.score >= minScore);
       if (strict.length > 0 || keywordResults.length === 0) {
@@ -1849,7 +1857,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
-    activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
@@ -1888,7 +1895,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
-      activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }

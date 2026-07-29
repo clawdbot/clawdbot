@@ -60,6 +60,7 @@ function createManagerMock(params: {
     score: number;
     snippet: string;
     source: "memory";
+    projectKey?: string;
   }>;
   withMemorySourceCounts?: boolean;
 }) {

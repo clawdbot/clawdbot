@@ -10,6 +10,7 @@ export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   cosineSimilarity,
+  extractProjectKeysFromCuratedEntry,
   DEFAULT_MEMORY_READ_LINES,
   DEFAULT_MEMORY_READ_MAX_CHARS,
   dropMemoryPathFtsTriggers,
@@ -19,6 +20,7 @@ export {
   ensureMemoryRecallMetadataColumns,
   ensureMemoryPathFtsTriggers,
   hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
   isFileMissingError,
   isTransientMemoryReadError,
   listMemoryFiles,
@@ -33,6 +35,7 @@ export {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  normalizeProjectAnnotationKey,
   normalizeExtraMemoryPaths,
   parseEmbedding,
   readMemoryFile,
@@ -44,10 +47,13 @@ export {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
   runWithConcurrency,
+  splitCuratedMarkdownEntries,
   statRegularFile,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
+  CuratedMarkdownEntry,
+  CuratedProjectAnnotations,
   MemoryEntryProvenance,
   MemoryOriginClass,
   MemorySearchResult,

@@ -553,6 +553,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       toolNames: effectiveTools.map((tool) => tool.name),
       capabilityToolNames: allowedToolNames,
     });
+    const activeProjectKeys = params.preparedModelRuntime?.projectKey
+      ? [params.preparedModelRuntime.projectKey]
+      : [];
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,
@@ -587,6 +590,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         userTime,
         userTimeFormat,
         contextFiles,
+        activeProjectKeys,
         preparedMemoryPrompt,
         preparedWatchedSessions,
         promptContribution,
