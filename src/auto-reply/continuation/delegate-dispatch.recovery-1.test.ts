@@ -374,7 +374,10 @@ describe("recoverPendingContinuationDelegates", () => {
   });
 
   it("uses the recovered session key even when caller ctx has a stale sessionKey", async () => {
-    const sessionKey = "session-recovered-ctx";
+    // Recovery derives the store path from the recovered key's agent id, which is
+    // required explicitly since the implicit-main fallback was removed. Real owner
+    // keys are agent-scoped; the stale ctx key below is what must lose.
+    const sessionKey = "agent:main:recovered-ctx";
     enqueuePendingDelegate(sessionKey, { task: "recover ctx" });
 
     await recoverPendingContinuationDelegates({
