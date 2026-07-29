@@ -143,6 +143,7 @@ internal class ChatMediaSessionLifecycle<T : Any, S : Any>(
   }
 }
 
+@OptIn(UnstableApi::class)
 internal fun inlineMediaSessionPlayerCommands(availableCommands: Player.Commands): Player.Commands =
   availableCommands
     .buildUpon()
