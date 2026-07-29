@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommand,
   getFreePort,
@@ -187,6 +188,35 @@ describe("sessions_send gateway loopback", () => {
     expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
+
+  it.each([
+    {
+      label: "direct",
+      sessionKey: "agent:main:feishu:direct:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "dm alias",
+      sessionKey: "agent:main:feishu:dm:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "account-scoped direct",
+      sessionKey: "agent:main:feishu:work:direct:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+    {
+      label: "account-scoped dm alias",
+      sessionKey: "agent:main:feishu:work:dm:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+  ])(
+    "delivers a $label session announcement through the authenticated Gateway without stored delivery context",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({ sessionKey, expectedAccountId }) => {
+      await runDirectSessionAnnounceScenario({ sessionKey, expectedAccountId });
+    },
+  );
 
   it(
     "announces through gateway send using external deliveryContext over stale webchat session fields",
