@@ -493,7 +493,7 @@ enum ChatMarkdownBlockSegmenter {
         return result
     }
 
-    private struct Extraction {
+    fileprivate struct Extraction {
         let lineRange: Range<Int>
         let content: Content
 
@@ -513,7 +513,7 @@ enum ChatMarkdownBlockSegmenter {
         }
     }
 
-    private enum UnfoldedBlock {
+    fileprivate enum UnfoldedBlock {
         case block(ChatMarkdownBlock)
         case disclosureOpen(isExpanded: Bool)
         case disclosureSummary(String)
@@ -918,7 +918,7 @@ enum ChatMarkdownBlockSegmenter {
         return ChatMarkdownList(kind: kind, items: renderedItems)
     }
 
-    private struct SourceBuffer {
+    fileprivate struct SourceBuffer {
         let markdown: String
         let lines: [String]
 
