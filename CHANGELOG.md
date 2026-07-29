@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Memory Core dreaming upgrades:** keep canonical SQLite state and archive divergent retired JSON journals so repeated startup migrations no longer block Gateway readiness. Thanks @brokemac79.
 - **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
 - **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
 - **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.
