@@ -38,6 +38,43 @@ describe("heartbeat wake target concurrency", () => {
     vi.restoreAllMocks();
   });
 
+  it("flushes target wakes before an unscoped barrier that was originally queued first", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn(async (_request: WakeRequest) => ({
+      status: "ran" as const,
+      durationMs: 1,
+    }));
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat({
+      source: "other",
+      intent: "immediate",
+      reason: "test-delayed-global-flush",
+      coalesceMs: 1_000,
+    });
+    requestHeartbeat({
+      source: "background-task",
+      intent: "immediate",
+      reason: "background-task",
+      agentId: "main",
+      sessionKey: "agent:main:guildchat:channel:123",
+    });
+    requestHeartbeat({
+      source: "other",
+      intent: "immediate",
+      reason: "test-global-flush",
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "background-task",
+      "test-global-flush",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
   it("starts independent target wakes without waiting for a blocked agent", async () => {
     vi.useFakeTimers();
     let finishBlockedWake: (() => void) | undefined;

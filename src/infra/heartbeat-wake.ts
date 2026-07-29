@@ -249,8 +249,23 @@ function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGro
   if (maxGroups <= 0) {
     return [];
   }
+  const globalWakeGroup = pendingWakes.get("::");
+  const globalImmediateWake = globalWakeGroup?.event;
+  // An unscoped immediate wake is a global flush barrier. Preserve the task
+  // registry contract while keeping spacing and busy guards authoritative.
+  const flushPendingCoalescing =
+    globalImmediateWake?.intent === "immediate" &&
+    !activeWakeTargets.has("::") &&
+    (globalWakeGroup?.blockedUntilMs === undefined || globalWakeGroup.blockedUntilMs <= now) &&
+    (globalImmediateWake.readyAtMs === undefined || globalImmediateWake.readyAtMs <= now) &&
+    (globalImmediateWake.notBeforeMs === undefined || globalImmediateWake.notBeforeMs <= now);
   const readyGroups: Array<{ targetKey: string; group: PendingWakeGroup }> = [];
-  for (const [targetKey, group] of pendingWakes) {
+  const pendingEntries = flushPendingCoalescing
+    ? [...pendingWakes.entries()].toSorted(
+        ([leftTarget], [rightTarget]) => Number(leftTarget === "::") - Number(rightTarget === "::"),
+      )
+    : pendingWakes.entries();
+  for (const [targetKey, group] of pendingEntries) {
     if (readyGroups.length >= maxGroups) {
       break;
     }
@@ -268,7 +283,7 @@ function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGro
         continue;
       }
       if (
-        (pending.readyAtMs === undefined || pending.readyAtMs <= now) &&
+        (flushPendingCoalescing || pending.readyAtMs === undefined || pending.readyAtMs <= now) &&
         (pending.notBeforeMs === undefined || pending.notBeforeMs <= now)
       ) {
         ready[slot] = pending;
