@@ -2,6 +2,8 @@ import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   INTERNAL_SESSION_PATH_PARAM,
+  INTERNAL_MEMORY_PATH_PARAM,
+  memoryTabFromPath,
   pathForRoute,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
@@ -107,6 +109,10 @@ function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute 
   const boardId = workboardBoardIdFromPath(pathname, basePath);
   if (boardId) {
     return ["workboard", "board", boardId];
+  }
+  const memoryTab = memoryTabFromPath(pathname, basePath);
+  if (memoryTab && memoryTab !== "overview") {
+    return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
   return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;

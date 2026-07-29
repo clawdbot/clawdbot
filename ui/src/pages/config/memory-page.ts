@@ -6,6 +6,7 @@ import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core
 import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { t } from "../../i18n/index.ts";
@@ -29,6 +30,8 @@ import "./memory-memories.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 import {
+  canonicalMemoryRouteLocation,
+  memoryTabForRoute,
   memorySchemaKeysForTab,
   resolveMemoryBackend,
   resolveMemoryEngineSelection,
@@ -42,6 +45,7 @@ import {
   type MemoryEngineOption,
   type MemoryPluginState,
 } from "./memory.ts";
+import type { ConfigRouteData } from "./route-data.ts";
 
 const MEMORY_ADDON_PLUGINS = [
   { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
@@ -69,7 +73,7 @@ type MemoryPageProps = {
   configObject: Record<string, unknown>;
   pluginsHref: string;
   memoryImportHref: string;
-  tab: MemoryTab | null;
+  routeData: ConfigRouteData | null;
   buildEditor: (keys: readonly string[]) => TemplateResult;
 };
 
@@ -102,7 +106,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) configObject: Record<string, unknown> = {};
   @property() pluginsHref = "";
   @property() memoryImportHref = "";
-  @property({ attribute: false }) tab: MemoryTab | null = null;
+  @property({ attribute: false }) routeData: ConfigRouteData | null = null;
   @property({ attribute: false }) buildEditor: MemoryPageProps["buildEditor"] = () => html``;
 
   @state() private catalog: MemoryCatalog = { kind: "unavailable" };
@@ -116,6 +120,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   private overviewRequest: { connection: CatalogConnection; agentId: string } | null = null;
   private supportPluginId: string | null = null;
   private supportProbe: { pluginId: string } | null = null;
+  private normalizedLocation = "";
 
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -150,14 +155,22 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    this.syncCanonicalLocation();
+  }
+
   protected override updated(changed: PropertyValues<this>) {
-    if (changed.has("tab")) {
-      const previous = (changed.get("tab") as MemoryTab | null | undefined) ?? "overview";
-      const current = this.tab ?? "overview";
+    if (changed.has("routeData")) {
+      const previous = this.activeTab(
+        (changed.get("routeData") as ConfigRouteData | null | undefined) ?? null,
+      );
+      const current = this.activeTab();
       if (previous !== current) {
         this.overviewRequest = null;
         void this.loadOverviewStatus();
       }
+      this.syncCanonicalLocation();
     }
     if (changed.has("configObject")) {
       const previous = changed.get("configObject") as Record<string, unknown> | undefined;
@@ -172,6 +185,31 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
   }
 
+  private activeTab(routeData = this.routeData): MemoryTab {
+    return memoryTabForRoute(routeData ?? {}, this.context?.basePath ?? "") ?? "overview";
+  }
+
+  private syncCanonicalLocation() {
+    const context = this.context;
+    const routeData = this.routeData;
+    if (!context || !routeData) {
+      return;
+    }
+    const canonical = canonicalMemoryRouteLocation(routeData, context.basePath);
+    if (!canonical) {
+      this.normalizedLocation = "";
+      return;
+    }
+    const source = `${routeData.pathname}${routeData.search}${routeData.hash}`;
+    if (this.normalizedLocation === source) {
+      return;
+    }
+    // One source location gets one replace. Route-data updates clear the guard
+    // once the canonical path arrives, so returning to an old link still works.
+    this.normalizedLocation = source;
+    context.replace("memory", canonical);
+  }
+
   private syncGateway(client: GatewayClient | null, connected: boolean) {
     if (this.connection?.client === client && this.connection.connected === connected) {
       return;
@@ -181,7 +219,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.overviewRequest = null;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
-      if ((this.tab ?? "overview") === "overview") {
+      if (this.activeTab() === "overview") {
         this.overviewStatus = {
           kind: "error",
           message: t("memoryPage.overview.hero.gatewayOffline"),
@@ -239,7 +277,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private async loadOverviewStatus(force = false) {
-    if ((this.tab ?? "overview") !== "overview") {
+    if (this.activeTab() !== "overview") {
       return;
     }
     if (resolveMemoryEngineSelection(this.configObject).kind === "off") {
@@ -428,14 +466,16 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private navigateTab(tab: MemoryTab) {
-    this.context.navigate("memory", tab === "overview" ? undefined : { search: `?tab=${tab}` });
+    this.context.navigate("memory", {
+      pathname: pathForMemoryTab(tab, this.context.basePath),
+    });
   }
 
   override render() {
     const runtimeConfig = this.context.runtimeConfig;
     const engineSelection = resolveMemoryEngineSelection(this.configObject);
     const backend = resolveMemoryBackend(this.configObject);
-    const activeTab = this.tab ?? "overview";
+    const activeTab = this.activeTab();
     const agentId = this.resolveAgentId();
     const agents = this.agentOptions();
     return renderMemory({
@@ -502,7 +542,7 @@ export function renderMemoryPage(props: MemoryPageProps) {
       .configObject=${props.configObject}
       .pluginsHref=${props.pluginsHref}
       .memoryImportHref=${props.memoryImportHref}
-      .tab=${props.tab}
+      .routeData=${props.routeData}
       .buildEditor=${props.buildEditor}
     ></openclaw-memory-settings>
   `;

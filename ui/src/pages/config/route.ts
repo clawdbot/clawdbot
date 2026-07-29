@@ -16,7 +16,7 @@ function configPage(id: ConfigPageId) {
   return definePage({
     ...routePageSpec(id),
     loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-      `${location.search}\u0000${location.hash}`,
+      `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location),
     component: () =>
       import("./config-page.ts").then(() => ({
