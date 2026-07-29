@@ -8,8 +8,11 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
-const { beginDiscordActiveTurnThreadRoute, notifyDiscordActiveTurnThreadReplyDelivered } =
-  await import("../active-turn-thread-route.js");
+const {
+  beginDiscordActiveTurnThreadRoute,
+  notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
+} = await import("../active-turn-thread-route.js");
 const { beginDiscordInboundEventDeliveryCorrelation } =
   await import("../inbound-event-delivery.js");
 
@@ -661,6 +664,24 @@ describe("handleDiscordMessageAction", () => {
         content: [],
         details: { ok: true },
       });
+      const mismatchedResult = await handleDiscordMessageAction({
+        action: "thread-reply",
+        params: {
+          threadId: "thread-2",
+          message: "unrelated",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(mismatchedResult.details).toEqual({ ok: true });
+      expect(onThreadReplyDelivered).not.toHaveBeenCalled();
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true },
+      });
       const result = await handleDiscordMessageAction({
         action: "thread-reply",
         params: {
@@ -679,6 +700,55 @@ describe("handleDiscordMessageAction", () => {
       expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
     } finally {
       endRoute();
+    }
+  });
+
+  it("confirms only the matching adopted thread across concurrent routes", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const firstReplyDelivered = vi.fn();
+    const secondReplyDelivered = vi.fn();
+    const endFirstRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered: firstReplyDelivered,
+    });
+    const endSecondRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-2",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered: secondReplyDelivered,
+    });
+    try {
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-1",
+        threadId: "thread-1",
+      });
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-2",
+        threadId: "thread-2",
+      });
+
+      expect(
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey,
+          accountId: "account-1",
+          threadId: "thread-2",
+        }),
+      ).toBe(true);
+      expect(firstReplyDelivered).not.toHaveBeenCalled();
+      expect(secondReplyDelivered).toHaveBeenCalledWith("thread-2");
+    } finally {
+      endFirstRoute();
+      endSecondRoute();
     }
   });
 

@@ -684,7 +684,7 @@ async function processDiscordMessageInner(
       await finalizeDiscordAdoptedThreadProgressReceipt(
         draftPreview.hasProgressDraftToCollapse,
         progress.buildProgressSummaryLine(),
-        draftPreview.finalizeProgressReceipt,
+        (receiptLine) => draftPreview.finalizeProgressReceipt(receiptLine),
         (receiptText) =>
           deliverDiscordPayload(
             { text: receiptText },
