@@ -6,7 +6,7 @@ import type { CodexAppServerClient } from "./client.js";
 import type { v2 } from "./protocol.js";
 
 /** Raised when a fresh thread does not expose every provisionally admitted app. */
-export class CodexPluginThreadAppAttestationError extends Error {
+class CodexPluginThreadAppAttestationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "CodexPluginThreadAppAttestationError";

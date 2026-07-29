@@ -1800,7 +1800,10 @@ describe("Codex provisional plugin app attestation", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const mutate = vi.fn(testCodexAppServerBindingStore.mutate);
+    const mutate = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) =>
+        await testCodexAppServerBindingStore.mutate(...args),
+    );
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
       mutate,
