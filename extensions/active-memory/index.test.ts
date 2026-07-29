@@ -745,7 +745,9 @@ describe("active-memory plugin", () => {
     };
     const warmLookup = async () => {
       if (cold) {
-        await new Promise((resolve) => setTimeout(resolve, coldDelayMs));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, coldDelayMs);
+        });
         cold = false;
       }
     };
@@ -774,7 +776,9 @@ describe("active-memory plugin", () => {
     );
     expect(prewarmResult).toBeUndefined();
     expect(coldDelayMs).toBeGreaterThan(simulatedBudgetMs);
-    await new Promise((resolve) => setTimeout(resolve, runtimePreparationMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, runtimePreparationMs);
+    });
 
     const startedAt = performance.now();
     const result = await runPromptBuild(
