@@ -19189,6 +19189,31 @@
       "translated": "发布者"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "已授予"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "缺少权限"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "辅助功能授权可能已失效"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "已授予辅助功能、事件发布和屏幕录制权限。"
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "缺少：\\(buckets.map(\\.displayName).joined(separator: \", \"))。请在“系统设置”→“隐私与安全性”中授予访问权限，然后重新打开 OpenClaw。"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "没有可用的配置部分。"
@@ -20629,9 +20654,14 @@
       "translated": "允许计算机控制"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "允许授权代理在此 Mac 上移动指针、点击和输入。还需要辅助功能、屏幕录制和网关命令授权。高风险。"
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "默认启用。此 Mac 配对且授予 macOS 访问权限后，已配对的 Gateway 可以移动指针、点击和输入，无需逐项确认。高风险。"
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "电脑控制访问权限"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "空闲"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "已停止"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "失败"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "等待中"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "设置"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "正在搜索…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

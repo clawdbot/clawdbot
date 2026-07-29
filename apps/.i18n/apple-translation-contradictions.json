@@ -3226,7 +3226,16 @@
       "source": "Failed",
       "translations": [
         "Échec",
-        "Échoué"
+        "Échoué",
+        "Échouée"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Failed",
+      "translations": [
+        "Non riuscita",
+        "Non riuscito"
       ]
     },
     {
@@ -3251,6 +3260,14 @@
       "translations": [
         "Не выполнено",
         "Ошибка"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Failed",
+      "translations": [
+        "Başarısız",
+        "Başarısız oldu"
       ]
     },
     {

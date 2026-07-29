@@ -19189,6 +19189,31 @@
       "translated": "Utgivare"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "Beviljad"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "Behörighet saknas"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "Behörigheten för Hjälpmedel kan vara inaktuell"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "Behörighet har beviljats för Hjälpmedel, händelseöverföring och skärminspelning."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "Saknas: \\(buckets.map(\\.displayName).joined(separator: \", \")). Bevilja åtkomst i Systeminställningar → Integritet och säkerhet och öppna sedan OpenClaw igen."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "Inga konfigurationsavsnitt tillgängliga."
@@ -20629,9 +20654,14 @@
       "translated": "Tillåt datorkontroll"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "Låt en auktoriserad agent flytta pekaren, klicka och skriva på denna Mac. Kräver även Hjälpmedel, Skärminspelning och auktorisering av gateway-kommandon. Hög risk."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "Aktiverat som standard. När denna Mac har parkopplats och macOS-åtkomst har beviljats kan den parkopplade Gateway flytta pekaren, klicka och skriva utan bekräftelse för varje åtgärd. Hög risk."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "Åtkomst till datorstyrning"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "Inaktiv"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "Stoppad"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "Misslyckades"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "Väntar"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "Konfiguration"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "Söker…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

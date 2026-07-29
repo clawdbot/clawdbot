@@ -19189,6 +19189,31 @@
       "translated": "Wydawca"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "Przyznano"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "Brak uprawnienia"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "Uprawnienie Dostępności może być nieaktualne"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "Dostępność, wysyłanie zdarzeń i nagrywanie ekranu są dozwolone."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "Brak: \\(buckets.map(\\.displayName).joined(separator: \", \")). Przyznaj dostęp w Ustawieniach systemowych → Prywatność i ochrona, a następnie ponownie otwórz OpenClaw."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "Brak dostępnych sekcji konfiguracji."
@@ -20629,9 +20654,14 @@
       "translated": "Zezwól na sterowanie komputerem"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "Pozwól autoryzowanemu agentowi przesuwać wskaźnik, klikać i pisać na tym Macu. Wymaga również Dostępności, Nagrywania ekranu i autoryzacji poleceń gateway. Wysokie ryzyko."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "Funkcja jest domyślnie włączona. Po sparowaniu tego Maca i przyznaniu dostępu w macOS sparowany Gateway może poruszać wskaźnikiem, klikać i pisać bez potwierdzania każdej czynności. Wysokie ryzyko."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "Dostęp do sterowania komputerem"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "Bezczynny"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "Zatrzymano"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "Niepowodzenie"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "Oczekiwanie"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "Konfiguracja"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "Wyszukiwanie…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

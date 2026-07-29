@@ -19189,6 +19189,31 @@
       "translated": "Nhà phát hành"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "Đã cấp"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "Thiếu quyền truy cập"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "Quyền Trợ năng có thể không còn hiệu lực"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "Đã cấp quyền Trợ năng, Đăng sự kiện và Ghi màn hình."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "Còn thiếu: \\(buckets.map(\\.displayName).joined(separator: \", \")). Hãy cấp quyền trong Cài đặt hệ thống → Quyền riêng tư & Bảo mật, rồi mở lại OpenClaw."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "Không có phần cấu hình nào."
@@ -20629,9 +20654,14 @@
       "translated": "Cho phép điều khiển máy tính"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "Cho phép một tác nhân được ủy quyền di chuyển con trỏ, nhấp và gõ trên máy Mac này. Cũng yêu cầu Trợ năng, Ghi màn hình và ủy quyền lệnh gateway. Rủi ro cao."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "Được bật mặc định. Sau khi máy Mac này được ghép đôi và quyền truy cập macOS được cấp, Gateway đã ghép đôi có thể di chuyển con trỏ, bấm và nhập mà không cần xác nhận từng thao tác. Rủi ro cao."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "Quyền Điều khiển máy tính"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "Không hoạt động"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "Đã dừng"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "Thất bại"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "Đang chờ"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "Thiết lập"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "Đang tìm kiếm…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

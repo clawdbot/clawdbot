@@ -19189,6 +19189,31 @@
       "translated": "ผู้เผยแพร่"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "อนุญาตแล้ว"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "สิทธิ์ขาดหายไป"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "สิทธิ์การช่วยการเข้าถึงอาจไม่เป็นปัจจุบัน"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "อนุญาตการช่วยการเข้าถึง การส่งอีเวนต์ และการบันทึกหน้าจอแล้ว"
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "ขาด: \\(buckets.map(\\.displayName).joined(separator: \", \")) โปรดให้สิทธิ์ใน การตั้งค่าระบบ → ความเป็นส่วนตัวและความปลอดภัย แล้วเปิด OpenClaw ใหม่"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "ไม่มีส่วนการกำหนดค่าที่พร้อมใช้งาน"
@@ -20629,9 +20654,14 @@
       "translated": "อนุญาตการควบคุมคอมพิวเตอร์"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "อนุญาตให้เอเจนต์ที่ได้รับอนุญาตเลื่อนตัวชี้ คลิก และพิมพ์บน Mac นี้ ต้องมีสิทธิ์การเข้าถึง (Accessibility), การบันทึกหน้าจอ (Screen Recording) และการอนุญาตคำสั่ง gateway ด้วย มีความเสี่ยงสูง"
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "เปิดใช้งานตั้งแต่เริ่มต้น เมื่อจับคู่ Mac เครื่องนี้และอนุญาตการเข้าถึง macOS แล้ว Gateway ที่จับคู่จะสามารถเลื่อนตัวชี้ คลิก และพิมพ์ได้โดยไม่ต้องยืนยันแต่ละการกระทำ มีความเสี่ยงสูง"
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "สิทธิ์การควบคุมคอมพิวเตอร์"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "ไม่ได้ใช้งาน"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "หยุดแล้ว"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "ล้มเหลว"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "กำลังรอ"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "ตั้งค่า"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "กำลังค้นหา…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

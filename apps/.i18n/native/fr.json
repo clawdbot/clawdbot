@@ -19189,6 +19189,31 @@
       "translated": "Éditeur"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "Accordé"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "Autorisation manquante"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "L’autorisation d’accessibilité est peut-être obsolète"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "L’accessibilité, la publication d’événements et l’enregistrement de l’écran sont autorisés."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "Manquant : \\(buckets.map(\\.displayName).joined(separator: \", \")). Autorisez l’accès dans Réglages Système → Confidentialité et sécurité, puis rouvrez OpenClaw."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "Aucune section de configuration disponible."
@@ -20629,9 +20654,14 @@
       "translated": "Autoriser le contrôle de l'ordinateur"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "Permettre à un agent autorisé de déplacer le pointeur, cliquer et taper sur ce Mac. Requiert également l'Accessibilité, l'Enregistrement d'écran et l'autorisation des commandes du gateway. Risque élevé."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "Activé au démarrage. Une fois ce Mac jumelé et l’accès macOS autorisé, la Gateway jumelée peut déplacer le pointeur, cliquer et saisir du texte sans confirmation pour chaque action. Risque élevé."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "Accès au contrôle de l’ordinateur"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "Inactif"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "Arrêté"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "Échouée"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "En attente"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "Configuration"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "Recherche…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

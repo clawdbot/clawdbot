@@ -3401,6 +3401,142 @@
         }
       }
     },
+    "Accessibility grant may be stale": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility grant may be stale"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "辅助功能授权可能已失效"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「輔助使用」授權可能已失效"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A autorização de Acessibilidade pode ter expirado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Bedienungshilfen-Freigabe ist möglicherweise nicht mehr gültig"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es posible que el permiso de Accesibilidad ya no sea válido"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセシビリティの許可が失効している可能性があります"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "손쉬운 사용 권한이 오래되었을 수 있습니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autorisation d’accessibilité est peut-être obsolète"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ऐक्सेसिबिलिटी की अनुमति पुरानी हो सकती है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "قد يكون إذن تسهيلات الاستخدام قديمًا"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autorizzazione Accessibilità potrebbe non essere aggiornata"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişilebilirlik izni güncelliğini yitirmiş olabilir"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дозвіл на універсальний доступ може бути застарілим"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Izin Aksesibilitas mungkin sudah tidak berlaku"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uprawnienie Dostępności może być nieaktualne"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สิทธิ์การช่วยการเข้าถึงอาจไม่เป็นปัจจุบัน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quyền Trợ năng có thể không còn hiệu lực"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toestemming voor Toegankelijkheid is mogelijk verouderd"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ممکن است مجوز دسترس‌پذیری دیگر معتبر نباشد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешение на универсальный доступ могло устареть"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behörigheten för Hjälpmedel kan vara inaktuell"
+          }
+        }
+      }
+    },
     "Accessibility permission is required to paste.": {
       "localizations": {
         "en": {
@@ -3533,6 +3669,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Behörighet för hjälpmedel krävs för att klistra in."
+          }
+        }
+      }
+    },
+    "Accessibility, Event Posting, and Screen Recording are granted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility, Event Posting, and Screen Recording are granted."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已授予辅助功能、事件发布和屏幕录制权限。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已授予「輔助使用」、「事件發送」和「螢幕錄製」權限。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acessibilidade, Publicação de Eventos e Gravação de Tela estão autorizadas."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bedienungshilfen, Ereignisübermittlung und Bildschirmaufnahme sind freigegeben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se han concedido los permisos de Accesibilidad, Envío de eventos y Grabación de pantalla."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセシビリティ、イベント送信、画面収録が許可されています。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "손쉬운 사용, 이벤트 게시 및 화면 기록 권한이 허용되었습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accessibilité, la publication d’événements et l’enregistrement de l’écran sont autorisés."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ऐक्सेसिबिलिटी, इवेंट पोस्टिंग और स्क्रीन रिकॉर्डिंग की अनुमतियाँ दी गई हैं।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تم منح أذونات تسهيلات الاستخدام ونشر الأحداث وتسجيل الشاشة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibilità, pubblicazione eventi e registrazione schermo sono autorizzate."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişilebilirlik, Etkinlik Gönderme ve Ekran Kaydı izinleri verilmiş."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Універсальний доступ, надсилання подій і запис екрана дозволено."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aksesibilitas, Pengiriman Peristiwa, dan Perekaman Layar telah diizinkan."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dostępność, wysyłanie zdarzeń i nagrywanie ekranu są dozwolone."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "อนุญาตการช่วยการเข้าถึง การส่งอีเวนต์ และการบันทึกหน้าจอแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã cấp quyền Trợ năng, Đăng sự kiện và Ghi màn hình."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toegankelijkheid, het versturen van gebeurtenissen en schermopname zijn toegestaan."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مجوزهای دسترس‌پذیری، ارسال رویداد و ضبط صفحه اعطا شده‌اند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предоставлены разрешения на универсальный доступ, отправку событий и запись экрана."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behörighet har beviljats för Hjälpmedel, händelseöverföring och skärminspelning."
           }
         }
       }
@@ -26653,6 +26925,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kompaktera sessionslogg?"
+          }
+        }
+      }
+    },
+    "Computer Control access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computer Control access"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电脑控制访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電腦控制存取權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acesso ao Controle do Computador"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff zur Computersteuerung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceso para controlar el ordenador"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ制御へのアクセス"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "컴퓨터 제어 접근 권한"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accès au contrôle de l’ordinateur"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कंप्यूटर नियंत्रण का ऐक्सेस"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "صلاحية التحكم في الكمبيوتر"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso al controllo del computer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilgisayar Denetimi erişimi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ до керування комп’ютером"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akses Kontrol Komputer"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dostęp do sterowania komputerem"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สิทธิ์การควบคุมคอมพิวเตอร์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quyền Điều khiển máy tính"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toegang voor computerbediening"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دسترسی کنترل رایانه"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к управлению компьютером"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Åtkomst till datorstyrning"
           }
         }
       }
@@ -63649,142 +64057,6 @@
         }
       }
     },
-    "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "允许授权代理在此 Mac 上移动指针、点击和输入。还需要辅助功能、屏幕录制和网关命令授权。高风险。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "讓授權的代理程式在此 Mac 上移動指標、點擊及輸入。同時需要輔助使用、螢幕錄製及 Gateway 指令授權。高風險。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permite que um agente autorizado mova o ponteiro, clique e digite neste Mac. Também requer Acessibilidade, Gravação de Tela e autorização de comandos do gateway. Alto risco."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Einem autorisierten Agenten erlauben, den Zeiger zu bewegen, zu klicken und auf diesem Mac zu tippen. Erfordert außerdem Bedienungshilfen, Bildschirmaufnahme und Gateway-Befehlsautorisierung. Hohes Risiko."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permite que un agente autorizado mueva el puntero, haga clic y escriba en este Mac. También requiere Accesibilidad, Grabación de pantalla y autorización de comandos del gateway. Alto riesgo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "承認されたエージェントがこの Mac 上でポインタの移動、クリック、入力を行えるようにします。アクセシビリティ、画面収録、および gateway コマンドの承認も必要です。高リスク。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "인증된 에이전트가 이 Mac에서 포인터를 이동하고 클릭하고 입력하도록 허용합니다. 손쉬운 사용, 화면 기록, gateway 명령 권한도 필요합니다. 높은 위험."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permettre à un agent autorisé de déplacer le pointeur, cliquer et taper sur ce Mac. Requiert également l'Accessibilité, l'Enregistrement d'écran et l'autorisation des commandes du gateway. Risque élevé."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "किसी अधिकृत एजेंट को इस Mac पर पॉइंटर हिलाने, क्लिक करने और टाइप करने दें। इसके लिए Accessibility, Screen Recording और gateway कमांड प्राधिकरण भी आवश्यक है। उच्च जोखिम।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اسمح لعميل مصرّح له بتحريك المؤشر والنقر والكتابة على هذا الـ Mac. يتطلب أيضًا إمكانية الوصول وتسجيل الشاشة وتفويض أوامر Gateway. خطر مرتفع."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consenti a un agente autorizzato di spostare il puntatore, fare clic e digitare su questo Mac. Richiede anche Accessibilità, Registrazione schermo e l'autorizzazione dei comandi del gateway. Rischio elevato."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yetkili bir aracının bu Mac'te işaretçiyi hareket ettirmesine, tıklamasına ve yazmasına izin verin. Ayrıca Erişilebilirlik, Ekran Kaydı ve gateway komut yetkilendirmesi gerektirir. Yüksek risk."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Дозвольте авторизованому агенту переміщувати вказівник, натискати та вводити текст на цьому Mac. Також потрібні дозволи «Доступність», «Запис екрана» та авторизація команд gateway. Високий ризик."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Izinkan agen resmi menggerakkan penunjuk, mengklik, dan mengetik di Mac ini. Juga memerlukan Aksesibilitas, Perekaman Layar, dan otorisasi perintah gateway. Risiko tinggi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pozwól autoryzowanemu agentowi przesuwać wskaźnik, klikać i pisać na tym Macu. Wymaga również Dostępności, Nagrywania ekranu i autoryzacji poleceń gateway. Wysokie ryzyko."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "อนุญาตให้เอเจนต์ที่ได้รับอนุญาตเลื่อนตัวชี้ คลิก และพิมพ์บน Mac นี้ ต้องมีสิทธิ์การเข้าถึง (Accessibility), การบันทึกหน้าจอ (Screen Recording) และการอนุญาตคำสั่ง gateway ด้วย มีความเสี่ยงสูง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cho phép một tác nhân được ủy quyền di chuyển con trỏ, nhấp và gõ trên máy Mac này. Cũng yêu cầu Trợ năng, Ghi màn hình và ủy quyền lệnh gateway. Rủi ro cao."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Laat een geautoriseerde agent de aanwijzer bewegen, klikken en typen op deze Mac. Vereist ook Toegankelijkheid, Schermopname en gateway-commando-autorisatie. Hoog risico."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "به یک عامل مجاز اجازه دهید نشانگر را حرکت دهد، کلیک کند و روی این مک تایپ کند. همچنین به Accessibility، Screen Recording و مجوز فرمان gateway نیاز دارد. ریسک بالا."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Позволяет авторизованному агенту перемещать указатель, нажимать и печатать на этом Mac. Также требуются доступ к Универсальному доступу, записи экрана и авторизация команд gateway. Высокий риск."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Låt en auktoriserad agent flytta pekaren, klicka och skriva på denna Mac. Kräver även Hjälpmedel, Skärminspelning och auktorisering av gateway-kommandon. Hög risk."
-          }
-        }
-      }
-    },
     "Let bundled skill command-line tools run without prompting.": {
       "localizations": {
         "en": {
@@ -70989,6 +71261,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Behörighet för mikrofon och taligenkänning krävs."
+          }
+        }
+      }
+    },
+    "Missing permission": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Missing permission"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缺少权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缺少權限"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissão ausente"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berechtigung fehlt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falta un permiso"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "権限がありません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "권한 없음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorisation manquante"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अनुमति मौजूद नहीं है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الإذن مفقود"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorizzazione mancante"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eksik izin"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відсутній дозвіл"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Izin tidak ada"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brak uprawnienia"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สิทธิ์ขาดหายไป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thiếu quyền truy cập"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toestemming ontbreekt"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مجوز موجود نیست"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отсутствует разрешение"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behörighet saknas"
           }
         }
       }
@@ -116281,6 +116689,142 @@
         }
       }
     },
+    "Searching…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在搜索…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜尋中…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pesquisando…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suche…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buscando…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "検索中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "검색 중…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recherche…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "खोजा जा रहा है…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "جارٍ البحث…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ricerca…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aranıyor…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пошук…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mencari…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wyszukiwanie…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังค้นหา…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang tìm kiếm…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoeken…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در حال جست‌وجو…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Söker…"
+          }
+        }
+      }
+    },
     "Seconds (optional)": {
       "localizations": {
         "en": {
@@ -129197,6 +129741,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Startar…"
+          }
+        }
+      }
+    },
+    "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "默认启用。此 Mac 配对且授予 macOS 访问权限后，已配对的 Gateway 可以移动指针、点击和输入，无需逐项确认。高风险。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "預設啟用。此 Mac 完成配對並授予 macOS 存取權後，已配對的 Gateway 即可移動游標、按一下及輸入文字，無須逐項確認。高風險。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativado por padrão. Depois que este Mac for emparelhado e o acesso ao macOS for concedido, o Gateway emparelhado poderá mover o ponteiro, clicar e digitar sem confirmação para cada ação. Alto risco."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standardmäßig aktiviert. Sobald dieser Mac gekoppelt und der macOS-Zugriff gewährt wurde, kann das gekoppelte Gateway den Zeiger bewegen, klicken und Text eingeben, ohne dass jede Aktion bestätigt werden muss. Hohes Risiko."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se inicia activado. Una vez enlazado este Mac y concedido el acceso a macOS, el Gateway enlazado podrá mover el puntero, hacer clic y escribir sin confirmación para cada acción. Riesgo alto."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デフォルトで有効です。このMacをペアリングし、macOSへのアクセスを許可すると、ペアリング済みのGatewayは操作ごとの確認なしにポインタの移動、クリック、入力ができるようになります。高リスクです。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "처음부터 활성화됩니다. 이 Mac이 페어링되고 macOS 접근 권한이 허용되면 페어링된 Gateway가 작업별 확인 없이 포인터를 이동하고 클릭하고 입력할 수 있습니다. 위험도가 높습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activé au démarrage. Une fois ce Mac jumelé et l’accès macOS autorisé, la Gateway jumelée peut déplacer le pointeur, cliquer et saisir du texte sans confirmation pour chaque action. Risque élevé."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "शुरू से चालू रहता है। इस Mac के पेयर होने और macOS ऐक्सेस मिलने के बाद, पेयर किया गया Gateway हर कार्रवाई की पुष्टि के बिना पॉइंटर चला, क्लिक और टाइप कर सकता है। जोखिम अधिक है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يبدأ مفعّلًا. بعد إقران هذا الـ Mac ومنح صلاحيات الوصول في macOS، يمكن لـ Gateway المقترن تحريك المؤشر والنقر والكتابة من دون تأكيد كل إجراء. مخاطرة عالية."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si avvia abilitato. Dopo aver abbinato questo Mac e concesso l’accesso a macOS, il Gateway abbinato può spostare il puntatore, fare clic e digitare senza conferma per ogni azione. Rischio elevato."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlangıçta etkindir. Bu Mac eşleştirildikten ve macOS erişimi verildikten sonra eşleştirilmiş Gateway, her işlem için onay istemeden işaretçiyi hareket ettirebilir, tıklayabilir ve yazabilir. Yüksek risk."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Увімкнено за замовчуванням. Після створення пари з цим Mac і надання доступу в macOS спарений Gateway зможе рухати вказівник, натискати й вводити текст без підтвердження кожної дії. Високий ризик."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diaktifkan sejak awal. Setelah Mac ini dipasangkan dan akses macOS diberikan, Gateway yang dipasangkan dapat menggerakkan penunjuk, mengeklik, dan mengetik tanpa konfirmasi untuk setiap tindakan. Berisiko tinggi."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funkcja jest domyślnie włączona. Po sparowaniu tego Maca i przyznaniu dostępu w macOS sparowany Gateway może poruszać wskaźnikiem, klikać i pisać bez potwierdzania każdej czynności. Wysokie ryzyko."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดใช้งานตั้งแต่เริ่มต้น เมื่อจับคู่ Mac เครื่องนี้และอนุญาตการเข้าถึง macOS แล้ว Gateway ที่จับคู่จะสามารถเลื่อนตัวชี้ คลิก และพิมพ์ได้โดยไม่ต้องยืนยันแต่ละการกระทำ มีความเสี่ยงสูง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Được bật mặc định. Sau khi máy Mac này được ghép đôi và quyền truy cập macOS được cấp, Gateway đã ghép đôi có thể di chuyển con trỏ, bấm và nhập mà không cần xác nhận từng thao tác. Rủi ro cao."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standaard ingeschakeld. Nadat deze Mac is gekoppeld en macOS-toegang is verleend, kan de gekoppelde Gateway de aanwijzer verplaatsen, klikken en typen zonder bevestiging per actie. Hoog risico."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "به‌طور پیش‌فرض فعال است. پس از جفت‌شدن این Mac و اعطای دسترسی macOS، Gateway جفت‌شده می‌تواند بدون تأیید هر عمل، نشانگر را حرکت دهد، کلیک کند و تایپ کند. پرخطر است."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включено по умолчанию. После сопряжения этого Mac и предоставления доступа macOS сопряжённый Gateway сможет перемещать указатель, нажимать и вводить текст без подтверждения каждого действия. Высокий риск."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktiverat som standard. När denna Mac har parkopplats och macOS-åtkomst har beviljats kan den parkopplade Gateway flytta pekaren, klicka och skriva utan bekräftelse för varje åtgärd. Hög risk."
           }
         }
       }
@@ -154765,6 +155445,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Röstväckning detekterad!"
+          }
+        }
+      }
+    },
+    "Waiting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待中"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待中"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En espera"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待機中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "प्रतीक्षारत"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "قيد الانتظار"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bekliyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очікування"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menunggu"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oczekiwanie"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังรอ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang chờ"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wachten"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در انتظار"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидание"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Väntar"
           }
         }
       }

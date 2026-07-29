@@ -19189,6 +19189,31 @@
       "translated": "게시자"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "허용됨"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "권한 없음"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "손쉬운 사용 권한이 오래되었을 수 있습니다"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "손쉬운 사용, 이벤트 게시 및 화면 기록 권한이 허용되었습니다."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "누락: \\(buckets.map(\\.displayName).joined(separator: \", \")). 시스템 설정 → 개인정보 보호 및 보안에서 접근을 허용한 다음 OpenClaw를 다시 여십시오."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "사용 가능한 구성 섹션이 없습니다."
@@ -20629,9 +20654,14 @@
       "translated": "컴퓨터 제어 허용"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "인증된 에이전트가 이 Mac에서 포인터를 이동하고 클릭하고 입력하도록 허용합니다. 손쉬운 사용, 화면 기록, gateway 명령 권한도 필요합니다. 높은 위험."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "처음부터 활성화됩니다. 이 Mac이 페어링되고 macOS 접근 권한이 허용되면 페어링된 Gateway가 작업별 확인 없이 포인터를 이동하고 클릭하고 입력할 수 있습니다. 위험도가 높습니다."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "컴퓨터 제어 접근 권한"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "유휴"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "중지됨"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "실패"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "대기 중"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "설정"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "검색 중…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

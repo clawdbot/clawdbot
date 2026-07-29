@@ -19189,6 +19189,31 @@
       "translated": "発行元"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "許可済み"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "権限がありません"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "アクセシビリティの許可が失効している可能性があります"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "アクセシビリティ、イベント送信、画面収録が許可されています。"
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "不足：\\(buckets.map(\\.displayName).joined(separator: \", \"))。システム設定 → プライバシーとセキュリティでアクセスを許可してから、OpenClawを再度開いてください。"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "利用可能な設定セクションがありません。"
@@ -20629,9 +20654,14 @@
       "translated": "コンピュータの制御を許可"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "承認されたエージェントがこの Mac 上でポインタの移動、クリック、入力を行えるようにします。アクセシビリティ、画面収録、および gateway コマンドの承認も必要です。高リスク。"
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "デフォルトで有効です。このMacをペアリングし、macOSへのアクセスを許可すると、ペアリング済みのGatewayは操作ごとの確認なしにポインタの移動、クリック、入力ができるようになります。高リスクです。"
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "コンピュータ制御へのアクセス"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "アイドル"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "停止中"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "失敗"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "待機中"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "設定"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "検索中…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

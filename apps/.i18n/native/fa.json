@@ -19189,6 +19189,31 @@
       "translated": "ناشر"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "اعطا شده"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "مجوز موجود نیست"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "ممکن است مجوز دسترس‌پذیری دیگر معتبر نباشد"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "مجوزهای دسترس‌پذیری، ارسال رویداد و ضبط صفحه اعطا شده‌اند."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "این موارد موجود نیستند: \\(buckets.map(\\.displayName).joined(separator: \", \")). در تنظیمات سیستم → حریم خصوصی و امنیت دسترسی را اعطا کنید، سپس OpenClaw را دوباره باز کنید."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "هیچ بخش پیکربندی موجود نیست."
@@ -20629,9 +20654,14 @@
       "translated": "اجازه کنترل رایانه"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "به یک عامل مجاز اجازه دهید نشانگر را حرکت دهد، کلیک کند و روی این مک تایپ کند. همچنین به Accessibility، Screen Recording و مجوز فرمان gateway نیاز دارد. ریسک بالا."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "به‌طور پیش‌فرض فعال است. پس از جفت‌شدن این Mac و اعطای دسترسی macOS، Gateway جفت‌شده می‌تواند بدون تأیید هر عمل، نشانگر را حرکت دهد، کلیک کند و تایپ کند. پرخطر است."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "دسترسی کنترل رایانه"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -26639,9 +26669,29 @@
       "translated": "بیکار"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "متوقف شد"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "ناموفق"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "در انتظار"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "راه‌اندازی"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "در حال جست‌وجو…"
     },
     {
       "id": "native.apple.081a07c7306b223e",
