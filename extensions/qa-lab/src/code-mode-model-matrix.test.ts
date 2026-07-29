@@ -13,7 +13,6 @@ import {
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
 } from "../../../scripts/code-mode-model-matrix.ts";
-import { validateQaEvidenceSummaryJson } from "../api.ts";
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
