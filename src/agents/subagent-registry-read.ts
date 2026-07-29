@@ -122,20 +122,6 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
   );
 }
 
-/** Returns the exact child-session/run pair from authoritative registry state. */
-export function getSubagentRunByChildSessionKeyAndRunId(
-  childSessionKey: string,
-  runId: string,
-): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  const id = runId.trim();
-  if (!key || !id) {
-    return null;
-  }
-  const entry = getSubagentRunsSnapshotForChildSession(subagentRuns, key).get(id);
-  return entry?.childSessionKey === key && entry.runId === id ? entry : null;
-}
-
 /** Returns the current generation for a child session and logical task run. */
 export function getCurrentSubagentRunByChildSessionKeyAndTaskRunId(
   childSessionKey: string,
