@@ -8,7 +8,7 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
-const { beginDiscordActiveTurnThreadRoute, isDiscordActiveTurnThreadReply } =
+const { beginDiscordActiveTurnThreadRoute, notifyDiscordActiveTurnThreadReplyDelivered } =
   await import("../active-turn-thread-route.js");
 const { beginDiscordInboundEventDeliveryCorrelation } =
   await import("../inbound-event-delivery.js");
@@ -623,15 +623,17 @@ describe("handleDiscordMessageAction", () => {
   it("adopts a thread created from the active source message and confirms replies there", async () => {
     const sessionKey = "agent:main:discord:channel:channel-1";
     const onThreadAdopted = vi.fn();
+    const onThreadReplyDelivered = vi.fn();
     const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
       accountId: "account-1",
       sourceChannelId: "channel-1",
       sourceMessageId: "message-1",
       onThreadAdopted,
+      onThreadReplyDelivered,
     });
     try {
       expect(
-        isDiscordActiveTurnThreadReply({
+        notifyDiscordActiveTurnThreadReplyDelivered({
           sessionKey,
           accountId: "account-1",
         }),
@@ -674,6 +676,7 @@ describe("handleDiscordMessageAction", () => {
         ok: true,
         sourceReplyRoute: "current-source",
       });
+      expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
     } finally {
       endRoute();
     }

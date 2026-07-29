@@ -17,8 +17,8 @@ import {
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
-  isDiscordActiveTurnThreadReply,
   notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
 import {
@@ -481,7 +481,7 @@ export async function handleDiscordMessageAction(
       const threadId = readStringParam(params, "threadId") ?? readTarget();
       notifyVisibleOutbound(threadId);
       if (
-        isDiscordActiveTurnThreadReply({
+        notifyDiscordActiveTurnThreadReplyDelivered({
           sessionKey: ctx.sessionKey,
           accountId,
           threadId,

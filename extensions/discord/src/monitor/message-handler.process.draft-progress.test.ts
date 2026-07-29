@@ -1,6 +1,9 @@
 // Discord message processing coverage split by cohesive behavior.
 import { describe, expect, it } from "vitest";
-import { notifyDiscordActiveTurnThreadCreated } from "../active-turn-thread-route.js";
+import {
+  notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
+} from "../active-turn-thread-route.js";
 import {
   createAutomaticSourceDeliveryContext,
   createNoQueuedDispatchResult,
@@ -50,6 +53,99 @@ describe("processDiscordMessage draft streaming progress", () => {
       expect.objectContaining({
         target: "channel:thread-1",
         replyToId: undefined,
+      }),
+    );
+  });
+
+  it("keeps adopted-thread progress with terminal tool and timing receipts", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        progressText: "Checked the pipeline.",
+      });
+      await elapseProgressDraftStartDelay();
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: String(params?.ctx?.SessionKey),
+        accountId: "default",
+        sourceChannelId: "c1",
+        sourceMessageId: "m1",
+        threadId: "thread-1",
+      });
+      expect(
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey: String(params?.ctx?.SessionKey),
+          accountId: "default",
+          threadId: "thread-1",
+        }),
+      ).toBe(true);
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Investigating" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.retarget).toHaveBeenCalledWith("thread-1");
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      expect.stringMatching(
+        /^Investigating\n\n🛠️ Exec\n.*Checked the pipeline\.\n-# .*🛠️ 1 tool call.*⏱️ 5s$/,
+      ),
+    );
+    expect(draftStream.stop).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("sends the adopted-thread receipt when the progress draft has no message id", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+    draftStream.messageId.mockReturnValue(undefined);
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        progressText: "Checked the pipeline.",
+      });
+      await elapseProgressDraftStartDelay();
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: String(params?.ctx?.SessionKey),
+        accountId: "default",
+        sourceChannelId: "c1",
+        sourceMessageId: "m1",
+        threadId: "thread-1",
+      });
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey: String(params?.ctx?.SessionKey),
+        accountId: "default",
+        threadId: "thread-1",
+      });
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Investigating" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "channel:thread-1",
+        kind: "block",
+        replies: [
+          expect.objectContaining({
+            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 5s$/),
+          }),
+        ],
       }),
     );
   });

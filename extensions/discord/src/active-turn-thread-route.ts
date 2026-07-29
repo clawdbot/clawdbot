@@ -4,6 +4,7 @@ type ActiveDiscordTurnThreadRoute = {
   sourceMessageId: string;
   adoptedThreadId?: string;
   onThreadAdopted: (threadId: string) => Promise<void> | void;
+  onThreadReplyDelivered?: (threadId: string) => void;
   onThreadAdoptionError?: (error: unknown) => void;
 };
 
@@ -64,17 +65,31 @@ export async function notifyDiscordActiveTurnThreadCreated(params: {
   return true;
 }
 
-export function isDiscordActiveTurnThreadReply(params: {
+export function notifyDiscordActiveTurnThreadReplyDelivered(params: {
   sessionKey?: string | null;
   accountId?: string | null;
   threadId?: string;
 }): boolean {
+  const route = findDiscordActiveTurnThreadReplyRoute(params);
+  const threadId = normalizeId(params.threadId ?? undefined);
+  if (!route || !threadId) {
+    return false;
+  }
+  route.onThreadReplyDelivered?.(threadId);
+  return true;
+}
+
+function findDiscordActiveTurnThreadReplyRoute(params: {
+  sessionKey?: string | null;
+  accountId?: string | null;
+  threadId?: string;
+}): ActiveDiscordTurnThreadRoute | undefined {
   const key = normalizeId(params.sessionKey ?? undefined);
   const threadId = normalizeId(params.threadId);
   if (!key || !threadId) {
-    return false;
+    return undefined;
   }
-  return Array.from((key && activeRoutes.get(key)) || []).some(
+  return Array.from(activeRoutes.get(key) ?? []).find(
     (route) =>
       Boolean(route.adoptedThreadId) &&
       route.adoptedThreadId === threadId &&
