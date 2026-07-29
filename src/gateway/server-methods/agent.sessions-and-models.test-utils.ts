@@ -330,10 +330,11 @@ describe("gateway agent handler", () => {
         resetSubagentRegistryForTests({ persist: false });
         // Route through the harness helper so the ensureRuntimePluginsLoaded
         // pin survives this wholesale deps override.
+        const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
+          throw new Error("disk full");
+        });
         applyGatewaySubagentRegistryTestDeps({
-          persistSubagentRunsToDiskOrThrow: () => {
-            throw new Error("disk full");
-          },
+          persistSubagentRunsToDiskOrThrow,
         });
         const runId = "plugin-subagent-registry-fail";
         const childSessionKey = "agent:main:subagent:registry-fail";
@@ -387,6 +388,7 @@ describe("gateway agent handler", () => {
           },
         );
 
+        expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
         await waitForAssertion(() => {
           const task = requireValue(findTaskByRunId(runId), "expected fallback cli task");
