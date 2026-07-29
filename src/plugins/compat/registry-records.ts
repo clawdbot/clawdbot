@@ -23,7 +23,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "declare `ContextEngineInfo.acceptedHostParams`; full host params after the window",
     docsPath: "/concepts/context-engine#the-contextengine-interface",
     surfaces: ["ContextEngineInfo.acceptedHostParams and undeclared-engine default projection"],
-    diagnostics: ["plugin compatibility registry and dated runtime removal TODO"],
+    diagnostics: ["plugin compatibility registry and dated runtime removal marker"],
     tests: ["src/context-engine/host-param-projection.test.ts"],
   },
   {
