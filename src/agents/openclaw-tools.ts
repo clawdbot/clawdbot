@@ -220,9 +220,7 @@ export function createOpenClawTools(
     ModelAwareToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config;
-  const activeProjectKeys = options?.preparedModelRuntime?.projectKey
-    ? [options.preparedModelRuntime.projectKey]
-    : [];
+  const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
     inputConfig: resolvedConfig,
