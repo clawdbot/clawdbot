@@ -121,12 +121,16 @@ export function resolveQaRunProfileExecutionSelection(params: {
   channel?: string | null;
   defaultChannel?: string;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
 }): QaRunProfileExecutionSelection {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
   const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
   for (const scenario of params.scenarios) {
     const reasons: string[] = [];
+    if (params.executionKind && scenario.execution.kind !== params.executionKind) {
+      reasons.push(`execution.kind=${params.executionKind}`);
+    }
     // qa-channel is the built-in harness channel, so another driver cannot implement it.
     if (scenario.execution.channel === "qa-channel" && params.channelDriver !== "qa-channel") {
       reasons.push("channelDriver=qa-channel");
@@ -185,6 +189,7 @@ export function resolveQaProfileScenarios(params: {
   channelDriver?: QaScorecardChannelDriver;
   channel?: string;
   eligibleChannels?: readonly string[];
+  executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   requireDeclaredChannel?: boolean;
   scenarioIds?: readonly string[];
 }) {
@@ -230,6 +235,7 @@ export function resolveQaProfileScenarios(params: {
         primaryModel,
         channelDriver,
         channel: channel ?? scenario.execution.channel,
+        executionKind: params.executionKind,
       }).excludedScenarios.flatMap((entry) => entry.reasons),
     );
     return { scenario, reasons: uniqueStrings(reasons) };
