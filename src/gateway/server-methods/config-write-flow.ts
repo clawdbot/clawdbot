@@ -305,6 +305,8 @@ export async function commitGatewayConfigWrite(params: {
     },
     afterWrite: { mode: "auto" },
   });
+  // Watcher acceptance is debounced; clear now so the writer's immediate
+  // follow-up config.get observes the committed bytes before that hook runs.
   invalidateConfigGetResponseCache();
   return {
     path: resolveGatewayConfigPath(params.snapshot),

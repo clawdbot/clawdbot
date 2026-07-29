@@ -821,13 +821,16 @@ function diffConfigLeafPaths(prev: unknown, next: unknown, prefix = ""): string[
 }
 
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond }) => {
+  "config.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
     respond(
       true,
-      await readConfigGetResponse({ loadUiHints: () => loadSchemaWithPlugins().uiHints }),
+      await readConfigGetResponse({
+        getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
+        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+      }),
       undefined,
     );
   },

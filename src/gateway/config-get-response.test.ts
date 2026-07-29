@@ -1,12 +1,9 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   appliedConfigHash: "applied-1" as string | null,
-  configPath: "",
   pluginRegistryVersion: 1,
   readConfigFileSnapshot: vi.fn<() => Promise<ConfigFileSnapshot>>(),
 }));
@@ -15,7 +12,6 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    createConfigIO: () => ({ configPath: mocks.configPath }),
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   };
 });
@@ -35,11 +31,12 @@ vi.mock("../plugins/runtime.js", () => ({
 const { invalidateConfigGetResponseCache, readConfigGetResponse } =
   await import("./config-get-response.js");
 
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-get-cache-"));
+const activeWatcher = () => "active" as const;
+const disabledWatcher = () => "disabled" as const;
 
 function configSnapshot(sourceConfig: OpenClawConfig): ConfigFileSnapshot {
   return {
-    path: mocks.configPath,
+    path: "/tmp/openclaw.json",
     exists: true,
     raw: JSON.stringify(sourceConfig),
     parsed: sourceConfig,
@@ -54,18 +51,12 @@ function configSnapshot(sourceConfig: OpenClawConfig): ConfigFileSnapshot {
   } as ConfigFileSnapshot;
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   invalidateConfigGetResponseCache();
   mocks.appliedConfigHash = "applied-1";
   mocks.pluginRegistryVersion = 1;
-  mocks.configPath = path.join(tempRoot, "openclaw.json");
-  await fs.writeFile(mocks.configPath, '{"gateway":{"port":19001}}\n');
   mocks.readConfigFileSnapshot.mockReset();
   mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot({ gateway: { port: 19_001 } }));
-});
-
-afterAll(async () => {
-  await fs.rm(tempRoot, { recursive: true, force: true });
 });
 
 afterEach(() => {
@@ -73,55 +64,91 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
-  it("shares a stable response across concurrent and settled callers", async () => {
+  it("serves identical bytes without filesystem work on an active-watcher cache hit", async () => {
     const loadUiHints = vi.fn(() => undefined);
+    const first = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    const stat = vi.spyOn(fs.promises, "stat");
+    mocks.readConfigFileSnapshot.mockClear();
+    loadUiHints.mockClear();
 
-    const concurrent = await Promise.all(
-      Array.from({ length: 8 }, () => readConfigGetResponse({ loadUiHints })),
-    );
-    const settled = await readConfigGetResponse({ loadUiHints });
+    const hit = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
 
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
-    expect(loadUiHints).toHaveBeenCalledTimes(1);
-    expect(concurrent.every((response) => response === concurrent[0])).toBe(true);
-    expect(settled).toBe(concurrent[0]);
-  });
-
-  it("rebuilds for file stamps, applied config revisions, and plugin schema generations", async () => {
-    const loadUiHints = vi.fn(() => undefined);
-    await readConfigGetResponse({ loadUiHints });
-
-    await fs.writeFile(mocks.configPath, '{"gateway":{"port":190012}}\n');
-    await readConfigGetResponse({ loadUiHints });
-
-    mocks.appliedConfigHash = "applied-2";
-    await readConfigGetResponse({ loadUiHints });
-
-    mocks.pluginRegistryVersion = 2;
-    await readConfigGetResponse({ loadUiHints });
-
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(4);
-    expect(loadUiHints).toHaveBeenCalledTimes(4);
-  });
-
-  it("rebuilds immediately after explicit write-path invalidation", async () => {
-    const loadUiHints = vi.fn(() => undefined);
-    await readConfigGetResponse({ loadUiHints });
+    expect(hit).toBe(first);
+    expect(stat).not.toHaveBeenCalled();
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(loadUiHints).not.toHaveBeenCalled();
 
     invalidateConfigGetResponseCache();
-    await readConfigGetResponse({ loadUiHints });
+    const fresh = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    expect(hit).toEqual(fresh);
+  });
+
+  it("shares one projection across concurrent active-watcher callers", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints }),
+      ),
+    );
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(loadUiHints).toHaveBeenCalledOnce();
+    expect(responses.every((response) => response === responses[0])).toBe(true);
+  });
+
+  it("evicts a failed projection instead of retaining its rejected promise", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    mocks.readConfigFileSnapshot.mockRejectedValueOnce(new Error("transient read failure"));
+
+    await expect(
+      readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints }),
+    ).rejects.toThrow("transient read failure");
+    await expect(
+      readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints }),
+    ).resolves.toMatchObject({ appliedConfigHash: "applied-1" });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("revalidates an unchanged file stamp after the bounded cache window", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  it("rebuilds when the active plugin metadata generation changes", async () => {
     const loadUiHints = vi.fn(() => undefined);
-    await readConfigGetResponse({ loadUiHints });
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
 
-    now.mockReturnValue(6_001);
+    mocks.pluginRegistryVersion = 2;
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    expect(loadUiHints).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds immediately after watcher or write-path invalidation", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    invalidateConfigGetResponseCache();
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses the cache when hot reload is disabled", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+
+    await readConfigGetResponse({ getHotReloadStatus: disabledWatcher, loadUiHints });
+    await readConfigGetResponse({ getHotReloadStatus: disabledWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    expect(loadUiHints).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses the cache when no config watcher status is available", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+
+    await readConfigGetResponse({ loadUiHints });
     await readConfigGetResponse({ loadUiHints });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    expect(loadUiHints).toHaveBeenCalledTimes(2);
   });
 });
