@@ -110,6 +110,7 @@ jobs:
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
       macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
       run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
+      run_openclawkit_tests: ${{ steps.manifest.outputs.run_openclawkit_tests }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
@@ -525,6 +526,7 @@ jobs:
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
+          const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
           const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
           const supportsFormatCheck =
@@ -703,6 +705,7 @@ jobs:
             ),
             run_macos_swift:
               runMacos && (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+            run_openclawkit_tests: runMacos && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
             run_protocol_event_coverage: runProtocolEventCoverage,
@@ -877,6 +880,33 @@ jobs:
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Fetch pull request scan history
+        if: github.event_name == 'pull_request'
+        env:
+          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+          PR_MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid pull request commit count: $PR_COMMIT_COUNT"
+            exit 2
+          fi
+          # Include the synthetic merge, every pull request commit, and one
+          # ancestor so TruffleHog can clone and resolve the bounded range.
+          fetch_depth=$((PR_COMMIT_COUNT + 2))
+          timeout --signal=TERM --kill-after=10s 120s git \
+            -c protocol.version=2 \
+            fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"
+
+      - name: Scan pull request for leaked credentials
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        with:
+          base: ${{ steps.diff_base.outputs.sha }}
+          head: ${{ github.sha }}
+          version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42"
+          extra_args: --results=verified,unknown --fail-on-scan-errors
 
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
@@ -1056,16 +1086,16 @@ jobs:
           save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
       - name: Restore dist build cache
         id: dist_build_cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/
@@ -1080,6 +1110,27 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
+
+      # Reruns the (warm, seconds-cheap) asset hooks and fails on drift so
+      # packages/-only PRs cannot land stale committed plugin bundles; the
+      # extension byte-equality suites do not run for those diffs.
+      - name: Check bundled plugin generated assets
+        run: |
+          set -euo pipefail
+
+          if node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          process.exit(packageJson.scripts?.["plugins:assets:check"] ? 0 : 1);
+          NODE
+          then
+            pnpm plugins:assets:check
+          else
+            # Frozen release candidates predate this generated-asset contract.
+            # Their own build remains the available asset validation surface.
+            echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
+          fi
 
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
@@ -1233,7 +1284,7 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         continue-on-error: true
         with:
           path: |
@@ -1261,7 +1312,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           persist-credentials: false
@@ -1346,6 +1397,46 @@ jobs:
             pnpm --dir ui test --maxWorkers 3
           fi
 
+  checks-ui-e2e:
+    permissions:
+      contents: read
+    name: checks-ui-e2e (${{ matrix.shard }}/4)
+    needs: [preflight]
+    # Compatibility targets pin a frozen Control UI whose e2e expectations track
+    # that release, not current main.
+    if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    # Chromium, Vite, and the Vitest coordinator share this runner even though
+    # files are serial. Four-vCPU runners let host-side CDP polling starve while
+    # the browser kept making progress, producing rotating timeout failures.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Keep Chromium ownership serial within each independently required shard.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          # Fork PRs must never read or write repository-global sticky snapshots.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Install Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
+      - name: Test Control UI end-to-end
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          --shard ${{ matrix.shard }}/4
+
   control-ui-i18n:
     permissions:
       contents: read
@@ -1354,6 +1445,8 @@ jobs:
     if: needs.preflight.outputs.run_control_ui_i18n == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
+    env:
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1366,6 +1459,17 @@ jobs:
           # repository-global state and must never be produced by fork code.
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Verify Control UI i18n source
+        run: |
+          if node -e 'process.exit(require("./package.json").scripts?.["ui:i18n:verify"] ? 0 : 1)'; then
+            pnpm ui:i18n:verify
+          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Skipping ui:i18n:verify: unavailable on the selected compatibility target." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui:i18n:verify is required for non-compatibility targets." >&2
+            exit 1
+          fi
 
       - name: Check Control UI locale parity
         # Source-only drift stays advisory because the post-merge bot owns
@@ -1623,7 +1727,7 @@ jobs:
 
       - name: Set up Blacksmith Docker layer cache
         if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -1632,10 +1736,7 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
-          node scripts/build-all.mjs qaRuntime
-          pnpm ui:build
           package_args=(
-            --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
@@ -1643,6 +1744,8 @@ jobs:
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
 
       - name: Run smoke profile part
         env:
@@ -1686,7 +1789,6 @@ jobs:
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
               "system-agent-ring-zero-setup",
-              "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",
               "long-running-release-audit",
@@ -1925,7 +2027,7 @@ jobs:
         if: matrix.requires_go == true
         # The current workflow validates frozen targets whose go.mod may predate this patch pin.
         # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25.12"
           cache-dependency-path: scripts/docs-i18n/go.sum
@@ -1970,10 +2072,11 @@ jobs:
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           # Frozen targets can carry integration hooks whose cold setup exceeds
-          # the current 120-second default on shared release runners.
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=300000"]' || '[]' }}
+          # the current defaults on shared release runners. Keep the no-output
+          # watchdog above Vitest so it cannot preempt hook diagnostics.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=600000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
@@ -2025,8 +2128,8 @@ jobs:
           - check_name: check-guards
             task: guards
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-shrinkwrap
-            task: shrinkwrap
+          - check_name: check-npm-lock
+            task: npm-lock
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-bundled-channel-config-metadata
             task: bundled-channel-config-metadata
@@ -2148,8 +2251,15 @@ jobs:
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
               ;;
-            shrinkwrap)
-              pnpm deps:shrinkwrap:check
+            npm-lock)
+              if has_package_script "deps:npm-lock:check"; then
+                pnpm deps:npm-lock:check
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the deps:npm-lock:check package script." >&2
+                exit 1
+              else
+                echo "[skip] historical target predates the transient npm lock contract"
+              fi
               ;;
             bundled-channel-config-metadata)
               pnpm check:bundled-channel-config-metadata
@@ -2369,7 +2479,7 @@ jobs:
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
         if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/plugin-sdk
@@ -2662,7 +2772,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -2938,7 +3048,7 @@ jobs:
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -2947,7 +3057,7 @@ jobs:
 
       - name: Cache Swift build directory
         id: swift-build-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -3048,7 +3158,9 @@ jobs:
           fi
           swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
+      # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
       - name: OpenClawKit tests
+        if: needs.preflight.outputs.run_openclawkit_tests == 'true'
         run: |
           set -euo pipefail
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
@@ -3077,7 +3189,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    timeout-minutes: 45
+    timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -3174,6 +3286,68 @@ jobs:
       - name: Build iOS app
         run: pnpm ios:build
 
+      # App compilation and screenshots do not execute approval or notification
+      # lifecycles. Exercise both owners on the already provisioned simulator.
+      - name: Run focused iOS lifecycle simulator tests
+        id: ios_lifecycle_tests
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
+              if (!simulator) {
+                console.error("No available iPhone simulator for iOS lifecycle tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
+          mkdir -p "apps/ios/build/LifecycleTestResults"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -resultBundlePath "$result_bundle" \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawTests/DelayedActionGateTests \
+            -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            test
+
+      - name: Upload iOS lifecycle simulator evidence
+        if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Capture iOS release screenshots
+        if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+        run: pnpm ios:screenshots
+
+      - name: Upload iOS release screenshot evidence
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/SnapshotTestResults/*.xcresult
+          if-no-files-found: error
+          retention-days: 14
+
   android:
     permissions:
       contents: read
@@ -3232,7 +3406,7 @@ jobs:
           exit 1
 
       - name: Checkout CI Android toolchain action
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-workflow
@@ -3373,6 +3547,7 @@ jobs:
       - build-artifacts
       - native-i18n
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - qa-smoke-ci-profile
@@ -3404,6 +3579,7 @@ jobs:
             build-artifacts=${{ needs.build-artifacts.result }}
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
+            checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
@@ -3462,6 +3638,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard
@@ -3477,13 +3654,13 @@ jobs:
       - macos-swift
       - ios-build
       - android
-    # Re-enable this job when we want to collect CI timing data for timing optimization.
+    # TODO(2026-10-01): Re-enable or delete the CI timing-summary job after the next timing-optimization review.
     if: ${{ false && !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Checkout timing summary helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
           fetch-depth: 1

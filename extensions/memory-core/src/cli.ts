@@ -19,6 +19,7 @@ import type {
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
+import type { MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
@@ -28,6 +29,7 @@ import {
 const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
+const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 
 async function runMemoryStatus(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
   const runtime = await loadMemoryCliRuntime();
@@ -79,6 +81,14 @@ async function runMemoryRemBackfill(
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemBackfill(opts, hostOptions);
+}
+
+async function runMemorySessionBackfill(
+  opts: MemorySessionBackfillOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySessionBackfill(opts, hostOptions);
 }
 
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
@@ -158,6 +168,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
           [
             "openclaw memory rem-backfill --path ./memory --stage-short-term",
             "Also seed durable grounded candidates into the live short-term promotion store.",
+          ],
+          [
+            "openclaw memory session-backfill --agent main --from 2026-01-01",
+            "Preview trusted candidates from retained session history.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
@@ -274,6 +288,34 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
       await runMemoryRemBackfill(opts, hostOptions);
+    });
+
+  memory
+    .command("session-backfill")
+    .description("Distill retained session history into staged memory candidates")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--from <YYYY-MM-DD>", "Oldest transcript day to include")
+    .option("--to <YYYY-MM-DD>", "Newest transcript day to include")
+    .option(
+      "--limit-days <n>",
+      `Maximum unprocessed days (default: ${DEFAULT_SESSION_BACKFILL_LIMIT_DAYS})`,
+      (value: string) => parseMemoryCliPositiveIntegerOption(value, "--limit-days"),
+      DEFAULT_SESSION_BACKFILL_LIMIT_DAYS,
+    )
+    .option("--rem", "Write grounded per-day REM previews to DREAMS.md", false)
+    .option("--apply", "Stage candidates and write DREAMS.md diary entries", false)
+    .option(
+      "--rollback",
+      "Remove all grounded backfill candidates and shared backfill diary entries",
+      false,
+    )
+    .option(
+      "--archive-files <path...>",
+      "Also inspect foreign transcript archive files conservatively",
+    )
+    .option("--json", "Print JSON")
+    .action(async (opts: MemorySessionBackfillOptions) => {
+      await runMemorySessionBackfill(opts, hostOptions);
     });
 
   memory.action(() => {

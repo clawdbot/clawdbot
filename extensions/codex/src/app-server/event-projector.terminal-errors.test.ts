@@ -6,6 +6,7 @@ import {
   TURN_ID,
   createProjector,
   buildEmptyToolTelemetry,
+  readAttemptTerminal,
   expectUsageLimitPromptError,
   forCurrentTurn,
   agentMessageDelta,
@@ -26,10 +27,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.aborted).toBe(false);
-    expect(result.externalAbort).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      promptError: null,
+    });
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
   });
@@ -58,7 +61,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(result.assistantTexts).toEqual([]);
     expect(result.toolMetas).toEqual([
       expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
@@ -117,7 +120,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     );
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.aborted).toBe(true);
+    expect(readAttemptTerminal(result).aborted).toBe(true);
     expect(result.assistantTexts).toEqual([]);
   });
 
@@ -130,9 +133,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.aborted).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: true,
+      promptError: null,
+      promptErrorSource: null,
+    });
     expect(result.lastToolError).toMatchObject({
       toolName: "bash",
       error: expect.stringContaining("without a matching tool.result"),
@@ -147,9 +152,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.aborted).toBe(false);
-    expect(result.promptError).toContain("without a matching tool.result");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      promptErrorSource: "prompt",
+    });
+    expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
     expect(result.lastToolError).toBeUndefined();
   });
 
@@ -167,8 +174,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["final answer"]);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      promptErrorSource: null,
+    });
     expect(result.lastAssistant?.stopReason).toBe("stop");
     expect(result.lastAssistant?.errorMessage).toBeUndefined();
   });
@@ -182,8 +191,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toBe("stream failed permanently");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: "stream failed permanently",
+      promptErrorSource: "prompt",
+    });
     expect(result.lastAssistant).toBeUndefined();
   });
 
@@ -206,11 +217,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    const promptError = expectUsageLimitPromptError(result.promptError);
+    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
     expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
     expect(promptError.message).toContain("Next reset in");
     expect(promptError.message).toContain("Wait until the reset time");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 
   it("uses Codex rate-limit resets for failed turns", async () => {
@@ -236,10 +247,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    const promptError = expectUsageLimitPromptError(result.promptError);
+    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
     expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
     expect(promptError.message).toContain("Next reset in");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 
   it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
@@ -277,10 +288,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    const promptError = expectUsageLimitPromptError(result.promptError);
+    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
     expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
     expect(promptError.message).toContain("Next reset in");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 
   it("preserves Codex retry hints when failed turns omit structured reset details", async () => {
@@ -304,10 +315,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    const promptError = expectUsageLimitPromptError(result.promptError);
+    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
     expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
     expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
     expect(promptError.message).not.toContain("Codex did not return a reset time");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 });

@@ -101,7 +101,12 @@ export function parseMcpTarget(
   transport: McpServerTransport,
 ): Record<string, unknown> | null {
   if (transport !== "stdio") {
-    return /^https?:\/\//i.test(target) ? { url: target, transport } : null;
+    try {
+      const protocol = new URL(target).protocol;
+      return protocol === "http:" || protocol === "https:" ? { url: target, transport } : null;
+    } catch {
+      return null;
+    }
   }
   if (/^https?:\/\//i.test(target)) {
     return null;

@@ -328,7 +328,6 @@ async function runVoiceCallGatewayProducer(
       id: "voice-call-cli-rpc-agent-tool",
       title: "Voice Call CLI, RPC, and agent tool flow",
       sourcePath: "qa/scenarios/plugins/voice-call-cli-rpc-agent-tool.yaml",
-      primaryCoverageIds: ["voice-call.cli-rpc-agent-tool"],
       docsRefs: ["docs/cli/voicecall.md", "docs/plugins/voice-call.md"],
       codeRefs: [
         SOURCE_PATH,

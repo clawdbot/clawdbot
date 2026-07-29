@@ -109,10 +109,10 @@ describe("memory-wiki plugin", () => {
     });
   });
 
-  it("resolves every tool factory from the invocation agent", async () => {
+  it("resolves every tool factory from keyed agent entries", async () => {
     const rootDir = await createTempDir("memory-wiki-index-agents-");
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: { default: true }, marketing: {} } },
     } as OpenClawConfig;
     const { api, registerTool } = createPluginApi();
     api.config = appConfig;

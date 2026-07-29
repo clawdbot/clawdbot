@@ -65,8 +65,11 @@ function migratedConversation(
   persistedChatType?: string,
   sessionKey?: string,
 ) {
-  const delivery = migratedObject(entry, "deliveryContext");
-  const origin = migratedObject(entry, "origin");
+  const canonicalDelivery = migratedObject(entry, "delivery");
+  const delivery =
+    migratedObject(canonicalDelivery ?? {}, "context") ?? migratedObject(entry, "deliveryContext");
+  const origin =
+    migratedObject(canonicalDelivery ?? {}, "origin") ?? migratedObject(entry, "origin");
   const deliveryRouteTarget = migratedText(delivery?.to);
   const kind = inferMigratedChatType({
     entry,
@@ -129,6 +132,27 @@ function migratedConversation(
 
 /** Backfills canonical external addresses once when conversation routing becomes active. */
 export function backfillSessionConversations(db: DatabaseSync): void {
+  if (
+    !readSqliteTableColumns(db, "session_entries") ||
+    !readSqliteTableColumns(db, "sessions") ||
+    !readSqliteTableColumns(db, "conversations")
+  ) {
+    return;
+  }
+  if (!readSqliteTableColumns(db, "session_conversations")) {
+    db.exec(`
+      CREATE TABLE session_conversations (
+        session_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, conversation_id, role),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+      );
+    `);
+  }
   // Earlier schemas did not retain an exact delivery target. Remove their
   // derived projection, then rebuild only addresses recoverable from sessions.
   db.exec(`

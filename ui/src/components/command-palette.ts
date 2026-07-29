@@ -404,19 +404,19 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const previous = this.sessionSearchSource;
     const sourceChanged = previous?.gateway !== gateway;
     const clientChanged = previous?.client !== snapshot.client;
-    const reconnected = previous?.connected === false && snapshot.connected;
+    const reconnected = previous?.connected === false && snapshot.phase === "connected";
     this.sessionSearchSource = {
       gateway,
       client: snapshot.client,
-      connected: snapshot.connected,
+      connected: snapshot.phase === "connected",
     };
 
-    if (sourceChanged || clientChanged || !snapshot.connected) {
+    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
       // Query results belong to one runtime/client connection. Discard them as
       // soon as that owner changes so detached or reconnecting rows stay inert.
       this.clearSessionSearch();
     }
-    if (snapshot.connected && (sourceChanged || clientChanged || reconnected)) {
+    if (snapshot.phase === "connected" && (sourceChanged || clientChanged || reconnected)) {
       this.scheduleSessionSearch(this.query);
     }
   }
@@ -454,7 +454,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const sessions = context?.sessions;
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
-    if (!sessions || !gateway?.snapshot.connected || !client) {
+    if (!sessions || gateway?.snapshot.phase !== "connected" || !client) {
       return;
     }
     const requestId = ++this.sessionSearchId;
@@ -479,7 +479,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           this.context?.sessions !== sessions ||
           this.context?.gateway !== gateway ||
           gateway.snapshot.client !== client ||
-          !gateway.snapshot.connected ||
+          gateway.snapshot.phase !== "connected" ||
           !result
         ) {
           return;

@@ -6,7 +6,10 @@ import {
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
-import type { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
+import type {
+  acquireAgentRunPreparedModelRuntime,
+  PreparedModelRuntimeSnapshot,
+} from "../../agents/prepared-model-runtime.js";
 import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
@@ -19,7 +22,6 @@ import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
-  projectWorkerInferenceModelRouteConfig,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
@@ -170,11 +172,31 @@ function setup(entry: SessionEntry = sessionEntry) {
     agentRuntime?: string;
     authProfile?: string;
     catalogWorkspace?: string;
+    preparedModelRuntime?: boolean;
     prepareWorkspace?: string;
   } = {};
+  const preparedModelRuntime = {
+    agentDir: "/gateway-agent",
+    activeProjectKeys: [],
+    workspaceDir: WORKSPACE,
+    config,
+    metadataSnapshot: { plugins: [] } as never,
+    modelCatalog: {
+      entries: [
+        { provider: PROVIDER, id: MODEL, name: "Approved model" },
+        { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
+      ],
+      routeVariants: [],
+    },
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+  } satisfies PreparedModelRuntimeSnapshot;
+  let leasedPreparedModelRuntime: PreparedModelRuntimeSnapshot | undefined;
   const resolveModel = vi.fn<Deps["resolveModel"]>(
     async (_provider, _model, _dir, _cfg, options) => {
       scope.agentRuntime = options?.agentRuntimeId;
+      scope.preparedModelRuntime = options?.preparedModelRuntime === leasedPreparedModelRuntime;
       return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
     },
   );
@@ -211,21 +233,9 @@ function setup(entry: SessionEntry = sessionEntry) {
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
     scope.catalogWorkspace = WORKSPACE;
+    leasedPreparedModelRuntime = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
     return {
-      snapshot: {
-        agentDir: runtimeParams.agentDir,
-        workspaceDir: WORKSPACE,
-        config,
-        metadataSnapshot: { plugins: [] } as never,
-        modelCatalog: {
-          entries: [
-            { provider: PROVIDER, id: MODEL, name: "Approved model" },
-            { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
-          ],
-          routeVariants: [],
-        },
-        createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-      },
+      snapshot: leasedPreparedModelRuntime,
       release: releaseRuntime,
     };
   });
@@ -284,19 +294,16 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
-  it("projects the gateway-owned auth profile onto the provider route", () => {
-    const oauth = projectWorkerInferenceModelRouteConfig({
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-      authMode: "oauth",
-    });
-    const apiKey = projectWorkerInferenceModelRouteConfig({
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-      authMode: "api_key",
-    });
+  it("projects the gateway-owned auth profile onto the provider route", async () => {
+    const oauthRuntime = setup();
+    oauthRuntime.resolveAuthProfileMode.mockReturnValue("oauth");
+    await oauthRuntime.executor(params(request(), vi.fn()));
+    const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
+
+    const apiKeyRuntime = setup();
+    apiKeyRuntime.resolveAuthProfileMode.mockReturnValue("api_key");
+    await apiKeyRuntime.executor(params(request(), vi.fn()));
+    const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     expect(oauth.models?.providers?.openai).toMatchObject({
       auth: "oauth",
@@ -375,6 +382,7 @@ describe("worker inference provider runtime", () => {
       agentRuntime: "openclaw",
       authProfile: PROFILE,
       catalogWorkspace: WORKSPACE,
+      preparedModelRuntime: true,
       prepareWorkspace: WORKSPACE,
     });
     expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(

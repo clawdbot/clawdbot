@@ -3,6 +3,7 @@ package ai.openclaw.app.gateway
 import ai.openclaw.app.SecurePrefs
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -30,11 +31,18 @@ class GatewayRegistryStoreTest {
     val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
     assertEquals(listOf("alpha", "Beta"), restored.entries.value.map { it.name })
     assertEquals(alpha.stableId, restored.activeStableId.value)
+    assertEquals(listOf(alpha.stableId), restored.connectedStableIds.value)
     assertEquals(42L, restored.activeEntry()?.lastConnectedAtMs)
+
+    restored.setConnectionEnabled(beta.stableId, true)
+    assertEquals(listOf(alpha.stableId, beta.stableId), restored.connectedStableIds.value)
+    restored.setConnectionEnabled(alpha.stableId, false)
+    assertEquals(listOf(beta.stableId), restored.connectedStableIds.value)
 
     assertTrue(restored.remove(alpha.stableId))
     assertNull(restored.activeStableId.value)
     assertEquals(listOf(beta.stableId), restored.entries.value.map { it.stableId })
+    assertEquals(listOf(beta.stableId), restored.connectedStableIds.value)
 
     val afterRemoval = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
     assertNull(afterRemoval.activeStableId.value)
@@ -92,6 +100,53 @@ class GatewayRegistryStoreTest {
     assertFalse(store.remove(alpha.stableId))
     assertEquals(listOf(alpha.stableId), store.entries.value.map { it.stableId })
     assertEquals(alpha.stableId, store.activeStableId.value)
+    assertEquals(listOf(alpha.stableId), store.connectedStableIds.value)
+  }
+
+  @Test
+  fun versionOneRegistryUpgradesActiveGatewayToConnected() {
+    val (_, securePrefs) = freshPrefs()
+    securePrefs
+      .edit()
+      .putString(
+        GatewayRegistryStore.STORAGE_KEY,
+        """{"version":1,"activeStableId":"manual|alpha.example|18789","entries":[{"stableId":"manual|alpha.example|18789","kind":"manual","name":"Alpha","host":"alpha.example","port":18789}]}""",
+      ).commit()
+
+    val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+
+    assertEquals(1, Json.decodeFromString<PersistedGatewayRegistry>(securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null)!!).version)
+    assertEquals(listOf("manual|alpha.example|18789"), restored.connectedStableIds.value)
+  }
+
+  @Test
+  fun unsupportedOrMalformedRegistryIsNotOverwrittenOnLaunch() {
+    val (_, securePrefs) = freshPrefs()
+    val unsupported = """{"version":3,"future":["keep-me"]}"""
+    securePrefs.edit().putString(GatewayRegistryStore.STORAGE_KEY, unsupported).commit()
+
+    val unsupportedStore = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+
+    assertTrue(unsupportedStore.entries.value.isEmpty())
+    unsupportedStore.upsert(manualEntry("new", "new.example"))
+    assertEquals(unsupported, securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null))
+
+    val malformed = "{not-json"
+    securePrefs.edit().putString(GatewayRegistryStore.STORAGE_KEY, malformed).commit()
+
+    val malformedStore = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+
+    assertTrue(malformedStore.entries.value.isEmpty())
+    malformedStore.upsert(manualEntry("new", "new.example"))
+    assertEquals(malformed, securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null))
+
+    val missingVersion = """{"entries":[]}"""
+    securePrefs.edit().putString(GatewayRegistryStore.STORAGE_KEY, missingVersion).commit()
+
+    val missingVersionStore = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+    missingVersionStore.upsert(manualEntry("new", "new.example"))
+
+    assertEquals(missingVersion, securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null))
   }
 
   @Test

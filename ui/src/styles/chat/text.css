@@ -26,6 +26,37 @@
   word-break: break-word;
 }
 
+.chat-user-message-disclosure__preview {
+  white-space: pre-wrap;
+}
+
+.chat-user-message-disclosure__toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.chat-user-message-disclosure__toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  color: var(--text);
+}
+
+.chat-user-message-disclosure__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
 }
@@ -46,6 +77,12 @@
   border: 1px solid var(--border);
   padding: 6px 10px;
   vertical-align: top;
+}
+
+.chat-text :where(th:first-child, td:first-child) {
+  min-width: 8rem;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-text :where(th) {
@@ -107,6 +144,22 @@
   font-size: 0.9em;
 }
 
+.chat-text :where(.markdown-inline-image-button) {
+  display: block;
+  max-width: min(100%, 420px);
+  margin-top: 0.75em;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.chat-text :where(.markdown-inline-image-button:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .chat-text :where(.markdown-inline-image) {
   display: block;
   max-width: min(100%, 420px);
@@ -118,6 +171,10 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   object-fit: contain;
+}
+
+.chat-text :where(.markdown-inline-image-button > .markdown-inline-image) {
+  margin-top: 0;
 }
 
 .chat-text :where(:not(pre) > code) {
@@ -180,7 +237,7 @@
 
 /* Order contract: stays below the nested-blockquote margin rule so a nested
    quote that follows a paragraph gets paragraph rhythm, not the 8px gap. */
-.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
+.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote, ul + p, ol + p) {
   margin-top: 0.75em;
 }
 

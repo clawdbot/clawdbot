@@ -1,22 +1,5 @@
-import type {
-  MeetingBrowserHealth,
-  MeetingBrowserTab,
-  MeetingSessionRecord,
-  MeetingTranscriptSnapshot,
-} from "openclaw/plugin-sdk/meeting-runtime";
-import type { TeamsMeetingsMode, TeamsMeetingsTransport } from "../config.js";
-
-export type TeamsMeetingsTranscriptSnapshot = MeetingTranscriptSnapshot;
-
-export type TeamsMeetingsJoinRequest = {
-  url: string;
-  transport?: TeamsMeetingsTransport;
-  mode?: TeamsMeetingsMode;
-  message?: string;
-  requesterSessionKey?: string;
-  agentId?: string;
-  timeoutMs?: number;
-};
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "../config.js";
 
 type TeamsMeetingsManualActionReason =
   | "teams-login-required"
@@ -35,69 +18,18 @@ type TeamsMeetingsSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "teams-microphone-muted";
 
-export type TeamsMeetingsChromeHealth = MeetingBrowserHealth<
-  TeamsMeetingsManualActionReason,
-  TeamsMeetingsSpeechBlockedReason
-> & {
-  inCall?: boolean;
-  micMuted?: boolean;
-  cameraOff?: boolean;
-  lobbyWaiting?: boolean;
-  captionCaptureRequested?: boolean;
-  captioning?: boolean;
-  captionsEnabledAttempted?: boolean;
-  transcriptLines?: number;
-  lastCaptionAt?: string;
-  lastCaptionSpeaker?: string;
-  lastCaptionText?: string;
-  recentTranscript?: Array<{
-    at?: string;
-    speaker?: string;
-    text: string;
-  }>;
-  audioInputRouted?: boolean;
-  audioInputDeviceLabel?: string;
-  audioInputRouteError?: string;
-  audioOutputRouted?: boolean;
-  audioOutputDeviceLabel?: string;
-  audioOutputRouteError?: string;
-  audioOutputRouteRetryable?: boolean;
-  providerConnected?: boolean;
-  realtimeReady?: boolean;
-  audioInputActive?: boolean;
-  audioOutputActive?: boolean;
-  lastInputAt?: string;
-  lastOutputAt?: string;
-  lastInputBytes?: number;
-  lastOutputBytes?: number;
-  bridgeClosed?: boolean;
-  browserUrl?: string;
-  browserTitle?: string;
-  status?: string;
-  notes?: string[];
-};
-
-export type TeamsMeetingsBrowserTab = MeetingBrowserTab;
-
-export type TeamsMeetingsSession = MeetingSessionRecord<
-  TeamsMeetingsTransport,
-  TeamsMeetingsMode
-> & {
-  chrome?: {
-    audioBackend: "blackhole-2ch";
-    launched: boolean;
-    nodeId?: string;
-    browserProfile?: string;
-    browserTab?: TeamsMeetingsBrowserTab;
-    audioBridge?: {
-      type: "command-pair" | "node-command-pair";
-      provider?: string;
-    };
-    health?: TeamsMeetingsChromeHealth;
-  };
-};
-
-export type TeamsMeetingsJoinResult = {
-  session: TeamsMeetingsSession;
-  spoken?: boolean;
-};
+export type TeamsMeetingsPluginTypes = ReturnType<
+  typeof MeetingPlatformAdapter.pluginTypes<
+    TeamsMeetingsConfig,
+    TeamsMeetingsTransport,
+    TeamsMeetingsMode,
+    TeamsMeetingsManualActionReason,
+    TeamsMeetingsSpeechBlockedReason
+  >
+>;
+export type TeamsMeetingsTranscriptSnapshot = TeamsMeetingsPluginTypes["TranscriptSnapshot"];
+export type TeamsMeetingsJoinRequest = TeamsMeetingsPluginTypes["JoinRequest"];
+export type TeamsMeetingsChromeHealth = TeamsMeetingsPluginTypes["ChromeHealth"];
+export type TeamsMeetingsBrowserTab = TeamsMeetingsPluginTypes["BrowserTab"];
+export type TeamsMeetingsSession = TeamsMeetingsPluginTypes["Session"];
+export type TeamsMeetingsJoinResult = TeamsMeetingsPluginTypes["JoinResult"];

@@ -1,12 +1,17 @@
 // Whatsapp plugin module implements extract behavior.
 import type { proto } from "baileys";
 import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatLocationText,
+  type ChannelInboundMediaInput,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
+import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
 
 function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | undefined {
@@ -188,27 +193,28 @@ export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undef
   return title || sourceUrl || body ? { title, sourceUrl, body } : undefined;
 }
 
-export function extractMediaPlaceholder(
+export function extractMediaKind(
   rawMessage: proto.IMessage | undefined,
-): string | undefined {
+): NonNullable<ChannelInboundMediaInput["kind"]> | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {
     return undefined;
   }
   if (message.imageMessage) {
-    return "<media:image>";
+    return "image";
   }
   if (message.videoMessage) {
-    return message.videoMessage.gifPlayback === true ? "<media:gif>" : "<media:video>";
+    // GIF playback is a video transport detail; no downstream behavior needs a new GIF kind.
+    return "video";
   }
   if (message.audioMessage) {
-    return "<media:audio>";
+    return "audio";
   }
   if (message.documentMessage) {
-    return "<media:document>";
+    return "document";
   }
   if (message.stickerMessage) {
-    return "<media:sticker>";
+    return "sticker";
   }
   return undefined;
 }
@@ -330,21 +336,7 @@ export function describeReplyContext(
   }
   const contextInfo = extractContextInfo(message);
   const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
-  if (!quoted) {
-    return null;
-  }
-  const location = extractLocationData(quoted);
-  const locationText = location ? formatLocationText(location) : undefined;
-  const text = extractText(quoted);
-  let body: string | undefined = [text, locationText].filter(Boolean).join("\n").trim();
-  if (!body) {
-    body = extractMediaPlaceholder(quoted);
-  }
-  if (!body) {
-    const quotedType = quoted ? getContentType(quoted) : undefined;
-    logVerbose(
-      `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
-    );
+  if (!quoted && !contextInfo?.stanzaId) {
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
@@ -352,9 +344,33 @@ export function describeReplyContext(
     jid: senderJid,
     label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
   });
+  if (!quoted) {
+    // Baileys may preserve a real reply ID while omitting its private quoted payload.
+    return {
+      id: contextInfo?.stanzaId || undefined,
+      body: "[quoted message unavailable]",
+      sender,
+    };
+  }
+  const location = extractLocationData(quoted);
+  const locationText = location ? formatLocationText(location) : undefined;
+  const text = extractText(quoted);
+  const body = [text, locationText].filter(Boolean).join("\n").trim();
+  const mediaKind = extractMediaKind(quoted);
+  const media = mediaKind
+    ? { kind: mediaKind, contentType: resolveInboundMediaMimetype(quoted) }
+    : undefined;
+  if (!body && !media) {
+    const quotedType = quoted ? getContentType(quoted) : undefined;
+    logVerbose(
+      `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
+    );
+    return null;
+  }
   return {
     id: contextInfo?.stanzaId || undefined,
-    body,
+    body: body ?? "",
+    media,
     sender,
   };
 }
@@ -389,7 +405,7 @@ export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): b
   if (extractText(rawMessage)) {
     return true;
   }
-  if (extractMediaPlaceholder(rawMessage)) {
+  if (extractMediaKind(rawMessage)) {
     return true;
   }
   if (extractLocationData(rawMessage)) {

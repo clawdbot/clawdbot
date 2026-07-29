@@ -83,7 +83,7 @@ import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
 } from "./session-conversation.js";
-import { telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupAdapter, telegramSetupContract } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
   createTelegramPluginBase,
@@ -114,6 +114,11 @@ function resolveTelegramProbe() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
   );
+}
+
+function isTelegramRichMessagesEnabled(cfg: OpenClawConfig, accountId?: string | null): boolean {
+  const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
+  return mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true;
 }
 
 async function readStartupBotInfoCache(params: {
@@ -267,6 +272,7 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
 });
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
+  messageActionTargetAliases: telegramMessageActionsImpl.messageActionTargetAliases,
   resolveExecutionMode: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
     telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
@@ -731,6 +737,7 @@ export const telegramPlugin = createChatChannelPlugin({
     ...createTelegramPluginBase({
       setupWizard: telegramSetupWizard,
       setup: telegramSetupAdapter,
+      setupContract: telegramSetupContract,
     }),
     allowlist: buildDmGroupAccountAllowlistAdapter({
       channelId: "telegram",
@@ -814,14 +821,15 @@ export const telegramPlugin = createChatChannelPlugin({
           cfg,
           accountId: accountId ?? undefined,
         });
-        return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        return [
+          ...(inlineButtonsScope === "off" ? [] : ["inlineButtons"]),
+          ...(isTelegramRichMessagesEnabled(cfg, accountId) ? ["markdownDetails"] : []),
+        ];
       },
       // Authoring contract lives here so every runtime (including native Codex)
       // sees it via inbound-meta response_format; core system-prompt no longer owns it.
       inboundFormattingHints: ({ cfg, accountId }) => {
-        const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-        const richMessages =
-          mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true;
+        const richMessages = isTelegramRichMessagesEnabled(cfg, accountId);
         if (richMessages) {
           return {
             text_markup: "markdown_telegram_rich",

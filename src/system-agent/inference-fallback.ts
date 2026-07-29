@@ -1,12 +1,13 @@
 // Provider-neutral live inference ladder for delegated OpenClaw sessions.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentTargetAgentId,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { verifySetupInference, type BoundVerifySetupInferenceResult } from "./setup-inference.js";
@@ -56,13 +57,13 @@ export async function verifySystemAgentInferenceWithFallback(params: {
 }): Promise<BoundVerifySetupInferenceResult> {
   const deps = params.deps ?? {};
   const config = await (deps.readConfig ?? readCurrentConfig)();
-  const requestedAgentId = normalizeAgentId(
-    params.requestingAgentId ?? resolveDefaultAgentId(config),
-  );
+  const defaultAgentId = params.requestingAgentId
+    ? tryResolveDefaultAgentId(config)
+    : resolveSystemAgentTargetAgentId(config);
+  const requestedAgentId = normalizeAgentId(params.requestingAgentId ?? defaultAgentId);
   const candidateAgentIds = [
     requestedAgentId,
-    ...(config.agents?.list ?? []).map((agent) => normalizeAgentId(agent.id)),
-    normalizeAgentId(resolveDefaultAgentId(config)),
+    ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
   ];
   const resolveRoute = deps.resolveRoute ?? resolveSystemAgentConfiguredRouteFromConfig;
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =

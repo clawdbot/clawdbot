@@ -24,14 +24,28 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
-function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjection[]) {
-  const runAbortController = new AbortController();
+function prepareCatalogExecutor(
+  projections: ToolSearchTargetTranscriptProjection[],
+  options?: {
+    getRunState?: () => {
+      aborted: boolean;
+      promptError: unknown;
+      timedOut: boolean;
+      yieldDetected: boolean;
+    };
+    runAbortController?: AbortController;
+    sandboxSessionKey?: string;
+    sessionKey?: string;
+  },
+) {
+  const runAbortController = options?.runAbortController ?? new AbortController();
   return prepareEmbeddedAttemptStream({
     attempt: {
       runId: "run-output-schema",
       sessionId: "session-output-schema",
-      sessionKey: "agent:main:main",
+      sessionKey: options?.sessionKey ?? "agent:main:main",
     } as never,
     activeSession: { agent: {}, isStreaming: false } as never,
     hookRunner: undefined as never,
@@ -43,17 +57,19 @@ function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjectio
     runAbortController,
     abortRun: vi.fn(),
     markExternalAbort: vi.fn(),
-    getRunState: () => ({
-      aborted: false,
-      promptError: undefined,
-      timedOut: false,
-      yieldDetected: false,
-    }),
+    getRunState:
+      options?.getRunState ??
+      (() => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      })),
     hasDeliveredSourceReply: () => false,
     markSourceReplyDelivered: vi.fn(),
     onBlockReply: vi.fn(),
     onBlockReplyFlush: vi.fn(),
-    sandboxSessionKey: "agent:main:main",
+    sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
   });
@@ -68,6 +84,19 @@ describe("prepareEmbeddedAttemptStream", () => {
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
       isCompacting: vi.fn(() => false),
     });
+  });
+
+  it("routes live events to the transcript session instead of the sandbox authority session", () => {
+    prepareCatalogExecutor([], {
+      sessionKey: "agent:main:internal-session-effects:companion-run",
+      sandboxSessionKey: "agent:main:main",
+    });
+
+    expect(mocks.buildSubscriptionParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:internal-session-effects:companion-run",
+      }),
+    );
   });
 
   it("validates hidden tool results before queuing transcript projections", async () => {
@@ -149,5 +178,30 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(returned).toMatchObject({ details: { id: 42 } });
     expect(Object.isFrozen(returned)).toBe(true);
     expect(Object.isFrozen(returned.details)).toBe(true);
+  });
+
+  it("distinguishes an accepted abort from normal steering closure and sessions_yield", () => {
+    const runAbortController = new AbortController();
+    let aborted = false;
+    const prepared = prepareCatalogExecutor([], {
+      runAbortController,
+      getRunState: () => ({
+        aborted,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+    });
+
+    expect(prepared.queueHandle.isAborted?.()).toBe(false);
+    prepared.stopAcceptingSteerMessages();
+    expect(prepared.queueHandle.isStopped?.()).toBe(true);
+    expect(prepared.queueHandle.isAborted?.()).toBe(false);
+
+    runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+    expect(prepared.queueHandle.isAborted?.()).toBe(false);
+
+    aborted = true;
+    expect(prepared.queueHandle.isAborted?.()).toBe(true);
   });
 });

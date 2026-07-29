@@ -1,6 +1,7 @@
 // IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -40,12 +41,7 @@ type IrcIngressDispatch = (
   context: { connectedNick: string; connectionEpoch: string },
 ) => Promise<IrcIngressDispatchResult | void> | IrcIngressDispatchResult | void;
 
-class IrcIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "IrcIngressPayloadError";
-  }
-}
+const IrcIngressPayloadError = createChannelIngressError("IrcIngressPayloadError");
 
 function inspectRawPrivmsg(rawLine: string): {
   laneKey: string;

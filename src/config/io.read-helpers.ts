@@ -21,6 +21,7 @@ import {
 } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
+  type ConfigIncludeResolutionEvent,
   hashConfigIncludeRaw,
   INCLUDE_KEY,
   readConfigIncludeFileWithGuards,
@@ -233,6 +234,7 @@ export function resolveConfigIncludesForRead(
   includeFileHashesForWrite?: Record<string, string>,
   includeFileTargetsForWrite?: Record<string, string>,
   includeFilePathsForWatch?: Set<string>,
+  onIncludeResolved?: (event: ConfigIncludeResolutionEvent) => void,
 ): unknown {
   const allowedRoots = resolveIncludeRoots(deps.env, deps.homedir);
   const recordIncludeWatchPath = (resolvedPath: string) => {
@@ -258,6 +260,7 @@ export function resolveConfigIncludesForRead(
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
       onLexicalPath: recordIncludeWatchPath,
+      onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
         try {
           const raw = readConfigIncludeFileWithGuards({

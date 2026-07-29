@@ -43,7 +43,7 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     });
   });
 
-  it("marks gateway.auth.token inactive when env token is configured", () => {
+  it("keeps gateway.auth.token active when env token is configured", () => {
     const states = evaluate(
       {
         gateway: {
@@ -58,8 +58,8 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
 
     expectGatewayState(states["gateway.auth.token"], {
       hasSecretRef: true,
-      active: false,
-      reason: "gateway token env var is configured.",
+      active: true,
+      reason: 'gateway.auth.mode is "token".',
     });
   });
 

@@ -42,9 +42,6 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
       buildSessionContext: () => ({ messages: repairedMessages }),
     },
     sessionLockController: {
-      waitForSessionEvents: vi.fn(async () => {
-        order.push("session-events");
-      }),
       releaseForPrompt: vi.fn(async () => {
         order.push("release-prompt-lock");
       }),
@@ -143,7 +140,6 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
 
     expect(fixture.activeSession.agent.state.messages).toBe(fixture.repairedMessages);
     expect(fixture.order).toEqual([
-      "session-events",
       "pending-events",
       "release-prompt-lock",
       "settle",

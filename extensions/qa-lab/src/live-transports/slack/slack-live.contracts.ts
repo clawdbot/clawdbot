@@ -95,6 +95,7 @@ export type SlackQaScenarioId =
   | "slack-chart-presentation-native"
   | "slack-channel-disabled-warning"
   | "slack-mention-gating"
+  | "slack-mpim-app-mention-dedupe"
   | "slack-progress-commentary-false"
   | "slack-progress-commentary-omitted"
   | "slack-progress-commentary-true"
@@ -130,6 +131,7 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
 
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
+  cleanup?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<void>;
   kind?: "message";
   expectReply: boolean;
   input: string;
@@ -193,12 +195,14 @@ type SlackQaBeforeRunResult =
   | void
   | {
       details?: string;
+      inputChannelId?: string;
       inputThreadTs?: string;
     };
 
 export type SlackQaConfigOverrides = {
   allowFrom?: string[];
   channelEnabled?: boolean;
+  groupDmEnabled?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;

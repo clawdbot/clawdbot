@@ -2,6 +2,7 @@ import {
   isHostScopedAgentToolActive,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
@@ -189,6 +190,10 @@ export function buildThreadStartParams(
     // accepts them natively (codex-rs normalize_dynamic_tool_specs).
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
+    // Codex `ephemeral` skips rollout/state DB writes while loaded threads remain reusable
+    // (`codex-rs/app-server-protocol/src/protocol/v2/thread.rs:108`;
+    // `codex-rs/core/src/session/session.rs:599-683`, `thread_manager.rs:1157-1163`).
+    ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
   };
 }
 

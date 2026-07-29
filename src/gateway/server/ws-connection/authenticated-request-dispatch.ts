@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams, ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   ErrorCodes,
@@ -5,6 +9,11 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  createChildDiagnosticTraceContext,
+  parseDiagnosticTraceparent,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -137,21 +146,48 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
     };
 
-    const requestDispatch = (async () => {
-      const { handleGatewayRequest } = await import("../../server-methods.js");
-      await handleGatewayRequest({
-        req,
-        respond,
-        client,
-        isWebchatConnect: params.isWebchatConnect,
-        extraHandlers,
-        methodRegistry: getMethodRegistry?.(),
-        context: buildRequestContext(),
-      });
-    })().catch((err: unknown) => {
-      logGateway.error(`request handler failed: ${formatForLog(err)}`);
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    });
+    const executeRequest = async () => {
+      // One-shot CLI clients cancel by closing their authenticated socket;
+      // leave long-lived SDK/UI invocations independent of connection teardown.
+      const nodeInvocationController =
+        req.method === "node.invoke" &&
+        client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
+        client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI
+          ? new AbortController()
+          : undefined;
+      const cancelNodeInvocation = () => nodeInvocationController?.abort();
+      if (nodeInvocationController) {
+        client.socket.once("close", cancelNodeInvocation);
+      }
+      try {
+        const { handleGatewayRequest } = await import("../../server-methods.js");
+        await handleGatewayRequest({
+          req,
+          respond,
+          client,
+          isWebchatConnect: params.isWebchatConnect,
+          extraHandlers,
+          methodRegistry: getMethodRegistry?.(),
+          context: buildRequestContext(),
+          ...(nodeInvocationController ? { signal: nodeInvocationController.signal } : {}),
+        });
+      } catch (err) {
+        // Failure diagnostics and responses belong to the same request trace as the handler.
+        logGateway.error(`request handler failed: ${formatForLog(err)}`);
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      } finally {
+        if (nodeInvocationController) {
+          client.socket.off("close", cancelNodeInvocation);
+        }
+      }
+    };
+    const upstreamTrace = parseDiagnosticTraceparent(req.traceparent);
+    const requestDispatch = upstreamTrace
+      ? runWithDiagnosticTraceContext(
+          createChildDiagnosticTraceContext(upstreamTrace),
+          executeRequest,
+        )
+      : executeRequest();
     if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
       const barrier = requestDispatch.finally(() => {
         if (deviceCredentialMutationBarrier === barrier) {

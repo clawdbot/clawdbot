@@ -310,6 +310,47 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("preserves non-text MCP content alongside structuredContent without duplicating mirrored text", async () => {
+    const structuredContent = { description: "captured screenshot" };
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "text", text: "captured screenshot" },
+            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+            {
+              type: "resource_link",
+              uri: "https://example.com/report",
+              name: "report",
+              title: "Report",
+            },
+            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+          ],
+          structuredContent,
+        },
+      }),
+    });
+
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+      },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "text", text: "[Report] https://example.com/report" },
+      { type: "text", text: "memo body" },
+      { type: "text", text: "[audio audio/mpeg]" },
+    ]);
+  });
+
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
     // resource_link/resource/audio blocks have no base64 image source; if they
     // leaked into the provider image branch Anthropic would 400 on an image with

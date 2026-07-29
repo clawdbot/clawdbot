@@ -5,6 +5,8 @@ import OSLog
 
 extension Notification.Name {
     static let openclawNodeHostWorkerFailed = Notification.Name("openclaw.node-host-worker.failed")
+    static let openclawNodeHostWorkerRetryExhausted = Notification.Name(
+        "openclaw.node-host-worker.retry-exhausted")
 }
 
 struct MacNodeHostManifest: Equatable, Sendable {

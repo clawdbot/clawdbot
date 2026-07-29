@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
@@ -17,6 +19,10 @@ const detachedTaskRuntimeMocks = vi.hoisted(() => ({
   failTaskRunByRunId: vi.fn(),
   recordTaskRunProgressByRunId: vi.fn(),
 }));
+
+const requesterEntry = (context: DeliveryContext): Partial<SessionEntry> => ({
+  delivery: normalizeSessionDeliveryState({ context }),
+});
 const taskRegistryDeliveryRuntimeMocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
 }));
@@ -33,6 +39,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
     "../../config/sessions/session-accessor.js",
   )),
   loadSessionEntry: sessionMocks.loadSessionEntry,
+  loadSessionEntryReadOnly: sessionMocks.loadSessionEntry,
 }));
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
@@ -811,11 +818,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
 
   it("pins a missing requester target from session state when the task starts", async () => {
     subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
-      entry: {
-        lastChannel: "telegram",
-        lastTo: "5866004662",
-        lastAccountId: "bot-1",
-      },
+      entry: requesterEntry({ channel: "telegram", to: "5866004662", accountId: "bot-1" }),
     });
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,
@@ -834,11 +837,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
     });
 
     subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
-      entry: {
-        lastChannel: "telegram",
-        lastTo: "other-peer",
-        lastAccountId: "bot-1",
-      },
+      entry: requesterEntry({ channel: "telegram", to: "other-peer", accountId: "bot-1" }),
     });
     await lifecycle.wakeTaskCompletion({
       handle,
@@ -859,11 +858,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
 
   it("does not pin a session target from another account", () => {
     subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
-      entry: {
-        lastChannel: "telegram",
-        lastTo: "peer-b",
-        lastAccountId: "bot-b",
-      },
+      entry: requesterEntry({ channel: "telegram", to: "peer-b", accountId: "bot-b" }),
     });
     const lifecycle = createImageMediaLifecycle();
 
@@ -893,11 +888,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
 
   it("does not pin a stored thread from a different requester target", () => {
     subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
-      entry: {
-        lastChannel: "telegram",
-        lastTo: "room-b",
-        lastThreadId: 99,
-      },
+      entry: requesterEntry({ channel: "telegram", to: "room-b", threadId: 99 }),
     });
     const lifecycle = createImageMediaLifecycle();
 
@@ -916,11 +907,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
 
   it("pins the external session route for an internal requester origin", () => {
     subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
-      entry: {
-        lastChannel: "telegram",
-        lastTo: "room-a",
-        lastAccountId: "bot-1",
-      },
+      entry: requesterEntry({ channel: "telegram", to: "room-a", accountId: "bot-1" }),
     });
     const lifecycle = createImageMediaLifecycle();
 

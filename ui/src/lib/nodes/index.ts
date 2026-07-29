@@ -1,12 +1,11 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 import {
-  clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
-  loadDeviceAuthTokenFromStore,
-  storeDeviceAuthTokenInStore,
-} from "../../../../src/shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../../../../src/shared/device-auth.js";
+  type DeviceAuthStore,
+  normalizeDeviceAuthRole,
+  normalizeDeviceAuthScopes,
+} from "../../../../src/shared/device-auth.js";
 import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
@@ -726,19 +725,34 @@ function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
   }
 }
 
+function canonicalDeviceAuthTokens(tokens: DeviceAuthStore["tokens"]) {
+  const canonical: DeviceAuthStore["tokens"] = {};
+  for (const [rawRole, entry] of Object.entries(tokens)) {
+    const role = normalizeDeviceAuthRole(rawRole);
+    if (!role || !entry || typeof entry.token !== "string") {
+      continue;
+    }
+    canonical[role] = {
+      token: entry.token,
+      role,
+      scopes: normalizeDeviceAuthScopes(Array.isArray(entry.scopes) ? entry.scopes : undefined),
+      updatedAtMs: Number.isFinite(entry.updatedAtMs) ? entry.updatedAtMs : 0,
+    };
+  }
+  return canonical;
+}
+
 export function loadDeviceAuthToken(params: {
   deviceId: string;
   gatewayUrl: string;
   role: string;
 }): DeviceAuthEntry | null {
-  return loadDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const store = readStore(params.gatewayUrl);
+  if (!store || store.deviceId !== params.deviceId) {
+    return null;
+  }
+  const role = normalizeDeviceAuthRole(params.role);
+  return canonicalDeviceAuthTokens(store.tokens)[role] ?? null;
 }
 
 export function storeDeviceAuthToken(params: {
@@ -748,16 +762,23 @@ export function storeDeviceAuthToken(params: {
   token: string;
   scopes?: string[];
 }): DeviceAuthEntry {
-  return storeDeviceAuthTokenInStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
+  const existing = readStore(params.gatewayUrl);
+  const role = normalizeDeviceAuthRole(params.role);
+  const entry: DeviceAuthEntry = {
     token: params.token,
-    scopes: params.scopes,
+    role,
+    scopes: normalizeDeviceAuthScopes(params.scopes),
+    updatedAtMs: Date.now(),
+  };
+  writeStore(params.gatewayUrl, {
+    version: 1,
+    deviceId: params.deviceId,
+    tokens: {
+      ...(existing?.deviceId === params.deviceId ? canonicalDeviceAuthTokens(existing.tokens) : {}),
+      [role]: entry,
+    },
   });
+  return entry;
 }
 
 export function clearDeviceAuthToken(params: {
@@ -765,14 +786,17 @@ export function clearDeviceAuthToken(params: {
   gatewayUrl: string;
   role: string;
 }) {
-  clearDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const store = readStore(params.gatewayUrl);
+  if (!store || store.deviceId !== params.deviceId) {
+    return;
+  }
+  const role = normalizeDeviceAuthRole(params.role);
+  if (!store.tokens[role]) {
+    return;
+  }
+  const tokens = canonicalDeviceAuthTokens(store.tokens);
+  delete tokens[role];
+  writeStore(params.gatewayUrl, { ...store, tokens });
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

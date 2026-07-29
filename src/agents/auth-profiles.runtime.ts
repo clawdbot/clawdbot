@@ -1,15 +1,9 @@
-/**
- * Runtime seam for auth-profile store loading.
- * Tests can stub this facade without importing the full auth profile store
- * implementation.
- */
-import { ensureAuthProfileStore as ensureAuthProfileStoreImpl } from "./auth-profiles/store.js";
-
-type EnsureAuthProfileStore = typeof import("./auth-profiles/store.js").ensureAuthProfileStore;
-
-/** Ensure an auth-profile store using the production store implementation. */
-export function ensureAuthProfileStore(
-  ...args: Parameters<EnsureAuthProfileStore>
-): ReturnType<EnsureAuthProfileStore> {
-  return ensureAuthProfileStoreImpl(...args);
-}
+/** Runtime auth-profile facade for lazy model selection and fallback paths. */
+export { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+export { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
+export {
+  getSoonestCooldownExpiry,
+  isProfileInCooldown,
+  maybeReprobeWhamBlockedProfiles,
+  resolveProfilesUnavailableReason,
+} from "./auth-profiles/usage.js";

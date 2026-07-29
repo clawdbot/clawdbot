@@ -25,6 +25,41 @@ struct NixModeStableSuiteTests {
         #expect(resolved)
     }
 
+    @Test func `detects SwiftPM and XCTest runners`() {
+        #expect(ProcessInfo.resolveIsRunningTests(
+            environment: [:],
+            processName: "swiftpm-testing-helper",
+            arguments: [],
+            bundleURLs: []))
+        #expect(ProcessInfo.resolveIsRunningTests(
+            environment: [:],
+            processName: "swiftpm-xctest-helper",
+            arguments: [],
+            bundleURLs: []))
+        for helper in ["swiftpm-testing-helper", "swiftpm-xctest-helper"] {
+            #expect(ProcessInfo.resolveIsRunningTests(
+                environment: [:],
+                processName: "OpenClawTests",
+                arguments: ["/Library/Developer/Toolchains/usr/libexec/swift/pm/\(helper)"],
+                bundleURLs: []))
+        }
+        #expect(ProcessInfo.resolveIsRunningTests(
+            environment: ["XCTestSessionIdentifier": "session"],
+            processName: "OpenClawTests",
+            arguments: [],
+            bundleURLs: []))
+        #expect(ProcessInfo.resolveIsRunningTests(
+            environment: [:],
+            processName: "OpenClawTests",
+            arguments: [],
+            bundleURLs: [URL(fileURLWithPath: "/tmp/OpenClawTests.xctest")]))
+        #expect(!ProcessInfo.resolveIsRunningTests(
+            environment: [:],
+            processName: "OpenClaw",
+            arguments: [],
+            bundleURLs: []))
+    }
+
     @Test func `ignores stable suite outside app bundles`() throws {
         let suite = try #require(UserDefaults(suiteName: launchdLabel))
         let key = "openclaw.nixMode"

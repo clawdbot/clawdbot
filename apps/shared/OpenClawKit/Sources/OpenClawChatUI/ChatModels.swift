@@ -116,6 +116,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let thinkingSignature: String?
     public let mimeType: String?
     public let fileName: String?
+    public let artifactId: String?
+    public let url: String?
+    public let openUrl: String?
+    public let alt: String?
+    public let width: Int?
+    public let height: Int?
+    public let sizeBytes: Int?
     public let durationSeconds: Double?
     public let content: AnyCodable?
     public let preview: OpenClawChatCanvasPreview?
@@ -127,6 +134,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let details: AnyCodable?
     public let isError: Bool?
 
+    /// Gateway media and historical file attachments must stay visible in both chat and exports.
+    var isInlineAttachment: Bool {
+        switch self.type?.lowercased() {
+        case "file", "attachment", "image", "audio":
+            true
+        default:
+            false
+        }
+    }
+
     public init(
         type: String?,
         text: String?,
@@ -134,6 +151,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         thinkingSignature: String? = nil,
         mimeType: String?,
         fileName: String?,
+        artifactId: String? = nil,
+        url: String? = nil,
+        openUrl: String? = nil,
+        alt: String? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        sizeBytes: Int? = nil,
         durationSeconds: Double? = nil,
         content: AnyCodable?,
         preview: OpenClawChatCanvasPreview? = nil,
@@ -149,6 +173,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.thinkingSignature = thinkingSignature
         self.mimeType = mimeType
         self.fileName = fileName
+        self.artifactId = artifactId
+        self.url = url
+        self.openUrl = openUrl
+        self.alt = alt
+        self.width = width
+        self.height = height
+        self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds
         self.content = content
         self.preview = preview
@@ -166,6 +197,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case thinkingSignature
         case mimeType
         case fileName
+        case artifactId
+        case url
+        case openUrl
+        case alt
+        case width
+        case height
+        case sizeBytes
         case durationSeconds
         case content
         case preview
@@ -185,6 +223,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.thinkingSignature = try container.decodeIfPresent(String.self, forKey: .thinkingSignature)
         self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
         self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        let decodedURL = try container.decodeIfPresent(String.self, forKey: .url)
+        self.url = decodedURL
+        self.openUrl = try container.decodeIfPresent(String.self, forKey: .openUrl)
+        self.artifactId = try container.decodeIfPresent(String.self, forKey: .artifactId)
+            ?? Self.managedImageArtifactId(from: decodedURL)
+        self.alt = try container.decodeIfPresent(String.self, forKey: .alt)
+        self.width = try container.decodeIfPresent(Int.self, forKey: .width)
+        self.height = try container.decodeIfPresent(Int.self, forKey: .height)
+        self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
@@ -211,6 +258,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.thinkingSignature, forKey: .thinkingSignature)
         try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
         try container.encodeIfPresent(self.fileName, forKey: .fileName)
+        try container.encodeIfPresent(self.artifactId, forKey: .artifactId)
+        try container.encodeIfPresent(self.url, forKey: .url)
+        try container.encodeIfPresent(self.openUrl, forKey: .openUrl)
+        try container.encodeIfPresent(self.alt, forKey: .alt)
+        try container.encodeIfPresent(self.width, forKey: .width)
+        try container.encodeIfPresent(self.height, forKey: .height)
+        try container.encodeIfPresent(self.sizeBytes, forKey: .sizeBytes)
         try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
         try container.encodeIfPresent(self.content, forKey: .content)
         try container.encodeIfPresent(self.preview, forKey: .preview)
@@ -219,6 +273,21 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.arguments, forKey: .arguments)
         try container.encodeIfPresent(self.details, forKey: .details)
         try container.encodeIfPresent(self.isError, forKey: .isError)
+    }
+
+    private static func managedImageArtifactId(from rawURL: String?) -> String? {
+        guard let rawURL,
+              let components = URLComponents(string: rawURL),
+              components.scheme == nil,
+              components.host == nil
+        else { return nil }
+        let segments = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
+        guard segments.count == 7,
+              segments[0...3] == ["api", "chat", "media", "outgoing"],
+              segments[6] == "full",
+              let attachmentId = UUID(uuidString: String(segments[5]))?.uuidString.lowercased()
+        else { return nil }
+        return "artifact_managed_image_\(attachmentId)"
     }
 }
 
@@ -562,13 +631,56 @@ public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
     public let sessionId: String?
 }
 
+public struct OpenClawChatEditorAttachment: Codable, Sendable {
+    public let mimeType: String
+    public let data: String
+}
+
 public struct OpenClawChatRewindResponse: Codable, Sendable {
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
 }
 
 public struct OpenClawChatForkAtMessageResponse: Codable, Sendable {
     public let sessionKey: String
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
+}
+
+public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifiable {
+    public let leafEntryId: String
+    public let headline: String
+    public let messageCount: Int
+    public let updatedAt: String?
+    public let active: Bool
+
+    public var id: String {
+        self.leafEntryId
+    }
+
+    // periphery:ignore - package tests construct branch fixtures; app consumers decode them.
+    public init(
+        leafEntryId: String,
+        headline: String,
+        messageCount: Int,
+        updatedAt: String?,
+        active: Bool)
+    {
+        self.leafEntryId = leafEntryId
+        self.headline = headline
+        self.messageCount = messageCount
+        self.updatedAt = updatedAt
+        self.active = active
+    }
+}
+
+public struct OpenClawChatSessionBranchesResponse: Codable, Sendable {
+    public let branches: [OpenClawChatSessionBranch]
+
+    // periphery:ignore - package tests construct branch fixtures; app consumers decode them.
+    public init(branches: [OpenClawChatSessionBranch]) {
+        self.branches = branches
+    }
 }
 
 public struct OpenClawChatEventPayload: Codable, Sendable {

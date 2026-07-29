@@ -70,7 +70,12 @@ function inspectTelegramSpooledUpdate(update: unknown, botInfo?: TelegramBotInfo
   };
 }
 
-export type TelegramIngressDrainLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+export type TelegramIngressDrainLifecycle = Omit<
+  ChannelIngressMonitorLifecycle,
+  "admission" | "onFailed"
+> & {
+  onFailed: (error: unknown) => void | Promise<void>;
+};
 
 type TelegramIngressDrainDispatch = (
   update: unknown,
@@ -128,11 +133,14 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         ),
     },
     deliver: async (update, lifecycle) => {
+      // The monitor always supplies onFailed; the optional public field preserves
+      // structural compatibility for channel lifecycles that never use deferred failure.
+      const telegramLifecycle = lifecycle as TelegramIngressDrainLifecycle;
       try {
         const result = await runWithTelegramSpooledReplayUpdate(
           update as object,
-          async () => await params.dispatch(update, lifecycle),
-          lifecycle,
+          async () => await params.dispatch(update, telegramLifecycle),
+          telegramLifecycle,
         );
         const outcome = result.value;
         if (outcome && typeof outcome === "object" && "kind" in outcome) {
@@ -144,52 +152,66 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
             return { kind: "completed" };
           }
         }
-        // Every spooled participant gets deferredWork. Wait for its terminal
-        // result so failed-retryable releases and stalls cannot disappear.
+        // Every spooled participant gets deferredWork. Forward its terminal
+        // result without retaining Telegram's ingress serialization lane.
         const participant = result.deferredWork;
         if (participant) {
-          const terminal = await new Promise<TelegramMessageProcessingResult>((resolve, reject) => {
-            const abortError = () =>
-              lifecycle.abortSignal.reason instanceof Error
-                ? lifecycle.abortSignal.reason
-                : new Error("ingress-aborted");
-            if (lifecycle.abortSignal.aborted) {
-              reject(abortError());
-              return;
+          let abortedWhilePending = participant.wasOwnerAbortedWhilePending();
+          const onAbort = () => {
+            if (!participant.isSettled()) {
+              abortedWhilePending = true;
             }
-            const onAbort = () => reject(abortError());
-            lifecycle.abortSignal.addEventListener("abort", onAbort, { once: true });
-            void participant.task.then(
-              (value) => {
-                lifecycle.abortSignal.removeEventListener("abort", onAbort);
-                resolve(value);
+          };
+          telegramLifecycle.abortSignal.addEventListener("abort", onAbort, { once: true });
+          const removeAbortListener = () => {
+            telegramLifecycle.abortSignal.removeEventListener("abort", onAbort);
+          };
+          // Two-arg then: the rejection arm must observe only a participant.task
+          // rejection. Chaining it as .catch would also swallow onFailed/onAdopted
+          // settlement errors and re-drive them through onFailed with an
+          // infrastructure error — applying the wrong disposition, or silently
+          // discarding a wedged tombstone once the phase moved past pre-adoption.
+          void participant.task
+            .then(
+              async (terminal) => {
+                removeAbortListener();
+                if (terminal.kind === "failed-retryable") {
+                  await telegramLifecycle.onFailed(terminal.error);
+                  return;
+                }
+                if (abortedWhilePending) {
+                  await telegramLifecycle.onFailed(
+                    telegramLifecycle.abortSignal.reason instanceof Error
+                      ? telegramLifecycle.abortSignal.reason
+                      : new Error("ingress-aborted"),
+                  );
+                  return;
+                }
+                await lifecycle.onAdopted();
               },
-              (error: unknown) => {
-                lifecycle.abortSignal.removeEventListener("abort", onAbort);
-                reject(error instanceof Error ? error : new Error(String(error)));
+              async (error: unknown) => {
+                removeAbortListener();
+                await telegramLifecycle.onFailed(
+                  error instanceof Error ? error : new Error(String(error)),
+                );
               },
-            );
-          }).then(
-            (value) => value,
-            (error: unknown) => {
-              if (lifecycle.abortSignal.aborted) {
-                return { kind: "skipped" as const };
-              }
-              throw error;
-            },
+            )
+            .catch((error: unknown) => {
+              params.onLog?.(
+                `telegram ingress: deferred settlement failed for update ${
+                  resolveTelegramUpdateId(update) ?? "unknown"
+                }: ${String(error)}`,
+              );
+            });
+          return { kind: "deferred" };
+        }
+        if (!participant) {
+          // A dispatched update that records no outcome and defers no participant
+          // was consumed silently; completing here tombstones the spool row with
+          // attempts=0 and no trace, so keep a diagnostic trail for regressions.
+          params.onLog?.(
+            `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
           );
-          if (terminal.kind === "failed-retryable") {
-            return { kind: "failed-retryable", error: terminal.error };
-          }
-          if (lifecycle.abortSignal.aborted) {
-            return {
-              kind: "failed-retryable",
-              error:
-                lifecycle.abortSignal.reason instanceof Error
-                  ? lifecycle.abortSignal.reason
-                  : new Error("ingress-aborted"),
-            };
-          }
         }
         await lifecycle.onAdopted();
         return { kind: "completed" };
@@ -206,6 +228,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
     },
     drain: {
+      deferredLaneOccupancy: "release",
       adoptionStallTimeoutMs: params.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       orderBy: "id",
       scanLimit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,

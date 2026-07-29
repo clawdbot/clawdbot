@@ -28,7 +28,7 @@ describe("runHeartbeatOnce identity", () => {
               workspace: tmpDir,
               heartbeat: { every: "5m", target: "last", isolatedSession },
             },
-            list: [{ id: "main", default: true }, { id: "historian2" }],
+            entries: { main: { default: true }, historian2: {} },
           },
           session: { scope: "global", dmScope: "per-channel-peer", store: storeTemplate },
         };
@@ -87,9 +87,9 @@ describe("runHeartbeatOnce identity", () => {
             workspace: tmpDir,
             heartbeat: { every: "5m", target: "slack", to: "channel:C123" },
           },
-          list: [{ id: "main", identity: { name: "Pulse", emoji: "📟" } }],
+          entries: { main: { identity: { name: "Pulse", emoji: "📟" } } },
         },
-        channels: { slack: { heartbeat: { showOk } } },
+        channels: { slack: { heartbeatVisibility: { showOk } } },
         session: { store: storePath },
       };
       await seedMainSessionStore(storePath, cfg, {
