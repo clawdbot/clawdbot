@@ -35,7 +35,6 @@ import type { TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
-import { formatTelegramFallbackError } from "./telegram-error-presenter.js";
 import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
@@ -309,10 +308,13 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
         if (!spooledReplay) {
           try {
-            const fallbackText = formatTelegramFallbackError(err);
+            // The outer catch wraps the entire dispatch call; the error origin
+            // is ambiguous (could be provider or Telegram transport), so use
+            // the generic fallback rather than misclassifying transport errors
+            // as provider failures.
             await bot.api.sendMessage(
               context.chatId,
-              fallbackText,
+              "Something went wrong while processing your request. Please try again.",
               buildTelegramThreadParams(context.threadSpec),
             );
           } catch {}

@@ -622,4 +622,33 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     const texts = allDeliveredReplyTexts();
     expect(texts.some((text) => text.includes("tool call · ⏱️"))).toBe(false);
   });
+
+  it("uses generic fallback for Telegram delivery errors, not allowlisted categories", async () => {
+    // A 429 from Telegram delivery (e.g. flood limit) should NOT produce
+    // "Rate limit reached" — that would misattribute a transport error
+    // to the provider. Delivery errors must stay on the generic fallback.
+    deliverReplies
+      .mockResolvedValueOnce({ delivered: true }) // partial block
+      .mockRejectedValueOnce(new Error("429 Too Many Requests: retry after 3")); // terminal delivery fails
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expectDeliveredReply(0, { text: "partial answer" });
+    expectDeliveredReply(
+      0,
+      {
+        text: "Something went wrong while processing your request. Please try again.",
+      },
+      1,
+    );
+  });
 });
