@@ -388,7 +388,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under
       // message_tool_only delivery modes (e.g. Codex harness DMs). Mirrors iMessage #82642.
       CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
-      ...buildMattermostInboundMediaPayload(mediaList),
+      ...(await buildMattermostInboundMediaPayload(mediaList)),
     });
     const pinnedMainDmOwner =
       kind === "direct"

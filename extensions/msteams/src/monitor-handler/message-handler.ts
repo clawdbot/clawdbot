@@ -7,7 +7,7 @@ import {
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveInboundSupplementalSenderAllowed,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   hasFinalInboundReplyDispatch,
@@ -872,7 +872,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }
           : undefined,
       },
-      media: toInboundMediaFacts(inboundMedia),
+      media: await toInboundMediaFactsWithMetadata(inboundMedia),
       messageId: activity.id,
       timestamp: timestamp?.getTime() ?? Date.now(),
       from: teamsFrom,

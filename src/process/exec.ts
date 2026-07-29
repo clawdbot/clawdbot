@@ -26,6 +26,7 @@ export type RunExecOptions = {
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
   input?: string | Uint8Array;
+  stdinFileDescriptor?: number;
   signal?: AbortSignal;
 };
 
@@ -46,7 +47,14 @@ export async function runExec(
       ? DEFAULT_EXEC_MAX_BUFFER_BYTES
       : (opts.maxBuffer ?? DEFAULT_EXEC_MAX_BUFFER_BYTES);
   const resolvedOptions = typeof opts === "number" ? undefined : opts;
+  if (resolvedOptions?.input !== undefined && resolvedOptions.stdinFileDescriptor !== undefined) {
+    throw new Error("runExec accepts either input or stdinFileDescriptor, not both");
+  }
   try {
+    const inheritedStdio =
+      resolvedOptions?.stdinFileDescriptor === undefined
+        ? undefined
+        : ([resolvedOptions.stdinFileDescriptor, "pipe", "pipe"] as const);
     const subprocess = spawnCommand([command, ...args], {
       baseEnv: resolvedOptions?.baseEnv,
       cancelSignal: resolvedOptions?.signal,
@@ -57,7 +65,9 @@ export async function runExec(
       ...(resolvedOptions?.input !== undefined ? { input: resolvedOptions.input } : {}),
       maxBuffer,
       reject: true,
-      stdin: resolvedOptions?.input === undefined ? "ignore" : undefined,
+      ...(inheritedStdio
+        ? { stdio: inheritedStdio }
+        : { stdin: resolvedOptions?.input === undefined ? "ignore" : undefined }),
       stripFinalNewline: false,
       timeout,
     });
