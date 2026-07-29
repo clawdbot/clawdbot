@@ -123,7 +123,9 @@ type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 10_000;
-const GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS = 150_000;
+const GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS = 650_000;
+// Apply can await evaluator, proposal-change, and skill-change hook phases.
+const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
@@ -465,7 +467,7 @@ async function runSkillProposalApply(
     config: resolved.config,
     method: "skills.proposals.apply",
     params: { agentId: resolved.agentId, proposalId },
-    timeoutMs: GATEWAY_SKILLS_MUTATION_TIMEOUT_MS,
+    timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   });
