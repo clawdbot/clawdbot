@@ -109,12 +109,14 @@ describe("isAgentToAgentSendInputProvenance", () => {
     ).toBe(true);
   });
 
-  it.each(["subagent_announce", "agent_harness_task", "image_generate"])(
-    "does not flag inter-session %s turns",
-    (sourceTool) => {
-      expect(isAgentToAgentSendInputProvenance({ kind: "inter_session", sourceTool })).toBe(false);
-    },
-  );
+  it.each([
+    "subagent_announce",
+    "agent_harness_task",
+    "image_generate",
+    "sessions_send_delivery_failure",
+  ])("does not flag inter-session %s turns", (sourceTool) => {
+    expect(isAgentToAgentSendInputProvenance({ kind: "inter_session", sourceTool })).toBe(false);
+  });
 
   it("does not flag external-user sessions_send provenance or missing provenance", () => {
     expect(

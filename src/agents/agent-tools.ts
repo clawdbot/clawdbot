@@ -26,7 +26,10 @@ import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
+import {
+  type InputProvenance,
+  isAgentToAgentSendInputProvenance,
+} from "../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -1051,7 +1054,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sourceReplyOnly,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
-            interAgentSendTurn: options?.interAgentSendTurn,
+            interAgentSendTurn:
+              options?.interAgentSendTurn === true ||
+              isAgentToAgentSendInputProvenance(options?.inputProvenance),
             disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
             swarmCollector: options?.swarmCollector,
             swarmOutputSchema: options?.swarmOutputSchema,

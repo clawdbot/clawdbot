@@ -70,6 +70,20 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
+  it("omits sessions_send from CLI loopback scopes for sessions_send target turns", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:worker:discord:group:dev",
+      surface: "loopback",
+      interAgentSendTurn: true,
+    });
+
+    const toolNames = result.tools.map((tool) => tool.name);
+    expect(toolNames).not.toContain("sessions_send");
+    expect(toolNames).toContain("sessions_list");
+    expect(toolNames).toContain("sessions_history");
+  });
+
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
     try {

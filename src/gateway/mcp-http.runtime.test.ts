@@ -197,4 +197,17 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
   });
+
+  it("does not share cache rows across ordinary and sessions_send target turns", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg }));
+    cache.resolve(scopeParams({ cfg, interAgentSendTurn: true }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools).toHaveBeenLastCalledWith(
+      expect.objectContaining({ interAgentSendTurn: true }),
+    );
+  });
 });

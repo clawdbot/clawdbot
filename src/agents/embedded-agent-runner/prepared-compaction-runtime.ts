@@ -325,6 +325,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           webSearchEnabled: params.toolOverrides?.webSearch !== false,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          inputProvenance: params.inputProvenance,
           modelProvider: effectiveModel.provider,
           modelId,
           modelHasVision: effectiveModel.input?.includes("image") ?? false,

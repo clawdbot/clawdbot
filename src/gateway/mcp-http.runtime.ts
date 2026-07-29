@@ -181,6 +181,7 @@ export class McpLoopbackToolCache {
       params.sourceReplyDeliveryMode ?? "",
       params.sourceReplyOnly === true ? "source-reply-only" : "",
       params.taskSuggestionDeliveryMode ?? "",
+      params.interAgentSendTurn === true ? "inter-agent-send-turn" : "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
       // Unset (full scope) must never share a cache row with an empty
       // allowlist (deny-all), so the marker distinguishes presence.

@@ -67,3 +67,29 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
   });
 });
+
+describe("buildCliMcpGrantContext sessions_send A2A guard", () => {
+  it("marks sessions_send target turns for loopback tool filtering", () => {
+    expect(
+      buildGrant({
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:main",
+          sourceTool: "sessions_send",
+        },
+      }).interAgentSendTurn,
+    ).toBe(true);
+  });
+
+  it("does not mark requester delivery-failure recovery turns", () => {
+    expect(
+      buildGrant({
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:worker:main",
+          sourceTool: "sessions_send_delivery_failure",
+        },
+      }).interAgentSendTurn,
+    ).toBeUndefined();
+  });
+});

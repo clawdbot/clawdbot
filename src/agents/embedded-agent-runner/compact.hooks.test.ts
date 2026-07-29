@@ -1002,6 +1002,26 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("preserves sessions_send provenance when rebuilding compaction tools", async () => {
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:main:main",
+      sourceTool: "sessions_send",
+    };
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      inputProvenance,
+    });
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      inputProvenance,
+    });
+  });
+
   it.each([
     { input: ["text"], modelHasVision: false },
     { input: ["text", "image"], modelHasVision: true },
