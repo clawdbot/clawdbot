@@ -37,6 +37,160 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    // MARK: - Disclosures
+
+    @Test @MainActor func `details fold collapsed and expanded blocks`() throws {
+        let collapsed = try #require(self.segments("""
+        <details>
+        <summary>**Why**</summary>
+
+        Body
+
+        </details>
+        """).first)
+        let expanded = try #require(self.segments("""
+        <details open>
+        <summary>More</summary>
+
+        Body
+
+        </details>
+        """).first)
+
+        #expect(collapsed == .disclosure(ChatMarkdownDisclosure(
+            summary: "**Why**",
+            isExpanded: false,
+            blocks: [.prose("Body")])))
+        #expect(expanded == .disclosure(ChatMarkdownDisclosure(
+            summary: "More",
+            isExpanded: true,
+            blocks: [.prose("Body")])))
+
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "<details>\n<summary>**Why**</summary>\n\nBody\n\n</details>",
+            isComplete: true)
+        guard case let .disclosure(rendered) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected rendered disclosure")
+            return
+        }
+        #expect(String(rendered.summary.attributed.characters) == "Why")
+        #expect(rendered.summary.attributed.runs.contains {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+    }
+
+    @Test func `details without summary use default label`() {
+        #expect(self.segments("<details>\n\nBody\n\n</details>") == [
+            .disclosure(ChatMarkdownDisclosure(
+                summary: "Details",
+                isExpanded: false,
+                blocks: [.prose("Body")])),
+        ])
+    }
+
+    @Test func `details body keeps native list and fence blocks`() throws {
+        let blocks = self.segments("""
+        <details open>
+        <summary>Why</summary>
+
+        - first
+        - second
+
+        ```swift
+        let value = 1
+        ```
+
+        </details>
+        """)
+        guard case let .disclosure(disclosure) = try #require(blocks.first) else {
+            Issue.record("expected disclosure block")
+            return
+        }
+
+        #expect(disclosure.blocks.count == 2)
+        guard case let .list(list) = disclosure.blocks[0] else {
+            Issue.record("expected native list in disclosure")
+            return
+        }
+        #expect(list.items.count == 2)
+        #expect(disclosure.blocks[1] == .code(ChatCodeBlock(
+            language: "swift",
+            code: "let value = 1",
+            isComplete: true)))
+    }
+
+    @Test func `unsupported nested details balance without closing outer disclosure`() throws {
+        let blocks = self.segments("""
+        <details>
+        <summary>Outer</summary>
+
+        <details class="legacy">
+
+        unsupported body
+
+        </details>
+
+        still outer
+
+        </details>
+        """)
+        guard case let .disclosure(outer) = try #require(blocks.first) else {
+            Issue.record("expected outer disclosure")
+            return
+        }
+
+        #expect(blocks.count == 1)
+        #expect(outer.blocks.contains(.prose(#"<details class="legacy">"#)))
+        #expect(outer.blocks.contains(.prose("</details>")))
+        #expect(outer.blocks.contains(.prose("still outer")))
+    }
+
+    @Test func `details tags in code stay literal`() {
+        let fenced = "```html\n<details>\n<summary>Code</summary>\n</details>\n```"
+        #expect(self.segments(fenced) == [
+            .code(ChatCodeBlock(
+                language: "html",
+                code: "<details>\n<summary>Code</summary>\n</details>",
+                isComplete: true)),
+        ])
+        #expect(self.segments("`<details>`") == [.prose("`<details>`")])
+    }
+
+    @Test func `mid line and over indented details stay literal`() {
+        #expect(self.segments("before <details> after") == [.prose("before <details> after")])
+        #expect(self.segments("    <details>\n    body\n    </details>") == [
+            .prose("    <details>\n    body\n    </details>"),
+        ])
+    }
+
+    @Test func `unclosed streaming details fold available body`() {
+        #expect(self.segments(
+            "<details open>\n<summary>Progress</summary>\n\n- first",
+            isComplete: false) == [
+            .disclosure(ChatMarkdownDisclosure(
+                summary: "Progress",
+                isExpanded: true,
+                blocks: [.prose("- first")])),
+        ])
+    }
+
+    @Test func `details nesting stops at depth cap`() {
+        let depth = ChatMarkdownBlockSegmenter.maxDisclosureDepth + 1
+        let markdown = Array(repeating: "<details>", count: depth).joined(separator: "\n")
+            + "\nbody\n"
+            + Array(repeating: "</details>", count: depth).joined(separator: "\n")
+        var blocks = self.segments(markdown)
+        var structuralDepth = 0
+        while case let .disclosure(disclosure)? = blocks.first {
+            structuralDepth += 1
+            blocks = disclosure.blocks
+        }
+
+        #expect(structuralDepth == ChatMarkdownBlockSegmenter.maxDisclosureDepth)
+        #expect(blocks.contains(.prose("<details>")))
+        #expect(blocks.contains(.prose("</details>")))
+    }
+
     // MARK: - Headings
 
     @Test func `all ATX heading levels become native blocks`() {

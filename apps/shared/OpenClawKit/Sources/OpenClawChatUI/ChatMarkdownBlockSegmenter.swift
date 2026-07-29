@@ -10,7 +10,14 @@ enum ChatMarkdownBlock: Equatable {
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
     case list(ChatMarkdownList)
+    case disclosure(ChatMarkdownDisclosure)
     case thematicBreak
+}
+
+struct ChatMarkdownDisclosure: Equatable {
+    let summary: String
+    let isExpanded: Bool
+    let blocks: [ChatMarkdownBlock]
 }
 
 struct ChatMarkdownHeading: Equatable {
@@ -101,6 +108,7 @@ enum ChatMarkdownBlockSegmenter {
     static let maxListBytes = 20000
     static let maxListItems = 100
     static let maxListDepth = 6
+    static let maxDisclosureDepth = 32
 
     /// Extracts top-level structural blocks. The parser owns CommonMark
     /// container and reference semantics; nested list content stays attached
@@ -117,6 +125,11 @@ enum ChatMarkdownBlockSegmenter {
         for child in document.children {
             guard let lineRange = source.lineRange(for: child.range) else { continue }
             if mathResult.protectedRanges.contains(where: { $0.contains(lineRange.lowerBound) }) {
+                continue
+            }
+
+            if let html = self.disclosureHTML(child, source: source, lineRange: lineRange) {
+                extractions.append(Extraction(lineRange: lineRange, html: html))
                 continue
             }
 
@@ -199,26 +212,37 @@ enum ChatMarkdownBlockSegmenter {
             return left.lineRange.upperBound > right.lineRange.upperBound
         }
 
-        var blocks: [ChatMarkdownBlock] = []
+        var unfolded: [UnfoldedBlock] = []
+        var disclosureTokenizer = DisclosureTokenizer()
         var proseStart = 0
 
         func appendProse(until end: Int) {
             guard proseStart < end else { return }
-            blocks.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])))
+            unfolded.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])).map(UnfoldedBlock.block))
         }
 
         for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
             appendProse(until: extraction.lineRange.lowerBound)
-            blocks.append(extraction.block)
+            switch extraction.content {
+            case let .block(block):
+                unfolded.append(.block(block))
+            case let .html(html):
+                unfolded.append(contentsOf: disclosureTokenizer.tokenize(html) { markdown in
+                    self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
+                })
+            }
             proseStart = extraction.lineRange.upperBound
         }
 
         appendProse(until: source.lines.count)
+        let hasDisclosure = unfolded.contains(where: \.opensDisclosure)
+        let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
             if case .list = block { return true }
             return false
         }
-        if blocks.count > 1 || reparsesListContent,
+        if !hasDisclosure,
+           blocks.count > 1 || reparsesListContent,
            self.containsReferenceLink(document, source: source)
         {
             return self.proseOnly(source.lines)
@@ -341,9 +365,325 @@ enum ChatMarkdownBlockSegmenter {
         code.hasSuffix("\n") ? String(code.dropLast()) : code
     }
 
+    private static func disclosureHTML(
+        _ child: any Markup,
+        source: SourceBuffer,
+        lineRange: Range<Int>) -> String?
+    {
+        guard child is Markdown.HTMLBlock else { return nil }
+        let html = source.text(in: lineRange)
+        return DisclosureTokenizer.containsCandidateLine(html) ? html : nil
+    }
+
+    private static func foldDisclosures(_ unfolded: [UnfoldedBlock]) -> [ChatMarkdownBlock] {
+        struct Frame {
+            var summary = "Details"
+            let isExpanded: Bool
+            var blocks: [ChatMarkdownBlock] = []
+        }
+
+        var result: [ChatMarkdownBlock] = []
+        var stack: [Frame] = []
+
+        func append(_ block: ChatMarkdownBlock) {
+            if stack.isEmpty {
+                result.append(block)
+            } else {
+                stack[stack.count - 1].blocks.append(block)
+            }
+        }
+
+        func closeTopFrame() {
+            guard let frame = stack.popLast() else { return }
+            append(.disclosure(ChatMarkdownDisclosure(
+                summary: frame.summary,
+                isExpanded: frame.isExpanded,
+                blocks: frame.blocks)))
+        }
+
+        for token in unfolded {
+            switch token {
+            case let .block(block):
+                append(block)
+            case let .disclosureOpen(isExpanded):
+                stack.append(Frame(isExpanded: isExpanded))
+            case let .disclosureSummary(summary):
+                if !stack.isEmpty {
+                    stack[stack.count - 1].summary = summary
+                }
+            case .disclosureClose:
+                closeTopFrame()
+            }
+        }
+
+        // The model streams the opener before the closer. Treat EOF as an
+        // implicit close so each delta remains a usable disclosure hierarchy.
+        while !stack.isEmpty {
+            closeTopFrame()
+        }
+        return result
+    }
+
     private struct Extraction {
         let lineRange: Range<Int>
-        let block: ChatMarkdownBlock
+        let content: Content
+
+        enum Content {
+            case block(ChatMarkdownBlock)
+            case html(String)
+        }
+
+        init(lineRange: Range<Int>, block: ChatMarkdownBlock) {
+            self.lineRange = lineRange
+            self.content = .block(block)
+        }
+
+        init(lineRange: Range<Int>, html: String) {
+            self.lineRange = lineRange
+            self.content = .html(html)
+        }
+    }
+
+    private enum UnfoldedBlock {
+        case block(ChatMarkdownBlock)
+        case disclosureOpen(isExpanded: Bool)
+        case disclosureSummary(String)
+        case disclosureClose
+
+        var opensDisclosure: Bool {
+            if case .disclosureOpen = self { return true }
+            return false
+        }
+    }
+
+    private struct DisclosureTokenizer {
+        private struct BalanceFrame {
+            let isStructural: Bool
+            var hasSummary: Bool
+        }
+
+        private enum TagKind {
+            case detailsOpen(isExpanded: Bool)
+            case detailsClose
+            case summaryOpen
+            case summaryClose
+            case unsupportedDetailsOpen
+            case unsupportedDetailsClose
+            case unsupportedSummary
+        }
+
+        private struct Tag {
+            let range: Range<String.Index>
+            let raw: String
+            let kind: TagKind
+        }
+
+        private var balanceStack: [BalanceFrame] = []
+
+        static func containsCandidateLine(_ source: String) -> Bool {
+            source.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+                Self.tags(in: String(line)) != nil
+            }
+        }
+
+        mutating func tokenize(
+            _ source: String,
+            parseMarkdown: (String) -> [UnfoldedBlock]) -> [UnfoldedBlock]
+        {
+            let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            var tokens: [UnfoldedBlock] = []
+            var pendingSource = ""
+
+            func flushSource() {
+                let trimmed = pendingSource.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    pendingSource = ""
+                    return
+                }
+                tokens.append(contentsOf: parseMarkdown(pendingSource))
+                pendingSource = ""
+            }
+
+            func appendLiteral(_ raw: String) {
+                flushSource()
+                tokens.append(.block(.prose(raw)))
+            }
+
+            for (lineIndex, line) in lines.enumerated() {
+                guard let tags = Self.tags(in: line) else {
+                    pendingSource += line
+                    if lineIndex < lines.count - 1 { pendingSource += "\n" }
+                    continue
+                }
+
+                var cursor = line.startIndex
+                var index = 0
+                while index < tags.count {
+                    let tag = tags[index]
+                    pendingSource += line[cursor..<tag.range.lowerBound]
+
+                    switch tag.kind {
+                    case let .detailsOpen(isExpanded):
+                        flushSource()
+                        let isStructural = self.balanceStack.count < Self.maxDepth
+                        if isStructural {
+                            tokens.append(.disclosureOpen(isExpanded: isExpanded))
+                        } else {
+                            appendLiteral(tag.raw)
+                        }
+                        self.balanceStack.append(BalanceFrame(
+                            isStructural: isStructural,
+                            hasSummary: false))
+                    case .unsupportedDetailsOpen:
+                        appendLiteral(tag.raw)
+                        self.balanceStack.append(BalanceFrame(
+                            isStructural: false,
+                            hasSummary: false))
+                    case .detailsClose, .unsupportedDetailsClose:
+                        guard let frame = self.balanceStack.popLast() else {
+                            appendLiteral(tag.raw)
+                            cursor = tag.range.upperBound
+                            index += 1
+                            continue
+                        }
+                        flushSource()
+                        if frame.isStructural, case .detailsClose = tag.kind {
+                            tokens.append(.disclosureClose)
+                        } else {
+                            appendLiteral(tag.raw)
+                        }
+                    case .summaryOpen:
+                        let closeIndex = tags[(index + 1)...].firstIndex { candidate in
+                            if case .summaryClose = candidate.kind { return true }
+                            return false
+                        }
+                        if let closeIndex,
+                           !self.balanceStack.isEmpty,
+                           self.balanceStack[self.balanceStack.count - 1].isStructural,
+                           !self.balanceStack[self.balanceStack.count - 1].hasSummary
+                        {
+                            flushSource()
+                            let close = tags[closeIndex]
+                            tokens
+                                .append(.disclosureSummary(String(line[tag.range.upperBound..<close.range.lowerBound])))
+                            self.balanceStack[self.balanceStack.count - 1].hasSummary = true
+                            cursor = close.range.upperBound
+                            index = closeIndex + 1
+                            continue
+                        }
+                        appendLiteral(tag.raw)
+                    case .summaryClose, .unsupportedSummary:
+                        appendLiteral(tag.raw)
+                    }
+
+                    cursor = tag.range.upperBound
+                    index += 1
+                }
+                pendingSource += line[cursor...]
+                if lineIndex < lines.count - 1 { pendingSource += "\n" }
+            }
+
+            flushSource()
+            return tokens
+        }
+
+        private static let maxDepth = ChatMarkdownBlockSegmenter.maxDisclosureDepth
+        private static let tagExpression: NSRegularExpression = {
+            do {
+                return try NSRegularExpression(
+                    pattern: #"</?(?:details|summary)(?=[\s>])[^>]*>"#,
+                    options: [.caseInsensitive])
+            } catch {
+                preconditionFailure("invalid disclosure tag expression: \(error)")
+            }
+        }()
+
+        private static func tags(in line: String) -> [Tag]? {
+            guard line.range(
+                of: #"^ {0,3}</?(?:details|summary)(?=[\s>])"#,
+                options: [.regularExpression, .caseInsensitive]) != nil
+            else { return nil }
+
+            let codeRanges = self.inlineCodeRanges(in: line)
+            let fullRange = NSRange(line.startIndex..<line.endIndex, in: line)
+            let matches = self.tagExpression.matches(in: line, range: fullRange)
+            let tags = matches.compactMap { match -> Tag? in
+                guard let range = Range(match.range, in: line),
+                      !self.isEscaped(line, at: range.lowerBound),
+                      !codeRanges.contains(where: { $0.contains(range.lowerBound) })
+                else { return nil }
+                let raw = String(line[range])
+                return Tag(range: range, raw: raw, kind: self.kind(of: raw))
+            }
+            return tags.isEmpty ? nil : tags
+        }
+
+        private static func kind(of raw: String) -> TagKind {
+            let lower = raw.lowercased()
+            switch lower {
+            case "<details>": return .detailsOpen(isExpanded: false)
+            case "<details open>": return .detailsOpen(isExpanded: true)
+            case "</details>": return .detailsClose
+            case "<summary>": return .summaryOpen
+            case "</summary>": return .summaryClose
+            default:
+                if lower.hasPrefix("</details") { return .unsupportedDetailsClose }
+                if lower.hasPrefix("<details") { return .unsupportedDetailsOpen }
+                return .unsupportedSummary
+            }
+        }
+
+        private static func isEscaped(_ line: String, at index: String.Index) -> Bool {
+            var cursor = index
+            var count = 0
+            while cursor > line.startIndex {
+                let previous = line.index(before: cursor)
+                guard line[previous] == "\\" else { break }
+                count += 1
+                cursor = previous
+            }
+            return count.isMultiple(of: 2) == false
+        }
+
+        private static func inlineCodeRanges(in line: String) -> [Range<String.Index>] {
+            var ranges: [Range<String.Index>] = []
+            var cursor = line.startIndex
+            while cursor < line.endIndex {
+                guard line[cursor] == "`" else {
+                    cursor = line.index(after: cursor)
+                    continue
+                }
+                let openerStart = cursor
+                var openerEnd = cursor
+                while openerEnd < line.endIndex, line[openerEnd] == "`" {
+                    openerEnd = line.index(after: openerEnd)
+                }
+                let runLength = line.distance(from: openerStart, to: openerEnd)
+                var search = openerEnd
+                var closeEnd: String.Index?
+                while search < line.endIndex {
+                    guard line[search] == "`" else {
+                        search = line.index(after: search)
+                        continue
+                    }
+                    let closeStart = search
+                    while search < line.endIndex, line[search] == "`" {
+                        search = line.index(after: search)
+                    }
+                    if line.distance(from: closeStart, to: search) == runLength {
+                        closeEnd = search
+                        break
+                    }
+                }
+                if let closeEnd {
+                    ranges.append(openerStart..<closeEnd)
+                    cursor = closeEnd
+                } else {
+                    cursor = openerEnd
+                }
+            }
+            return ranges
+        }
     }
 
     private struct MathExtractionResult {
