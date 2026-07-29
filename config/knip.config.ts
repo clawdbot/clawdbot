@@ -359,6 +359,8 @@ const config = {
     // the full-tree companion config still audits their actual consumers.
     "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // Focused startup tests consume this explicit seam; production imports only the bootstrap.
+    "src/gateway/server-startup-bootstrap.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],

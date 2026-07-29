@@ -10,7 +10,7 @@ export {
   createChannelIngressDrain,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
 } from "./ingress-drain.js";
-export { createChannelIngressMonitor } from "./ingress-monitor.js";
+export { createChannelIngressError, createChannelIngressMonitor } from "./ingress-monitor.js";
 export {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,

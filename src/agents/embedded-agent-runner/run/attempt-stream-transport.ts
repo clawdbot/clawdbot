@@ -137,6 +137,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
+    webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
     messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),

@@ -21,6 +21,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderBoardSessionSurface } from "./board-session-surface.ts";
 import { clearChatHistory } from "./chat-history.ts";
+import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
   SESSION_RAIL_DOCK_MIN_WIDTH,
@@ -140,6 +141,13 @@ export class ChatPane extends ChatPaneHeader {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelSetupRequired = requiresChatModelSetup({
+      catalog: catalogKey !== null,
+      connected: state.connected,
+      agentsLoaded: this.context.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: agentDefaultModel,
+    });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
@@ -324,7 +332,9 @@ export class ChatPane extends ChatPaneHeader {
       onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
-        : !selectedSessionArchived && (!sessionParticipationBlocked || suggestionViewer),
+        : !modelSetupRequired &&
+          !selectedSessionArchived &&
+          (!sessionParticipationBlocked || suggestionViewer),
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
@@ -334,7 +344,11 @@ export class ChatPane extends ChatPaneHeader {
               actionLabel: t("common.unarchive"),
               onAction: () => void this.restoreArchivedSession(state.sessionKey),
             }
-          : undefined,
+          : modelSetupRequired
+            ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+            : undefined,
+      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
+      onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,

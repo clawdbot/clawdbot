@@ -260,7 +260,7 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
     >
       <summary
         class="msg-meta__summary"
-        aria-label=${`Message context for ${display.title}`}
+        aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
         @click=${pinMessageMetaPreview}
       >
         ${renderChatTimestamp(timestamp, true)}

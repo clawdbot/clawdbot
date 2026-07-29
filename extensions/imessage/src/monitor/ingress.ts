@@ -1,10 +1,12 @@
 // iMessage plugin module owns raw-row durable admission and replay.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -56,16 +58,7 @@ type IMessageIngressDispatch = (
   provenance?: { catchup?: boolean },
 ) => Promise<IMessageIngressDispatchResult | void> | IMessageIngressDispatchResult | void;
 
-class IMessageIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "IMessageIngressPayloadError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const IMessageIngressPayloadError = createChannelIngressError("IMessageIngressPayloadError");
 
 function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
   if (!isRecord(raw)) {

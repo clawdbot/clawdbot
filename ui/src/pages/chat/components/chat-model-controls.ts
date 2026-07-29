@@ -200,7 +200,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   );
   const pickerDefaultLabel =
     defaultModel && canonicalDefaultLabel !== defaultLabel
-      ? `Default (${canonicalDefaultLabel})`
+      ? t("chat.modelControls.defaultWithModel", { model: canonicalDefaultLabel })
       : defaultLabel;
   const normalizedDefaultModel = defaultModel.trim().toLowerCase();
   const modelOptions: ChatModelProviderOption[] = selectOptions.map((option) => {
@@ -429,7 +429,7 @@ function renderChatModelReasoningSelect(params: {
     : defaultLevelLabel;
   const reasoningValueLabel = hasThinkingOverride
     ? reasoningValueText
-    : `Default (${defaultLevelLabel})`;
+    : t("chat.modelControls.defaultWithLevel", { level: defaultLevelLabel });
   // Selections commit immediately; the picker stays open so model, reasoning,
   // and speed can be adjusted together. The extra onRequestUpdate re-renders
   // the optimistic state patched synchronously by the switch helpers.
@@ -451,8 +451,8 @@ function renderChatModelReasoningSelect(params: {
     onRequestUpdate?.();
   };
   const speedTooltip = fastMode.supported
-    ? "Fast responses finish sooner and can use more of your usage limits."
-    : "Speed control is not supported for this model.";
+    ? t("chat.modelControls.fastHelp")
+    : t("chat.modelControls.speedUnsupported");
   const resetSliderPreview = (input: HTMLInputElement, restoreValue = false) => {
     if (restoreValue) {
       input.value = String(sliderIndex);
@@ -552,7 +552,9 @@ function renderChatModelReasoningSelect(params: {
       entry.value === selectedModelValue || (entry.isDefault && selectedModelValue === "");
     const modelLabel = formatCombinedPickerModelOptionLabel(entry);
     const contextLabel = entry.contextWindow
-      ? `${formatCompactTokenCount(entry.contextWindow)} context`
+      ? t("chat.modelControls.contextWindow", {
+          count: formatCompactTokenCount(entry.contextWindow),
+        })
       : "";
     return html`
       <div class="chat-controls__combined-model">
@@ -728,7 +730,9 @@ function renderChatModelReasoningSelect(params: {
                       <div
                         class="chat-controls__provider-model-group"
                         data-chat-model-provider-group=${provider}
-                        aria-label=${`${providerDisplayLabel(provider)} models`}
+                        aria-label=${t("chat.modelControls.providerModels", {
+                          provider: providerDisplayLabel(provider),
+                        })}
                         ?hidden=${provider !== selectedProvider}
                       >
                         ${repeat(
@@ -775,13 +779,17 @@ function renderChatModelReasoningSelect(params: {
                           ${hasThinkingOverride
                             ? html`
                                 <openclaw-tooltip
-                                  .content=${`Reset to default (${defaultLevelLabel})`}
+                                  .content=${t("chat.modelControls.resetReasoning", {
+                                    level: defaultLevelLabel,
+                                  })}
                                 >
                                   <button
                                     class="chat-controls__reasoning-reset"
                                     data-chat-thinking-option=""
                                     type="button"
-                                    aria-label=${`Use default reasoning (${defaultLevelLabel})`}
+                                    aria-label=${t("chat.modelControls.useDefaultReasoning", {
+                                      level: defaultLevelLabel,
+                                    })}
                                     ?disabled=${thinkingDisabled}
                                     @click=${(event: MouseEvent) => {
                                       event.stopPropagation();
@@ -894,7 +902,9 @@ function renderChatModelReasoningSelect(params: {
                             type="button"
                             role="switch"
                             aria-checked=${fastMode.active ? "true" : "false"}
-                            aria-label=${`Fast responses: ${fastMode.label}`}
+                            aria-label=${t("chat.modelControls.fastResponsesAria", {
+                              state: fastMode.label,
+                            })}
                             ?disabled=${fastMode.disabled}
                             @click=${(event: MouseEvent) => {
                               event.stopPropagation();

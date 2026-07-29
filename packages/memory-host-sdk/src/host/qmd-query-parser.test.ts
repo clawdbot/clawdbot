@@ -14,6 +14,17 @@ describe("parseQmdQueryJson", () => {
     ]);
   });
 
+  it.each([
+    { name: "null", stdout: "[null]" },
+    { name: "string", stdout: '["noise"]' },
+    { name: "number", stdout: "[1]" },
+    { name: "boolean", stdout: "[true]" },
+    { name: "nested array", stdout: '[[{"docid":"abc"}]]' },
+    { name: "mixed object and primitive", stdout: '[{"docid":"abc"},null]' },
+  ])("rejects a $name QMD result before it reaches memory consumers", ({ stdout }) => {
+    expect(() => parseQmdQueryJson(stdout, "")).toThrow(/qmd query returned invalid JSON/i);
+  });
+
   it("extracts embedded result arrays from noisy stdout", () => {
     const results = parseQmdQueryJson(
       `initializing

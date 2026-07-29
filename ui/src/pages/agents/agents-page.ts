@@ -27,9 +27,9 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
   setDefaultAgent,
-  type AgentsPanel,
   type AgentsState,
 } from "../../lib/agents/index.ts";
+import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
 import {
   createInitialCronState,
@@ -41,6 +41,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { loadModels } from "../chat/models.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
 import {
   resetIdentityDraft,
@@ -51,17 +52,14 @@ import {
 } from "./identity-actions.ts";
 import { stageAgentModelFallbacks, stageAgentPrimaryModel } from "./model-config.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
+import {
+  navigateToAgent,
+  navigateToAgentPanel,
+  syncAgentsCanonicalLocation,
+} from "./route-navigation.ts";
+import type { AgentsRouteData } from "./route.ts";
 import { loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
-
-export type AgentsRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
-  error: string | null;
-};
 
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
@@ -79,7 +77,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() agentsError: string | null = null;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsSelectedId: string | null = null;
-  @state() agentsPanel: AgentsPanel = "files";
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogLoadingAgentId: string | null = null;
   @state() toolsCatalogError: string | null = null;
@@ -119,6 +116,13 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
+  private chatModelCatalogClient: GatewayBrowserClient | null = null;
+  private chatModelCatalogRefreshRequired = false;
+  private chatModelCatalogRequest: {
+    client: GatewayBrowserClient;
+    generation: number;
+  } | null = null;
+  private normalizedLocation = "";
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.agents,
@@ -247,6 +251,15 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     return this.context.gateway.snapshot.sessionKey;
   }
 
+  get agentsPanel(): AgentsPanel {
+    return this.routeData?.panel ?? DEFAULT_AGENT_PANEL;
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.syncCanonicalLocation();
+  }
+
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.requestGeneration += 1;
@@ -258,6 +271,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
+      this.syncCanonicalLocation();
       this.ensureInitialData();
     }
   }
@@ -272,8 +286,12 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.syncGatewayState(snapshot);
     if (forceReset || (!initialBind && clientChanged)) {
       this.resetForClientChange();
+      this.chatModelCatalogRefreshRequired = forceReset && !clientChanged;
     } else if (!initialBind && connectionChanged) {
       this.invalidateTransientRequests();
+      this.chatModelCatalog = [];
+      this.chatModelCatalogClient = null;
+      this.chatModelCatalogRefreshRequired = true;
     }
     this.ensureInitialData();
   }
@@ -336,6 +354,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentsError = null;
     this.agentsList = null;
     this.agentsSelectedId = null;
+    this.chatModelCatalog = [];
+    this.chatModelCatalogClient = null;
+    this.chatModelCatalogRefreshRequired = false;
     this.resetSelectionState();
     this.cron = createInitialCronState({
       client: this.client,
@@ -395,6 +416,14 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
         this.resetSelectionState();
       }
     }
+  }
+
+  private syncCanonicalLocation() {
+    this.normalizedLocation = syncAgentsCanonicalLocation(
+      this.context,
+      this.routeData,
+      this.normalizedLocation,
+    );
   }
 
   private resolveSelectedAgentId() {
@@ -497,6 +526,10 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     if (!agentId) {
       return;
     }
+    if (this.agentsPanel === "overview") {
+      this.ensureModelCatalog();
+      return;
+    }
     if (this.agentsPanel === "files" && this.agentFilesList?.agentId !== agentId) {
       void this.loadAgentFiles(agentId);
       return;
@@ -519,6 +552,43 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     if (this.agentsPanel === "cron" && !this.cron.cronLoading && !this.cron.cronStatus) {
       void this.refreshCron();
     }
+  }
+
+  private ensureModelCatalog() {
+    const client = this.client;
+    if (!client || !this.connected || this.chatModelCatalogClient === client) {
+      return;
+    }
+    const generation = this.requestGeneration;
+    const previousRequest = this.chatModelCatalogRequest;
+    if (previousRequest?.client === client && previousRequest.generation === generation) {
+      return;
+    }
+    const request = { client, generation };
+    this.chatModelCatalogRequest = request;
+    const refresh = this.chatModelCatalogRefreshRequired || previousRequest?.client === client;
+    this.chatModelCatalogRefreshRequired = false;
+    // A direct overview has no chat metadata. Refresh after reconnect so neither
+    // an in-flight request nor a settled cache can restore stale Gateway models.
+    void loadModels(client, refresh ? { refresh: true } : undefined)
+      .then((models) => {
+        if (this.isCurrentRequest(client, generation)) {
+          this.chatModelCatalog = models;
+          this.chatModelCatalogClient = client;
+        }
+      })
+      .catch(() => {
+        if (this.isCurrentRequest(client, generation)) {
+          this.chatModelCatalog = [];
+          this.chatModelCatalogClient = null;
+          this.chatModelCatalogRefreshRequired = true;
+        }
+      })
+      .finally(() => {
+        if (this.chatModelCatalogRequest === request) {
+          this.chatModelCatalogRequest = null;
+        }
+      });
   }
 
   private async loadAgentsAndCommit() {
@@ -655,21 +725,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       return;
     }
     void loadToolsEffective(this, { agentId, sessionKey: this.sessionKey });
-  }
-
-  private selectAgent(agentId: string) {
-    if (this.agentsSelectedId === agentId) {
-      return;
-    }
-    this.agentsSelectedId = agentId;
-    this.resetSelectionState();
-    void this.context.agentIdentity.ensure([agentId]);
-    this.loadActivePanelData();
-  }
-
-  private selectPanel(panel: AgentsPanel) {
-    this.agentsPanel = panel;
-    this.loadActivePanelData();
   }
 
   private refreshAgents() {
@@ -814,9 +869,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
           onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
-          onSelectAgent: (agentId) => this.selectAgent(agentId),
+          onSelectAgent: (agentId) =>
+            navigateToAgent(this.context, agentId, selectedAgentId, this.agentsPanel),
           onCreateAgent: () => this.context.navigate("custodian", { search: "?intent=new-agent" }),
-          onSelectPanel: (panel) => this.selectPanel(panel),
+          onSelectPanel: (panel) =>
+            navigateToAgentPanel(this.context, selectedAgentId, this.agentsPanel, panel),
           onLoadFiles: (agentId) => void this.loadAgentFiles(agentId, true),
           onSelectFile: (name) => {
             this.agentFileActive = name;

@@ -524,7 +524,11 @@ export async function runSkillWorkshopLifecycleAction(
     await client.request(method, requestParams);
     await refreshAfterMutation(state, context, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
-    showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");
+    showActionNotice(
+      state,
+      updated ?? previous,
+      t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
+    );
   } catch (err) {
     state.skillWorkshopError = getErrorMessage(err);
   } finally {
@@ -638,7 +642,7 @@ export async function requestSkillWorkshopRevision(
     await sendRevisionRequest(instructions, currentProposal, proposalAgentId);
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
-    showActionNotice(state, proposal, "Revision requested");
+    showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
     return true;
   } catch (err) {
     state.skillWorkshopError = getErrorMessage(err);

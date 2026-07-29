@@ -8,7 +8,7 @@ import { formatUnknownText } from "../lib/format.ts";
 import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   hasSensitiveConfigData,
-  REDACTED_PLACEHOLDER,
+  redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { renderSettingsSegmented } from "./settings-ui.ts";
@@ -249,7 +249,7 @@ export function renderJsonTextareaControl(params: {
   const textareaControl = html`
     <textarea
       class="settings-input${sensitiveState.isRedacted ? " cfg-redacted" : ""}"
-      placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : t("configForm.jsonValue")}
+      placeholder=${sensitiveState.isRedacted ? redactedPlaceholder() : t("configForm.jsonValue")}
       rows=${params.rows}
       .value=${sensitiveState.isRedacted ? "" : fallback}
       ?disabled=${disabled}

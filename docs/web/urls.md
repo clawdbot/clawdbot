@@ -131,7 +131,7 @@ no route-specific URL parameters.
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
 | Activity            | `/activity`                 | -                         | -                                                |
 | Apps                | `/apps`                     | -                         | -                                                |
-| Agents              | `/settings/agents`          | `/agents`                 | `?agent=<agentId>`                               |
+| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
 | General settings    | `/settings/general`         | `/config`                 | Shared settings parameters below                 |
@@ -178,6 +178,10 @@ any setting anchor.
 Plugin catalog tabs also use paths instead of `?tab=`. Older links with
 `?tab=discover|installed` are replaced once with the corresponding path while
 keeping other query parameters and the fragment.
+
+Agent selection and its `overview|files|tools|skills|channels|cron|memory`
+panels use paths. Older links with `?agent=<agentId>` are replaced once with
+the agent path while keeping other query parameters and the fragment.
 
 ## Special documents and startup modes
 

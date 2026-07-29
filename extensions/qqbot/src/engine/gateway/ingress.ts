@@ -1,5 +1,6 @@
 // QQBot plugin module owns raw gateway-envelope durable ingress and replay.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressQueue,
@@ -36,12 +37,8 @@ type QQBotIngressDispatch = (
   eventId: string,
 ) => Promise<QQBotIngressDispatchResult | void> | QQBotIngressDispatchResult | void;
 
-export class QQBotIngressAdmissionError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "QQBotIngressAdmissionError";
-  }
-}
+export const QQBotIngressAdmissionError = createChannelIngressError("QQBotIngressAdmissionError");
+export type QQBotIngressAdmissionError = InstanceType<typeof QQBotIngressAdmissionError>;
 
 export type QQBotIngressMonitor = {
   receive: (rawEnvelope: string) => Promise<void>;

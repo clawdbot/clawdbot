@@ -155,7 +155,10 @@ suite.define(() => {
           kind === "image"
             ? page.getByAltText("Local bootstrap image")
             : page.locator(".chat-assistant-attachment-card audio");
-        await media.waitFor({ state: "visible", timeout: 10_000 });
+        await media.waitFor({
+          state: kind === "image" ? "visible" : "attached",
+          timeout: 10_000,
+        });
         await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
         expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
         expect(requestedMediaUrls[1]?.searchParams.get("mediaTicket")).toBe(ticket);

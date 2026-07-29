@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -26,6 +26,7 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { probeMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
 import {
   resolveMediaReferenceLocalPath,
   resolveMediaReferenceLocalPathInfo,
@@ -75,6 +76,7 @@ import {
   sendControlUiHtmlBody,
   serveControlUiAsset,
 } from "./control-ui-static.js";
+import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
@@ -418,7 +420,11 @@ async function resolveControlUiDeviceReadTokenScopes(token: string): Promise<str
 }
 
 type AssistantMediaAvailability =
-  | { available: true }
+  | ({
+      available: true;
+      mimeType?: string;
+      sizeBytes?: number;
+    } & MediaProbeResult)
   | { available: false; reason: string; code: string };
 
 type AssistantMediaTicketPayload = {
@@ -541,8 +547,37 @@ async function resolveAssistantMediaAvailability(
     const localPath = await resolveMediaReferenceLocalPath(source);
     await assertLocalMediaAllowed(localPath, localRoots);
     const opened = await openLocalFileSafely({ filePath: localPath });
-    await opened.handle.close();
-    return { available: true };
+    try {
+      const sizeBytes = opened.stat.size;
+      let mimeType: string | undefined;
+      try {
+        const sniffLength = Math.min(sizeBytes, 8192);
+        const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
+        const bytesRead = sniffBuffer
+          ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+          : 0;
+        mimeType =
+          (await detectMime({
+            buffer: sniffBuffer?.subarray(0, bytesRead),
+            filePath: localPath,
+          })) ?? undefined;
+      } catch {
+        // Availability is authoritative; optional metadata remains best-effort.
+      }
+      const mediaKind = kindFromMime(mimeType);
+      const probe =
+        mediaKind === "audio" || mediaKind === "video"
+          ? await probeMediaFileDescriptor(opened.handle.fd, mediaKind)
+          : {};
+      return {
+        available: true,
+        ...(mimeType ? { mimeType } : {}),
+        sizeBytes,
+        ...probe,
+      };
+    } finally {
+      await opened.handle.close().catch(() => {});
+    }
   } catch (err) {
     return classifyAssistantMediaError(err);
   }
@@ -643,8 +678,23 @@ export async function handleControlUiAssistantMediaRequest(
       buildAssistantMediaContentDisposition(filename, contentType),
     );
     res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Content-Length", String(opened.stat.size));
-    const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
+    const byteResponse = resolveByteResponse({
+      file: opened.stat,
+      method: req.method,
+      rangeHeader: req.headers.range,
+      ifRangeHeader: req.headers["if-range"],
+    });
+    writeByteHeaders(res, byteResponse);
+    if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
+      await closeOpenedHandle();
+      res.end();
+      return true;
+    }
+    const stream = opened.handle.createReadStream({
+      start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
+      end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
+      autoClose: false,
+    });
     const finishClose = () => {
       void closeOpenedHandle();
     };

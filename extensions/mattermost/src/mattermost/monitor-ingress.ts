@@ -1,9 +1,11 @@
 // Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getMattermostRuntime } from "../runtime.js";
@@ -44,20 +46,9 @@ type MattermostIngressDispatch = (
   lifecycle: MattermostIngressLifecycle,
 ) => Promise<MattermostIngressDispatchResult | void> | MattermostIngressDispatchResult | void;
 
-class MattermostIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "mattermost-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MattermostIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const MattermostIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "mattermost-auth"
+>("MattermostIngressPermanentError", { withReason: true });
 
 function parseRawObject(raw: string, subject: string): Record<string, unknown> {
   let parsed: unknown;

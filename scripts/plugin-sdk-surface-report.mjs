@@ -128,7 +128,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-inbound": 18,
   "channel-logging": 4,
   "channel-lifecycle": 23,
-  "channel-message": 129,
+  // +1: shared ingress error factory projected through the deprecated message barrel.
+  "channel-message": 130,
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
@@ -198,7 +199,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
       // +11: attributed skill proposal evaluation and committed skill lifecycle contracts.
-      4768,
+      // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
+      // +2: shared ingress error factory through channel-outbound and channel-message.
+      4771,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -233,7 +236,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: pinned secret create and synchronous/asynchronous reads.
       // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
-      2878,
+      // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
+      // +2: shared ingress error factory through channel-outbound and channel-message.
+      2881,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -243,7 +248,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
       // +1: flushLogger projected through the deprecated text-runtime barrel.
-      1701,
+      // +1: shared ingress error factory projected through channel-message.
+      1702,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

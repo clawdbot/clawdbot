@@ -1,10 +1,12 @@
 // Googlechat plugin module owns raw webhook durable admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { GoogleChatEventPayloadError, parseGoogleChatInboundPayload } from "./monitor-event.js";
 import { getGoogleChatRuntime } from "./runtime.js";
@@ -38,20 +40,9 @@ type GoogleChatIngressDispatch = (
   lifecycle: GoogleChatIngressLifecycle,
 ) => Promise<GoogleChatIngressDispatchResult | void> | GoogleChatIngressDispatchResult | void;
 
-class GoogleChatIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "googlechat-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "GoogleChatIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const GoogleChatIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "googlechat-auth"
+>("GoogleChatIngressPermanentError", { withReason: true });
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value === "string" && value.trim()) {

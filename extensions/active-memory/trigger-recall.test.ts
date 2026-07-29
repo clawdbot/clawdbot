@@ -165,6 +165,19 @@ describe("active-memory trigger recall", () => {
     expect(context).not.toContain("<!--");
   });
 
+  it("honors every project retained in the session active set", () => {
+    const entries = [
+      result({ startLine: 1, triggers: "shared deploy", projectKey: "alpha-key" }),
+      result({ startLine: 2, triggers: "shared deploy", projectKey: "beta-key" }),
+      result({ startLine: 3, triggers: "shared deploy", projectKey: "gamma-key" }),
+    ];
+    expect(
+      selectStrongTriggerMatches("shared deploy", entries, ["beta-key", "alpha-key"]).map(
+        (entry) => entry.startLine,
+      ),
+    ).toEqual([1, 2]);
+  });
+
   it("blocks every oversized entry fragment when its project is inactive", () => {
     const fragments = [
       result({

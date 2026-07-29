@@ -7,6 +7,7 @@ import {
   scheduleRoutePreload,
   SETTINGS_NAVIGATION_GROUPS,
   settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
@@ -19,6 +20,8 @@ import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import "./settings-save-indicator.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -42,6 +45,7 @@ type SettingsSidebarProps = {
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  saveIndicator: SettingsSaveIndicatorProps;
 };
 
 type SettingsNavigationGroupView = {
@@ -134,7 +138,8 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active = !props.searchQuery && props.activeRouteId === routeId;
+  const active =
+    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -313,7 +318,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
               onRetry: props.onRetryConnect,
             })
-          : nothing}
+          : html`<openclaw-settings-save-indicator
+              .props=${props.saveIndicator}
+            ></openclaw-settings-save-indicator>`}
         ${props.version
           ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
           : nothing}

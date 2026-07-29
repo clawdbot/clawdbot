@@ -4217,7 +4217,7 @@ describe("chat attachment picker", () => {
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 
-  it("accepts and previews non-video file attachments", async () => {
+  it("accepts and previews file attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
@@ -4247,20 +4247,32 @@ describe("chat attachment picker", () => {
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("brief.pdf");
   });
 
-  it("filters video file attachments", () => {
+  it("accepts video file attachments with the generic file preview", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 
     expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(input?.accept).toContain("video/*");
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
     input!.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    await waitForFast(() => {
+      const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]?.fileName).toBe("clip.mp4");
+      expect(attachments[0]?.mimeType).toBe("video/mp4");
+      expect(attachments[0]?.sizeBytes).toBe(file.size);
+    });
+
+    const nextAttachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    const preview = renderChatView({ attachments: nextAttachments });
+    expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
+    expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("clip.mp4");
   });
 });
 
@@ -4276,6 +4288,8 @@ describe("chat welcome", () => {
     sessionKey?: string;
     sessionHost?: { assistantAgentId?: string | null } | null;
     onOpenSession?: (sessionKey: string) => void;
+    modelSetupRequired?: boolean;
+    onModelSetup?: () => void;
   }) {
     const container = document.createElement("div");
     render(
@@ -4287,6 +4301,8 @@ describe("chat welcome", () => {
         sessionKey: params.sessionKey,
         sessionHost: params.sessionHost,
         onOpenSession: params.onOpenSession,
+        modelSetupRequired: params.modelSetupRequired,
+        onModelSetup: params.onModelSetup,
         onDraftChange: () => undefined,
         onSend: () => undefined,
       }),
@@ -4318,6 +4334,37 @@ describe("chat welcome", () => {
     expect(clawd).not.toBeNull();
     expect(clawd?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("idle");
     expect(container.querySelector(".agent-chat__badge")).toBeNull();
+  });
+
+  it("replaces sendable welcome actions with model setup", () => {
+    const onModelSetup = vi.fn();
+    const container = renderWelcome({
+      assistantAvatar: null,
+      modelSetupRequired: true,
+      onModelSetup,
+    });
+
+    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("omits the composer footer behind the empty model setup splash", () => {
+    const container = renderChatView({
+      canSend: false,
+      disabledBanner: {
+        kind: "composer-replacement",
+        text: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
+        actionLabel: "Configure a provider",
+        onAction: () => undefined,
+      },
+      modelSetupRequired: true,
+    });
+
+    expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__composer-shell")).toBeNull();
   });
 
   it("teases and catches file drags with the welcome mascot", () => {

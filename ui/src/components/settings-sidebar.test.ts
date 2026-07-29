@@ -9,6 +9,17 @@ import "./tooltip.ts";
 
 let container: HTMLDivElement;
 
+const saveIndicator = () => ({
+  status: "idle" as const,
+  lastError: null,
+  needsApply: false,
+  applying: false,
+  applyDisabled: false,
+  onRetry: vi.fn(),
+  onReload: vi.fn(),
+  onApply: vi.fn(),
+});
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -22,6 +33,36 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps Models selected while its setup flow is open", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "model-setup",
+        offline: false,
+        lastError: null,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const active = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/settings/model-providers"]',
+    );
+    expect(active?.classList.contains("settings-sidebar__item--active")).toBe(true);
+    expect(active?.getAttribute("aria-current")).toBe("page");
+    expect(active?.textContent?.trim()).toBe("Models");
+  });
+
   it("links Ask OpenClaw to the shared custodian route", () => {
     const onNavigate = vi.fn();
     render(
@@ -40,6 +81,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -76,6 +118,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -119,6 +162,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -166,6 +210,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -216,6 +261,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -255,6 +301,7 @@ describe("settings sidebar search", () => {
             rerender();
           },
           preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
         }),
         container,
       );
@@ -332,6 +379,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -366,6 +414,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -399,14 +448,17 @@ describe("settings sidebar search", () => {
           onNavigate: vi.fn(),
           onSearchQueryChange: vi.fn(),
           preloadTimers: new Map(),
+          saveIndicator: { ...saveIndicator(), status: "saving" },
         }),
         container,
       );
 
     renderSidebar(false, null, 3);
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
     renderSidebar(true, "connection refused?token=settings-secret", 3);
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);
     expect(

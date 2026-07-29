@@ -11,9 +11,9 @@ import {
   reserveCodeModeMatrixOutputDir,
   resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
+  validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
-} from "../../scripts/code-mode-model-matrix.ts";
-import type { AgentExecEnvelope } from "../../src/commands/agent-exec.ts";
+} from "../../../scripts/code-mode-model-matrix.ts";
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -135,7 +135,7 @@ describe("Code Mode model matrix classification", () => {
     model: "qwen3.5:9b",
     provider: "ollama",
     sessionId: "session",
-  } satisfies AgentExecEnvelope;
+  } satisfies Parameters<typeof classifyCodeModeMatrixCell>[0]["envelope"];
 
   it("requires engagement, tool execution, effect, and exact final text", () => {
     expect(
@@ -610,9 +610,9 @@ describe("Code Mode model matrix artifacts", () => {
         failureCategory: "harness_error",
         error: { kind: "harness_error", message: "fixture exploded" },
       });
-      const evidence = JSON.parse(
-        await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8"),
-      ) as { entries: unknown[] };
+      const evidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8")),
+      );
       expect(evidence.entries).toHaveLength(2);
       expect(evidence.entries[0]).toMatchObject({
         test: {

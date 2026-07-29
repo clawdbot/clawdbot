@@ -489,8 +489,8 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
-      deliverySummary.skippedNonSilent > 0 ||
-      deliverySummary.failedNonSilent > 0);
+      deliverySummary.failedNonSilent > 0 ||
+      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
       ? "Something went wrong while processing your request. Please try again."

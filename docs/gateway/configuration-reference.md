@@ -271,7 +271,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
-- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
+- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
@@ -1312,7 +1312,7 @@ writer is best-effort, not a lossless compliance archive.
 - `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
-- `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. `true` captures non-system message, tool, and tool-definition content plus OTLP log bodies.
+- `otel.captureContent`: opt-in content capture for OTEL span attributes. Defaults to off. `true` captures non-system visible message, tool, and tool-definition content plus OTLP log bodies; provider-internal thinking payloads remain excluded.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.

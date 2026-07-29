@@ -225,6 +225,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
+    toolOverrides: params.toolOverrides,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine
       ? {

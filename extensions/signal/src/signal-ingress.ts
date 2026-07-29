@@ -1,11 +1,14 @@
 // Signal plugin module owns raw-envelope durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as normalizeRawString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
@@ -47,24 +50,9 @@ type SignalIngressDispatch = (
   lifecycle: SignalIngressLifecycle,
 ) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
 
-class SignalIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SignalIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeRawString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const SignalIngressPermanentError = createChannelIngressError<
+  "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
+>("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
