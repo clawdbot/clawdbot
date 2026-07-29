@@ -174,6 +174,8 @@ type ChatThreadProps = {
   onCompanionQuestion?: (question: string) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
   backgroundTasks?: BackgroundTasksProps;
 };

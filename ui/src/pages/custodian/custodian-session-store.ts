@@ -1,4 +1,8 @@
-import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
+import {
+  readSystemAgentInferenceUnavailableErrorDetails,
+  type SystemAgentChatParams,
+  type SystemAgentChatResult,
+} from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -37,6 +41,7 @@ export class CustodianSessionStore {
   wizardInputPending = false;
   questionReplyUncertain = false;
   error: string | null = null;
+  setupRequired = false;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
   activeClient: GatewayBrowserClient | null = null;
@@ -145,7 +150,7 @@ export class CustodianSessionStore {
     if (questionReply) {
       this.questionReplyUncertain = true;
     }
-    if (!message.trim() || !client || !this.chatAvailable || this.sending) {
+    if (!message.trim() || !client || !this.chatAvailable || this.sending || this.setupRequired) {
       this.emit();
       return "rejected";
     }
@@ -236,6 +241,10 @@ export class CustodianSessionStore {
     this.context?.navigate("chat");
   }
 
+  openModelSetup(): void {
+    this.context?.navigate("model-setup");
+  }
+
   private emit(): void {
     for (const listener of this.listeners) {
       listener();
@@ -290,6 +299,7 @@ export class CustodianSessionStore {
     this.input = "";
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.error = null;
+    this.setupRequired = false;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, variant, false);
   }
@@ -381,6 +391,7 @@ export class CustodianSessionStore {
     const epoch = ++this.requestEpoch;
     this.sending = true;
     this.error = null;
+    this.setupRequired = false;
     this.retryParams = params;
     this.emit();
     if (loadTranscript) {
@@ -420,6 +431,7 @@ export class CustodianSessionStore {
     this.answeredQuestions = new Set();
     this.retryParams = null;
     this.error = null;
+    this.setupRequired = false;
     this.input = "";
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
@@ -450,6 +462,7 @@ export class CustodianSessionStore {
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
+    this.setupRequired = false;
     this.retryParams = params;
     this.emit();
     try {
@@ -503,6 +516,9 @@ export class CustodianSessionStore {
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
         this.error = custodianErrorMessage(error);
+        const details =
+          error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
+        this.setupRequired = readSystemAgentInferenceUnavailableErrorDetails(details) !== undefined;
         if (params.message !== undefined && isCustodianSessionInvalidatedError(error)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.
           this.rotateVolatileSession(client, this.currentSessionVariant());
