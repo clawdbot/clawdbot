@@ -294,9 +294,10 @@ describe("ChatComposerCapabilityHost", () => {
     expect(props.webSearchBaseEnabled).toBe(true);
   });
 
-  it("refetches effective tools when the active connector set changes", async () => {
+  it("refetches effective tools when an active connector definition changes", async () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({
+      appliedConfigHash: "config-1",
       runtimeConfig: {
         mcp: { servers: { github: { url: "https://mcp.example.test", enabled: true } } },
       },
@@ -317,11 +318,11 @@ describe("ChatComposerCapabilityHost", () => {
     });
 
     context.runtimeConfig.state.configSnapshot = {
+      appliedConfigHash: "config-2",
       runtimeConfig: {
         mcp: {
           servers: {
-            github: { url: "https://mcp.example.test", enabled: true },
-            notion: { command: "notion-mcp", enabled: true },
+            github: { url: "https://new-mcp.example.test", enabled: true },
           },
         },
       },

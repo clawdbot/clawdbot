@@ -1,7 +1,12 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SkillStatusEntry, ToolsEffectiveResult } from "../../api/types.ts";
+import type {
+  ConfigSnapshot,
+  GatewaySessionRow,
+  SkillStatusEntry,
+  ToolsEffectiveResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import "../../components/modal-dialog.ts";
@@ -26,10 +31,7 @@ import {
 } from "../../lib/sessions/index.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import {
-  nextBooleanToolOverrides,
-  readOwnEntry,
-} from "../../lib/sessions/tool-overrides.ts";
+import { nextBooleanToolOverrides, readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -65,10 +67,15 @@ function webSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
 }
 
-function mcpConnectorSetFingerprint(config: Record<string, unknown> | null): string {
-  return JSON.stringify(
-    (summarizeMcpServers(config) ?? []).map(({ name, enabled }) => [name, enabled] as const),
-  );
+function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
+  const revision =
+    snapshot?.appliedConfigHash ?? snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
+  if (revision) {
+    return revision;
+  }
+  // Older gateways and partial test fixtures may omit revision hashes. Include the complete
+  // connector definitions so edits to targets, args, auth, or filters still invalidate tools.
+  return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
 }
 
 function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
@@ -204,9 +211,10 @@ export class ChatComposerCapabilityHost {
       },
       { agentId, sessionKey: state.sessionKey },
     );
-    const runtimeConfig = context.runtimeConfig.state.configSnapshot?.runtimeConfig ?? null;
-    const connectorSet = mcpConnectorSetFingerprint(runtimeConfig);
-    return { cacheKey: `${requestKey}\0mcp=${connectorSet}`, requestKey };
+    const configFingerprint = activeConfigFingerprint(
+      context.runtimeConfig.state.configSnapshot ?? null,
+    );
+    return { cacheKey: `${requestKey}\0config=${configFingerprint}`, requestKey };
   }
 
   private loadEffectiveTools(
