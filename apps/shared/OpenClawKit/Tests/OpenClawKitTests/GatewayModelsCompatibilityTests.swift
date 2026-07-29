@@ -3,6 +3,20 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayModelsCompatibilityTests {
+    @Test
+    func `agents workspace encoding remains AnyCodable`() {
+        let file = AgentsWorkspaceFile(
+            path: "notes.txt",
+            name: "notes.txt",
+            size: 5,
+            updatedatms: 1,
+            mimetype: "text/plain",
+            encoding: AnyCodable("utf8"),
+            content: "hello")
+
+        #expect(file.encoding.value as? String == "utf8")
+    }
+
     private func roundTripGatewayFrame(_ json: String) throws -> GatewayFrame {
         let decoded = try JSONDecoder().decode(GatewayFrame.self, from: Data(json.utf8))
         let encoded = try JSONEncoder().encode(decoded)
