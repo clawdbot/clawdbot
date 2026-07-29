@@ -32,6 +32,13 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     readSourceConfigBestEffort: () => readSourceConfigBestEffortFromContext(context),
     readConfigFileSnapshot: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotFromContext(context, readOptions),
+    readConfigFileSnapshotWithEnvProvenance: async () => {
+      const result = await readInternal();
+      return {
+        snapshot: result.snapshot,
+        envSubstitutions: result.envSubstitutions ?? [],
+      };
+    },
     readConfigFileSnapshotWithPluginMetadata: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
     readConfigFileSnapshotForWrite: () => readConfigFileSnapshotForWriteFromContext(context),

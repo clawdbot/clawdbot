@@ -19,6 +19,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
+import type { ReadConfigFileSnapshotWithEnvProvenanceResult } from "../config/io.types.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -768,12 +769,12 @@ export async function collectStateDeepFilesystemFindings(params: {
 export async function readConfigSnapshotForAudit(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
-}): Promise<ConfigFileSnapshot> {
+}): Promise<ReadConfigFileSnapshotWithEnvProvenanceResult> {
   const { createConfigIO } = await loadConfigModule();
   return await createConfigIO({
     env: params.env,
     configPath: params.configPath,
-  }).readConfigFileSnapshot();
+  }).readConfigFileSnapshotWithEnvProvenance();
 }
 
 export async function collectPluginsCodeSafetyFindings(params: {

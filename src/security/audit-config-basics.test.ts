@@ -4,13 +4,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createConfigIO } from "../config/config.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
-import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
+import {
+  collectMinimalProfileOverrideFindings,
+  collectSecretsInConfigFindings,
+} from "./audit-extra.sync.js";
 import { runSecurityAudit } from "./audit.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
@@ -27,6 +31,73 @@ function captureSecurityEvents(): {
     }
   });
   return { events, stop };
+}
+
+const STORED_SECRET_CHECK_IDS = new Set([
+  "config.secrets.gateway_password_in_config",
+  "config.secrets.hooks_token_in_config",
+]);
+
+async function collectStoredSecretCheckIds(params: {
+  config: Record<string, unknown>;
+  env?: NodeJS.ProcessEnv;
+  include?: boolean;
+  injectSnapshot?: boolean;
+  includeFilesystem?: boolean;
+  configAfterRead?: Record<string, unknown>;
+}): Promise<string[]> {
+  const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-secret-source-"));
+  const configPath = path.join(configDir, "openclaw.json");
+  const env: NodeJS.ProcessEnv = {
+    HOME: configDir,
+    OPENCLAW_STATE_DIR: configDir,
+    ...params.env,
+  };
+  try {
+    if (params.include) {
+      await fs.writeFile(configPath, JSON.stringify({ $include: "./secrets.json" }), "utf8");
+      await fs.writeFile(
+        path.join(configDir, "secrets.json"),
+        JSON.stringify(params.config),
+        "utf8",
+      );
+    } else {
+      await fs.writeFile(configPath, JSON.stringify(params.config), "utf8");
+    }
+    const configRead = await createConfigIO({
+      configPath,
+      env,
+      homedir: () => configDir,
+      logger: { error: () => {}, warn: () => {} },
+      observe: false,
+      pluginValidation: "skip",
+    }).readConfigFileSnapshotWithEnvProvenance();
+    const { snapshot } = configRead;
+    expect(snapshot.valid).toBe(true);
+    if (params.configAfterRead) {
+      await fs.writeFile(configPath, JSON.stringify(params.configAfterRead), "utf8");
+    }
+
+    const report = await runSecurityAudit({
+      config: snapshot.runtimeConfig,
+      sourceConfig: snapshot.sourceConfig,
+      env,
+      configPath,
+      stateDir: configDir,
+      includeFilesystem: params.includeFilesystem ?? true,
+      includeChannelSecurity: false,
+      ...(params.injectSnapshot
+        ? {
+            configSnapshotRead: configRead,
+          }
+        : {}),
+    });
+    return report.findings
+      .map((finding) => finding.checkId)
+      .filter((checkId) => STORED_SECRET_CHECK_IDS.has(checkId));
+  } finally {
+    await fs.rm(configDir, { recursive: true, force: true });
+  }
 }
 
 describe("security audit config basics", () => {
@@ -599,6 +670,167 @@ describe("security audit config basics", () => {
         }),
       ]),
     );
+  });
+
+  describe("stored secret provenance", () => {
+    const externalEnv = {
+      OPENCLAW_GATEWAY_PASSWORD: "external-gateway-password",
+      OPENCLAW_HOOKS_TOKEN: "external-hooks-token",
+    };
+    const envRefConfig = {
+      gateway: { auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" } },
+      hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+    };
+
+    it.each([
+      { name: "root config", include: false, injectSnapshot: false },
+      { name: "included config", include: true, injectSnapshot: false },
+      { name: "an injected snapshot", include: false, injectSnapshot: true },
+      {
+        name: "an injected snapshot without filesystem checks",
+        include: false,
+        injectSnapshot: true,
+        includeFilesystem: false,
+      },
+    ])(
+      "does not flag external env references from $name",
+      async ({ include, injectSnapshot, includeFilesystem }) => {
+        await expect(
+          collectStoredSecretCheckIds({
+            config: envRefConfig,
+            env: externalEnv,
+            include,
+            injectSnapshot,
+            includeFilesystem,
+          }),
+        ).resolves.toEqual([]);
+      },
+    );
+
+    it("keeps findings for plaintext values stored directly in config", async () => {
+      await expect(
+        collectStoredSecretCheckIds({
+          config: {
+            gateway: { auth: { password: "stored-gateway-password" } },
+            hooks: { enabled: true, token: "stored-hooks-token" },
+          },
+        }),
+      ).resolves.toEqual([
+        "config.secrets.gateway_password_in_config",
+        "config.secrets.hooks_token_in_config",
+      ]);
+    });
+
+    it("does not apply provenance from an older config revision", async () => {
+      await expect(
+        collectStoredSecretCheckIds({
+          config: envRefConfig,
+          env: externalEnv,
+          configAfterRead: {
+            gateway: { auth: { password: externalEnv.OPENCLAW_GATEWAY_PASSWORD } },
+            hooks: { enabled: true, token: externalEnv.OPENCLAW_HOOKS_TOKEN },
+          },
+        }),
+      ).resolves.toEqual([
+        "config.secrets.gateway_password_in_config",
+        "config.secrets.hooks_token_in_config",
+      ]);
+    });
+
+    it("keeps findings for env references embedded in stored values", async () => {
+      await expect(
+        collectStoredSecretCheckIds({
+          config: {
+            gateway: {
+              auth: { password: "prefix-${OPENCLAW_GATEWAY_PASSWORD}" },
+            },
+            hooks: {
+              enabled: true,
+              token: "prefix-${OPENCLAW_HOOKS_TOKEN}",
+            },
+          },
+          env: externalEnv,
+        }),
+      ).resolves.toEqual([
+        "config.secrets.gateway_password_in_config",
+        "config.secrets.hooks_token_in_config",
+      ]);
+    });
+
+    it.each([
+      { name: "root config", include: false },
+      { name: "included config", include: true },
+    ])("keeps findings when env.vars in $name owns the referenced values", async ({ include }) => {
+      await expect(
+        collectStoredSecretCheckIds({
+          config: {
+            env: {
+              vars: {
+                OPENCLAW_GATEWAY_PASSWORD: "stored-gateway-password",
+                OPENCLAW_HOOKS_TOKEN: "stored-hooks-token",
+              },
+            },
+            ...envRefConfig,
+          },
+          include,
+        }),
+      ).resolves.toEqual([
+        "config.secrets.gateway_password_in_config",
+        "config.secrets.hooks_token_in_config",
+      ]);
+    });
+
+    it("keeps findings for Windows case aliases owned by env.vars", async () => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      try {
+        await expect(
+          collectStoredSecretCheckIds({
+            config: {
+              env: {
+                vars: {
+                  openclaw_gateway_password: "stored-gateway-password",
+                  openclaw_hooks_token: "stored-hooks-token",
+                },
+              },
+              gateway: {
+                auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+              },
+              hooks: {
+                enabled: true,
+                token: "${OPENCLAW_HOOKS_TOKEN}",
+              },
+            },
+            env: {
+              OPENCLAW_GATEWAY_PASSWORD: "stored-gateway-password",
+              OPENCLAW_HOOKS_TOKEN: "stored-hooks-token",
+            },
+            injectSnapshot: true,
+            includeFilesystem: false,
+          }),
+        ).resolves.toEqual([
+          "config.secrets.gateway_password_in_config",
+          "config.secrets.hooks_token_in_config",
+        ]);
+      } finally {
+        platformSpy.mockRestore();
+      }
+    });
+
+    it("keeps findings without snapshot provenance", () => {
+      const findings = collectSecretsInConfigFindings({
+        cfg: {
+          gateway: { auth: { password: "stored-gateway-password" } },
+          hooks: { enabled: true, token: "stored-hooks-token" },
+        },
+        env: externalEnv,
+        envSubstitutions: [],
+      });
+
+      expect(findings.map((finding) => finding.checkId)).toEqual([
+        "config.secrets.gateway_password_in_config",
+        "config.secrets.hooks_token_in_config",
+      ]);
+    });
   });
 
   it("emits a redacted security audit summary event", async () => {

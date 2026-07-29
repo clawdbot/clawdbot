@@ -83,9 +83,15 @@ export type EnvSubstitutionWarning = {
   configPath: string;
 };
 
+export type EnvSubstitutionEvent = EnvSubstitutionWarning & {
+  wholeValue: boolean;
+};
+
 type SubstituteOptions = {
   /** When set, missing vars call this instead of throwing and the original placeholder is preserved. */
   onMissing?: (warning: EnvSubstitutionWarning) => void;
+  /** Records successful substitutions without retaining the resolved value. */
+  onSubstitution?: (event: EnvSubstitutionEvent) => void;
 };
 
 function substituteString(
@@ -125,6 +131,11 @@ function substituteString(
         }
         throw new MissingEnvVarError(token.name, configPath);
       }
+      opts?.onSubstitution?.({
+        varName: token.name,
+        configPath,
+        wholeValue: value.trim() === `\${${token.name}}`,
+      });
       chunks.push(envValue);
       i = token.end;
       continue;

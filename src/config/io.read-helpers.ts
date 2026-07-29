@@ -11,6 +11,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   applyConfigEnvVars,
+  collectConfigRuntimeEnvVars,
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
 } from "./config-env-vars.js";
@@ -28,7 +29,12 @@ import {
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
 } from "./includes.js";
-import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
+import type {
+  ConfigEnvSubstitutionEvent,
+  ConfigIoDeps,
+  NormalizedConfigIoDeps,
+  ParseConfigJson5Result,
+} from "./io.types.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
@@ -296,6 +302,7 @@ export function resolveConfigIncludesForRead(
 type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
+  envSubstitutions: ConfigEnvSubstitutionEvent[];
   envWarnings: EnvSubstitutionWarning[];
 };
 
@@ -304,15 +311,33 @@ export function resolveConfigForRead(
   env: NodeJS.ProcessEnv,
   lowerPrecedenceEnv: Readonly<Record<string, string>> = {},
 ): ConfigReadResolution {
+  // Capture ownership before substitution replaces the authored env references.
+  const normalizeEnvName = (name: string) =>
+    process.platform === "win32" ? name.toUpperCase() : name;
+  const configOwnedEnvNames =
+    resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes
+      ? new Set(
+          Object.keys(collectConfigRuntimeEnvVars(resolvedIncludes as OpenClawConfig)).map(
+            normalizeEnvName,
+          ),
+        )
+      : new Set<string>();
   if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env, { lowerPrecedenceEnv });
   }
+  const envSubstitutions: ConfigEnvSubstitutionEvent[] = [];
   const envWarnings: EnvSubstitutionWarning[] = [];
   return {
     resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
       onMissing: (warning) => envWarnings.push(warning),
+      onSubstitution: (event) =>
+        envSubstitutions.push({
+          ...event,
+          source: configOwnedEnvNames.has(normalizeEnvName(event.varName)) ? "config" : "external",
+        }),
     }),
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
+    envSubstitutions,
     envWarnings,
   };
 }

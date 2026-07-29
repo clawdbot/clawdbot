@@ -13,6 +13,7 @@ import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { ConfigEnvSubstitutionEvent } from "../config/io.types.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -76,6 +77,24 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
+}
+
+function isExternalWholeValueEnvRef(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  resolvedValue: string;
+  envSubstitutions: readonly ConfigEnvSubstitutionEvent[];
+}): boolean {
+  const substitution = params.envSubstitutions.find(
+    (event) =>
+      event.configPath === params.configPath && event.wholeValue && event.source === "external",
+  );
+  if (!substitution) {
+    return false;
+  }
+  // Suppress only when this exact runtime value came from an external env slot.
+  // Stale snapshot provenance must keep the finding.
+  return normalizeOptionalString(params.env[substitution.varName]) === params.resolvedValue;
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -587,10 +606,21 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
-export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectSecretsInConfigFindings(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  envSubstitutions: readonly ConfigEnvSubstitutionEvent[];
+}): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
+  const { cfg } = params;
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  const externalPasswordRef = isExternalWholeValueEnvRef({
+    configPath: "gateway.auth.password",
+    env: params.env,
+    resolvedValue: password,
+    envSubstitutions: params.envSubstitutions,
+  });
+  if (password && !looksLikeEnvRef(password) && !externalPasswordRef) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -603,7 +633,18 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  const externalHooksTokenRef = isExternalWholeValueEnvRef({
+    configPath: "hooks.token",
+    env: params.env,
+    resolvedValue: hooksToken,
+    envSubstitutions: params.envSubstitutions,
+  });
+  if (
+    cfg.hooks?.enabled === true &&
+    hooksToken &&
+    !looksLikeEnvRef(hooksToken) &&
+    !externalHooksTokenRef
+  ) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",

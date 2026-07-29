@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { EnvSubstitutionEvent } from "./env-substitution.js";
 import type {
   ConfigWriteAfterWrite,
   RuntimeConfigSnapshotRefreshOptions,
@@ -130,12 +131,22 @@ export type ConfigSnapshotReadOptions = {
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigEnvSubstitutionEvent = EnvSubstitutionEvent & {
+  source: "config" | "external";
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
   snapshot: ConfigFileSnapshot;
+  envSubstitutions?: readonly ConfigEnvSubstitutionEvent[];
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
   includeFileTargetsForWrite?: Record<string, string>;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
+export type ReadConfigFileSnapshotWithEnvProvenanceResult = {
+  snapshot: ConfigFileSnapshot;
+  envSubstitutions: readonly ConfigEnvSubstitutionEvent[];
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {

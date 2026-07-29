@@ -10,6 +10,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import type { ReadConfigFileSnapshotWithEnvProvenanceResult } from "../config/io.types.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
@@ -107,6 +108,8 @@ type SecurityAuditOptions = {
   execDockerRawFn?: ExecDockerRawFn;
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
+  /** Optional atomic snapshot + env provenance injection. */
+  configSnapshotRead?: ReadConfigFileSnapshotWithEnvProvenanceResult | null;
   /** Optional cache for code-safety summaries across repeated deep audits. */
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
   /** Optional explicit auth for deep gateway probe. */
@@ -135,7 +138,7 @@ type AuditExecutionContext = {
   probeGatewayFn?: ProbeGatewayFn;
   plugins?: ChannelPlugin[];
   loadPluginSecurityCollectors: boolean;
-  configSnapshot: ConfigFileSnapshot | null;
+  configSnapshotRead: ReadConfigFileSnapshotWithEnvProvenanceResult | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
@@ -1301,11 +1304,19 @@ async function createAuditExecutionContext(
         ? resolveUserPath(configuredDefaultWorkspace, env)
         : resolveDefaultAgentWorkspaceDir(env));
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
-  const configSnapshot = includeFilesystem
-    ? opts.configSnapshot !== undefined
-      ? opts.configSnapshot
-      : await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
-    : null;
+  const configSnapshotRead =
+    opts.configSnapshotRead !== undefined
+      ? opts.configSnapshotRead
+      : opts.configSnapshot !== undefined
+        ? opts.configSnapshot
+          ? {
+              snapshot: opts.configSnapshot,
+              envSubstitutions: [],
+            }
+          : null
+        : includeFilesystem
+          ? await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
+          : null;
   return {
     cfg,
     sourceConfig,
@@ -1323,7 +1334,7 @@ async function createAuditExecutionContext(
     plugins: opts.plugins,
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
-    configSnapshot,
+    configSnapshotRead,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
@@ -1334,6 +1345,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;
+  const storedConfig = context.configSnapshotRead?.snapshot.runtimeConfig ?? cfg;
   const auditNonDeep = await loadAuditNonDeepModule();
 
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
@@ -1372,7 +1384,13 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectNodeDenyCommandPatternFindings(cfg));
   findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
-  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  findings.push(
+    ...auditNonDeep.collectSecretsInConfigFindings({
+      cfg: storedConfig,
+      env,
+      envSubstitutions: context.configSnapshotRead?.envSubstitutions ?? [],
+    }),
+  );
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
@@ -1388,10 +1406,10 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         execIcacls: context.execIcacls,
       })),
     );
-    if (context.configSnapshot) {
+    if (context.configSnapshotRead) {
       findings.push(
         ...(await auditNonDeep.collectIncludeFilePermFindings({
-          configSnapshot: context.configSnapshot,
+          configSnapshot: context.configSnapshotRead.snapshot,
           env,
           platform,
           execIcacls: context.execIcacls,
