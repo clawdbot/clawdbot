@@ -11,7 +11,7 @@ export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
 export type PluginsHubRouteTab = "installed" | "discover";
 
-export type AgentRoutePath = {
+type AgentRoutePath = {
   agentId: string;
   panel: AgentsPanel;
   panelSegment: AgentsPanel | null;
