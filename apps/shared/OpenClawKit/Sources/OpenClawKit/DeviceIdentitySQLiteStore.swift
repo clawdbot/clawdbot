@@ -405,7 +405,7 @@ enum DeviceIdentitySQLiteStore {
                                 String(cString: strerror(acquireError)))
                     }
 
-                    // RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
+                    /// RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
                     func restoreOrParkQuarantine() {
                         _ = quarantineURL.path.withCString { quarantinePath in
                             nativeClaimURL.path.withCString { claimPath in
