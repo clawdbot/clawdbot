@@ -57,7 +57,10 @@ export async function createBuzzQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const requestedCredentialSource = options.credentialSource?.trim().toLowerCase() || "file";
+  const requestedCredentialSource =
+    options.credentialSource?.trim().toLowerCase() ||
+    process.env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase() ||
+    "file";
   if (requestedCredentialSource !== "file" && requestedCredentialSource !== "convex") {
     throw new Error('Buzz QA credential source must be "file" or "convex".');
   }

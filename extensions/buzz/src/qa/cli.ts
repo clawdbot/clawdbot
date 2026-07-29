@@ -39,7 +39,6 @@ export const buzzQaCliRegistration: LiveTransportQaCliRegistration =
     },
     credentialOptions: {
       sourceDescription: "Credential source for Buzz QA: file or convex (default: file)",
-      sourceDefault: "file",
       roleDescription:
         "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },

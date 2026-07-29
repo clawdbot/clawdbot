@@ -181,7 +181,6 @@ export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
 /** Help text customizations for live credential source and role flags. */
 export type LiveTransportQaCredentialCliOptions = {
   sourceDescription?: string;
-  sourceDefault?: string;
   roleDescription?: string;
 };
 
@@ -280,18 +279,11 @@ function registerLiveTransportQaCli(
   }
 
   if (params.credentialOptions) {
-    const sourceDescription =
+    command.option(
+      "--credential-source <source>",
       params.credentialOptions.sourceDescription ??
-      "Credential source for live lanes: env or convex (default: env)";
-    if (params.credentialOptions.sourceDefault) {
-      command.option(
-        "--credential-source <source>",
-        sourceDescription,
-        params.credentialOptions.sourceDefault,
-      );
-    } else {
-      command.option("--credential-source <source>", sourceDescription);
-    }
+        "Credential source for live lanes: env or convex (default: env)",
+    );
     if (params.credentialOptions.roleDescription) {
       command.option("--credential-role <role>", params.credentialOptions.roleDescription);
     }

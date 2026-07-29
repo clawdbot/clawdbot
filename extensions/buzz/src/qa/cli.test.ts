@@ -39,7 +39,6 @@ describe("Buzz QA CLI", () => {
       options: {
         providerMode: "mock-openai",
         credentialFile: "/secure/buzz-qa.json",
-        credentialSource: "file",
       },
     });
     expect(
