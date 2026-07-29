@@ -9,39 +9,46 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-export function resolveQaScenarioLaneChannel(params: {
+export function resolveQaScenarioLaneChannels(params: {
   scenario: QaSeedScenario;
   channelDriver: QaScorecardChannelDriver;
   channel?: string | null;
   defaultChannel?: string;
   supportsChannel?: (channel: string) => boolean;
-}): string | undefined {
+}): Array<string | undefined> {
   if (params.channelDriver === "qa-channel") {
-    return "qa-channel";
+    return ["qa-channel"];
   }
   const selectedChannel = params.channel?.trim().toLowerCase();
   if (selectedChannel) {
-    return selectedChannel;
+    return [selectedChannel];
   }
   const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
   if (scenarioChannel) {
-    return scenarioChannel;
+    return [scenarioChannel];
   }
-  if (params.channelDriver === "live" && params.scenario.execution.kind === "flow") {
-    const liveChannels = params.scenario.execution.channels?.filter(
+  if (params.scenario.execution.kind === "flow") {
+    const driverChannels = params.scenario.execution.channels?.filter(
       (channel) => channel !== "qa-channel",
     );
-    const supportedChannel = liveChannels?.find(
+    const supportedChannels = driverChannels?.filter(
       (channel) => !params.supportsChannel || params.supportsChannel(channel),
     );
-    if (supportedChannel) {
-      return supportedChannel;
+    if (supportedChannels?.length) {
+      return supportedChannels;
     }
-    if (liveChannels?.[0]) {
-      return liveChannels[0];
+    if (driverChannels?.length) {
+      return driverChannels;
     }
   }
-  return params.defaultChannel?.trim().toLowerCase() || undefined;
+  const defaultChannel = params.defaultChannel?.trim().toLowerCase();
+  return [defaultChannel];
+}
+
+export function resolveQaScenarioLaneChannel(
+  params: Parameters<typeof resolveQaScenarioLaneChannels>[0],
+): string | undefined {
+  return resolveQaScenarioLaneChannels(params)[0];
 }
 
 export function describeQaProviderLaneMismatches(params: {
