@@ -310,6 +310,7 @@ describe("qa scenario catalog", () => {
 
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
+    const screenshotScenario = readQaScenarioById("control-ui-browser-screenshot-body-cancel");
     const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
@@ -322,6 +323,20 @@ describe("qa scenario catalog", () => {
     );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.secondary).toContain(`${browserUi}.gateway-hosted-ui-control`);
+    expect(screenshotScenario.execution.kind).toBe("playwright");
+    if (screenshotScenario.execution.kind !== "playwright") {
+      throw new Error(`expected Playwright scenario, got ${screenshotScenario.execution.kind}`);
+    }
+    expect(screenshotScenario.execution.path).toBe(
+      "ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts",
+    );
+    expect(screenshotScenario.execution.testNamePattern).toBe(
+      "keeps the status error visible and cancels the unread media body",
+    );
+    expect(screenshotScenario.execution.flow).toBeUndefined();
+    expect(screenshotScenario.coverage?.secondary).toContain(
+      `${browserUi}.gateway-hosted-ui-control`,
+    );
     expect(otelSmoke.execution.kind).toBe("script");
     if (otelSmoke.execution.kind !== "script") {
       throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
@@ -345,6 +360,7 @@ describe("qa scenario catalog", () => {
     for (const scenario of [
       readQaScenarioById("control-ui-chat-flow-playwright"),
       readQaScenarioById("control-ui-plan-replay-reconnect"),
+      readQaScenarioById("control-ui-browser-screenshot-body-cancel"),
     ]) {
       expect(scenario.execution.kind, scenario.id).toBe("playwright");
       expect(scenario.coverage?.primary, scenario.id).not.toContain(coverageId);

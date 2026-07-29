@@ -4444,6 +4444,68 @@ describe("main-session-restart-recovery", () => {
     },
   );
 
+  it.each([
+    {
+      label: "a replay-safe checkpoint earlier in the interrupted turn",
+      messages: [
+        { role: "user", content: "do the thing" },
+        codeModeCheckpointMessage("exec"),
+        createAssistantToolCallMessage([
+          {
+            type: "toolCall",
+            id: "call-read-current",
+            name: "read",
+            arguments: { path: "README.md" },
+          },
+        ]),
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "call-read-current",
+          content: [{ type: "text", text: "current read result" }],
+        },
+      ],
+      forceRestartSafeTools: true,
+    },
+    {
+      label: "a replay-safe checkpoint from an earlier user turn",
+      messages: [
+        { role: "user", content: "finish the earlier turn" },
+        codeModeCheckpointMessage("exec"),
+        { role: "user", content: "start the current turn" },
+        createAssistantToolCallMessage([
+          {
+            type: "toolCall",
+            id: "call-read-current",
+            name: "read",
+            arguments: { path: "README.md" },
+          },
+        ]),
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "call-read-current",
+          content: [{ type: "text", text: "current read result" }],
+        },
+      ],
+      forceRestartSafeTools: false,
+    },
+  ])(
+    "preserves the restart-safe boundary after an ordinary tool result with $label",
+    async ({ messages, forceRestartSafeTools }) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, mainSessionStore());
+      await writeTranscript(sessionsDir, "main-session", messages);
+
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      if (forceRestartSafeTools) {
+        expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+      } else {
+        expect(gatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+      }
+    },
+  );
+
   it("keeps restart safety across a second restart of the recovery turn", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
