@@ -125,6 +125,7 @@ describe("Telegram live QA scenario gate", () => {
       },
     ]);
     mocks.resolveTelegramQaRunOptions.mockReturnValueOnce({
+      allowFailures: false,
       listScenarios: true,
       providerMode: "mock-openai",
       repoRoot: process.cwd(),
