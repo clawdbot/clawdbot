@@ -131,7 +131,9 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                 >`
               : null}
             ${downloadHref && !this.failed
-              ? html`<a
+              ? html`<!-- The download attribute is ignored for cross-origin URLs (rare here — attachment
+                  hrefs are same-origin gateway routes); those open in a new tab instead. -->
+                  <a
                   class="chat-assistant-attachment-card__download"
                   href=${downloadHref}
                   download=${this.label}
