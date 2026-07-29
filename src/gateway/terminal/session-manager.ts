@@ -130,7 +130,10 @@ export class TerminalSessionManager {
         pending.abortMessage ??= message;
         // A hung spawn must not consume capacity after its owner is gone.
         // Its eventual backend is still killed by the abortMessage check below.
+        // The eviction claim must also drop now: a cancelled open whose spawn
+        // never settles would otherwise keep its victim unclaimable forever.
         releaseReservation();
+        releaseEvictionClaim();
       },
     };
     const abortPending = () => {

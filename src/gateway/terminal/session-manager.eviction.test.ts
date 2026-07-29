@@ -194,6 +194,38 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(manager.size).toBeLessThanOrEqual(2);
   });
 
+  it("releases the eviction claim when a cancelled open's spawn never settles", async () => {
+    let hangNextSpawn = false;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => {
+        if (hangNextSpawn) {
+          hangNextSpawn = false;
+          return await new Promise<never>(() => {});
+        }
+        return makeFakePty();
+      },
+      maxSessions: 1,
+    });
+    const victim = await manager.open(baseOpenRequest({ owner: agentOwner }));
+    if (!victim.ok) {
+      throw new Error("expected open");
+    }
+
+    hangNextSpawn = true;
+    const controller = new AbortController();
+    const hung = manager.open(baseOpenRequest({ owner: agentOwner, signal: controller.signal }));
+    await vi.waitFor(() => expect(hangNextSpawn).toBe(false));
+    controller.abort(new Error("cancelled"));
+
+    // The cancelled open's claim is gone, so a later open can evict the victim.
+    const next = await manager.open(baseOpenRequest({ owner: agentOwner }));
+    expect(next.ok).toBe(true);
+    expect(manager.size).toBe(1);
+    // The hung open stays pending forever by design; do not await it.
+    void hung;
+  });
+
   it("keeps the claimed victim alive when the replacement spawn fails", async () => {
     const pty = makeFakePty();
     let failNextSpawn = false;
