@@ -717,7 +717,7 @@ export const SkillsProposalInspectParamsSchema = closedObject({
 /** Full proposal inspection result used before apply/revise decisions. */
 export const SkillsProposalInspectResultSchema = closedObject({
   record: SkillProposalRecordSchema,
-  revisionHash: Sha256String,
+  revisionHash: Type.Optional(Sha256String),
   content: Type.String(),
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
 });

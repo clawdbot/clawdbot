@@ -366,6 +366,25 @@ describe("Skill Workshop proposal RPCs", () => {
     expect(state.skillWorkshopProposals[0]?.evaluation).toBeUndefined();
   });
 
+  it("loads legacy inspect responses but refuses revision-sensitive evaluation", async () => {
+    const { revisionHash: _revisionHash, ...legacyInspect } = inspectResult();
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal()],
+    });
+    request.mockResolvedValue(legacyInspect);
+
+    await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("skills.proposals.inspect", {
+      agentId: "research",
+      proposalId: "proposal-1",
+    });
+    expect(state.skillWorkshopError).toBe("The current proposal revision could not be identified.");
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBeNull();
+  });
+
   it("reloads proposals when the selected session changes agent scope", async () => {
     const { state, context, request } = createFixture(
       {

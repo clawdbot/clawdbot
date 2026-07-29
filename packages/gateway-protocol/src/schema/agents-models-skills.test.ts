@@ -338,6 +338,12 @@ describe("SkillsProposalInspectResultSchema", () => {
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SkillsProposalInspectResultSchema, {
+        record: result.record,
+        content: result.content,
+      }),
+    ).toBe(true);
   });
 });
 

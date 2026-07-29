@@ -85,7 +85,7 @@ type SkillProposalSupportFile = {
 
 type SkillProposalInspectResult = {
   record: SkillProposalRecord;
-  revisionHash: string;
+  revisionHash?: string;
   content: string;
   supportFiles?: SkillProposalSupportFile[];
 };
