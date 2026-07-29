@@ -109,7 +109,6 @@ const LOOPBACK_FAILURE_DELAY_BASE_MS = 250;
 const LOOPBACK_FAILURE_DELAY_MAX_MS = 5_000;
 const LOOPBACK_FAILURE_HISTORY_LIMIT =
   Math.ceil(Math.log2(LOOPBACK_FAILURE_DELAY_MAX_MS / LOOPBACK_FAILURE_DELAY_BASE_MS)) + 1;
-const MAX_PENDING_LOOPBACK_FAILURE_DELAYS = 32;
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -154,6 +153,11 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
 
   const entries = new Map<string, RateLimitEntry>();
+  // Penalty deadlines are per key, not per in-flight request: concurrent failures
+  // for one key all wait out the same deadline, so an attacker cannot buy free
+  // guesses by keeping timers occupied. Settlers are tracked only so dispose()
+  // can release waiters without stalling gateway shutdown.
+  const loopbackPenaltyUntil = new Map<string, number>();
   const pendingLoopbackFailureDelays = new Set<() => void>();
   let overflowLockedUntil: number | undefined;
 
@@ -271,15 +275,25 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   ): Promise<void> {
     const { key, ip } = resolveKey(rawIp, rawScope);
     recordFailure(rawIp, rawScope);
-    if (!isExempt(ip) || pendingLoopbackFailureDelays.size >= MAX_PENDING_LOOPBACK_FAILURE_DELAYS) {
+    if (!isExempt(ip)) {
       return;
     }
 
     const failureCount = entries.get(key)?.attempts.length ?? 1;
-    const delayMs = Math.min(
+    const penaltyMs = Math.min(
       LOOPBACK_FAILURE_DELAY_BASE_MS * 2 ** Math.min(failureCount - 1, 30),
       LOOPBACK_FAILURE_DELAY_MAX_MS,
     );
+    // Hold the key's deadline at the furthest point any current failure earned, but
+    // never past one full penalty from now, so parallel guesses cannot be answered
+    // sooner than a serial one and cannot be queued into an unbounded wait either.
+    const now = Date.now();
+    const deadline = Math.min(
+      Math.max(loopbackPenaltyUntil.get(key) ?? 0, now + penaltyMs),
+      now + LOOPBACK_FAILURE_DELAY_MAX_MS,
+    );
+    loopbackPenaltyUntil.set(key, deadline);
+    const delayMs = Math.max(0, deadline - now);
     await new Promise<void>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
@@ -303,6 +317,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   function reset(rawIp: string | undefined, rawScope?: string): void {
     const { key } = resolveKey(rawIp, rawScope);
     entries.delete(key);
+    loopbackPenaltyUntil.delete(key);
   }
 
   function pruneExpiredEntries(now: number): void {
@@ -314,6 +329,11 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       slideWindow(entry, now);
       if (entry.attempts.length === 0) {
         entries.delete(key);
+      }
+    }
+    for (const [key, until] of loopbackPenaltyUntil) {
+      if (now >= until) {
+        loopbackPenaltyUntil.delete(key);
       }
     }
   }
@@ -373,6 +393,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       clearInterval(pruneTimer);
     }
     entries.clear();
+    loopbackPenaltyUntil.clear();
     overflowLockedUntil = undefined;
     for (const settle of [...pendingLoopbackFailureDelays]) {
       settle();

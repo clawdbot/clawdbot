@@ -349,23 +349,58 @@ describe("auth rate limiter", () => {
     }
   });
 
-  it("returns loopback failures immediately beyond the pending-delay cap", async () => {
+  // Regression: an earlier revision skipped the delay once a global timer cap was
+  // full, so an attacker could park cheap failures in every slot and then guess
+  // without penalty. Concurrency must never buy a faster answer than one attempt.
+  it("still delays loopback failures when many are already pending", async () => {
     vi.useFakeTimers();
     try {
       limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
-      const pending = Array.from({ length: 32 }, (_, index) =>
+      const pending = Array.from({ length: 64 }, (_, index) =>
         limiter.recordFailureAndDelay("127.0.0.1", `scope-${index}`),
       );
 
-      let overflowSettled = false;
-      void limiter.recordFailureAndDelay("127.0.0.1", "scope-overflow").then(() => {
-        overflowSettled = true;
+      let extraSettled = false;
+      const extra = limiter.recordFailureAndDelay("127.0.0.1", "scope-extra").then(() => {
+        extraSettled = true;
       });
       await Promise.resolve();
-      expect(overflowSettled).toBe(true);
+      expect(extraSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await extra;
+      expect(extraSettled).toBe(true);
 
       limiter.dispose();
       await Promise.all(pending);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Parallel guesses on one key share the key's deadline instead of each starting
+  // a fresh short timer, so fanning out cannot outrun the escalating penalty.
+  it("holds concurrent failures for the same key to a shared deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      // Escalate the key first so its penalty is well above the 250ms base.
+      for (let i = 0; i < 4; i += 1) {
+        const settled = limiter.recordFailureAndDelay("127.0.0.1", "shared");
+        await vi.advanceTimersByTimeAsync(5_000);
+        await settled;
+      }
+
+      let lateSettled = false;
+      const late = limiter.recordFailureAndDelay("127.0.0.1", "shared").then(() => {
+        lateSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(lateSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await late;
+      expect(lateSettled).toBe(true);
     } finally {
       vi.useRealTimers();
     }
