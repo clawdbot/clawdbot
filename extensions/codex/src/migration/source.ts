@@ -1,5 +1,6 @@
 // Codex plugin module implements source behavior.
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,
@@ -120,20 +121,15 @@ async function discoverInstalledCuratedPlugins(
           method: "plugin/installed",
           requestParams: { cwds: [] } satisfies v2.PluginInstalledParams,
         });
-        const curatedMarketplaces = response.marketplaces.filter(isOpenAiCuratedMarketplace);
-        const curatedMarketplacePaths = new Set(
-          curatedMarketplaces.flatMap((marketplace) =>
-            marketplace.path ? [marketplace.path] : [],
-          ),
+        // Codex reports marketplace load failures by manifest file path, and both
+        // curated variants (marketplace.json and api_marketplace.json) sync under
+        // `<codexHome>/.tmp/plugins` while custom marketplaces load from user-owned
+        // roots. Failed manifests never appear in `marketplaces`, so containment in
+        // the curated sync root is the only reliable curated-failure signal.
+        const curatedSyncRoot = path.join(codexHome, ".tmp", "plugins");
+        const curatedMarketplaceErrors = response.marketplaceLoadErrors.filter((error) =>
+          isPathInside(curatedSyncRoot, error.marketplacePath),
         );
-        const curatedMarketplaceErrors = response.marketplaceLoadErrors.filter((error) => {
-          const marketplaceName = path.basename(error.marketplacePath);
-          return (
-            curatedMarketplacePaths.has(error.marketplacePath) ||
-            marketplaceName === CODEX_PLUGINS_MARKETPLACE_NAME ||
-            marketplaceName === `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`
-          );
-        });
         if (curatedMarketplaceErrors.length > 0) {
           return {
             plugins: [],
