@@ -17,6 +17,7 @@ type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
 };
 
 const BUZZ_GATEWAY_ACCOUNT_ID = "default";
+const BUZZ_MESSAGE_ID_MAPPING_TIMEOUT_MS = 5_000;
 
 function isBuzzMention(text: string) {
   return /(^|\s)@openclaw\b/iu.test(text);
@@ -96,15 +97,37 @@ export async function createBuzzQaTransportAdapter(
   let logicalConversationId = credentials.roomId;
   let relayDriver: Awaited<ReturnType<typeof createBuzzQaRelayDriver>>;
 
+  const resolveBusMessageId = async (nativeId: string | undefined) => {
+    if (!nativeId) {
+      return undefined;
+    }
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < BUZZ_MESSAGE_ID_MAPPING_TIMEOUT_MS) {
+      const busId = busMessageIds.get(nativeId);
+      if (busId) {
+        return busId;
+      }
+      // A fast relay response can arrive before sendInbound records the
+      // published event's portable id. Preserve native reply relations until
+      // that canonical mapping is available instead of dropping them.
+      await sleep(10);
+    }
+    throw new Error(`Buzz QA could not resolve the portable id for native message ${nativeId}.`);
+  };
+
   const recordOutbound = async (message: BuzzInboundMessage) => {
+    const [threadId, replyToId] = await Promise.all([
+      resolveBusMessageId(message.threadId),
+      resolveBusMessageId(message.replyToId),
+    ]);
     const outbound = await context.messages.addOutboundMessage({
       accountId,
       to: `group:${logicalConversationId}`,
       senderId: credentials.sutPublicKey,
       text: message.text,
       timestamp: message.createdAt * 1_000,
-      threadId: message.threadId ? busMessageIds.get(message.threadId) : undefined,
-      replyToId: message.replyToId ? busMessageIds.get(message.replyToId) : undefined,
+      threadId,
+      replyToId,
     });
     nativeMessageIds.set(outbound.id, message.id);
     busMessageIds.set(message.id, outbound.id);

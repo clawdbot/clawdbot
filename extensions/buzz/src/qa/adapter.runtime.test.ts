@@ -238,6 +238,70 @@ describe("Buzz QA transport adapter", () => {
     );
   });
 
+  it("waits for a racing inbound id mapping before recording reply relations", async () => {
+    let resolveInbound:
+      | ((value: { id: string; direction: "inbound"; timestamp: number }) => void)
+      | undefined;
+    const addInboundMessage = vi.fn(
+      async () =>
+        await new Promise<{ id: string; direction: "inbound"; timestamp: number }>((resolve) => {
+          resolveInbound = resolve;
+        }),
+    );
+    const addOutboundMessage = vi.fn(async (input) => ({
+      ...input,
+      id: "bus-outbound",
+      direction: "outbound" as const,
+      conversation: { id: "main", kind: "group" as const },
+    }));
+    const adapter = await createBuzzQaTransportAdapter({
+      adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
+      channelId: "buzz",
+      driver: "live",
+      messages: {
+        addInboundMessage,
+        addOutboundMessage,
+        editMessage: vi.fn(),
+      },
+      outputDir: ".artifacts/qa-e2e/buzz",
+    });
+
+    const inboundPromise = adapter.sendInbound({
+      accountId: "sut",
+      conversation: { id: "main", kind: "group" },
+      senderId: "driver",
+      senderName: "QA Driver",
+      text: "@openclaw root",
+    });
+    await vi.waitFor(() => expect(addInboundMessage).toHaveBeenCalledOnce());
+    const outboundPromise = relayDriverState.onMessage?.({
+      id: "native-sut-reply",
+      senderPubkey: credentials.sutPublicKey,
+      text: "fast reply",
+      channelId: credentials.roomId,
+      createdAt: 1_750_000_000,
+      threadId: "native-inbound",
+      replyToId: "native-inbound",
+      mentionedPubkeys: [],
+    });
+    expect(addOutboundMessage).not.toHaveBeenCalled();
+
+    resolveInbound?.({
+      id: "bus-inbound",
+      direction: "inbound",
+      timestamp: 1_750_000_000_000,
+    });
+    await inboundPromise;
+    await outboundPromise;
+
+    expect(addOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "bus-inbound",
+        replyToId: "bus-inbound",
+      }),
+    );
+  });
+
   it("closes relay observation before stopping and releasing the credential lease", async () => {
     const adapter = await createBuzzQaTransportAdapter({
       adapterOptions: { credentialSource: "convex" },
