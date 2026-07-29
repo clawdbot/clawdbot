@@ -42,6 +42,7 @@ export type MemoryAddonRow = {
   state: MemoryPluginState;
   busy: boolean;
   error: string | null;
+  notice: string | null;
 };
 
 type MemoryViewProps = {
@@ -268,6 +269,16 @@ function renderAddonsSection(props: MemoryViewProps) {
                 title: t("memoryPage.addons.changeFailed", { plugin: addon.label }),
                 description: addon.error,
                 control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+              })}
+          ${addon.notice === null
+            ? nothing
+            : renderSettingsRow({
+                title: t("pluginsPage.needsAttention"),
+                description: addon.notice,
+                control: renderSettingsStatus({
+                  kind: "warn",
+                  label: t("pluginsPage.needsAttention"),
+                }),
               })}
         `,
       )}

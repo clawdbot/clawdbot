@@ -533,6 +533,34 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
+  it("surfaces restart-required outcomes from add-on mutations", async () => {
+    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+    const updated = [addon("active-memory", true), addon("memory-wiki", true)];
+    const { element } = createPage({
+      configObject: {},
+      listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
+      setEnabled: (_pluginId, enabled) =>
+        Promise.resolve({
+          ok: true,
+          plugin: addon("memory-wiki", enabled),
+          restartRequired: true,
+        }),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(false));
+      toggleAddon(element, "Memory wiki", true);
+
+      await waitForFast(() => expect(element.textContent).toContain("Needs attention"));
+      expect(element.textContent).toContain(
+        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+      );
+      expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
+    } finally {
+      element.remove();
+    }
+  });
+
   it("disables only the add-on whose mutation is in flight", async () => {
     const pending = deferred<unknown>();
     const { element } = createPage({

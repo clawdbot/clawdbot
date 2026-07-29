@@ -118,6 +118,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private engineError: string | null = null;
   @state() private addonBusy = new Set<string>();
   @state() private addonErrors = new Map<string, string>();
+  @state() private addonNotices = new Map<string, string>();
   @state() private selectedAgentId: string | null = null;
   @state() private overviewStatus: MemoryOverviewStatus = { kind: "idle" };
   @state() private probingEmbeddings = false;
@@ -388,6 +389,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         state: pluginState(catalog, entry),
         busy: this.addonBusy.has(addon.id),
         error: this.addonErrors.get(addon.id) ?? null,
+        notice: this.addonNotices.get(addon.id) ?? null,
       };
     });
   }
@@ -414,9 +416,20 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const errors = new Map(this.addonErrors);
     errors.delete(pluginId);
     this.addonErrors = errors;
+    const notices = new Map(this.addonNotices);
+    notices.delete(pluginId);
+    this.addonNotices = notices;
     try {
       try {
-        await setPluginEnabled(client, pluginId, enabled);
+        const result = await setPluginEnabled(client, pluginId, enabled);
+        if (result.restartRequired) {
+          const key = enabled ? "pluginsPage.enabledRestart" : "pluginsPage.disabledRestart";
+          const warnings = "warnings" in result ? (result.warnings ?? []) : [];
+          this.addonNotices = new Map(this.addonNotices).set(
+            pluginId,
+            [t(key, { name: result.plugin.name }), ...warnings].filter(Boolean).join(" "),
+          );
+        }
       } catch (error) {
         this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));
         return;
