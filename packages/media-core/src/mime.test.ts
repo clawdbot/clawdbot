@@ -143,16 +143,17 @@ describe("mime detection", () => {
       expected: "application/vnd.android.package-archive",
     },
     {
-      name: "requires a complete APK directory at security boundaries",
+      name: "rejects an APK sniff without a complete directory at security boundaries",
       input: async () => {
         const apk = await makeApkZip();
         const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
         return {
           buffer: apk.subarray(0, centralDirectoryOffset),
+          filePath: "/tmp/truncated.zip",
           requireCompleteApkVerification: true,
         };
       },
-      expected: "application/zip",
+      expected: undefined,
     },
     {
       name: "preserves a trusted APK header for bounded-prefix callers",

@@ -1136,6 +1136,15 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it("rejects a truncated APK instead of accepting it as ZIP", async () => {
+    const apk = await makeApkZip();
+    const centralDirectoryOffset = apk.lastIndexOf(Buffer.from("PK\u0001\u0002", "binary"));
+    await expectLoadWebMediaErrorCode(
+      loadDocumentWithHostRead("truncated.apk", apk.subarray(0, centralDirectoryOffset)),
+      "path-not-allowed",
+    );
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
     // Declared plain-text aliases must use the text validator path even when the

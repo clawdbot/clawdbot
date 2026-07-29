@@ -237,10 +237,7 @@ export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
   return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
 }
 
-async function sniffMime(
-  buffer?: Buffer,
-  requireCompleteApkVerification = false,
-): Promise<string | undefined> {
+async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
@@ -257,12 +254,6 @@ async function sniffMime(
         // file-type stops at an early JAR manifest in signed APKs. Verify the
         // central directory so the host-read gate can trust the same result.
         return APK_MIME;
-      }
-      // file-type identifies APKs from a local classes*.dex entry and is
-      // intentionally useful on bounded prefixes. Only security boundaries
-      // with the complete file should require central-directory verification.
-      if (sniffed === APK_MIME && requireCompleteApkVerification) {
-        return "application/zip";
       }
       return sniffed;
     }
@@ -333,7 +324,13 @@ export async function detectMime(opts: {
     ? rawMimeHints.filter((mime) => mime !== APK_MIME)
     : rawMimeHints;
   const headerMime = mimeHints[0];
-  const sniffed = await sniffMime(opts.buffer, requireCompleteApkVerification);
+  const sniffed = await sniffMime(opts.buffer);
+  // file-type can identify an APK from a bounded local-entry prefix. At a
+  // complete-verification boundary, do not let a failed archive check fall
+  // through to an allowed ZIP extension or MIME hint.
+  if (requireCompleteApkVerification && sniffed === APK_MIME && !hasVerifiedApk) {
+    return undefined;
+  }
   const sniffedGenericContainer =
     sniffed === "application/octet-stream" || sniffed === "application/zip";
 
