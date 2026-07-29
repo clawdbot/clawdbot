@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   inheritedToolAllowPatch,
@@ -11,7 +12,11 @@ import {
 } from "./inherited-tool-deny.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
-import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";
+import {
+  loadSessionEntry,
+  resolveGatewaySessionStoreTarget,
+  upsertSessionEntry,
+} from "./subagent-spawn.runtime.js";
 
 function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
   const entry: Partial<SessionEntry> = {};
@@ -107,6 +112,7 @@ export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   childSessionKey: string;
+  requireFreshIdentity?: boolean;
   incognito: boolean;
   requesterInternalKey: string;
   completionOwnerSessionKey: string;
@@ -152,19 +158,38 @@ export async function createInitialSubagentSession(params: {
           cfg: params.cfg,
           key: params.childSessionKey,
         });
-    const entry = await upsertSessionEntry(
-      {
-        storePath: target.storePath,
-        sessionKey: target.canonicalKey,
-      },
-      {
-        ...buildDirectChildSessionPatch(initialChildSessionPatch),
-        ...buildSessionCreationStamp({
-          via: "spawn",
-          actor: { type: "agent", id: params.requesterInternalKey },
-        }),
-      },
-    );
+    const patch = {
+      ...buildDirectChildSessionPatch(initialChildSessionPatch),
+      ...buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: params.requesterInternalKey },
+      }),
+    };
+    const createEntry = async () =>
+      await upsertSessionEntry(
+        {
+          storePath: target.storePath,
+          sessionKey: target.canonicalKey,
+        },
+        patch,
+      );
+    const entry = params.requireFreshIdentity
+      ? await runExclusiveSessionLifecycleMutation({
+          scope: target.storePath,
+          identities: new Set([target.canonicalKey, ...target.storeKeys]),
+          run: async () => {
+            const existing = loadSessionEntry({
+              agentId: target.agentId,
+              storePath: target.storePath,
+              sessionKey: target.canonicalKey,
+            });
+            if (existing) {
+              throw new Error("reserved childSessionKey already exists");
+            }
+            return await createEntry();
+          },
+        })
+      : await createEntry();
     return { status: "ok", entry: entry ?? undefined };
   } catch (err) {
     const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";

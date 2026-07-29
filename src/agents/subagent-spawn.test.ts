@@ -419,6 +419,111 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
+  it("rejects an existing reserved child session without mutating or dispatching it", async () => {
+    const childSessionKey = "agent:worker:subagent:existing-reserved-child";
+    const existingEntry = {
+      sessionId: "existing-session",
+      updatedAt: 1,
+      pluginOwnerId: "other-plugin",
+      spawnedBy: "agent:other:main",
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "must not overwrite the existing child",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: "reserved-run-existing-child",
+        pluginOwnerId: "agentic-os",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("atomically accepts only one concurrent creator for a reserved child session", async () => {
+    const childSessionKey = "agent:worker:subagent:concurrent-reserved-child";
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.callGatewayMock.mockImplementation(async ({ method, params }) =>
+      method === "agent"
+        ? { runId: requireRecord(params).idempotencyKey }
+        : method?.startsWith("sessions.")
+          ? { ok: true }
+          : {},
+    );
+    const spawn = () =>
+      spawnSubagentDirect(
+        {
+          task: "claim the child exactly once",
+          agentId: "worker",
+          expectsCompletionMessage: false,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          authorizedTargetAgentId: "worker",
+          preallocatedChildSessionKey: childSessionKey,
+          preallocatedRunId: "reserved-run-concurrent-child",
+          pluginOwnerId: "agentic-os",
+        },
+      );
+
+    const results = await Promise.all([spawn(), spawn()]);
+
+    expect(results.filter((result) => result.status === "accepted")).toHaveLength(1);
+    expect(
+      results.filter(
+        (result) =>
+          result.status === "error" &&
+          result.error?.includes("reserved childSessionKey already exists"),
+      ),
+    ).toHaveLength(1);
+    expect(gatewayRequestRecords().filter((request) => request.method === "agent")).toHaveLength(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "mismatched target",

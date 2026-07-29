@@ -236,6 +236,8 @@ export type RegisterSubagentRunParams = {
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
   queued?: boolean;
+  /** Fail closed instead of reusing a plugin-reserved child identity. */
+  rejectIdentityReuse?: boolean;
 };
 
 export function createSubagentRunManager(params: {
@@ -786,6 +788,17 @@ export function createSubagentRunManager(params: {
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
+    }
+    if (params.runs.has(runId)) {
+      throw new Error(`subagent runId already exists: ${runId}`);
+    }
+    if (
+      registerParams.rejectIdentityReuse === true &&
+      Array.from(params.runs.values()).some(
+        (candidate) => candidate.childSessionKey === childSessionKey,
+      )
+    ) {
+      throw new Error(`subagent childSessionKey already exists: ${childSessionKey}`);
     }
     const now = Date.now();
     const generation = nextSubagentRunGeneration(params.runs.values(), childSessionKey);

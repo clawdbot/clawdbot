@@ -572,6 +572,53 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("rejects a duplicate runId without overwriting the registered run", () => {
+    mod.registerSubagentRun({
+      runId: "reserved-duplicate-run",
+      childSessionKey: "agent:main:subagent:reserved-original",
+      task: "original task",
+      expectsCompletionMessage: false,
+    });
+
+    expect(() =>
+      mod.registerSubagentRun({
+        runId: "reserved-duplicate-run",
+        childSessionKey: "agent:main:subagent:reserved-replacement",
+        task: "replacement task",
+        expectsCompletionMessage: false,
+        rejectIdentityReuse: true,
+      }),
+    ).toThrow("subagent runId already exists");
+    expect(mod.getSubagentRunByRunId("reserved-duplicate-run")).toMatchObject({
+      childSessionKey: "agent:main:subagent:reserved-original",
+      task: "original task",
+    });
+  });
+
+  it("rejects reserved child identity reuse without adding a second run", () => {
+    const childSessionKey = "agent:main:subagent:reserved-existing-child";
+    mod.registerSubagentRun({
+      runId: "reserved-existing-child-run",
+      childSessionKey,
+      task: "existing child owner",
+      expectsCompletionMessage: false,
+    });
+
+    expect(() =>
+      mod.registerSubagentRun({
+        runId: "reserved-replacement-run",
+        childSessionKey,
+        task: "must not reuse child",
+        expectsCompletionMessage: false,
+        rejectIdentityReuse: true,
+      }),
+    ).toThrow("subagent childSessionKey already exists");
+    expect(mod.getSubagentRunByRunId("reserved-replacement-run")).toBeUndefined();
+    expect(mod.getSubagentRunByRunId("reserved-existing-child-run")).toMatchObject({
+      task: "existing child owner",
+    });
+  });
+
   it("tracks missing-entry lifecycle result refresh until capture and persistence settle", async () => {
     const childSessionKey = "agent:main:subagent:refresh-admission";
     mocks.callGateway.mockImplementation(async (request: { method?: string }) =>

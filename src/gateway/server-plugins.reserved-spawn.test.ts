@@ -3,9 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withPluginRuntimePluginIdScope } from "../plugins/runtime/gateway-request-scope.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
+const getAgentRunContext = vi.hoisted(() => vi.fn());
+const getSubagentRunByRunId = vi.hoisted(() => vi.fn());
+const getLatestSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect,
+}));
+vi.mock("../agents/subagent-registry.js", () => ({
+  getLatestSubagentRunByChildSessionKey,
+  getSubagentRunByRunId,
+}));
+vi.mock("../infra/agent-events.js", () => ({
+  getAgentRunContext,
 }));
 
 import { createGatewaySubagentRuntime } from "./server-plugins.js";
@@ -21,6 +31,9 @@ const reservation = {
 describe("createGatewaySubagentRuntime.spawnReserved", () => {
   beforeEach(() => {
     spawnSubagentDirect.mockReset();
+    getAgentRunContext.mockReset().mockReturnValue(undefined);
+    getSubagentRunByRunId.mockReset().mockReturnValue(undefined);
+    getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
     spawnSubagentDirect.mockResolvedValue({
       status: "accepted",
       childSessionKey: reservation.childSessionKey,
@@ -86,6 +99,77 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         pluginOwnerId: "agentic-os",
       },
     );
+  });
+
+  it.each([
+    {
+      name: "active Gateway run",
+      arrange: () => getAgentRunContext.mockReturnValue({ sessionKey: "agent:other:main" }),
+      expected: "runId is already active",
+    },
+    {
+      name: "persisted run",
+      arrange: () => getSubagentRunByRunId.mockReturnValue({ runId: reservation.runId }),
+      expected: "runId already exists",
+    },
+    {
+      name: "persisted child",
+      arrange: () =>
+        getLatestSubagentRunByChildSessionKey.mockReturnValue({
+          childSessionKey: reservation.childSessionKey,
+        }),
+      expected: "childSessionKey already exists",
+    },
+  ])(
+    "rejects a reserved identity collision before dispatch: $name",
+    async ({ arrange, expected }) => {
+      arrange();
+
+      await expect(
+        withPluginRuntimePluginIdScope("agentic-os", () =>
+          createGatewaySubagentRuntime().spawnReserved(reservation),
+        ),
+      ).rejects.toThrow(expected);
+      expect(spawnSubagentDirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows exactly one concurrent claimant for the same reserved identities", async () => {
+    let resolveFirst:
+      | ((value: {
+          status: "accepted";
+          childSessionKey: string;
+          runId: string;
+          mode: "run";
+        }) => void)
+      | undefined;
+    spawnSubagentDirect.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const runtime = createGatewaySubagentRuntime();
+    const first = withPluginRuntimePluginIdScope("agentic-os", () =>
+      runtime.spawnReserved(reservation),
+    );
+    await vi.waitFor(() => expect(spawnSubagentDirect).toHaveBeenCalledTimes(1));
+
+    await expect(
+      withPluginRuntimePluginIdScope("agentic-os", () => runtime.spawnReserved(reservation)),
+    ).rejects.toThrow("already claimed");
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.({
+      status: "accepted",
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+      mode: "run",
+    });
+    await expect(first).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
   });
 
   it("fails closed when core returns different identities", async () => {
