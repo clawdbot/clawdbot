@@ -223,6 +223,73 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(self.segments("`<details>`") == [.prose("`<details>`")])
     }
 
+    @Test func `details in raw HTML contexts stay literal`() {
+        let commented = """
+        <!--
+        <details>
+        <summary>Example</summary>
+        </details>
+        -->
+        """
+        let preformatted = """
+        <pre>
+        <details>
+        <summary>Example</summary>
+        </details>
+        </pre>
+        """
+
+        #expect(self.segments(commented) == [.prose(commented)])
+        #expect(self.segments(preformatted) == [.prose(preformatted)])
+    }
+
+    @Test func `details after an HTML comment still fold`() {
+        let comment = """
+        <!--
+        <details>
+        </details>
+        -->
+        """
+        #expect(self.segments("""
+        \(comment)
+        <details>
+        <summary>After</summary>
+
+        Body
+
+        </details>
+        """) == [
+            .prose(comment),
+            .disclosure(ChatMarkdownDisclosure(
+                summary: "After",
+                isExpanded: false,
+                blocks: [.prose("Body")])),
+        ])
+    }
+
+    @Test @MainActor func `details summary resolves document scoped reference link`() throws {
+        let destination = try #require(URL(string: "https://example.com"))
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            <details>
+            <summary>[Docs][id]</summary>
+
+            Body
+
+            </details>
+
+            [id]: https://example.com
+            """,
+            isComplete: true)
+        guard case let .disclosure(disclosure) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected disclosure")
+            return
+        }
+
+        #expect(String(disclosure.summary.attributed.characters) == "Docs")
+        #expect(disclosure.summary.attributed.runs.contains { $0.link == destination })
+    }
+
     @Test func `mid line and over indented details stay literal`() {
         #expect(self.segments("before <details> after") == [.prose("before <details> after")])
         #expect(self.segments("    <details>\n    body\n    </details>") == [

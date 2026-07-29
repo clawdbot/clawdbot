@@ -9,6 +9,7 @@ import org.commonmark.node.BlockQuote
 import org.commonmark.node.BulletList
 import org.commonmark.node.Emphasis
 import org.commonmark.node.FencedCodeBlock
+import org.commonmark.node.HtmlBlock
 import org.commonmark.node.Paragraph
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -144,6 +145,46 @@ class ChatMarkdownTest {
 
     assertTrue((fenced as ChatMarkdownRenderBlock.CommonMark).node is FencedCodeBlock)
     assertTrue((inline as ChatMarkdownRenderBlock.CommonMark).node is Paragraph)
+  }
+
+  @Test
+  fun detailsInRawHtmlContextsStayLiteral() {
+    val commented = "<!--\n<details>\n<summary>Example</summary>\n</details>\n-->"
+    val preformatted = "<pre>\n<details>\n<summary>Example</summary>\n</details>\n</pre>"
+
+    assertTrue((parseChatMarkdownBlocks(commented).single() as ChatMarkdownRenderBlock.CommonMark).node is HtmlBlock)
+    assertTrue((parseChatMarkdownBlocks(preformatted).single() as ChatMarkdownRenderBlock.CommonMark).node is HtmlBlock)
+  }
+
+  @Test
+  fun detailsAfterHtmlCommentStillFold() {
+    val comment = "<!--\n<details>\n</details>\n-->"
+    val blocks =
+      parseChatMarkdownBlocks(
+        "$comment\n<details>\n<summary>After</summary>\n\nBody\n\n</details>",
+      )
+
+    assertEquals(2, blocks.size)
+    assertTrue((blocks[0] as ChatMarkdownRenderBlock.CommonMark).node is HtmlBlock)
+    assertEquals("After", (blocks[1] as ChatMarkdownRenderBlock.Disclosure).summary)
+  }
+
+  @Test
+  fun detailsSummaryResolvesDocumentScopedReferenceLink() {
+    val source =
+      "<details>\n<summary>[Docs][id]</summary>\n\nBody\n\n</details>\n\n[id]: https://example.com"
+    val disclosure = parseChatMarkdownBlocks(source).first() as ChatMarkdownRenderBlock.Disclosure
+    val rendered =
+      buildChatInlineMarkdown(
+        checkNotNull(disclosure.summary),
+        referenceDocument = disclosure.referenceDocument,
+      )
+
+    assertEquals("Docs", rendered.text)
+    assertEquals(
+      "https://example.com",
+      (rendered.getLinkAnnotations(0, rendered.length).single().item as LinkAnnotation.Url).url,
+    )
   }
 
   @Test

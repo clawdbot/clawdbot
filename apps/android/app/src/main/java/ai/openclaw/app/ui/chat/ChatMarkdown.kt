@@ -307,8 +307,12 @@ private fun RenderMarkdownDisclosure(
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
   val summarySource = chatMarkdownDisclosureSummarySource(disclosure.summary) { nativeString("Details") }
   val summary =
-    remember(summarySource, inlineStyles.linkColor) {
-      buildChatInlineMarkdown(summarySource, linkColor = inlineStyles.linkColor)
+    remember(summarySource, disclosure.referenceDocument, inlineStyles.linkColor) {
+      buildChatInlineMarkdown(
+        summarySource,
+        linkColor = inlineStyles.linkColor,
+        referenceDocument = disclosure.referenceDocument,
+      )
     }
 
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -719,8 +723,10 @@ internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
 internal fun buildChatInlineMarkdown(
   text: String,
   linkColor: Color = Color.Blue,
+  referenceDocument: String? = null,
 ): AnnotatedString {
-  val document = parseChatMarkdown(text)
+  val markdown = referenceDocument?.let { "$text\n\n$it" } ?: text
+  val document = parseChatMarkdown(markdown)
   val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
   return buildInlineMarkdown(
     paragraph.firstChild,
@@ -748,6 +754,7 @@ internal sealed interface ChatMarkdownRenderBlock {
     val summary: String?,
     val isExpanded: Boolean,
     val blocks: List<ChatMarkdownRenderBlock>,
+    val referenceDocument: String,
   ) : ChatMarkdownRenderBlock
 }
 
@@ -763,14 +770,14 @@ internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock
   var node = document.firstChild
   while (node != null) {
     val current = node
-    if (current is HtmlBlock && DisclosureTokenizer.containsCandidateLine(current.literal.orEmpty())) {
+    if (current is HtmlBlock && DisclosureTokenizer.startsWithCandidateLine(current.literal.orEmpty())) {
       tokens += tokenizer.tokenize(current.literal.orEmpty())
     } else {
       tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.CommonMark(current))
     }
     node = current.next
   }
-  return foldDisclosureTokens(tokens)
+  return foldDisclosureTokens(tokens, referenceDocument = text)
 }
 
 private fun commonMarkBlocks(start: Node?): List<ChatMarkdownRenderBlock> {
@@ -926,7 +933,7 @@ private class DisclosureTokenizer {
     private val candidateLineRegex = Regex("^ {0,3}</?(?:details|summary)(?=[\\s>])", RegexOption.IGNORE_CASE)
     private val tagRegex = Regex("</?(?:details|summary)(?=[\\s>])[^>]*>", RegexOption.IGNORE_CASE)
 
-    fun containsCandidateLine(source: String): Boolean = source.lineSequence().any { tags(it) != null }
+    fun startsWithCandidateLine(source: String): Boolean = source.lineSequence().firstOrNull { it.isNotBlank() }?.let { tags(it) != null } ?: false
 
     private fun tags(line: String): List<Tag>? {
       if (!candidateLineRegex.containsMatchIn(line)) return null
@@ -1009,7 +1016,10 @@ private class DisclosureTokenizer {
   }
 }
 
-private fun foldDisclosureTokens(tokens: List<DisclosureToken>): List<ChatMarkdownRenderBlock> {
+private fun foldDisclosureTokens(
+  tokens: List<DisclosureToken>,
+  referenceDocument: String,
+): List<ChatMarkdownRenderBlock> {
   data class Frame(
     var summary: String? = null,
     val isExpanded: Boolean,
@@ -1030,6 +1040,7 @@ private fun foldDisclosureTokens(tokens: List<DisclosureToken>): List<ChatMarkdo
         summary = frame.summary,
         isExpanded = frame.isExpanded,
         blocks = frame.blocks,
+        referenceDocument = referenceDocument,
       ),
     )
   }

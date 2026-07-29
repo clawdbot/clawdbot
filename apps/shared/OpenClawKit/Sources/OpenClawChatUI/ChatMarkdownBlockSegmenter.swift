@@ -226,9 +226,14 @@ enum ChatMarkdownBlockSegmenter {
             case let .block(block):
                 unfolded.append(.block(block))
             case let .html(html):
-                unfolded.append(contentsOf: disclosureTokenizer.tokenize(html) { markdown in
-                    self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
-                })
+                unfolded.append(contentsOf: disclosureTokenizer.tokenize(
+                    html,
+                    parseMarkdown: { markdown in
+                        self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
+                    },
+                    resolveSummary: { summary in
+                        self.resolvingSummaryReferences(summary, documentMarkdown: source.markdown)
+                    }))
             }
             proseStart = extraction.lineRange.upperBound
         }
@@ -394,6 +399,19 @@ enum ChatMarkdownBlockSegmenter {
         return source.replacing(replacements)
     }
 
+    private static func resolvingSummaryReferences(
+        _ summary: String,
+        documentMarkdown: String) -> String
+    {
+        let separator = "\n\n"
+        let combinedSource = SourceBuffer(summary + separator + documentMarkdown)
+        let combinedDocument = Document(parsing: combinedSource.markdown)
+        guard let resolved = self.resolvingReferenceLinks(in: combinedDocument, source: combinedSource),
+              let separatorRange = resolved.range(of: separator)
+        else { return summary }
+        return String(resolved[..<separatorRange.lowerBound])
+    }
+
     private static func isReferenceLink(_ markup: any Markup, source: SourceBuffer) -> Bool {
         guard markup is Markdown.Link || markup is Markdown.Image,
               let range = markup.range,
@@ -413,12 +431,12 @@ enum ChatMarkdownBlockSegmenter {
     {
         guard child is Markdown.HTMLBlock else { return nil }
         let html = source.text(in: lineRange)
-        return DisclosureTokenizer.containsCandidateLine(html) ? html : nil
+        return DisclosureTokenizer.startsWithCandidateLine(html) ? html : nil
     }
 
     private static func foldDisclosures(_ unfolded: [UnfoldedBlock]) -> [ChatMarkdownBlock] {
         struct Frame {
-            var summary: String? = nil
+            var summary: String?
             let isExpanded: Bool
             var blocks: [ChatMarkdownBlock] = []
         }
@@ -447,7 +465,7 @@ enum ChatMarkdownBlockSegmenter {
             case let .block(block):
                 append(block)
             case let .disclosureOpen(isExpanded):
-                stack.append(Frame(isExpanded: isExpanded))
+                stack.append(Frame(summary: nil, isExpanded: isExpanded))
             case let .disclosureSummary(summary):
                 if !stack.isEmpty {
                     stack[stack.count - 1].summary = summary
@@ -516,15 +534,17 @@ enum ChatMarkdownBlockSegmenter {
 
         private var balanceStack: [BalanceFrame] = []
 
-        static func containsCandidateLine(_ source: String) -> Bool {
-            source.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
-                Self.tags(in: String(line)) != nil
-            }
+        static func startsWithCandidateLine(_ source: String) -> Bool {
+            let firstContentLine = source
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            return firstContentLine.map { Self.tags(in: String($0)) != nil } ?? false
         }
 
         mutating func tokenize(
             _ source: String,
-            parseMarkdown: (String) -> [UnfoldedBlock]) -> [UnfoldedBlock]
+            parseMarkdown: (String) -> [UnfoldedBlock],
+            resolveSummary: (String) -> String) -> [UnfoldedBlock]
         {
             let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             var tokens: [UnfoldedBlock] = []
@@ -602,8 +622,8 @@ enum ChatMarkdownBlockSegmenter {
                         {
                             flushSource()
                             let close = tags[closeIndex]
-                            tokens
-                                .append(.disclosureSummary(String(line[tag.range.upperBound..<close.range.lowerBound])))
+                            let summary = String(line[tag.range.upperBound..<close.range.lowerBound])
+                            tokens.append(.disclosureSummary(resolveSummary(summary)))
                             self.balanceStack[self.balanceStack.count - 1].hasSummary = true
                             cursor = close.range.upperBound
                             index = closeIndex + 1
