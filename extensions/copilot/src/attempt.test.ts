@@ -521,6 +521,27 @@ describe("runCopilotAttempt", () => {
     expect(result.lastToolError).toEqual(terminalError);
   });
 
+  it("reports code-mode engagement through the real tool bridge", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    // No `createToolBridge` override: this runs the production bridge, so the
+    // reported value is the gate `createAgentHarnessToolSurfaceRuntime`
+    // actually resolved for the run rather than a stubbed constant.
+    const result = await runCopilotAttempt(
+      makeParams({
+        disableTools: false,
+        config: { tools: { codeMode: true } },
+      } as never),
+      { pool: makeFakePool(sdk) },
+    );
+
+    expect(result.codeModeEngaged).toBe(true);
+  });
+
   it("reports the tool bridge's code-mode engagement on the attempt result", async () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
