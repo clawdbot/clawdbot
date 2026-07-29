@@ -445,7 +445,7 @@ function normalizeLegacyFlatWebInboundMessage(msg: LegacyFlatWebInboundMessage):
   });
 }
 
-export function normalizeWebInboundMessage(msg: WebInboundMessageInput): WebInboundMessage {
+function normalizeWebInboundMessage(msg: WebInboundMessageInput): WebInboundMessage {
   if (msg.event && msg.payload && msg.platform) {
     return withDeprecatedWebInboundMessageFlatAliases(msg);
   }

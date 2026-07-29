@@ -43,7 +43,6 @@ export {
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
-  resolveChannelInboundReplyPolicy,
   resolveChannelSourceReplyDeliveryMode,
 } from "./reply-pipeline.js";
 export type { ChannelIngressDrain } from "./ingress-drain.js";

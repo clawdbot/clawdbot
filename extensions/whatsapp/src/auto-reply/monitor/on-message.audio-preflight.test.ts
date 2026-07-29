@@ -95,8 +95,7 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
   }),
 }));
 
-import { requireAdmittedWhatsAppInboundMessage } from "../../inbound/admission.js";
-import { normalizeWebInboundMessage } from "../../inbound/message-aliases.js";
+import { normalizeAdmittedWebInboundMessage } from "../../inbound/message-aliases.js";
 import {
   createTestLegacyFlatWebInboundMessage,
   createTestWebAudioInboundMessage,
@@ -105,7 +104,7 @@ import type { AdmittedWebInboundMessage, WebInboundMessageInput } from "../../in
 import { createWebOnMessageHandler } from "./on-message.js";
 
 function admitTestMessage(msg: WebInboundMessageInput): AdmittedWebInboundMessage {
-  return requireAdmittedWhatsAppInboundMessage(normalizeWebInboundMessage(msg));
+  return normalizeAdmittedWebInboundMessage(msg);
 }
 
 function makeAudioMsg(): AdmittedWebInboundMessage {

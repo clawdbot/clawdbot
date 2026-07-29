@@ -26,10 +26,7 @@ import {
 } from "./message-delivery.js";
 import { createWebSendApi } from "./send-api.js";
 import { createWhatsAppAttachedSocketSession } from "./socket-session.js";
-import type {
-  AdmittedWebInboundCallbackMessage,
-  WebInboundMessageInput,
-} from "./types.js";
+import type { AdmittedWebInboundCallbackMessage, WebInboundMessageInput } from "./types.js";
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (enabled) {

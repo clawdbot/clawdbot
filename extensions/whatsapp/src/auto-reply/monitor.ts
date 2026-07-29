@@ -27,13 +27,13 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { normalizeAdmittedWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
 } from "../inbound/baileys-cache.js";
 import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { normalizeAdmittedWebInboundMessage } from "../inbound/message-aliases.js";
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import type { WebInboundMessageInput } from "../inbound/types.js";
 import {

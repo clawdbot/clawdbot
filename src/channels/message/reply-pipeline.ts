@@ -45,43 +45,6 @@ export function resolveChannelSourceReplyDeliveryMode(params: {
   return resolveSourceReplyDeliveryMode(params);
 }
 
-type ChannelInboundReplyPolicy = {
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  disableBlockStreaming?: boolean;
-  suppressTyping: boolean;
-};
-
-/** Resolves product reply policy from portable turn facts and channel capabilities. */
-export function resolveChannelInboundReplyPolicy(params: {
-  cfg: OpenClawConfig;
-  ctx: SourceReplyDeliveryModeContext & {
-    ChatType?: string;
-    WasMentioned?: boolean;
-  };
-  blockStreamingEnabled?: boolean;
-}): ChannelInboundReplyPolicy {
-  const isRoom = params.ctx.ChatType === "group" || params.ctx.ChatType === "channel";
-  const sourceReplyDeliveryMode = isRoom
-    ? resolveChannelSourceReplyDeliveryMode({
-        cfg: params.cfg,
-        ctx: params.ctx,
-      })
-    : undefined;
-  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  return {
-    sourceReplyDeliveryMode,
-    disableBlockStreaming: sourceRepliesAreToolOnly
-      ? true
-      : typeof params.blockStreamingEnabled === "boolean"
-        ? !params.blockStreamingEnabled
-        : undefined,
-    suppressTyping:
-      sourceRepliesAreToolOnly &&
-      params.ctx.ChatType === "group" &&
-      params.ctx.WasMentioned !== true,
-  };
-}
-
 /** Reply pipeline options shared by core channel turns and plugin SDK callers. */
 export type ChannelReplyPipeline = ReplyPrefixOptions & {
   /** Resolves a response prefix against the pipeline's live selected-model context. */

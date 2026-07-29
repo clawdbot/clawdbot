@@ -1,18 +1,13 @@
 // Whatsapp plugin module implements inbound dispatch behavior.
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  buildChannelInboundEventContext,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
-  projectPreparedChannelInbound,
-  resolveChannelInboundReplyPolicy,
   type ChannelInboundTurnPlan,
-  type PreparedChannelInbound,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  bindIngressLifecycleToReplyOptions,
   listMessageReceiptPlatformIds,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -54,6 +49,11 @@ import {
   type ReplyPayload,
   type resolveAgentRoute,
 } from "./inbound-dispatch.runtime.js";
+import {
+  projectPreparedChannelInbound,
+  resolveWhatsAppInboundReplyPolicy,
+  type PreparedChannelInbound,
+} from "./prepared-inbound.js";
 
 type ReplyLifecycleKind = "tool" | "block" | "final";
 type ChannelReplyOnModelSelected = NonNullable<
@@ -641,7 +641,7 @@ export function createWhatsAppReplyPlan(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
-  const replyPolicy = resolveChannelInboundReplyPolicy({
+  const replyPolicy = resolveWhatsAppInboundReplyPolicy({
     cfg: params.cfg,
     ctx: params.context,
     blockStreamingEnabled: resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp),

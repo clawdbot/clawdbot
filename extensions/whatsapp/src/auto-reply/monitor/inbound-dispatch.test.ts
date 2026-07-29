@@ -51,14 +51,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextMock,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
-  return {
-    ...actual,
-    resolveChannelInboundReplyPolicy: (params: {
+    resolveChannelMessageSourceReplyDeliveryMode: (params: {
       cfg: {
         messages?: {
           visibleReplies?: "automatic" | "message_tool";
@@ -69,34 +62,16 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         ChatType?: string;
         CommandSource?: "native" | "text";
         CommandAuthorized?: boolean;
-        WasMentioned?: boolean;
       };
-      blockStreamingEnabled?: boolean;
     }) => {
       sourceReplyDeliveryModeContexts.push(params.ctx);
-      const isRoom = params.ctx.ChatType === "group" || params.ctx.ChatType === "channel";
-      const sourceReplyDeliveryMode = !isRoom
-        ? undefined
-        : params.ctx.CommandSource === "native" ||
-            (params.ctx.CommandSource === "text" && params.ctx.CommandAuthorized === true)
+      return params.ctx.CommandSource === "native" ||
+        (params.ctx.CommandSource === "text" && params.ctx.CommandAuthorized === true)
+        ? "automatic"
+        : (params.cfg.messages?.groupChat?.visibleReplies ??
+              params.cfg.messages?.visibleReplies) === "automatic"
           ? "automatic"
-          : (params.cfg.messages?.groupChat?.visibleReplies ??
-                params.cfg.messages?.visibleReplies) === "automatic"
-            ? "automatic"
-            : "message_tool_only";
-      const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-      return {
-        sourceReplyDeliveryMode,
-        disableBlockStreaming: sourceRepliesAreToolOnly
-          ? true
-          : typeof params.blockStreamingEnabled === "boolean"
-            ? !params.blockStreamingEnabled
-            : undefined,
-        suppressTyping:
-          sourceRepliesAreToolOnly &&
-          params.ctx.ChatType === "group" &&
-          params.ctx.WasMentioned !== true,
-      };
+          : "message_tool_only";
     },
   };
 });

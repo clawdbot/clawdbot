@@ -1,12 +1,14 @@
-import type { ReplyThreadingPolicy } from "../../auto-reply/types.js";
-import type { NormalizedLocation } from "../location.js";
-import { toLocationContext } from "../location.js";
-import type { CommandFacts, NormalizedTurnInput, SupplementalContextFacts } from "../turn/types.js";
 import {
   buildChannelInboundEventContext,
+  toLocationContext,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
-} from "./context.js";
+  type CommandFacts,
+  type NormalizedLocation,
+  type SupplementalContextFacts,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 
 type PreparedChannelInboundCommandAuthorization =
   | { kind: "not_checked" }
@@ -77,7 +79,14 @@ export function projectPreparedChannelInbound(params: {
   inbound: PreparedChannelInbound;
   control: PreparedChannelInboundControl;
 }): {
-  input: NormalizedTurnInput;
+  input: {
+    id: string;
+    timestamp?: number;
+    rawText: string;
+    textForAgent?: string;
+    textForCommands?: string;
+    raw: PreparedChannelInbound;
+  };
   context: BuiltChannelInboundEventContext;
 } {
   const { inbound, control } = params;
@@ -121,5 +130,42 @@ export function projectPreparedChannelInbound(params: {
         ...(inbound.context?.location ? toLocationContext(inbound.context.location) : {}),
       },
     }),
+  };
+}
+
+type ChannelInboundReplyPolicy = {
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  disableBlockStreaming?: boolean;
+  suppressTyping: boolean;
+};
+
+/** Keeps WhatsApp reply-policy mapping beside the transport that applies it. */
+export function resolveWhatsAppInboundReplyPolicy(params: {
+  cfg: Parameters<typeof resolveChannelMessageSourceReplyDeliveryMode>[0]["cfg"];
+  ctx: Parameters<typeof resolveChannelMessageSourceReplyDeliveryMode>[0]["ctx"] & {
+    ChatType?: string;
+    WasMentioned?: boolean;
+  };
+  blockStreamingEnabled?: boolean;
+}): ChannelInboundReplyPolicy {
+  const isRoom = params.ctx.ChatType === "group" || params.ctx.ChatType === "channel";
+  const sourceReplyDeliveryMode = isRoom
+    ? resolveChannelMessageSourceReplyDeliveryMode({
+        cfg: params.cfg,
+        ctx: params.ctx,
+      })
+    : undefined;
+  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  return {
+    sourceReplyDeliveryMode,
+    disableBlockStreaming: sourceRepliesAreToolOnly
+      ? true
+      : typeof params.blockStreamingEnabled === "boolean"
+        ? !params.blockStreamingEnabled
+        : undefined,
+    suppressTyping:
+      sourceRepliesAreToolOnly &&
+      params.ctx.ChatType === "group" &&
+      params.ctx.WasMentioned !== true,
   };
 }
