@@ -17,7 +17,7 @@ import type {
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -345,7 +345,7 @@ export type DaemonStatus = {
     healthy: boolean;
     staleGatewayPids: number[];
   };
-  extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraServices: ExtraGatewayService[];
   /**
    * Plugin version drift report. Surfaces active official external plugins
    * whose installed version does not match the running gateway version, which
@@ -644,9 +644,7 @@ export async function gatherDaemonStatus(
           .catch(() => [])
       : [];
 
-  const timeoutMs =
-    parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
-    Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
+  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -704,7 +702,6 @@ export async function gatherDaemonStatus(
             shouldUseLocalTlsRuntime && tlsRuntime?.enabled
               ? tlsRuntime.fingerprintSha256
               : undefined,
-          preauthHandshakeTimeoutMs: daemonCfg.gateway?.handshakeTimeoutMs,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,

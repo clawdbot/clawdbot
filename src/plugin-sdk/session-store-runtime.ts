@@ -8,15 +8,21 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
   patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
@@ -24,13 +30,9 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type {
   AmbientTranscriptWatermark,
   InternalSessionEntry,
@@ -49,6 +51,15 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+
+export {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
@@ -246,7 +257,7 @@ export function loadSessionStore(
     }).map(({ sessionKey, entry }) => {
       const sessionId = entry.sessionId?.trim();
       const projectedEntry = projectPluginSessionEntry(entry as InternalSessionEntry);
-      if (projectedEntry.sessionFile || !sessionId) {
+      if (!sessionId) {
         return [sessionKey, projectedEntry];
       }
       return [
@@ -356,15 +367,21 @@ export function resolveSessionStoreEntry(params: {
 
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
-  const entry = loadSessionEntry(toSessionAccessScope(params));
+  const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Lists session entries for one agent. */
+/**
+ * Lists session entries for one agent. `readOnly` reads without joining the
+ * agent database writable lifecycle (no create/register/migrate) — required
+ * for detection/introspection paths that may run across the whole fleet.
+ * One flagged entry instead of a second export keeps the SDK surface budget flat.
+ */
 export function listSessionEntries(
-  params: SessionStoreListParams = {},
+  params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
+  return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -567,7 +584,7 @@ export {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
   type SqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
+} from "../config/sessions/legacy-sqlite-marker.js";
 export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,
@@ -575,7 +592,7 @@ export {
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 export { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.

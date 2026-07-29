@@ -807,6 +807,64 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history applies the reset boundary kept-tail cut", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      await replaceSqliteTranscriptEvents(
+        { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
+        [
+          { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
+          {
+            type: "message",
+            id: "kept-user",
+            parentId: "old",
+            message: { role: "user", content: "kept question" },
+          },
+          {
+            type: "message",
+            id: "kept-tool",
+            parentId: "kept-user",
+            message: { role: "toolResult", content: "hidden tool" },
+          },
+          {
+            type: "message",
+            id: "kept-assistant",
+            parentId: "kept-tool",
+            message: { role: "assistant", content: "kept answer" },
+          },
+          {
+            type: "reset",
+            id: "reset-boundary",
+            parentId: "kept-assistant",
+            timestamp: "2026-07-22T00:00:00.000Z",
+            reason: "new",
+            firstKeptEntryId: "kept-user",
+          },
+          {
+            type: "message",
+            id: "post-reset",
+            parentId: "reset-boundary",
+            message: { role: "user", content: "new turn" },
+          },
+        ],
+      );
+
+      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+
+      expect(history.ok).toBe(true);
+      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toEqual([
+        "kept question",
+        "kept answer",
+        "new turn",
+      ]);
+    });
+  });
+
   test("marks a running webchat session failed when restart drain overlaps dispatch rejection", async () => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
@@ -1679,6 +1737,53 @@ describe("gateway server chat", () => {
 
     expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
   });
+  test("preserves split fenced-code indentation in chat.send events and history", async () => {
+    await withMainSessionStore(async () => {
+      const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "```yaml\nroot:\n" });
+        params.dispatcher.sendFinalReply({ text: "  nested:\n    value: true\n```" });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+      const finalPromise = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === "idem-fenced-code-indentation",
+        8_000,
+      );
+
+      const result = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "show the YAML",
+        idempotencyKey: "idem-fenced-code-indentation",
+      });
+      expect(result.ok).toBe(true);
+      const finalEvent = await finalPromise;
+      expect(extractFirstTextBlock(finalEvent.payload?.message)).toBe(expected);
+
+      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(history.ok).toBe(true);
+      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(expected);
+    });
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);
@@ -1786,6 +1891,56 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(["main thread context"]);
+    });
+  });
+
+  test("preserves split fenced-code indentation in /btw side-result events", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendBlockReply({
+          text: "```yaml\nroot:\n",
+          btw: { question: "show YAML" },
+        });
+        params.dispatcher.sendBlockReply({
+          text: "  nested:\n    value: true\n```",
+          btw: { question: "show YAML" },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: false, counts: params.dispatcher.getQueuedCounts() };
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat.side_result" &&
+          event.payload?.kind === "btw" &&
+          event.payload?.runId === "idem-btw-fenced-code-indentation",
+        8_000,
+      );
+
+      const result = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw show YAML",
+        idempotencyKey: "idem-btw-fenced-code-indentation",
+      });
+      expect(result.ok).toBe(true);
+      expectRecordFields((await sideResultPromise).payload, {
+        kind: "btw",
+        runId: "idem-btw-fenced-code-indentation",
+        question: "show YAML",
+        text: "```yaml\nroot:\n  nested:\n    value: true\n```",
+      });
     });
   });
 

@@ -1,10 +1,10 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
+import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
 import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
-import { expandPolicyToolRequirement, toolListCoversTool } from "./policy-runtime.js";
 import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
@@ -362,9 +362,9 @@ export function toolRiskFindings(
       return {
         checkId: CHECK_IDS.policyMissingToolRisk,
         severity: "error",
-        message: `TOOLS.md tool '${tool.id}' has no explicit risk classification.`,
+        message: `AGENTS.md tool '${tool.id}' has no explicit risk classification.`,
         source: "policy",
-        path: "TOOLS.md",
+        path: "AGENTS.md",
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,
@@ -389,9 +389,9 @@ export function toolUnknownRiskFindings(
       return {
         checkId: CHECK_IDS.policyUnknownToolRisk,
         severity: "error",
-        message: `TOOLS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
+        message: `AGENTS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
         source: "policy",
-        path: "TOOLS.md",
+        path: "AGENTS.md",
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,
@@ -411,9 +411,9 @@ export function toolSensitivityFindings(
         {
           checkId: CHECK_IDS.policyMissingToolSensitivity,
           severity: "error",
-          message: `TOOLS.md tool '${tool.id}' has no declared artifact sensitivity.`,
+          message: `AGENTS.md tool '${tool.id}' has no declared artifact sensitivity.`,
           source: "policy",
-          path: "TOOLS.md",
+          path: "AGENTS.md",
           line: tool.line,
           ocPath: tool.source,
           target: tool.source,
@@ -433,9 +433,9 @@ export function toolSensitivityFindings(
       {
         checkId: CHECK_IDS.policyUnknownToolSensitivity,
         severity: "error",
-        message: `TOOLS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
+        message: `AGENTS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
         source: "policy",
-        path: "TOOLS.md",
+        path: "AGENTS.md",
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,
@@ -456,9 +456,9 @@ export function toolOwnerFindings(
       return {
         checkId: CHECK_IDS.policyMissingToolOwner,
         severity: "error",
-        message: `TOOLS.md tool '${tool.id}' has no declared owner.`,
+        message: `AGENTS.md tool '${tool.id}' has no declared owner.`,
         source: "policy",
-        path: "TOOLS.md",
+        path: "AGENTS.md",
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,

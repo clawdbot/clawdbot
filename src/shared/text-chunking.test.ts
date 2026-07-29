@@ -7,6 +7,8 @@ describe("shared/text-chunking", () => {
     expect(chunkTextByBreakResolver("", 10, () => 5)).toStrictEqual([]);
     expect(chunkTextByBreakResolver("hello", 10, () => 2)).toEqual(["hello"]);
     expect(chunkTextByBreakResolver("hello", 0, () => 2)).toEqual(["hello"]);
+    expect(chunkTextByBreakResolver("hello ", 10, () => 2)).toEqual(["hello "]);
+    expect(chunkTextByBreakResolver("hello ", 0, () => 2)).toEqual(["hello "]);
   });
 
   it("splits at resolver-provided breakpoints and trims separator boundaries", () => {
@@ -37,5 +39,15 @@ describe("shared/text-chunking", () => {
       "abc",
       "def",
     ]);
+  });
+
+  it.each([
+    { text: "  ! ", limit: 2, expected: ["!"] },
+    { text: "a b ", limit: 2, expected: ["a", "b"] },
+    { text: "alpha beta   ", limit: 8, expected: ["alpha", "beta"] },
+  ])("trims trailing whitespace from the final chunk: $text", ({ text, limit, expected }) => {
+    expect(chunkTextByBreakResolver(text, limit, (window) => window.lastIndexOf(" "))).toEqual(
+      expected,
+    );
   });
 });

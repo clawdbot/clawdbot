@@ -1,12 +1,14 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
 import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
 import { mapGatewayDispatchData } from "../internal/gateway-dispatch.js";
 import { getDiscordRuntime } from "../runtime.js";
@@ -42,16 +44,7 @@ type DiscordIngressMonitor = {
   stop: () => Promise<void>;
 };
 
-class DiscordIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "DiscordIngressPayloadError";
-  }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const DiscordIngressPayloadError = createChannelIngressError("DiscordIngressPayloadError");
 
 function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey: string } {
   if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) {

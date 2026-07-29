@@ -257,23 +257,6 @@ async function configureTrustedProxyControlUiAuth() {
   });
 }
 
-async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: boolean }) {
-  const { replaceConfigFile } = await import("../config/config.js");
-  const nextConfig = {
-    gateway: {
-      trustedProxies: ["127.0.0.1"],
-      controlUi: {
-        allowedOrigins: ["https://localhost"],
-        ...(params?.allowInsecureAuth ? { allowInsecureAuth: true } : {}),
-      },
-    },
-  };
-  await replaceConfigFile({
-    nextConfig,
-    afterWrite: { mode: "auto" },
-  });
-}
-
 function isConnectResMessage(id: string) {
   return (o: unknown) => {
     if (!o || typeof o !== "object" || Array.isArray(o)) {
@@ -421,7 +404,6 @@ export {
   waitForWsClose,
   withGatewayServer,
   withRuntimeVersionEnv,
-  writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 export { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";

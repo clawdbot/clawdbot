@@ -1,11 +1,13 @@
 // Twitch plugin owns raw chat-envelope durable admission and replay draining.
 import { HttpStatusCodeError } from "@twurple/api-call";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchChatMessage } from "./types.js";
 import { normalizeTwitchChannel } from "./utils/twitch.js";
@@ -33,16 +35,7 @@ type TwitchIngress = {
   stop: () => Promise<void>;
 };
 
-class TwitchIngressPermanentError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "TwitchIngressPermanentError";
-  }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const TwitchIngressPermanentError = createChannelIngressError("TwitchIngressPermanentError");
 
 function inspectTwitchIngressEvent(event: unknown): { eventId: string; laneKey: string } {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
@@ -121,7 +114,6 @@ export function createTwitchIngress(options: {
     });
   const shutdown = new AbortController();
   let stopped = false;
-  const deferredClaims = new Map<string, Promise<void>>();
   const monitor = createChannelIngressMonitor<unknown, string, TwitchIngressPayload>({
     queue,
     inspect: (message) => inspectTwitchIngressEvent(message),
@@ -140,21 +132,6 @@ export function createTwitchIngress(options: {
     deliver: async (rawEvent, lifecycle, claim) => {
       const message = normalizeClaimedTwitchMessage(rawEvent, claim.id);
       let handedOff = false;
-      let resolveDeferredClaim!: () => void;
-      const deferredClaim = new Promise<void>((resolve) => {
-        resolveDeferredClaim = resolve;
-      });
-      let deferredClaimSettled = false;
-      const settleDeferredClaim = () => {
-        if (deferredClaimSettled) {
-          return;
-        }
-        deferredClaimSettled = true;
-        if (deferredClaims.get(claim.id) === deferredClaim) {
-          deferredClaims.delete(claim.id);
-        }
-        resolveDeferredClaim();
-      };
       const deliveryAbortSignal = AbortSignal.any([lifecycle.abortSignal, shutdown.signal]);
       try {
         await options.deliver(message, {
@@ -162,26 +139,15 @@ export function createTwitchIngress(options: {
           abortSignal: deliveryAbortSignal,
           onAdopted: async () => {
             handedOff = true;
-            try {
-              await lifecycle.onAdopted();
-            } finally {
-              settleDeferredClaim();
-            }
+            await lifecycle.onAdopted();
           },
           onDeferred: () => {
             handedOff = true;
-            if (!deferredClaimSettled) {
-              deferredClaims.set(claim.id, deferredClaim);
-            }
             lifecycle.onDeferred();
           },
           onAbandoned: async () => {
             handedOff = true;
-            try {
-              await lifecycle.onAbandoned();
-            } finally {
-              settleDeferredClaim();
-            }
+            await lifecycle.onAbandoned();
           },
         });
       } catch (error) {
@@ -195,6 +161,7 @@ export function createTwitchIngress(options: {
       }
       return undefined;
     },
+    deferredClaims: "manual",
     pollIntervalMs: options.pollIntervalMs ?? TWITCH_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: TWITCH_INGRESS_PRUNE_INTERVAL_MS,
@@ -242,7 +209,7 @@ export function createTwitchIngress(options: {
         await monitor.waitForIdle();
         // Twitch waits for reply-lane ownership to settle before aborting the
         // drain; queued channel turns would otherwise be replayed on restart.
-        await Promise.allSettled(deferredClaims.values());
+        await monitor.waitForDeferredClaims();
         await monitor.stop();
       })();
       return stopTask;

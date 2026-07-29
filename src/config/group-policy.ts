@@ -60,6 +60,8 @@ function resolveChannelGroupConfig(
 }
 
 type GroupToolPolicySender = {
+  /** Skip sender-specific overlays for trusted non-ingress executions. */
+  senderPolicyMode?: "always" | "never";
   messageProvider?: string | null;
   senderId?: string | null;
   senderName?: string | null;
@@ -486,28 +488,34 @@ export function resolveChannelGroupToolsPolicy(
     }
   }
   const defaultConfig = groups?.["*"];
-  const groupSenderPolicy = resolveToolsBySender({
-    toolsBySender: groupConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const groupSenderPolicy =
+    params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: groupConfig?.toolsBySender,
+          messageProvider: params.messageProvider ?? params.channel,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
   if (groupSenderPolicy) {
     return groupSenderPolicy;
   }
   if (groupConfig?.tools) {
     return groupConfig.tools;
   }
-  const defaultSenderPolicy = resolveToolsBySender({
-    toolsBySender: defaultConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const defaultSenderPolicy =
+    params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: defaultConfig?.toolsBySender,
+          messageProvider: params.messageProvider ?? params.channel,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
   if (defaultSenderPolicy) {
     return defaultSenderPolicy;
   }

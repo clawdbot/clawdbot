@@ -117,7 +117,7 @@ harness in the same sense as the others above.
 
 Custom acpx agent aliases can be configured in acpx itself, but OpenClaw
 policy still checks `acp.allowedAgents` and any
-`agents.list[].runtime.acp.agent` mapping before dispatch.
+`agents.entries.*.runtime.acp.agent` mapping before dispatch.
 
 ## Operator runbook
 
@@ -158,7 +158,7 @@ Quick `/acp` flow from chat:
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
-    - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
+    - Idle runtime workers are eligible for cleanup after the built-in idle period; stored session metadata remains available for `/acp sessions`.
 
   </Accordion>
   <Accordion title="Native Codex routing rules">
@@ -211,7 +211,7 @@ Quick `/acp` flow from chat:
     calls. It targets ACP harness ids such as `codex`, `claude`, `droid`,
     `gemini`, or `opencode`. Do not pass a normal OpenClaw config agent id
     from `agents_list` unless that entry is explicitly configured with
-    `agents.list[].runtime.type="acp"`; otherwise use the default sub-agent
+    `agents.entries.*.runtime.type="acp"`; otherwise use the default sub-agent
     runtime. When an OpenClaw agent is configured with
     `runtime.type="acp"`, OpenClaw uses `runtime.acp.agent` as the underlying
     harness id.
@@ -305,8 +305,7 @@ Examples:
     - `acp.enabled=true`
     - `acp.dispatch.enabled` is on by default (set `false` to pause automatic ACP thread dispatch; explicit `sessions_spawn({ runtime: "acp" })` calls still work).
     - Channel-adapter thread session spawns enabled (default: `true`):
-      - Discord: `channels.discord.threadBindings.spawnSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
+      - Discord/Telegram: `session.threadBindings.spawnSessions=true`
 
     Thread binding support is adapter-specific. If the active channel adapter
     does not support thread bindings, OpenClaw returns a clear
@@ -359,18 +358,18 @@ For non-ephemeral workflows, configure persistent ACP bindings in top-level
 
 ### Runtime defaults per agent
 
-Use `agents.list[].runtime` to define ACP defaults once per agent:
+Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 
-- `agents.list[].runtime.type="acp"`
-- `agents.list[].runtime.acp.agent` (harness id, e.g. `codex` or `claude`)
-- `agents.list[].runtime.acp.backend`
-- `agents.list[].runtime.acp.mode`
-- `agents.list[].runtime.acp.cwd`
+- `agents.entries.*.runtime.type="acp"`
+- `agents.entries.*.runtime.acp.agent` (harness id, e.g. `codex` or `claude`)
+- `agents.entries.*.runtime.acp.backend`
+- `agents.entries.*.runtime.acp.mode`
+- `agents.entries.*.runtime.acp.cwd`
 
 **Override precedence for ACP bound sessions:**
 
 1. `bindings[].acp.*`
-2. `agents.list[].runtime.acp.*`
+2. `agents.entries.*.runtime.acp.*`
 3. Global ACP defaults (e.g. `acp.backend`)
 
 ### Example
@@ -568,7 +567,7 @@ config-the-default error).
   before `session/new`; slash forms such as `openai/gpt-5.4/high` also set
   Codex ACP reasoning effort. When omitted, `sessions_spawn({ runtime: "acp" })`
   uses existing subagent model defaults (`agents.defaults.subagents.model` or
-  `agents.list[].subagents.model`) when configured; otherwise it lets the ACP
+  `agents.entries.*.subagents.model`) when configured; otherwise it lets the ACP
   harness use its own default model. Other harnesses must advertise ACP
   `models` and support `session/set_model`; otherwise OpenClaw/acpx fails
   clearly instead of silently falling back to the target agent default.
@@ -610,8 +609,7 @@ config-the-default error).
 
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
-      - Discord: `channels.discord.threadBindings.spawnSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
+      - Discord/Telegram: `session.threadBindings.spawnSessions=true`
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>

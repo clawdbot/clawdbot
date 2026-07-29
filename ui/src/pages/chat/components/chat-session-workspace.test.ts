@@ -43,6 +43,25 @@ describe("toggleSessionWorkspace", () => {
   });
 });
 
+describe("custodian panel toggle", () => {
+  it("is available only while the gateway is connected and advertises chat", () => {
+    const state = {
+      client: null,
+      connected: false,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello(["openclaw.chat"]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeUndefined();
+
+    state.connected = true;
+    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeTypeOf("function");
+  });
+});
+
 describe("openSessionWorkspaceFile", () => {
   it("opens Markdown with a canonical Gateway- and pane-scoped draft identity", async () => {
     const handleOpenSidebar = vi.fn();

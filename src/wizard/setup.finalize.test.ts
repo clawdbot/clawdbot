@@ -172,7 +172,7 @@ vi.mock("../commands/health.js", () => ({
   healthCommand,
 }));
 
-vi.mock("../commands/onboard-search.js", () => ({
+vi.mock("../flows/search-setup.js", () => ({
   listSearchProviderOptions: () => [],
   resolveSearchProviderOptions: () => [],
   hasExistingKey,
@@ -536,13 +536,6 @@ describe("finalizeSetupWizard", () => {
                 source: "env",
                 provider: "default",
                 id: "OPENCLAW_GATEWAY_PASSWORD",
-              },
-            },
-          },
-          tools: {
-            web: {
-              search: {
-                apiKey: "",
               },
             },
           },

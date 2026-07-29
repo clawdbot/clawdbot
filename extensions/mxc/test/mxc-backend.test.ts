@@ -152,7 +152,7 @@ function createSandboxBackendTestConfig(
       binds: [],
       cdpPort: 0,
       cdpSourceRange: undefined,
-      enableNoVnc: false,
+      noVncEnabled: false,
       headless: true,
       image: "",
       network: "",
@@ -203,6 +203,21 @@ async function withProcessEnv(
     vi.unstubAllEnvs();
   }
 }
+
+describe("createMxcSandboxBackendFactory", () => {
+  test("hashes workspace-qualified scopes without truncating their identity", async () => {
+    const createBackend = createMxcSandboxBackendFactory(baseConfig);
+    const handle = await createBackend({
+      sessionKey: "agent:main:main",
+      scopeKey: `agent:main:workspace:${"a".repeat(32)}`,
+      workspaceDir: baseParams.workdir,
+      agentWorkspaceDir: baseParams.workdir,
+      cfg: createSandboxBackendTestConfig({ workspaceAccess: "rw" }),
+    });
+
+    expect(handle.runtimeId).toMatch(/^openclaw-mxc-workspace-[a-f0-9]{32}$/u);
+  });
+});
 
 describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests)", () => {
   beforeEach(() => {

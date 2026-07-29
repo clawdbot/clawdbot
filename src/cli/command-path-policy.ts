@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Resolves CLI command path policy from the declarative command catalog.
 import { isGatewayConfigBypassCommandPath } from "../gateway/explicit-connection-policy.js";
+import { resolveCliStartupCommandPath } from "./argv-invocation.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import {
   cliCommandCatalog,
@@ -45,8 +46,10 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
 
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
+  const startupPath = resolveCliStartupCommandPath(argv);
   const tokens =
-    resolveGatewayCatalogCommandPath(argv) ?? getCommandPathWithRootOptions(argv, argv.length);
+    resolveGatewayCatalogCommandPath(argv) ??
+    (startupPath[0] === "agent" ? startupPath : getCommandPathWithRootOptions(argv, argv.length));
   if (tokens.length === 0) {
     return [];
   }

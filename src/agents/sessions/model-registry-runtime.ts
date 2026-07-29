@@ -4,9 +4,8 @@ import {
   type ApiRegistry,
   type LlmRuntime,
 } from "@openclaw/ai";
-import { getPublishedApiProviders } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
-import "../../llm/ai-transport-host.js";
+import "../ai-transport-runtime-host.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 
 type ModelRegistryRuntime = {
@@ -19,11 +18,6 @@ const modelRegistryRuntimes = new WeakMap<object, ModelRegistryRuntime>();
 function resetApiRegistry(runtime: ModelRegistryRuntime): void {
   runtime.apiRegistry.clearApiProviders();
   registerBuiltInApiProviders(runtime.apiRegistry);
-  // The Plugin SDK registry is a shipped compatibility facade. Snapshot it at
-  // lifecycle publication so request-time routing never depends on mutable global state.
-  for (const provider of getPublishedApiProviders()) {
-    runtime.apiRegistry.registerApiProvider(provider);
-  }
 }
 
 /** Creates the runtime facts owned by one model-registry lifecycle. */

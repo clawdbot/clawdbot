@@ -20,18 +20,18 @@ struct IPadWorkboardScreen: View {
     @State private var busyCardID: String?
     @State private var dispatchSummaryText: String?
     @State private var presentedSheet: IPadWorkboardSheet?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
     let openSettings: () -> Void
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         openChat: @escaping () -> Void,
         openSettings: @escaping () -> Void = {})
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
         self.openSettings = openSettings
@@ -41,7 +41,7 @@ struct IPadWorkboardScreen: View {
         IPadSidebarScreenChrome(
             title: "Workboard",
             subtitle: self.currentWorkboardSubtitle,
-            headerLeadingAction: self.headerLeadingAction,
+            headerSidebarAction: self.headerSidebarAction,
             usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
@@ -1059,7 +1059,7 @@ private struct IPadWorkboardKanbanCard: View {
                     Button(action: self.openSession) {
                         Image(systemName: "bubble.left.and.text.bubble.right")
                     }
-                    .accessibilityLabel("Open Thread")
+                    .accessibilityLabel("Open Session")
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
                 }
@@ -1218,7 +1218,7 @@ struct IPadWorkboardQueueRow: View {
     private var actionMenuItems: some View {
         if self.card.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             Button(action: self.openSession) {
-                Text("Open Thread")
+                Text("Open Session")
                     .font(OpenClawType.subheadSemiBold)
             }
         }
@@ -1316,7 +1316,7 @@ private struct IPadWorkboardCardDetailSheet: View {
                         Button {
                             self.openSession()
                         } label: {
-                            Text("Open Thread")
+                            Text("Open Session")
                                 .font(OpenClawType.subheadSemiBold)
                         }
                     }

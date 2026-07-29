@@ -103,6 +103,7 @@ describe("createNodeRelayBackend", () => {
       registry,
       nodeId: "node-1",
       expectedConnId: "conn-authorized",
+      expectedPairingGeneration: "generation-authorized",
       command: "codex.terminal.resume.v1",
       params: {},
     });
@@ -110,7 +111,11 @@ describe("createNodeRelayBackend", () => {
     backend.onExit(exit);
 
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: "node-1", expectedConnId: "conn-authorized" }),
+      expect.objectContaining({
+        nodeId: "node-1",
+        expectedConnId: "conn-authorized",
+        expectedPairingGeneration: "generation-authorized",
+      }),
     );
     await vi.waitFor(() =>
       expect(exit).toHaveBeenCalledWith({

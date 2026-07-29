@@ -8,6 +8,7 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
@@ -24,7 +25,9 @@ import {
 import { CommandLane } from "../../process/lanes.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { enqueueRun, remove, run, start, update } from "./ops.js";
+import { start } from "./ops-lifecycle.js";
+import { remove, update } from "./ops-mutations.js";
+import { enqueueRun, run } from "./ops-run.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
@@ -660,7 +663,6 @@ describe("cron service ops regressions", () => {
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
-      cronConfig: { maxConcurrentRuns: 1 },
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -672,6 +674,7 @@ describe("cron service ops regressions", () => {
         }
       },
     });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
 
     const firstAck = await enqueueRun(state, first.id, "force");
     const secondAck = await enqueueRun(state, second.id, "force");
@@ -723,7 +726,7 @@ describe("cron service ops regressions", () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
       cronEnabled: true,
-      cronConfig: { triggers: { enabled: true, minIntervalMs: 30_000 } },
+      cronConfig: { triggers: { enabled: true } },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => dueAt,
@@ -903,7 +906,6 @@ describe("cron service ops regressions", () => {
     let peakInFlight = 0;
     const state = createCronServiceState({
       cronEnabled: true,
-      cronConfig: { maxConcurrentRuns: 2 },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
@@ -957,7 +959,6 @@ describe("cron service ops regressions", () => {
     let dispatchCount = 0;
     const state = createCronServiceState({
       cronEnabled: true,
-      cronConfig: { maxConcurrentRuns: 2 },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,

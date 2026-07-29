@@ -129,7 +129,7 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
     case "cron-nested":
-      return resolveCronMaxConcurrentRuns(cfg?.cron);
+      return resolveCronMaxConcurrentRuns();
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }

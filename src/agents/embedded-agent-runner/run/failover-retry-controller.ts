@@ -39,9 +39,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
     fallbackConfigured,
     profileFailureStore,
   } = input;
-  const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
-  const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
-  const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
+  const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs();
+  const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit();
+  const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit();
   let rateLimitProfileRotations = 0;
   let consecutiveSameModelRateLimitRetries = 0;
 

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
+import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
 import { createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
 import { getClickClackRuntime } from "./runtime.js";
@@ -161,13 +162,39 @@ export async function handleClickClackInbound(params: {
       ? { chatType: "direct", kind: "dm", id: message.author_id }
       : { chatType: "group", kind: "channel", id: message.channel_id ?? "" },
   );
-  const route = resolveAccountAgentRoute({
+  const accountRoute = resolveAccountAgentRoute({
     cfg: params.config as OpenClawConfig,
     account: params.account,
     target,
     isDirect,
   });
-  if (params.account.replyMode === "model") {
+  const discussionResolution =
+    !isDirect && message.channel_id
+      ? resolveClickClackDiscussionRoute({
+          runtime,
+          config: params.config,
+          accountId: params.account.accountId,
+          serverBaseUrl: params.account.baseUrl,
+          workspaceId: message.workspace_id,
+          channelId: message.channel_id,
+        })
+      : { state: "unbound" as const };
+  // A managed channel whose binding lost authority must never fall through to
+  // the account's ordinary agent/session. Reconciliation archives it separately.
+  if (discussionResolution.state === "revoked") {
+    return;
+  }
+  const discussionRoute =
+    discussionResolution.state === "active" ? discussionResolution.route : undefined;
+  const route = discussionRoute
+    ? {
+        ...accountRoute,
+        agentId: discussionRoute.agentId,
+        sessionKey: discussionRoute.sessionKey,
+        lastRoutePolicy: "session" as const,
+      }
+    : accountRoute;
+  if (params.account.replyMode === "model" && !discussionRoute) {
     await dispatchModelReply({
       account: params.account,
       cfg: params.config as OpenClawConfig,
@@ -189,7 +216,7 @@ export async function handleClickClackInbound(params: {
   if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
     activity = createClickClackActivityPublisher({
       client: createClickClackClient({
-        baseUrl: params.account.baseUrl,
+        baseUrl: params.account.apiEndpoint,
         token: params.account.token,
         correlationId: params.correlationId,
       }),
@@ -252,7 +279,10 @@ export async function handleClickClackInbound(params: {
         wasMentioned: !isDirect,
       },
     },
-    extra: { GroupChannel: message.channel_id },
+    extra: {
+      GroupChannel: message.channel_id,
+      ...(discussionRoute ? { GroupSystemPrompt: discussionRoute.systemPrompt } : {}),
+    },
   });
   const runId = resolveClickClackAgentRunId(message.id);
   const activityReplyOptions = activity

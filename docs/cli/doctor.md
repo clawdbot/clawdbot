@@ -269,6 +269,13 @@ imported and archived out of the active sessions directory after successful
 import; archive-tier JSONL files remain support artifacts, not runtime
 fallbacks.
 
+The regular `openclaw doctor` pass also reports canonical SQLite transcripts
+whose initial session header was never persisted. `openclaw doctor --fix`
+prepends a current header and rebuilds the transcript indexes in one
+transaction while preserving existing event IDs, parent links, row timestamps,
+and session-list recency. Headerless legacy or malformed transcripts remain
+rejected until their owning migration can validate them.
+
 Modes:
 
 | Mode       | Behavior                                                                                                               |

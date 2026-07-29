@@ -41,14 +41,10 @@ function normalizeProviderEnvVars(
 
 function resolvePluginProviderEnvVars(plugin: {
   setup?: { providers?: Array<{ id: string; envVars?: string[] }> };
-  providerAuthEnvVars?: Record<string, string[]>;
 }): Record<string, string[]> {
   const envVars: Record<string, string[]> = {};
   for (const provider of plugin.setup?.providers ?? []) {
     envVars[provider.id] = uniqueStrings(provider.envVars ?? []);
-  }
-  for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars ?? {})) {
-    envVars[providerId] = uniqueStrings([...(envVars[providerId] ?? []), ...keys]);
   }
   return normalizeProviderEnvVars(envVars);
 }

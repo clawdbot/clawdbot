@@ -61,6 +61,48 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect((converted[0] as { content?: unknown }).content).not.toContain("Conversation info");
   });
 
+  it("preserves settled history while isolating the finalization prompt", async () => {
+    const { activeSession, reset } = createActiveSession();
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => ({
+        id: "user-leaf",
+        parentId: "parent-entry",
+        type: "message",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        message: { role: "user", content: "old" },
+      }),
+    });
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        operation: "settled-tool-finalization",
+        prompt: "finalize exactly",
+        trigger: "user",
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+    const converted = await activeSession.agent.convertToLlm([
+      {
+        role: "user",
+        content: [{ type: "text", text: "finalize exactly" }],
+        timestamp: 1,
+        __openclaw: { senderName: "Must not leak" },
+      } as AgentMessage,
+    ]);
+
+    expect(reset).not.toHaveBeenCalled();
+    expect(boundary).toMatchObject({
+      boundaryTimezone: undefined,
+      includeBoundaryTimestamp: false,
+      orphanRepair: undefined,
+    });
+    expect((converted[0] as { content?: unknown }).content).toBe("finalize exactly");
+  });
+
   it("applies the prepared current-turn timestamp at the LLM boundary", async () => {
     const { activeSession } = createActiveSession();
     const preparedTimestamp = 1_717_570_800_000;
@@ -120,7 +162,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const converted = await activeSession.agent.convertToLlm([runtimeMessage]);
 
-    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
+    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
   });
 
   it("retains sender projection for earlier in-memory turns after a queued turn", async () => {
@@ -166,8 +208,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const converted = await activeSession.agent.convertToLlm([initialRuntime, queuedRuntime]);
 
-    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
-    expect((converted[1] as { content?: unknown }).content).toContain('"name": "Bob"');
+    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
+    expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
   });
 
   it("reserves exact pairings before matching duplicate timestamp and text", async () => {
@@ -213,9 +255,68 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const converted = await activeSession.agent.convertToLlm([firstRuntime, secondRuntime]);
 
-    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
-    expect((converted[1] as { content?: unknown }).content).toContain('"name": "Bob"');
+    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
+    expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
   });
+
+  it.each([false, true])(
+    "preserves the admitted current user with persistence suppression set to %s",
+    (suppressNextUserMessagePersistence) => {
+      const currentUser = {
+        role: "user" as const,
+        content: "current prompt",
+        idempotencyKey: "current-run:user",
+        timestamp: 1,
+      };
+      const { activeSession } = createActiveSession([currentUser]);
+      const branch = vi.fn();
+      const resetLeaf = vi.fn();
+      const clearNextUserMessagePersistenceSuppression = vi.fn();
+      const onUserMessagePersistenceInvalidated = vi.fn();
+      const sessionManager = createSessionManager({
+        branch,
+        resetLeaf,
+        clearNextUserMessagePersistenceSuppression,
+        getLeafEntry: () => ({
+          id: "current-user",
+          parentId: "previous-assistant",
+          timestamp: "2026-07-13T00:00:00.000Z",
+          type: "message",
+          message: currentUser,
+        }),
+      });
+      const recorder = {
+        hasPersisted: () => true,
+      } as NonNullable<
+        Parameters<
+          typeof prepareEmbeddedAttemptSessionBoundary
+        >[0]["attempt"]["userTurnTranscriptRecorder"]
+      >;
+
+      const boundary = prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        attempt: {
+          onUserMessagePersistenceInvalidated,
+          prompt: "current prompt",
+          suppressNextUserMessagePersistence,
+          trigger: "user",
+          userTurnTranscriptRecorder: recorder,
+        },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: currentUser,
+        sessionManager,
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      expect(boundary.orphanRepair).toBeUndefined();
+      expect(activeSession.agent.state.messages).toEqual([]);
+      expect(branch).not.toHaveBeenCalled();
+      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+      expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+    },
+  );
 
   it("repairs an orphaned user leaf before rebuilding active session messages", () => {
     const repairedMessages: AgentMessage[] = [

@@ -74,12 +74,6 @@ type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
   origin?: PluginOrigin;
 };
 
-type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams = LoadPluginRegistryParams & {
-  contract: PluginManifestContractListKey;
-  path: string | undefined;
-  origin?: PluginOrigin;
-};
-
 function normalizeContributionId(value: string): string {
   return value.trim();
 }
@@ -372,24 +366,6 @@ export function resolveManifestContractPluginIds(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
         listManifestContractValues(plugin, params.contract).length > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(
-  params: ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams,
-): string[] {
-  const normalizedPath = params.path?.trim();
-  if (!normalizedPath) {
-    return [];
-  }
-  return loadManifestContractRegistry(params)
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        listManifestContractValues(plugin, params.contract).length > 0 &&
-        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));

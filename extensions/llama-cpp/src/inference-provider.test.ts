@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => {
   };
   const llama = {
     loadModel: vi.fn(async () => model),
+    createGrammarForJsonSchema: vi.fn(async (schema: unknown) => ({ schema })),
+    getGrammarFor: vi.fn(async (type: string) => ({ type })),
     dispose: llamaDispose,
   };
   return {
@@ -235,6 +237,96 @@ describe("llama.cpp inference provider", () => {
     });
   });
 
+  it("builds a JSON Schema grammar for tool-free responseFormat requests", async () => {
+    const schema = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+    const stream = await createLlamaCppStreamFn({})(
+      model,
+      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+      { responseFormat: schema },
+    );
+
+    await collectEvents(stream);
+
+    expect(mocks.llama.createGrammarForJsonSchema).toHaveBeenCalledWith(schema);
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      grammar: { schema },
+    });
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("functions");
+  });
+
+  it("unwraps provider-shaped json_schema response formats", async () => {
+    const schema = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+    const stream = await createLlamaCppStreamFn({})(
+      model,
+      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+      {
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "planner", schema },
+        },
+      },
+    );
+
+    await collectEvents(stream);
+
+    expect(mocks.llama.createGrammarForJsonSchema).toHaveBeenCalledWith(schema);
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({ grammar: { schema } });
+  });
+
+  it("maps provider-shaped json_object response formats to the JSON grammar", async () => {
+    const stream = await createLlamaCppStreamFn({})(
+      model,
+      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+      { responseFormat: { type: "json_object" } },
+    );
+
+    await collectEvents(stream);
+
+    expect(mocks.llama.getGrammarFor).toHaveBeenCalledWith("json");
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      grammar: { type: "json" },
+    });
+  });
+
+  it("maps an empty JSON Schema to the generic JSON grammar", async () => {
+    const stream = await createLlamaCppStreamFn({})(
+      model,
+      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+      { responseFormat: {} },
+    );
+
+    await collectEvents(stream);
+
+    expect(mocks.llama.getGrammarFor).toHaveBeenCalledWith("json");
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      grammar: { type: "json" },
+    });
+  });
+
+  it("keeps provider-shaped text response formats unconstrained", async () => {
+    const stream = await createLlamaCppStreamFn({})(
+      model,
+      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+      { responseFormat: { type: "text" } },
+    );
+
+    await collectEvents(stream);
+
+    expect(mocks.llama.getGrammarFor).not.toHaveBeenCalled();
+    expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
+  });
+
   it("emits native function calls in the final assistant message", async () => {
     mocks.generateResponse.mockResolvedValueOnce({
       response: "",
@@ -269,6 +361,40 @@ describe("llama.cpp inference provider", () => {
         ],
       },
     });
+    expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+  });
+
+  it("lets tools win when responseFormat is also present", async () => {
+    const stream = await createLlamaCppStreamFn({})(
+      model,
+      {
+        messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
+        tools: [
+          {
+            name: "weather",
+            description: "Get weather",
+            parameters: { type: "object", properties: { city: { type: "string" } } },
+          },
+        ],
+      },
+      {
+        responseFormat: {
+          type: "object",
+          properties: { reply: { type: "string" } },
+          required: ["reply"],
+          additionalProperties: false,
+        },
+      },
+    );
+
+    await collectEvents(stream);
+
+    expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      functions: { weather: expect.any(Object) },
+      documentFunctionParams: true,
+    });
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
   });
 
   it("disposes the previous model and context when the model changes", async () => {

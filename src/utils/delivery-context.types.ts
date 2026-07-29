@@ -1,5 +1,5 @@
 // Delivery context types describe normalized channel route delivery inputs.
-import type { ChannelRouteRef, ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
+import type { ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
 
 /** Deferred outbound delivery intent attached to a session or task. */
 type DeliveryIntentRef = {
@@ -26,28 +26,4 @@ export type DeliveryContext = Pick<
   threadId?: string | number;
   /** Optional queued-delivery intent associated with this context. */
   deliveryIntent?: DeliveryIntentRef;
-};
-
-/** Mixed legacy and modern session fields used to reconstruct a delivery context. */
-export type DeliveryContextSessionSource = {
-  /** Modern SDK route metadata, preferred when present and routable. */
-  route?: ChannelRouteRef;
-  /** Original/current session channel; may be an internal channel such as webchat. */
-  channel?: string;
-  /** Legacy mirrored delivery channel. */
-  lastChannel?: string;
-  /** Legacy mirrored delivery target. */
-  lastTo?: string;
-  /** Legacy mirrored account/workspace id. */
-  lastAccountId?: string;
-  /** Legacy mirrored thread/topic id. */
-  lastThreadId?: string | number;
-  /** Older origin fields emitted before delivery context became canonical. */
-  origin?: {
-    provider?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  /** Canonical delivery context stored on newer session records. */
-  deliveryContext?: DeliveryContext;
 };

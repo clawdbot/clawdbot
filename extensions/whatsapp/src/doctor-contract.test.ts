@@ -103,7 +103,7 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
     });
   });
 
-  it("keeps the legacy ackReaction migration and stays idempotent", () => {
+  it("keeps global ackReaction canonical while migrating streaming aliases", () => {
     const first = normalizeCompatibilityConfig({
       cfg: {
         messages: { ackReaction: "👀" },
@@ -111,7 +111,8 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
       } as never,
     });
     const whatsapp = first.config.channels?.whatsapp as unknown as Record<string, unknown>;
-    expect(whatsapp.ackReaction).toEqual({ emoji: "👀", direct: false, group: "mentions" });
+    expect(whatsapp.ackReaction).toBeUndefined();
+    expect(first.config.messages?.ackReaction).toBe("👀");
     expect(whatsapp.streaming).toEqual({ block: { enabled: true } });
 
     const second = normalizeCompatibilityConfig({ cfg: first.config });

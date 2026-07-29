@@ -116,6 +116,32 @@ export interface AfterToolCallContext {
   context: AgentContext;
 }
 
+/**
+ * Context passed to `afterToolOutcome` after every finalized tool outcome.
+ *
+ * Unlike `afterToolCall`, this hook also observes failures that prevented
+ * execution. `args` contains validated arguments when execution reached the
+ * prepared state, otherwise the raw model arguments.
+ */
+export interface AfterToolOutcomeContext {
+  /** The assistant message that requested the tool call. */
+  assistantMessage: AssistantMessage;
+  /** The tool call whose final result is being emitted. */
+  toolCall: AgentToolCall;
+  /** Validated arguments when available, otherwise the raw model arguments. */
+  args: unknown;
+  /** Final result after any executed-only `afterToolCall` override. */
+  result: AgentToolResult<unknown>;
+  /** Whether the finalized result is currently treated as an error. */
+  isError: boolean;
+  /** Whether the tool implementation started executing. */
+  executionStarted: boolean;
+  /** Typed pre-execution failure provenance when available. */
+  errorKind?: "argument-validation";
+  /** Current agent context at the time the tool outcome is finalized. */
+  context: AgentContext;
+}
+
 /** Context passed to `shouldStopAfterTurn`. */
 export interface ShouldStopAfterTurnContext {
   /** The assistant message that completed the turn. */
@@ -299,6 +325,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    */
   afterToolCall?: (
     context: AfterToolCallContext,
+    signal?: AbortSignal,
+  ) => Promise<AfterToolCallResult | undefined>;
+
+  /**
+   * Called after every tool outcome is finalized, including failures that
+   * prevented execution. It runs after `afterToolCall` for executed tools.
+   */
+  afterToolOutcome?: (
+    context: AfterToolOutcomeContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
 }

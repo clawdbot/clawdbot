@@ -12,12 +12,13 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_META_TABLE,
@@ -25,6 +26,7 @@ import {
   type MemoryProviderStatus,
 } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
@@ -51,10 +53,9 @@ function hasBuiltInMemoryState(databasePath: string): boolean {
   if (!existsSync(databasePath)) {
     return false;
   }
-  const { DatabaseSync } = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(databasePath, { readOnly: true });
+    db = openNodeSqliteDatabase(databasePath, { readOnly: true });
     const builtInMemoryTableSets = [
       {
         meta: MEMORY_INDEX_META_TABLE,
@@ -216,9 +217,7 @@ async function applyLocalStatusRpcFallback(params: {
         method: "status",
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
-        timeoutMs: params.timeoutMsExplicit
-          ? boundedFallbackTimeoutMs
-          : Math.max(params.cfg.gateway?.handshakeTimeoutMs ?? 0, boundedFallbackTimeoutMs),
+        timeoutMs: boundedFallbackTimeoutMs,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       }),
@@ -247,11 +246,15 @@ async function applyLocalStatusRpcFallback(params: {
 }
 
 function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
-  if (cfg.agents?.defaults && Object.hasOwn(cfg.agents.defaults, "memorySearch")) {
+  if (cfg.memory && Object.hasOwn(cfg.memory, "search")) {
     return true;
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents.some((agent) => agent?.id === agentId && Object.hasOwn(agent, "memorySearch"));
+  return listAgentEntries(cfg).some(
+    (agent) =>
+      normalizeAgentId(agent.id) === normalizeAgentId(agentId) &&
+      agent.memory != null &&
+      Object.hasOwn(agent.memory, "search"),
+  );
 }
 
 /** Resolves whether memory status should be shown and which slot owns it. */
@@ -295,10 +298,7 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const defaultProbeTimeoutMs = Math.max(
-    params.opts.all ? 5000 : 2500,
-    params.cfg.gateway?.handshakeTimeoutMs ?? 0,
-  );
+  const defaultProbeTimeoutMs = params.opts.all ? 5000 : 2500;
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
   const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
   const initialGatewayProbe = shouldProbe
@@ -307,7 +307,6 @@ export async function resolveGatewayProbeSnapshot(params: {
           probeGateway({
             url: gatewayConnection.url,
             auth: gatewayProbeAuthResolution.auth,
-            preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
           }),

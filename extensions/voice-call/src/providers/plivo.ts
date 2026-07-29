@@ -574,8 +574,6 @@ export class PlivoProvider implements VoiceCallProvider {
     try {
       if (this.options.publicUrl) {
         const base = new URL(this.options.publicUrl);
-        const requestUrl = new URL(ctx.url);
-        base.pathname = requestUrl.pathname;
         return `${base.origin}${base.pathname}`;
       }
 

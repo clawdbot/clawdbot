@@ -17,6 +17,7 @@ import type { AgentSession } from "../sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { PreparedWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
@@ -33,6 +34,7 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   docsPath?: string;
   sourcePath?: string;
   ttsHint?: string;
@@ -92,6 +94,9 @@ export function buildEmbeddedSystemPrompt(params: {
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
+  preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  projectMemoryBootstrap?: string[];
+  activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }): string {
   return buildConfiguredAgentSystemPrompt({
@@ -107,6 +112,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
+    codeModeActive: params.codeModeActive,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     ttsHint: params.ttsHint,
@@ -137,6 +143,9 @@ export function buildEmbeddedSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
     preparedMemoryPrompt: params.preparedMemoryPrompt,
+    preparedWatchedSessions: params.preparedWatchedSessions,
+    projectMemoryBootstrap: params.projectMemoryBootstrap,
+    activeProjectKeys: params.activeProjectKeys,
     promptContribution: params.promptContribution,
   });
 }

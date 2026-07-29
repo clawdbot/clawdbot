@@ -1,7 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingProgressConfig,
-  OutboundRetryConfig,
 } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,
@@ -229,41 +228,16 @@ export type DiscordAgentComponentsConfig = {
   ttlMs?: number;
 };
 
-export type DiscordUiComponentsConfig = {
-  /** Accent color used by Discord component containers (hex). */
-  accentColor?: string;
-};
-
-export type DiscordUiConfig = {
-  components?: DiscordUiComponentsConfig;
-};
-
 export type DiscordThreadBindingsConfig = {
-  /**
-   * Enable Discord thread binding features (/focus, thread-bound delivery, and
-   * thread-bound subagent session flows). Overrides session.threadBindings.enabled
-   * when set.
-   */
+  /** Enable Discord thread binding features. Overrides session.threadBindings.enabled. */
   enabled?: boolean;
-  /**
-   * Inactivity window for thread-bound sessions in hours.
-   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
-   */
+  /** Inactivity window in hours. Set 0 to disable. Default: 24. */
   idleHours?: number;
-  /**
-   * Optional hard max age for thread-bound sessions in hours.
-   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
-   */
+  /** Hard max age in hours. Set 0 to disable. Default: 0. */
   maxAgeHours?: number;
-  /**
-   * Allow session spawns to auto-create + bind Discord threads.
-   * Applies to native subagent and ACP thread spawns. Default: true.
-   */
+  /** Allow session spawns to create and bind Discord threads. Default: true. */
   spawnSessions?: boolean;
-  /**
-   * Default context mode for native subagents spawned into a bound Discord thread.
-   * Default: "fork".
-   */
+  /** Default context mode for native subagents. Default: fork. */
   defaultSpawnContext?: "isolated" | "fork";
 };
 
@@ -285,10 +259,9 @@ export type DiscordAutoPresenceConfig = {
   /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
   minUpdateIntervalMs?: number;
   /** Optional custom status text while runtime is healthy; supports plain text. */
-  healthyText?: string;
   /** Optional custom status text while runtime/quota state is degraded or unknown. */
-  degradedText?: string;
   /** Optional custom status text while runtime detects quota/token exhaustion. */
+  /** @deprecated Doctor-only legacy input. */
   exhaustedText?: string;
 };
 
@@ -306,12 +279,6 @@ export type DiscordAccountConfig = Omit<
     activities?: { clientSecret?: string; applicationId?: string };
     /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
     proxy?: string;
-    /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
-    gatewayInfoTimeoutMs?: number;
-    /** Startup wait for the gateway READY event before restarting the socket. Default: 15000. */
-    gatewayReadyTimeoutMs?: number;
-    /** Runtime reconnect wait for the gateway READY event before force-stopping the lifecycle. Default: 30000. */
-    gatewayRuntimeReadyTimeoutMs?: number;
     /**
      * Deterministic outbound @handle rewrites for known Discord users.
      * Keys are handles without the leading @; values are Discord user IDs.
@@ -328,8 +295,6 @@ export type DiscordAccountConfig = Omit<
      * keeps replies readable in-channel. Default: 17.
      */
     maxLinesPerMessage?: number;
-    /** Retry policy for outbound Discord API calls. */
-    retry?: OutboundRetryConfig;
     /** Per-action tool gating (default: true for all). */
     actions?: DiscordActionConfig;
     /** Thread session behavior. */
@@ -342,12 +307,12 @@ export type DiscordAccountConfig = Omit<
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
     /** Discord UI customization (components, modals, etc.). */
-    ui?: DiscordUiConfig;
     /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
-    /** Thread binding lifecycle settings (focus/subagent thread sessions). */
+    /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
     /** Show subagent count reactions and typing on the source message. Default: false. */
+    /** @deprecated Doctor-only legacy input. */
     subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
@@ -377,19 +342,6 @@ export type DiscordAccountConfig = Omit<
        * lifecycle, not by Discord channel config.
        */
       runTimeoutMs?: number;
-    };
-    /**
-     * Discord EventQueue configuration. Controls how Discord gateway events are processed.
-     * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
-     * It does not control the lifetime of queued inbound agent turns.
-     */
-    eventQueue?: {
-      /** Max time (ms) a single listener can run before being killed. Default: 120000. */
-      listenerTimeout?: number;
-      /** Max events queued before backpressure is applied. Default: 10000. */
-      maxQueueSize?: number;
-      /** Max concurrent event processing operations. Default: 50. */
-      maxConcurrency?: number;
     };
   };
 

@@ -10,11 +10,6 @@ describe("resolveTelegramStreamMode", () => {
     expect(resolveTelegramStreamMode({})).toBe("partial");
   });
 
-  it("prefers explicit streaming boolean", () => {
-    expect(resolveTelegramStreamMode({ streaming: true })).toBe("partial");
-    expect(resolveTelegramStreamMode({ streaming: false })).toBe("off");
-  });
-
   it("resolves nested streaming.mode values", () => {
     expect(resolveTelegramStreamMode({ streaming: { mode: "off" } })).toBe("off");
     expect(resolveTelegramStreamMode({ streaming: { mode: "partial" } })).toBe("partial");
@@ -22,7 +17,7 @@ describe("resolveTelegramStreamMode", () => {
   });
 
   it("preserves unified progress mode on Telegram", () => {
-    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("progress");
+    expect(resolveTelegramStreamMode({ streaming: { mode: "progress" } })).toBe("progress");
   });
 });
 

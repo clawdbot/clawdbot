@@ -103,6 +103,7 @@ describe("detectChangedScope", () => {
     for (const changedPath of [
       "apps/.i18n/native-source.json",
       "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      "apps/android/wear/src/main/java/ai/openclaw/wear/WearScreens.kt",
       "apps/ios/Sources/RootTabs.swift",
       "apps/macos/Sources/OpenClaw/Settings.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
@@ -263,7 +264,7 @@ describe("detectChangedScope", () => {
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
-      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual({
@@ -1049,6 +1050,7 @@ describe("detectChangedScope", () => {
       strict_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
+      strict_native_i18n: "false",
       changed_paths_json: "[]",
     });
   });

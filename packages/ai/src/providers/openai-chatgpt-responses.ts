@@ -26,6 +26,7 @@ function loadNodeOs(): typeof NodeOs | null {
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
 const os = loadNodeOs();
 
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
@@ -35,6 +36,8 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -60,12 +63,12 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { inspectTlsCertificateError } from "../utils/tls-certificate-errors.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
-  processResponsesStream,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -147,12 +150,12 @@ function isRetryableError(status: number, errorText: string): boolean {
 function resolveHttpRetryDelayMs(response: Response, attempt: number): number {
   const fallbackMs = BASE_DELAY_MS * 2 ** attempt;
   const retryAfterMs = response.headers.get("retry-after-ms");
-  if (retryAfterMs !== null) {
+  if (retryAfterMs) {
     const trimmed = retryAfterMs.trim();
     const millis = Number(trimmed);
-    return /^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(millis)
-      ? (clampTimerTimeoutMs(millis, 0) ?? fallbackMs)
-      : fallbackMs;
+    if (/^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(millis)) {
+      return clampTimerTimeoutMs(millis, 0) ?? fallbackMs;
+    }
   }
 
   const retryAfter = response.headers.get("retry-after");
@@ -298,16 +301,6 @@ export const streamOpenAICodexResponses: StreamFunction<
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
       // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
-      const websocketRequestId = sessionId || createCodexRequestId();
-      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
-      const websocketHeaders = buildWebSocketHeaders(
-        modelHeaders,
-        optionHeaders,
-        accountId,
-        apiKey,
-        websocketRequestId,
-      );
-      const bodyJson = JSON.stringify(body);
       requestTimeoutMs = resolveRequestTimeoutMs(options);
       requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
@@ -319,6 +312,13 @@ export const streamOpenAICodexResponses: StreamFunction<
         transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
 
       if (transport !== "sse" && !websocketDisabledForSession) {
+        const websocketHeaders = buildWebSocketHeaders(
+          modelHeaders,
+          optionHeaders,
+          accountId,
+          apiKey,
+          sessionId || createCodexRequestId(),
+        );
         let websocketStarted = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
@@ -339,7 +339,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             );
 
             if (activeSignal?.aborted) {
-              throw new Error("Request was aborted");
+              throw transportAbortError(activeSignal);
             }
             stream.push({
               type: "done",
@@ -368,7 +368,7 @@ export const streamOpenAICodexResponses: StreamFunction<
                 phase: websocketStarted
                   ? "after_message_stream_start"
                   : "before_message_stream_start",
-                requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+                requestBytes: new TextEncoder().encode(JSON.stringify(body)).byteLength,
               }),
             );
             if (transport === "auto" && options?.sessionId) {
@@ -382,6 +382,8 @@ export const streamOpenAICodexResponses: StreamFunction<
         }
       }
 
+      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
+      const bodyJson = JSON.stringify(body);
       const canCompressSseBody = model.provider === "openai" && !sseHeaders.has("content-encoding");
       const compressedBody = canCompressSseBody ? compressRequestBodyZstd(bodyJson) : null;
       if (compressedBody) {
@@ -396,7 +398,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (activeSignal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(activeSignal);
         }
 
         let attemptResponse: Response;
@@ -438,9 +440,14 @@ export const streamOpenAICodexResponses: StreamFunction<
               throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
             }
           }
-          lastError = error instanceof Error ? error : new Error(String(error));
-          // Network errors are retryable
-          if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+          const tlsCertificateError = inspectTlsCertificateError(error);
+          lastError = toErrorObject(error, String(error));
+          // Deterministic certificate failures cannot recover through backoff.
+          if (
+            attempt < maxRetries &&
+            !lastError.message.includes("usage limit") &&
+            !tlsCertificateError
+          ) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;
@@ -473,7 +480,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       await processStream(response, output, stream, model, options, firstEventAbort.abort);
 
       if (activeSignal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(activeSignal);
       }
 
       stream.push({
@@ -673,6 +680,7 @@ async function processStream(
     firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
     abortFirstEventStream,
     onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+    signal: options?.signal,
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
       applyServiceTierPricing(usage, serviceTier, model),
@@ -1342,7 +1350,7 @@ async function* parseWebSocket(
   try {
     while (true) {
       if (signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(signal);
       }
       const next = queue.shift();
       if (next !== undefined) {
@@ -1358,7 +1366,7 @@ async function* parseWebSocket(
     }
 
     if (failed) {
-      throw toLintErrorObject(failed, "Non-Error thrown");
+      throw toErrorObject(failed, "Non-Error thrown");
     }
     if (!sawCompletion) {
       throw new Error("WebSocket stream closed before response.completed");
@@ -1475,7 +1483,7 @@ async function processWebSocketStream(
     useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
   try {
     if (options?.signal?.aborted) {
-      throw new Error("Request was aborted");
+      throw transportAbortError(options.signal);
     }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
@@ -1493,6 +1501,7 @@ async function processWebSocketStream(
         firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+        signal: options?.signal,
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
           applyServiceTierPricing(usage, serviceTier, model),
@@ -1704,17 +1713,4 @@ function buildWebSocketHeaders(
   return headers;
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

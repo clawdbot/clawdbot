@@ -255,9 +255,14 @@ start_openclaw_gateway() {
 }
 wait_for_gateway() {
   deadline=$((SECONDS + 240))
+  attempt=0
   while [ "$SECONDS" -lt "$deadline" ]; do
     if "$OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
       return
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 4 ]; then
+      start_openclaw_gateway
     fi
     sleep 2
   done
@@ -395,9 +400,14 @@ start_openclaw_gateway() {
 }
 wait_for_gateway() {
   deadline=$((SECONDS + 240))
+  attempt=0
   while [ "$SECONDS" -lt "$deadline" ]; do
     if openclaw gateway status --deep --require-rpc --timeout 15000; then
       return
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 4 ]; then
+      start_openclaw_gateway
     fi
     sleep 2
   done

@@ -7,6 +7,12 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "modelCatalog": {
+    "discovery": {
+      "minimax": "runtime",
+      "minimax-portal": "runtime"
+    }
+  },
   "providerEndpoints": [
     {
       "endpointClass": "minimax-native",
@@ -96,9 +102,6 @@
     "videoGenerationProviders": ["minimax", "minimax-portal"],
     "webSearchProviders": ["minimax"],
     "usageProviders": ["minimax"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "mediaUnderstandingProviderMetadata": {
     "minimax": {

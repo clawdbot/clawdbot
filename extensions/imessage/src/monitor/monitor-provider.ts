@@ -1,8 +1,6 @@
 // Imessage provider module implements model/runtime integration.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -12,7 +10,9 @@ import {
   runChannelInboundEvent,
   shouldDebounceTextInbound,
   type ChannelInboundTurnPlan,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
@@ -44,12 +44,18 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
+import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "../approval-resolver.js";
+import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
+import { resolveIMessageHomeDir } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
@@ -70,13 +76,7 @@ import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
-import {
-  combineIMessagePayloads,
-  hasIMessageBalloonMetadata,
-  hasIMessageUrlBalloonBundleID,
-  isStandaloneIMessageUrlPreviewPayload,
-  shouldCombineIMessagePayloadBucket,
-} from "./coalesce.js";
+import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
@@ -100,11 +100,7 @@ import {
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
-import {
-  buildIMessageFlushIngressLifecycle,
-  createIMessageDurableIngress,
-  type IMessageIngressLifecycle,
-} from "./ingress.js";
+import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
@@ -115,6 +111,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
+import { detectRemoteHostFromCliPath } from "./remote-host.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -122,33 +119,16 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+// Host-private context installed through the generic channel runtime registry.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
-const IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS = 7_000;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
-function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
-  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
-}
-
-function resolveIMessageSplitSendCompatDebounceMs(
-  cfg: OpenClawConfig,
-  coalesceSameSenderDms: boolean,
-): number | undefined {
-  if (!coalesceSameSenderDms) {
-    return undefined;
-  }
-  const inbound = cfg.messages?.inbound;
-  const channelOverride = inbound?.byChannel?.imessage;
-  if (typeof channelOverride === "number" && Number.isFinite(channelOverride)) {
-    return undefined;
-  }
-  if (typeof inbound?.debounceMs === "number" && Number.isFinite(inbound.debounceMs)) {
-    return undefined;
-  }
-  return IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS;
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }
 
 function isIMessagePluginPayloadAttachment(attachment: {
@@ -174,14 +154,19 @@ function resolveIMessageInboundMediaInput(params: {
 }) {
   // Apple rich-link previews are opaque plugin payloads; the useful URL stays
   // in message text. Treating them as media creates phantom attachments and
-  // keeps split-send URL previews out of the text debounce path.
+  // incorrectly bypasses text-only inbound debounce.
   const mediaCandidates = params.attachments.filter(
     (entry) => !isIMessagePluginPayloadAttachment(entry),
   );
-  const rawMediaAttachments = mediaCandidates.flatMap((attachment) => {
+  const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
+    const contentType = attachment.mime_type?.trim() || undefined;
+    return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+  });
+  const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
+    const fact = mediaFacts[index] ?? { kind: "unknown" as const };
     const attachmentPath = attachment.original_path?.trim();
     if (!attachmentPath || attachment.missing) {
-      return [];
+      return fact;
     }
     if (
       !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
@@ -189,21 +174,13 @@ function resolveIMessageInboundMediaInput(params: {
       params.logVerbose?.(
         `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
       );
-      return [];
+      return fact;
     }
-    return [{ path: attachmentPath, contentType: attachment.mime_type ?? undefined }];
+    return { ...fact, path: attachmentPath };
   });
-  const kind = kindFromMime(
-    rawMediaAttachments[0]?.contentType ?? mediaCandidates[0]?.mime_type ?? undefined,
-  );
-  const mediaPlaceholder = kind
-    ? `<media:${kind}>`
-    : mediaCandidates.length
-      ? "<media:attachment>"
-      : "";
   return {
-    bodyText: params.messageText || mediaPlaceholder,
-    mediaPlaceholder,
+    bodyText: params.messageText,
+    mediaFacts,
     mediaCandidates,
     rawMediaAttachments,
   };
@@ -211,66 +188,19 @@ function resolveIMessageInboundMediaInput(params: {
 
 function formatIMessageInboundMediaBody(params: {
   messageText: string;
-  optimisticPlaceholder: string;
-  mediaAttachments: Array<{ contentType?: string }>;
   unavailableCount: number;
 }): string {
-  const materializedKind = kindFromMime(params.mediaAttachments[0]?.contentType);
-  const materializedPlaceholder = materializedKind
-    ? `<media:${materializedKind}>`
-    : params.mediaAttachments.length > 0
-      ? "<media:attachment>"
-      : "";
   return formatInboundMediaUnavailableText({
-    body: params.messageText || materializedPlaceholder || params.optimisticPlaceholder,
-    mediaPlaceholder:
-      params.mediaAttachments.length === 0 ? params.optimisticPlaceholder : undefined,
+    body: params.messageText,
     notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
   });
-}
-
-async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
-  try {
-    const expanded = cliPath.startsWith("~")
-      ? cliPath.replace(/^~/, process.env.HOME ?? "")
-      : cliPath;
-    const content = await fs.readFile(expanded, "utf8");
-
-    const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
-    if (userHostMatch) {
-      return userHostMatch[1];
-    }
-
-    const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
-    return hostOnlyMatch?.[1];
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      logVerbose(
-        `imessage: failed to inspect cliPath ${cliPath} for remoteHost detection: ${String(err)}`,
-      );
-    }
-    return undefined;
-  }
-}
-
-function resolveLocalMessagesHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    return os.homedir().trim() || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function resolveLocalMessagesDbPath(dbPath: string): string {
   if (!dbPath.startsWith("~")) {
     return dbPath;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
 }
 
@@ -294,7 +224,7 @@ function resolveIMessageWatchSourceDbPath(params: {
   if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
     return undefined;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
 }
 
@@ -307,8 +237,7 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
       }
     | undefined;
   try {
-    const { DatabaseSync } = await import("node:sqlite");
-    database = new DatabaseSync(resolvedDbPath, { readOnly: true });
+    database = openNodeSqliteDatabase(resolvedDbPath, { readOnly: true });
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
@@ -442,6 +371,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     cfg,
     accountId: opts.accountId,
   });
+  const approvalGatewayRuntime =
+    opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
+      channelId: "imessage",
+      accountId: accountInfo.accountId,
+      capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+    });
   const imessageCfg = accountInfo.config;
   const historyLimit = Math.max(
     0,
@@ -563,12 +498,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
 
-  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
-  const debounceMsOverride = resolveIMessageSplitSendCompatDebounceMs(cfg, coalesceSameSenderDms);
-  // Session capability latch: flips true once any inbound row from this imsg
-  // build carries balloon metadata. The coalesce flush gate needs a build-level
-  // signal because imsg omits `balloon_bundle_id` for plain rows.
-  let imsgEmitsBalloonMetadata = false;
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
   const durableRecoveryCursorRowids = new Set<number>();
   const failedRecoveryCursorRowids = new Set<number>();
@@ -620,7 +549,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }>({
     cfg,
     channel: "imessage",
-    debounceMsOverride,
     buildKey: (entry) => {
       const msg = entry.message;
       const sender = msg.sender?.trim();
@@ -631,10 +559,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         msg.chat_id != null
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
-
-      if (coalesceSameSenderDms && msg.is_group !== true) {
-        return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
-      }
 
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
@@ -648,12 +572,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return false;
       }
 
-      // Opt-in DM coalescing holds rows long enough for Apple's command+URL
-      // split-send to arrive. Group chats keep instant per-message dispatch.
-      if (coalesceSameSenderDms) {
-        return msg.is_group !== true;
-      }
-
       // General same-sender inbound debounce: text-only, no control commands,
       // no media. Off by default unless messages.inbound is configured.
       return shouldDebounceTextInbound({
@@ -664,93 +582,48 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         ),
       });
     },
-    onFlush: async (entries) => {
-      if (entries.length === 0) {
-        return;
-      }
-      // Dispatch one unit (a single row or merged bucket). Every raw queue
-      // claim in that unit follows the merged turn's adoption lifecycle.
-      const dispatchUnit = async (
-        unitEntries: { message: IMessagePayload; ingressLifecycle?: IMessageIngressLifecycle }[],
-        message: IMessagePayload,
-      ) => {
-        const { lifecycle, settle, abandon } = buildIMessageFlushIngressLifecycle(
-          unitEntries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
-        );
-        try {
-          if (lifecycle?.abortSignal.aborted) {
-            await abandon();
+    onFlush: (entries, createFlush) => {
+      const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
+        entries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
+      );
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (entries.length === 0) {
             return;
           }
-          await handleMessageNow(message, lifecycle);
-          await settle();
-        } catch (err) {
-          await abandon();
-          runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
-        }
-      };
-
-      if (entries.length === 1) {
-        await dispatchUnit(
-          entries,
-          expectDefined(entries[0], "single iMessage dispatch entry").message,
-        );
-        return;
-      }
-
-      const messages = entries.map((e) => e.message);
-      if (!shouldCombineIMessagePayloadBucket(messages, imsgEmitsBalloonMetadata)) {
-        for (const entry of entries) {
-          await dispatchUnit([entry], entry.message);
-        }
-        return;
-      }
-      // The bucket-level gate only says this window contains URL-balloon work.
-      // Standalone URL preview rows merge with the immediately preceding row;
-      // already-complete URL messages flush any pending ordinary row first.
-      if (messages.some(hasIMessageUrlBalloonBundleID)) {
-        let pending: {
-          message: IMessagePayload;
-          ingressLifecycle?: IMessageIngressLifecycle;
-        } | null = null;
-        for (const entry of entries) {
-          if (isStandaloneIMessageUrlPreviewPayload(entry.message) && pending) {
-            const unitEntries = [pending, entry];
-            await dispatchUnit(
-              unitEntries,
-              combineIMessagePayloads(unitEntries.map((e) => e.message)),
-            );
-            pending = null;
-            continue;
-          }
-          if (hasIMessageUrlBalloonBundleID(entry.message)) {
-            if (pending) {
-              await dispatchUnit([pending], pending.message);
-              pending = null;
+          try {
+            if (admissionLifecycle.abortSignal.aborted) {
+              await abandon();
+              return;
             }
-            await dispatchUnit([entry], entry.message);
-            continue;
+            if (entries.length === 1) {
+              await handleMessageNow(
+                expectDefined(entries[0], "single iMessage dispatch entry").message,
+                admissionLifecycle,
+              );
+              await settle();
+              return;
+            }
+
+            const messages = entries.map((entry) => entry.message);
+            const combined = combineIMessagePayloads(messages);
+            if (shouldLogVerbose()) {
+              const text = combined.text ?? "";
+              const preview = sliceUtf16Safe(text, 0, 50);
+              const ellipsis = text.length > 50 ? "..." : "";
+              logVerbose(
+                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
+              );
+            }
+            await handleMessageNow(combined, admissionLifecycle);
+            await settle();
+          } catch (err) {
+            await abandon();
+            runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
           }
-          if (pending) {
-            await dispatchUnit([pending], pending.message);
-          }
-          pending = entry;
-        }
-        if (pending) {
-          await dispatchUnit([pending], pending.message);
-        }
-        return;
-      }
-      const combined = combineIMessagePayloads(messages);
-      if (shouldLogVerbose()) {
-        const text = combined.text ?? "";
-        const preview = sliceUtf16Safe(text, 0, 50);
-        const ellipsis = text.length > 50 ? "..." : "";
-        logVerbose(
-          `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
-        );
-      }
-      await dispatchUnit(entries, combined);
+        },
+      });
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
@@ -852,7 +725,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
     // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
     // decoded poll (question/options/votes) so the agent sees the actual poll.
-    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll, message.sender) : null;
     const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -900,29 +773,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const {
       messageText,
       bodyText,
-      mediaPlaceholder,
+      mediaFacts,
       mediaCandidates,
       rawMediaAttachments,
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
-
-    // Approval reaction shortcut: if the inbound tapback resolves a pending
-    // approval prompt, route it through the gateway and skip the normal
-    // dispatch pipeline. This bypasses reactionNotifications gating so
-    // approvals still work when general reaction surfacing is off, and it
-    // bypasses allowFrom/dmPolicy because the approval-reactions module
-    // enforces its own actor authorization via channels.imessage.allowFrom.
-    if (
-      await maybeResolveIMessageApprovalReaction({
-        cfg,
-        accountId: accountInfo.accountId,
-        message,
-        bodyText,
-        logVerboseMessage: logVerbose,
-      })
-    ) {
-      return;
-    }
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
@@ -941,6 +796,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       opts,
       messageText,
       bodyText,
+      mediaFacts,
       allowFrom,
       groupAllowFrom,
       allowLegacyConversationAllowFromForGroup,
@@ -1084,7 +940,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
       }
     }
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg, decision.route.agentId);
     const sendPolicy = resolveSendPolicy({
       cfg,
       entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
@@ -1156,7 +1012,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const staged = remoteHost
       ? {
           attachments: rawMediaAttachments,
-          unavailableCount: mediaCandidates.length - rawMediaAttachments.length,
+          unavailableCount: rawMediaAttachments.filter((attachment) => !attachment.path).length,
         }
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
@@ -1164,12 +1020,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
-    const firstAttachment = mediaAttachments[0];
-    const mediaPath = firstAttachment?.path ?? undefined;
-    const mediaType = firstAttachment?.contentType ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
-    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
     const unavailableCount = staged.unavailableCount;
     const contextDecision =
       unavailableCount > 0
@@ -1177,8 +1027,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             ...decision,
             agentBodyText: formatIMessageInboundMediaBody({
               messageText,
-              optimisticPlaceholder: mediaPlaceholder,
-              mediaAttachments,
               unavailableCount,
             }),
           }
@@ -1215,10 +1063,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       dmHistory,
       media: {
-        path: mediaPath,
-        type: mediaType,
-        paths: mediaPaths,
-        types: mediaTypes,
+        facts: mediaAttachments,
       },
     });
 
@@ -1448,13 +1293,122 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
   }
 
+  const suppressStaleIngress = (
+    message: IMessagePayload,
+    receivedAt: number,
+    provenance?: { catchup?: boolean },
+  ): boolean => {
+    const isRecoveryReplay =
+      recoveryCursorRowid !== null &&
+      recoveryBoundaryRowid !== null &&
+      typeof message.id === "number" &&
+      message.id <= recoveryBoundaryRowid;
+    const staleThresholdMs = isRecoveryReplay
+      ? IMESSAGE_RECOVERY_MAX_AGE_MS
+      : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
+    if (provenance?.catchup || !isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
+      return false;
+    }
+    staleBacklogSuppressed += 1;
+    runtime.log?.(
+      warn(
+        `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
+          `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
+          `(${staleBacklogSuppressed} suppressed since start)`,
+      ),
+    );
+    return true;
+  };
+
+  const maybeHandleApprovalControl = async (message: IMessagePayload): Promise<boolean> => {
+    if (
+      await maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        gatewayRuntime: approvalGatewayRuntime,
+      })
+    ) {
+      return true;
+    }
+    return await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: accountInfo.accountId,
+      message,
+      bodyText: resolveIMessageInboundBodyText(message).bodyText,
+      gatewayRuntime: approvalGatewayRuntime,
+      logVerboseMessage: logVerbose,
+    });
+  };
+
+  const resolveApprovalControlConversation = (message: IMessagePayload) => {
+    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
+    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
+    const receivedSenderIsLocalFallback =
+      message.is_from_me !== true && Boolean(sender) && sender === destination;
+    const actorHandle =
+      (receivedSenderIsLocalFallback ? "" : sender) ||
+      (message.is_from_me === true ? destination : "");
+    return actorHandle
+      ? buildIMessageApprovalConversationKeyForInbound({
+          chatGuid: message.chat_guid,
+          chatIdentifier: message.chat_identifier,
+          chatId: message.chat_id,
+          isGroup: message.is_group,
+          actorHandle,
+        })
+      : null;
+  };
+
   const ingress = createIMessageDurableIngress({
     accountId: accountInfo.accountId,
     runtime,
-    dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
-      if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
-        imsgEmitsBalloonMetadata = true;
+    dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
+      const bodyText = (message.text ?? "").trim();
+      const isApprovalCommand = /^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(bodyText);
+      const isCandidate =
+        isApprovalCommand ||
+        message.poll?.kind === "vote" ||
+        Boolean(resolveIMessageReactionContext(message, bodyText));
+      if (!isCandidate) {
+        return undefined;
       }
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
+        return { kind: "completed" };
+      }
+      const repairedMessage = await repairMessageConversationAnchor(message);
+      if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      if (isApprovalCommand) {
+        // Resolve approval commands through the ordinary authenticated command
+        // pipeline, but ahead of the chat lane containing the run they release.
+        await handleMessageNowInner(repairedMessage);
+        return { kind: "completed" };
+      }
+      const conversation = resolveApprovalControlConversation(repairedMessage);
+      while (true) {
+        if (await maybeHandleApprovalControl(repairedMessage)) {
+          return { kind: "completed" };
+        }
+        if (!conversation) {
+          return undefined;
+        }
+        const waited = await iMessageApprovalControlBindings.wait({
+          accountId: accountInfo.accountId,
+          conversation,
+          abortSignal: lifecycle.abortSignal,
+        });
+        if (!waited) {
+          // The binding may have completed between the ownership check and
+          // window lookup. Close that check-then-wait race before queueing.
+          return (await maybeHandleApprovalControl(repairedMessage))
+            ? { kind: "completed" }
+            : undefined;
+        }
+      }
+    },
+    dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
       // Age fence with two windows, split on the recovery boundary:
       //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
       //    imsg emits from since_rowid — deliver them up to the wider recovery
@@ -1463,27 +1417,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       //    threshold, which is where #89237's Push-flush backlog (old send date,
       //    fresh rowid) appears.
       // Logged at default level so suppressed traffic is never silent (#89237).
-      const isRecoveryReplay =
-        recoveryCursorRowid !== null &&
-        recoveryBoundaryRowid !== null &&
-        typeof message.id === "number" &&
-        message.id <= recoveryBoundaryRowid;
-      const staleThresholdMs = isRecoveryReplay
-        ? IMESSAGE_RECOVERY_MAX_AGE_MS
-        : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
       // Catchup rows are operator-requested history: the catchup query's own
       // maxAge window is their age gate. Running them through the live fence
       // would suppress AND tombstone rows older than 15 minutes — losing
       // messages the operator explicitly asked to replay.
-      if (!provenance?.catchup && isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
-        staleBacklogSuppressed += 1;
-        runtime.log?.(
-          warn(
-            `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
-              `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
-              `(${staleBacklogSuppressed} suppressed since start)`,
-          ),
-        );
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
         // Returning completes the durable GUID claim. A later restart cannot
         // reinterpret this live-fence suppression under the wider replay fence.
         // Accepted overlap: a legacy-catchup redelivery of this GUID stays
@@ -1495,6 +1433,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
       if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      // A candidate can arrive during the narrow send-to-binding window. If it
+      // initially proved unowned and waited in the chat lane, recheck before
+      // rendering it as ordinary inbound content.
+      if (await maybeHandleApprovalControl(repairedMessage)) {
         return { kind: "completed" };
       }
       await inboundDebouncer.enqueue({
@@ -1699,6 +1643,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         cfg,
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
+        gatewayRuntime: approvalGatewayRuntime,
         logVerboseMessage: logVerbose,
       });
     } catch (err) {

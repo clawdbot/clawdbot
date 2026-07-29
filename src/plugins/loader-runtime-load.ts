@@ -1,4 +1,7 @@
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   getReusableCachedPluginRegistry,
   pluginLoaderCacheState,
@@ -118,7 +121,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activateGlobalSideEffects: context.shouldActivate,
     });
     const { registry } = registryBuilder;
-    const { manifestRegistry, orderedCandidates, manifestByRoot, provenance } =
+    const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
       resolvePluginLoadDiscovery({
         options,
         context,
@@ -129,6 +132,39 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         warningCacheKey: context.cacheKey,
         suppliedManifestRegistry: options.manifestRegistry,
       });
+    const selectedMiddlewareOwnerManifests = new Map<
+      string,
+      (typeof manifestRegistry.plugins)[number]
+    >();
+    for (const candidate of orderedCandidates) {
+      const record = manifestBySource.get(candidate.source);
+      if (record && !selectedMiddlewareOwnerManifests.has(record.id)) {
+        selectedMiddlewareOwnerManifests.set(record.id, record);
+      }
+    }
+    for (const record of selectedMiddlewareOwnerManifests.values()) {
+      const activation = resolveEffectivePluginActivationState({
+        id: record.id,
+        origin: record.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
+        activationSource: context.activationSource,
+      });
+      const runtimes = normalizeAgentToolResultMiddlewareRuntimeIds(
+        record.contracts?.agentToolResultMiddleware,
+      );
+      if (
+        runtimes.length > 0 &&
+        (record.origin === "bundled" || (activation.enabled && activation.explicitlyEnabled))
+      ) {
+        registry.agentToolResultMiddlewareOwners.push({
+          pluginId: record.id,
+          runtimes,
+          manifest: record,
+        });
+      }
+    }
     const memorySlot = context.normalized.slots.memory;
     const state: PluginLoadLoopState = {
       seenIds: new Map(),
@@ -145,7 +181,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     const pluginLoadStartMs = performance.now();
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestByRoot.get(candidate.rootDir);
+      const manifestRecord = manifestBySource.get(candidate.source);
       if (!manifestRecord) {
         continue;
       }

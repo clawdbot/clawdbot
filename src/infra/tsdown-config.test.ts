@@ -117,8 +117,6 @@ describe("tsdown config", () => {
       "web-fetch/runtime",
       "mcp/openclaw-tools-serve",
       "mcp/plugin-tools-serve",
-      "plugin-sdk/compat",
-      "plugin-sdk/index",
       bundledEntry("active-memory"),
       "bundled/boot-md/handler",
     ]) {

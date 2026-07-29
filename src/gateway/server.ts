@@ -7,13 +7,13 @@
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server.impl.js";
 
-function emitStartupTrace(name: string, durationMs: number, totalMs: number): void {
+async function emitStartupTrace(name: string, durationMs: number, totalMs: number): Promise<void> {
   if (!process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) {
     return;
   }
-  process.stderr.write(
-    `[gateway] startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-  );
+  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+  const message = `[gateway] startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
 }
 
 async function loadServerImpl() {
@@ -23,7 +23,7 @@ async function loadServerImpl() {
     return await import("./server.impl.js");
   } finally {
     const now = performance.now();
-    emitStartupTrace("gateway.server-impl-import", now - before, now - startupStartedAt);
+    await emitStartupTrace("gateway.server-impl-import", now - before, now - startupStartedAt);
   }
 }
 

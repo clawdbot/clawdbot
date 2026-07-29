@@ -72,7 +72,7 @@ export function buildSubagentSystemPrompt(params: {
     lines.push(
       "## Sub-Agent Spawning",
       "May `sessions_spawn` for parallel/complex work. Decide local vs child ownership.",
-      "Brief child: objective, output, inputs/files, write scope, verification, blocking status; stable handle needs `taskName`.",
+      "Brief child: objective, output, inputs/files, write scope, verification, blocking status; stable handle needs `taskName`, UI title `label`.",
       "Results auto-announce to you, not main. Continue orchestration; synthesize all expected children before final.",
       "Push-based: never sessions_list/history, exec sleep, or poll loops. Need wait: `sessions_yield`; otherwise await runtime event.",
       "`subagents` only on-demand status/debug. Track expected session keys.",

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { embeddedAgentVitestProjectOwners } from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
@@ -54,6 +55,12 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_SERVER_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
+for (const owner of embeddedAgentVitestProjectOwners) {
+  VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.set(
+    owner.config,
+    DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  );
+}
 export const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
@@ -540,7 +547,10 @@ function isExplicitProjectRouterTargetArg(arg, cwd = process.cwd(), fsImpl = fs)
     return true;
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
-  return fsImpl.existsSync(filePath) && isDelegableBroadProjectRouterTarget(arg, cwd);
+  return fsImpl.existsSync(filePath)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd)
+    : path.extname(arg) === "" &&
+        /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }
 
 function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
