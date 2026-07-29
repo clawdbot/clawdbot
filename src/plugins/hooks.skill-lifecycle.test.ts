@@ -165,6 +165,33 @@ describe("skill lifecycle hooks", () => {
     ]);
   });
 
+  it("passes a frozen candidate snapshot to every evaluator", async () => {
+    const first = vi.fn((event: PluginHookSkillProposalEvaluateEvent) => {
+      expect(event).not.toBe(evaluationEvent);
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(Object.isFrozen(event.candidate)).toBe(true);
+      expect(Object.isFrozen(event.candidate.skillMd)).toBe(true);
+      expect(() => {
+        event.candidate.skillMd.content = "mutated";
+      }).toThrow();
+      return { summary: "first" };
+    });
+    const second = vi.fn((event: PluginHookSkillProposalEvaluateEvent) => {
+      expect(event.candidate.skillMd.content).toBe(evaluationEvent.candidate.skillMd.content);
+      return { summary: "second" };
+    });
+    const registry = createMockPluginRegistry([
+      { hookName: "skill_proposal_evaluate", pluginId: "first", handler: first },
+      { hookName: "skill_proposal_evaluate", pluginId: "second", handler: second },
+    ]);
+
+    await expect(
+      createHookRunner(registry).runSkillProposalEvaluate(evaluationEvent, ctx),
+    ).resolves.toHaveLength(2);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
   it("returns evaluator failures and timeouts as attributed outcomes", async () => {
     const logger = { warn: vi.fn(), error: vi.fn() };
     const registry = createMockPluginRegistry([

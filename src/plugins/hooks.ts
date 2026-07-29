@@ -171,6 +171,21 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   skill_proposal_evaluate: 120_000,
 };
 
+function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return value;
+  }
+  const object = value as object;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(object)) {
+    deepFreezeHookValue(child, seen);
+  }
+  return Object.freeze(value);
+}
+
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   mergeResults?: (
     accumulated: TResult | undefined,
@@ -1525,6 +1540,7 @@ export function createHookRunner(
     }
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
     return await Promise.all(
       hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
         const pluginVersion = getPluginPackageVersion(hook.pluginId);
@@ -1538,7 +1554,7 @@ export function createHookRunner(
             event: PluginHookSkillProposalEvaluateEvent,
             ctx: PluginHookSkillContext,
           ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
-          const promise = Promise.resolve(handler(event, ctx));
+          const promise = Promise.resolve(handler(immutableEvent, ctx));
           const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
           const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
           return result
