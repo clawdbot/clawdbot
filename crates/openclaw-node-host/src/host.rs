@@ -508,10 +508,7 @@ fn emit_connected(session: &crate::NodeSession, identity: &NodeIdentity) {
 }
 
 fn adopt_device_token(session: &crate::NodeSession, credentials: &mut HostCredentials) {
-    if let Some(device_token) = session.hello()["auth"]["deviceToken"]
-        .as_str()
-        .filter(|token| !token.is_empty())
-    {
+    if let Some(device_token) = session.issued_device_token() {
         credentials.issued_device_token = Some(device_token.to_owned());
         emit(
             "info",

@@ -1,9 +1,9 @@
+use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use openclaw_node_host::{
-    ConnectAuth, InvocationResult, NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity,
+    ConnectAuth, InvocationResult, NodeClient, NodeClientConfig, NodeConnectOptions,
 };
 use serde_json::{json, Value};
-use std::io;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -30,7 +30,8 @@ async fn node_profile_uses_shared_session_for_invocations() {
             &mut socket,
             json!({
                 "type":"res", "id":connect["id"], "ok":true,
-                "payload":{"type":"hello-ok","protocol":4}
+                "payload":{"type":"hello-ok","protocol":4,
+                    "auth":{"deviceToken":"issued-device-token"}}
             }),
         )
         .await;
@@ -57,22 +58,27 @@ async fn node_profile_uses_shared_session_for_invocations() {
         .await;
     });
 
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let public_key = signing_key.verifying_key().to_bytes();
     let session = NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        |nonce| async move {
+        move |nonce| async move {
             assert_eq!(nonce, "node-nonce");
-            Ok::<_, io::Error>(
-                NodeConnectOptions::new("test", "linux")
-                    .command("example.status")
-                    .activate()
-                    .auth(ConnectAuth::token("test-token"))
-                    .identity(NodeIdentity::from_secret_bytes([7; 32])),
+            let options = NodeConnectOptions::new("test", "linux")
+                .command("example.status")
+                .activate()
+                .auth(ConnectAuth::token("test-token"));
+            let request = options.external_signing_request(public_key, &nonce)?;
+            let signature = signing_key.sign(request.payload().as_bytes());
+            Ok::<_, openclaw_node_host::IdentityError>(
+                options.device(request.finish(signature.to_bytes())?),
             )
         },
     )
     .await
     .unwrap();
     assert!(session.is_activated());
+    assert_eq!(session.issued_device_token(), Some("issued-device-token"));
     let invocation = session.next_invocation().await.unwrap();
     assert_eq!(invocation.params, json!({"verbose":true}));
     assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));

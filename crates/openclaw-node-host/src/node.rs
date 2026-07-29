@@ -13,7 +13,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::identity::{IdentityError, NodeIdentity};
+use crate::identity::{DeviceSigningRequest, IdentityError, NodeIdentity};
 
 const PROTOCOL_VERSION: u32 = 4;
 const MINIMUM_NODE_PROTOCOL_VERSION: u32 = 3;
@@ -349,6 +349,30 @@ impl NodeConnectOptions {
         self
     }
 
+    /// Prepare the canonical v3 payload for an embedding-owned Ed25519 key.
+    ///
+    /// The caller signs [`DeviceSigningRequest::payload`] with the private key
+    /// corresponding to `public_key`, completes the request, and supplies the
+    /// resulting proof through [`Self::device`]. The private key never enters
+    /// this crate.
+    /// # Errors
+    ///
+    /// Returns an error when the system clock cannot produce the signed-at
+    /// timestamp required by the Gateway contract.
+    pub fn external_signing_request(
+        &self,
+        public_key: [u8; 32],
+        nonce: &str,
+    ) -> Result<DeviceSigningRequest, IdentityError> {
+        DeviceSigningRequest::new(
+            public_key,
+            nonce,
+            &self.client.platform,
+            self.client.device_family.as_deref(),
+            self.auth.as_ref().and_then(ConnectAuth::signature_token),
+        )
+    }
+
     #[must_use]
     pub fn auth(mut self, value: ConnectAuth) -> Self {
         self.auth = Some(value);
@@ -607,6 +631,16 @@ impl NodeSession {
     #[must_use]
     pub fn is_activated(&self) -> bool {
         self.activated
+    }
+
+    /// Return the issued device token from `hello-ok`, when the Gateway supplied
+    /// one. Embeddings remain responsible for secure persistence and for
+    /// selecting it on a later connection attempt.
+    #[must_use]
+    pub fn issued_device_token(&self) -> Option<&str> {
+        self.hello()["auth"]["deviceToken"]
+            .as_str()
+            .filter(|token| !token.is_empty())
     }
 
     #[must_use]
@@ -875,6 +909,27 @@ mod tests {
                 invoke_id: "invoke-1".into(),
                 node_id: "node-1".into(),
             }
+        );
+    }
+
+    #[test]
+    fn external_signing_request_uses_final_connect_metadata_and_auth() {
+        let options = NodeConnectOptions::new("test", "Windows")
+            .device_family("Desktop")
+            .auth(ConnectAuth::token("test-token"));
+        let public_key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+            .verifying_key()
+            .to_bytes();
+        let request = options
+            .external_signing_request(public_key, "nonce-1")
+            .expect("external signing request");
+        assert_eq!(
+            request.payload(),
+            format!(
+                "v3|{}|node-host|node|node||{}|test-token|nonce-1|windows|desktop",
+                request.device_id(),
+                request.signed_at()
+            )
         );
     }
 
