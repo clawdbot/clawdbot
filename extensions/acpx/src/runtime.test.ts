@@ -4206,7 +4206,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(launchCommands[0]).toContain(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
     expect(saveSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        agentCommand: launchCommands[0],
         openclawGatewayInstanceId: "gateway-test",
         openclawLeaseId: expect.any(String),
       }),
