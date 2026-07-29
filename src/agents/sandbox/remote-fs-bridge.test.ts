@@ -104,8 +104,9 @@ describe("remote sandbox fs bridge", () => {
     "reads files with the pinned mutation helper",
     async () => {
       await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
-        const workspaceDir = path.join(stateDir, "workspace");
-        await fs.mkdir(workspaceDir, { recursive: true });
+        const workspacePath = path.join(stateDir, "workspace");
+        await fs.mkdir(workspacePath, { recursive: true });
+        const workspaceDir = await fs.realpath(workspacePath);
         await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello", "utf8");
 
         const { calls, runtime } = createLocalRemoteRuntime({
@@ -128,6 +129,38 @@ describe("remote sandbox fs bridge", () => {
         expect(calls[0]?.script).toContain("python3 /dev/fd/3 \"$@\" 3<<'PY'");
         expect(calls[0]?.script).toContain("read_file(parent_fd, basename)");
         expect(calls[0]?.script).not.toContain('cat -- "$1"');
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "streams file copies with the pinned mutation helper",
+    async () => {
+      await withTempDir("openclaw-remote-fs-copy-", async (stateDir) => {
+        const workspacePath = path.join(stateDir, "workspace");
+        await fs.mkdir(workspacePath, { recursive: true });
+        const workspaceDir = await fs.realpath(workspacePath);
+        await fs.writeFile(path.join(workspaceDir, "source.txt"), "streamed", "utf8");
+        const { calls, runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+
+        const copyFile = bridge.copyFile?.bind(bridge);
+        expect(copyFile).toBeTypeOf("function");
+        await copyFile!({
+          sourcePath: "source.txt",
+          destinationPath: "nested/copy.txt",
+        });
+
+        await expect(
+          fs.readFile(path.join(workspaceDir, "nested", "copy.txt"), "utf8"),
+        ).resolves.toBe("streamed");
+        expect(calls.some((call) => call.args?.[0] === "copy")).toBe(true);
       });
     },
   );

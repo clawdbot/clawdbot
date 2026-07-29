@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
@@ -19,19 +20,12 @@ import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
 
-type DebugRequestScope = {
-  gateway: ApplicationContext["gateway"];
-  client: GatewayBrowserClient;
-  generation: number;
-};
-
 class DebugPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private client: GatewayBrowserClient | null = null;
   @state() private connected = false;
-  @state() private debugLoading = false;
   @state() private debugStatus: StatusSummary | null = null;
   @state() private debugHealth: HealthSnapshot | null = null;
   @state() private debugModels: unknown[] = [];
@@ -52,7 +46,25 @@ class DebugPage extends OpenClawLightDomElement {
   );
   private hasBoundGatewaySource = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
-  private requestGeneration = 0;
+  private callEpoch = 0;
+  private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
+  private readonly diagnosticsTask = new Task(this, {
+    autoRun: false,
+    args: () => [this.connected ? this.client : null] as const,
+    task: ([client], { signal }) =>
+      client ? loadGatewayDiagnostics(client, signal) : initialState,
+    onComplete: (result) => {
+      this.diagnosticsTaskActiveClient = null;
+      this.debugStatus = result.status;
+      this.debugHealth = result.health;
+      this.debugModels = result.models;
+      this.debugHeartbeat = result.heartbeat;
+    },
+    onError: (error) => {
+      this.diagnosticsTaskActiveClient = null;
+      this.debugCallError = String(error);
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
@@ -60,7 +72,6 @@ class DebugPage extends OpenClawLightDomElement {
         const resetForSourceBind = this.hasBoundGatewaySource;
         this.hasBoundGatewaySource = true;
         this.gatewaySource = gateway;
-        this.requestGeneration += 1;
         const cleanup = gateway.subscribe((snapshot) => {
           if (this.gatewaySource === gateway && this.context.gateway === gateway) {
             this.applyGatewaySnapshot(snapshot);
@@ -80,31 +91,31 @@ class DebugPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.requestGeneration += 1;
+    void this.diagnosticsTask.run([null]);
+    this.diagnosticsTaskActiveClient = null;
+    this.callEpoch += 1;
     this.gatewaySource = null;
-    this.debugLoading = false;
     super.disconnectedCallback();
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
-    const connectionChanged = snapshot.connected !== this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
     const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     if (clientChanged || connectionChanged) {
-      this.requestGeneration += 1;
+      void this.diagnosticsTask.run([null]);
+      this.diagnosticsTaskActiveClient = null;
+      this.callEpoch += 1;
     }
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged) {
       this.resetServerState();
-    } else if (connectionChanged) {
-      this.debugLoading = false;
     }
     this.syncPolling();
     this.ensureInitialDebug();
   }
 
   private resetServerState() {
-    this.debugLoading = false;
     this.debugStatus = null;
     this.debugHealth = null;
     this.debugModels = [];
@@ -122,81 +133,46 @@ class DebugPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialDebug() {
-    if (!this.connected || !this.client || this.debugStatus || this.debugLoading) {
+    if (!this.connected || !this.client || this.debugStatus || this.diagnosticsTaskActiveClient) {
       return;
     }
     void this.loadDiagnostics();
   }
 
-  private captureRequestScope(): DebugRequestScope | null {
-    const gateway = this.gatewaySource;
-    const client = this.client;
-    if (
-      !gateway ||
-      !client ||
-      !this.connected ||
-      !this.isConnected ||
-      this.context.gateway !== gateway
-    ) {
-      return null;
+  private loadDiagnostics(): Promise<void> {
+    const client = this.connected ? this.client : null;
+    if (!client || this.diagnosticsTaskActiveClient) {
+      return Promise.resolve();
     }
-    return { gateway, client, generation: this.requestGeneration };
-  }
-
-  private isRequestScopeCurrent(scope: DebugRequestScope): boolean {
-    return (
-      this.isConnected &&
-      this.gatewaySource === scope.gateway &&
-      this.context.gateway === scope.gateway &&
-      this.requestGeneration === scope.generation &&
-      this.client === scope.client &&
-      this.connected
-    );
-  }
-
-  private async loadDiagnostics() {
-    const scope = this.captureRequestScope();
-    if (!scope || this.debugLoading) {
-      return;
-    }
-    this.debugLoading = true;
-    try {
-      const result = await loadGatewayDiagnostics(scope.client);
-      if (!this.isRequestScopeCurrent(scope)) {
-        return;
-      }
-      this.debugStatus = result.status;
-      this.debugHealth = result.health;
-      this.debugModels = result.models;
-      this.debugHeartbeat = result.heartbeat;
-    } catch (err) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.debugCallError = String(err);
-      }
-    } finally {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.debugLoading = false;
-      }
-    }
+    this.diagnosticsTaskActiveClient = client;
+    return this.diagnosticsTask.run([client]);
   }
 
   private async callDebugMethod() {
-    const scope = this.captureRequestScope();
-    if (!scope) {
+    const client = this.connected ? this.client : null;
+    if (!client) {
       return;
     }
     this.debugCallError = null;
     this.debugCallResult = null;
+    const gateway = this.gatewaySource;
+    const epoch = this.callEpoch;
+    const isCurrent = () =>
+      this.connected &&
+      this.client === client &&
+      this.gatewaySource === gateway &&
+      this.context.gateway === gateway &&
+      this.callEpoch === epoch;
     try {
       const params = this.debugCallParams.trim()
         ? (JSON.parse(this.debugCallParams) as unknown)
         : {};
-      const res = await scope.client.request(this.debugCallMethod.trim(), params);
-      if (this.isRequestScopeCurrent(scope)) {
+      const res = await client.request(this.debugCallMethod.trim(), params);
+      if (isCurrent()) {
         this.debugCallResult = JSON.stringify(res, null, 2);
       }
     } catch (err) {
-      if (this.isRequestScopeCurrent(scope)) {
+      if (isCurrent()) {
         this.debugCallError = String(err);
       }
     }
@@ -204,7 +180,7 @@ class DebugPage extends OpenClawLightDomElement {
 
   override render() {
     const body = renderDebug({
-      loading: this.debugLoading,
+      loading: this.diagnosticsTask.status === TaskStatus.PENDING,
       status: this.debugStatus,
       health: this.debugHealth,
       models: this.debugModels,
@@ -231,4 +207,6 @@ class DebugPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-debug-page", DebugPage);
+if (!customElements.get("openclaw-debug-page")) {
+  customElements.define("openclaw-debug-page", DebugPage);
+}

@@ -137,6 +137,7 @@ describe("pairing setup code", () => {
         scopes: [
           "operator.admin",
           "operator.approvals",
+          "operator.questions",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",
@@ -365,17 +366,6 @@ describe("pairing setup code", () => {
       expectedAuthLabel: "password",
     },
     {
-      name: "uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef",
-      auth: {
-        mode: "password",
-        password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
-      } as const,
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
-      },
-      expectedAuthLabel: "password",
-    },
-    {
       name: "does not resolve gateway.auth.password SecretRef in token mode",
       auth: {
         mode: "token",
@@ -417,6 +407,20 @@ describe("pairing setup code", () => {
       ),
       options: { env: {} },
       expectedError: "MISSING_GW_TOKEN",
+    },
+    {
+      name: "does not let OPENCLAW_GATEWAY_PASSWORD mask a configured password SecretRef",
+      config: createCustomGatewayConfig(
+        {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+        },
+        defaultEnvSecretProviderConfig,
+      ),
+      options: {
+        env: { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" },
+      },
+      expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
     await expectResolvedSetupFailureCase({ config, options, expectedError });

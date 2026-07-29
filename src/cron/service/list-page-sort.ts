@@ -21,9 +21,11 @@ export function sortCronJobs(
       if (typeof aNext === "number" && typeof bNext === "number") {
         cmp = aNext - bNext;
       } else if (typeof aNext === "number") {
-        cmp = -1;
+        // Missing run times are not directional sort keys. Keep paused jobs
+        // after runnable jobs so descending pages do not hide scheduled work.
+        return -1;
       } else if (typeof bNext === "number") {
-        cmp = 1;
+        return 1;
       } else {
         cmp = 0;
       }

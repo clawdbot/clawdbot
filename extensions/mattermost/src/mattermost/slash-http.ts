@@ -11,11 +11,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  createReplyDispatcherWithTyping,
-  dispatchInboundMessage,
-  finalizeInboundContext,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -41,15 +37,14 @@ import {
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
+  toMattermostChannelDeliveryResult,
 } from "./reply-delivery.js";
 import {
   buildModelsProviderData,
-  createChannelMessageReplyPipeline,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
   type OpenClawConfig,
-  type ReplyPayload,
   type RuntimeEnv,
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
@@ -875,67 +870,70 @@ async function handleSlashCommandAsync(params: {
     accountId: account.accountId,
   });
 
-  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
-    cfg,
-    agentId: route.agentId,
-    channel: "mattermost",
-    accountId: account.accountId,
-    typing: {
-      start: () => sendMattermostTyping(client, { channelId }),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: (message) => log?.(message),
-          channel: "mattermost",
-          target: channelId,
-          error: err,
-        });
-      },
-    },
-  });
   const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
   const deliveryBarrier = createMattermostReplyDeliveryBarrier({
     isDirect: kind === "direct",
     dmRetryOptions: account.config.dmChannelRetry,
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...replyPipeline,
-    resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-    onDeliverySettled: deliveryBarrier.markDeliverySettled,
-    humanDelay,
-    deliver: async (payload: ReplyPayload) => {
-      await deliverMattermostReplyPayload({
-        core,
-        cfg,
-        payload,
-        to,
-        accountId: account.accountId,
-        agentId: route.agentId,
-        textLimit,
-        tableMode,
-        sendMessage: sendMessageMattermost,
-        onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-      });
-      runtime.log?.(`delivered slash reply to ${to}`);
-    },
-    onError: (err, info) => {
-      runtime.error?.(
-        `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
-      );
-    },
-    onReplyStart: typingCallbacks?.onReplyStart,
-  });
-
-  await dispatchInboundMessage({
-    ctx: ctxPayload,
+  await core.channel.inbound.dispatch({
     cfg,
-    dispatcher,
-    onSettled: () => markDispatchIdle(),
+    channel: "mattermost",
+    accountId: account.accountId,
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      sessionKey: route.sessionKey,
+    },
+    ctxPayload,
+    delivery: {
+      deliver: async (payload) => {
+        const result = toMattermostChannelDeliveryResult(
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload,
+            to,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            textLimit,
+            tableMode,
+            sendMessage: sendMessageMattermost,
+            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+          }),
+        );
+        if (result.visibleReplySent) {
+          runtime.log?.(`delivered slash reply to ${to}`);
+        }
+        return result;
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+        );
+      },
+    },
+    replyPipeline: {
+      typing: {
+        start: () => sendMattermostTyping(client, { channelId }),
+        onStartError: (err) => {
+          logTypingFailure({
+            log: (message) => log?.(message),
+            channel: "mattermost",
+            target: channelId,
+            error: err,
+          });
+        },
+      },
+    },
+    dispatcherOptions: {
+      resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+      onDeliverySettled: deliveryBarrier.markDeliverySettled,
+      humanDelay,
+    },
     replyOptions: {
-      ...replyOptions,
       disableBlockStreaming:
         typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-      onModelSelected,
     },
   });
 }

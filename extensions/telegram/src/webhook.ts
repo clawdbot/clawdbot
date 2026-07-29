@@ -37,7 +37,7 @@ import { createTelegramBot } from "./bot.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError } from "./network-errors.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
-import { createTelegramTransportIngressDrain } from "./telegram-ingress-drain-factory.js";
+import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import {
   resolveTelegramIngressSpoolDir,
   writeTelegramSpooledUpdate,
@@ -49,6 +49,7 @@ const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const TELEGRAM_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const TELEGRAM_WEBHOOK_ACCEPTED_VALUE = "durable";
 const TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS = 500;
+const TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS = 15_000;
 const TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY: BackoffPolicy = {
   initialMs: 5_000,
   maxMs: 60_000,
@@ -71,6 +72,24 @@ async function listenHttpServer(params: {
       resolve();
     });
   });
+}
+
+async function waitForWebhookIngressStop(task: Promise<void> | undefined): Promise<void> {
+  if (!task) {
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      task,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function resolveWebhookPublicUrl(params: {
@@ -367,59 +386,31 @@ export async function startTelegramWebhook(opts: {
   }
 
   const log = (line: string) => runtime.log?.(line);
-  let drainActive = false;
-  let drainRequested = false;
-  let webhookIngressDrain: ReturnType<typeof createTelegramTransportIngressDrain> | undefined;
-  const drainWebhookSpool = async (): Promise<void> => {
-    if (shutDown || opts.abortSignal?.aborted) {
-      return;
-    }
-    if (drainActive) {
-      drainRequested = true;
-      return;
-    }
-    drainActive = true;
-    drainRequested = false;
-    try {
-      // Shutdown must abort in-flight drain work (tombstone retries), not just
-      // stop the next claim; the composed signal carries webhook stop + caller abort.
-      const webhookAbortSignal = opts.abortSignal
-        ? AbortSignal.any([shutdownAbortController.signal, opts.abortSignal])
-        : shutdownAbortController.signal;
-      webhookIngressDrain ??= createTelegramTransportIngressDrain({
-        spoolDir,
-        bot,
-        cfg: opts.config ?? {},
-        accountId: opts.accountId ?? "default",
-        // Pre-migration product default: 25m claim→adoption stall for webhook.
-        adoptionStallTimeoutMs: 25 * 60_000,
-        abortSignal: webhookAbortSignal,
-        onLog: (message) => log(`webhook ${message}`),
-      });
-      await webhookIngressDrain.drainOnce({
-        shouldStop: () => shutDown || webhookAbortSignal.aborted,
-      });
-    } catch (err) {
-      log(`[telegram][diag] webhook spool drain failed: ${formatErrorMessage(err)}`);
-    } finally {
-      drainActive = false;
-      if (drainRequested && !shutDown && !opts.abortSignal?.aborted) {
-        drainRequested = false;
-        void Promise.resolve().then(drainWebhookSpool);
-      }
-    }
-  };
-  const requestWebhookSpoolDrain = () => {
-    void drainWebhookSpool();
-  };
-  let drainTimer: ReturnType<typeof setInterval> | undefined;
+  let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
+  const requestWebhookSpoolDrain = () => webhookIngressMonitor?.requestDrain();
   const startWebhookSpoolDrain = () => {
-    if (drainTimer) {
+    if (webhookIngressMonitor) {
       return;
     }
-    requestWebhookSpoolDrain();
-    drainTimer = setInterval(requestWebhookSpoolDrain, TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS);
-    drainTimer.unref?.();
+    // Shutdown must abort in-flight drain work (tombstone retries), not just
+    // stop the next claim; the composed signal carries webhook stop + caller abort.
+    const webhookAbortSignal = opts.abortSignal
+      ? AbortSignal.any([shutdownAbortController.signal, opts.abortSignal])
+      : shutdownAbortController.signal;
+    webhookIngressMonitor = createTelegramTransportIngressMonitor({
+      spoolDir,
+      bot,
+      cfg: opts.config ?? {},
+      accountId: opts.accountId ?? "default",
+      // Pre-migration product default: 25m claim→adoption stall for webhook.
+      adoptionStallTimeoutMs: 25 * 60_000,
+      pollIntervalMs: TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS,
+      abortSignal: webhookAbortSignal,
+      onLog: (message) => log(`webhook ${message}`),
+      onError: (error) =>
+        log(`[telegram][diag] webhook spool drain failed: ${formatErrorMessage(error)}`),
+    });
+    webhookIngressMonitor.start();
   };
 
   const server = createServer((req, res) => {
@@ -545,16 +536,14 @@ export async function startTelegramWebhook(opts: {
     botAbortController.abort();
     shutDown = true;
     shutdownAbortController.abort();
-    if (drainTimer) {
-      clearInterval(drainTimer);
-    }
-    webhookIngressDrain?.dispose();
-    webhookIngressDrain = undefined;
+    const ingressStopTask = webhookIngressMonitor?.stop();
+    webhookIngressMonitor = undefined;
     server.close();
     await bot.stop();
     // The webhook owns this transport because it resolved and injected it into
     // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
     await closeTransportOnce();
+    await waitForWebhookIngressStop(ingressStopTask);
     status.noteWebhookStop();
     if (diagnosticsEnabled) {
       stopDiagnosticHeartbeat();

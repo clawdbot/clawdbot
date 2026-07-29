@@ -1,7 +1,13 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
+import {
+  readQaScenarioById,
+  readQaScenarioPack,
+  type QaScenarioExecution,
+  type QaScenarioFlow,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
 type QaFlowStep = {
@@ -38,6 +44,7 @@ async function runLoadedScenarioFlow(
   const state = params.state ?? createQaBusState();
   let waitCount = 0;
   const transport = {
+    accountId: "qa-channel",
     state,
     reset: async () => {
       state.reset();
@@ -74,6 +81,10 @@ async function runLoadedScenarioFlow(
             (!input.textIncludes || candidate.text.includes(input.textIncludes)),
         );
       if (match) {
+        state.resolvePollCursor({
+          accountId: "qa-channel",
+          cursor: state.getSnapshot().cursor,
+        });
         return match;
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
@@ -87,7 +98,14 @@ async function runLoadedScenarioFlow(
         }),
   };
   const api = {
-    env: { providerMode: "mock-openai" },
+    env: {
+      providerMode: "mock-openai",
+      gateway: {
+        restartAfterStateMutation: async (mutate: (context: unknown) => Promise<void>) => {
+          await mutate({});
+        },
+      },
+    },
     transport,
     state,
     scenario,
@@ -98,6 +116,15 @@ async function runLoadedScenarioFlow(
     waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
+    waitForCondition: async <T>(check: () => T | Promise<T | undefined>) => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const value = await check();
+        if (value !== undefined) {
+          return value;
+        }
+      }
+      throw new Error("test condition was not met");
+    },
     sleep: async () => undefined,
     reset: async () => {
       state.reset();
@@ -207,7 +234,316 @@ async function runWebchatTranscriptWait(
   });
 }
 
+const planningEvidenceCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+
+type PlanningEvidenceScenario = QaSeedScenarioWithSource & {
+  execution: Extract<QaScenarioExecution, { kind: "flow" }> & { flow?: QaScenarioFlow };
+};
+
+function isPlanningEvidenceScenario(
+  scenario: QaSeedScenarioWithSource,
+): scenario is PlanningEvidenceScenario {
+  return (
+    scenario.execution.kind === "flow" &&
+    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
+      (coverageId) => planningEvidenceCoverageIds.has(coverageId),
+    )
+  );
+}
+
+type PlanningEvidenceFixture = {
+  currentSummary: Record<string, unknown>;
+  failureMessage: string;
+  outboundText: string;
+  scenario: PlanningEvidenceScenario;
+};
+
+function readPlanningEvidenceFlow(scenario: PlanningEvidenceScenario): QaScenarioFlow {
+  const step = scenario.execution.flow?.steps.find((candidate) =>
+    candidate.actions.some(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "call" in action &&
+        action.call === "runAgentPrompt",
+    ),
+  );
+  if (!step) {
+    throw new Error(`planning scenario has no agent turn: ${scenario.id}`);
+  }
+  const artifactIndex = step.actions.findIndex(
+    (action) =>
+      typeof action === "object" &&
+      action !== null &&
+      "set" in action &&
+      action.set === "artifactPath",
+  );
+  const evidenceActions = artifactIndex >= 0 ? step.actions.slice(0, artifactIndex) : step.actions;
+  return {
+    steps: [
+      {
+        name: "proves current-attempt planning evidence",
+        actions: [
+          { set: "selected", value: { provider: "openai", model: "gpt-5.6-luna" } },
+          ...evidenceActions,
+        ],
+      },
+    ],
+  };
+}
+
+function createPlanningEvidenceFixture(
+  scenario: PlanningEvidenceScenario,
+): PlanningEvidenceFixture {
+  const config = scenario.execution.config ?? {};
+  const artifactFile = typeof config.artifactFile === "string" ? config.artifactFile : undefined;
+  const expectedReply = typeof config.expectedReply === "string" ? config.expectedReply : undefined;
+  const internalMarker =
+    typeof config.internalMarker === "string" ? config.internalMarker : undefined;
+
+  if (scenario.execution.runtime === "codex" && expectedReply && internalMarker) {
+    return {
+      scenario,
+      outboundText: expectedReply,
+      failureMessage: "missing marked Codex internal plan/reasoning mirror evidence",
+      currentSummary: {
+        eventCursor: 9,
+        assistantMirrors: [
+          { identity: "current-turn:plan", text: `Codex plan:\n${internalMarker}` },
+          { identity: "current-turn:assistant", text: expectedReply },
+        ],
+        successfulToolCallCounts: {},
+      },
+    };
+  }
+  if (scenario.execution.runtime === "codex" && artifactFile) {
+    const outboundText = `Built ${artifactFile}`;
+    return {
+      scenario,
+      outboundText,
+      failureMessage: "missing Codex App Server plan signal",
+      currentSummary: {
+        eventCursor: 9,
+        assistantMirrors: [
+          { identity: "current-turn:plan", text: "Codex plan:\n- build the game" },
+          { identity: "current-turn:assistant", text: outboundText },
+        ],
+        successfulToolCallCounts: {},
+      },
+    };
+  }
+  if (scenario.execution.runtime === "openclaw" && artifactFile) {
+    return {
+      scenario,
+      outboundText: `Built ${artifactFile}`,
+      failureMessage: "missing OpenClaw update_plan signal",
+      currentSummary: {
+        eventCursor: 9,
+        successfulToolCallCounts: { update_plan: 1 },
+      },
+    };
+  }
+  throw new Error(`unsupported planning evidence metadata: ${scenario.id}`);
+}
+
+function runPlanningEvidenceFixture(
+  fixture: PlanningEvidenceFixture,
+  currentSummary = fixture.currentSummary,
+) {
+  const state = createQaBusState();
+  const readOptions: unknown[] = [];
+  const summaries = [
+    {
+      eventCursor: 7,
+      assistantMirrors: [
+        { identity: "old-turn:plan", text: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
+        { identity: "old-turn:assistant", text: fixture.outboundText },
+      ],
+      successfulToolCallCounts: { update_plan: 1 },
+    },
+    currentSummary,
+  ];
+  let readIndex = 0;
+  const result = runLoadedScenarioFlow(fixture.scenario.id, {
+    flow: readPlanningEvidenceFlow(fixture.scenario),
+    state,
+    onWaitForOutboundMessage: ({ state: currentState }) => {
+      currentState.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "dm:qa-operator",
+        text: fixture.outboundText,
+      });
+    },
+    api: {
+      env: {
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      },
+      readSessionTranscriptSummary: async (...args: unknown[]) => {
+        readOptions.push(args[2]);
+        const summary = summaries[readIndex];
+        readIndex += 1;
+        if (!summary) {
+          throw new Error("unexpected transcript summary read");
+        }
+        return summary;
+      },
+      resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
+      normalizeLowercaseStringOrEmpty: (value: unknown) =>
+        typeof value === "string" ? value.trim().toLowerCase() : "",
+      runAgentPrompt: async () => ({ started: { runId: "current-run" }, waited: { status: "ok" } }),
+    },
+  });
+  return { readOptions, result };
+}
+
+const planningEvidenceFixtures = readQaScenarioPack()
+  .scenarios.filter(isPlanningEvidenceScenario)
+  .map(createPlanningEvidenceFixture);
+
 describe("scenario-flow-runner", () => {
+  it.each(["runtime-first-hour-20-turn", "runtime-soak-100-turn"])(
+    "fails %s when no requested outbound marker is delivered",
+    async (scenarioId) => {
+      await expect(runLoadedScenarioFlow(scenarioId)).rejects.toThrow("test condition was not met");
+    },
+  );
+
+  it.each([
+    { id: "runtime-first-hour-20-turn", prefix: "FIRST-HOUR-20", width: 2 },
+    { id: "runtime-soak-100-turn", prefix: "SOAK-100", width: 3 },
+  ])("fails $id when user turns are persisted more than once", async ({ id, prefix, width }) => {
+    const state = createQaBusState();
+    let turnCount = 0;
+    await expect(
+      runLoadedScenarioFlow(id, {
+        state,
+        api: {
+          normalizeLowercaseStringOrEmpty: (value: unknown) =>
+            typeof value === "string" ? value.trim().toLowerCase() : "",
+          runAgentPrompt: async () => {
+            turnCount += 1;
+            state.addOutboundMessage({
+              accountId: "qa-channel",
+              to: "dm:qa-operator",
+              text: `${prefix}-${String(turnCount).padStart(width, "0")}`,
+            });
+          },
+          readSessionTranscriptSummary: async () => ({ userMessageCount: turnCount + 1 }),
+        },
+      }),
+    ).rejects.toThrow("persisted user turns");
+  });
+
+  it.each([
+    "control-ui-qa-channel-image-roundtrip",
+    "control-ui-assistant-transcript-role-boundary",
+  ])("opens the selected Control UI session from the gateway root for %s", async (scenarioId) => {
+    const scenario = readQaScenarioById(scenarioId);
+    const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions);
+    if (!actions) {
+      throw new Error(`scenario has no flow: ${scenarioId}`);
+    }
+
+    const sessionAction = actions.find(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "set" in action &&
+        action.set === "uiSessionKey",
+    );
+    const urlAction = actions.find(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "set" in action &&
+        action.set === "controlUiChatUrl",
+    );
+    const openAction = actions.find(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "call" in action &&
+        action.call === "webOpenPage",
+    );
+    if (!sessionAction || !urlAction || !openAction) {
+      throw new Error(`scenario has no Control UI session navigation: ${scenarioId}`);
+    }
+
+    const sessionKey = "agent:main:qa-channel:direct:control-ui-session";
+    const gatewayToken = "qa token/+";
+    const openedUrls: string[] = [];
+    const result = await runLoadedScenarioFlow(scenarioId, {
+      flow: {
+        steps: [
+          {
+            name: "opens the selected chat session",
+            actions: [sessionAction, urlAction, openAction],
+          },
+        ],
+      },
+      api: {
+        env: {
+          providerMode: "mock-openai",
+          cfg: {
+            agents: { list: [{ id: "main", default: true }] },
+          },
+          gateway: {
+            baseUrl: "http://127.0.0.1:43124",
+            token: gatewayToken,
+          },
+        },
+        buildAgentSessionKey: () => sessionKey,
+        webOpenPage: async ({ url }: { url: string }) => {
+          openedUrls.push(url);
+          return { pageId: "control-ui-session-page" };
+        },
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(openedUrls).toHaveLength(1);
+    const openedUrl = openedUrls[0];
+    if (!openedUrl) {
+      throw new Error(`scenario did not open its Control UI session: ${scenarioId}`);
+    }
+    const chatUrl = new URL(openedUrl);
+    expect(chatUrl.pathname).toBe("/");
+    expect(chatUrl.searchParams.get("session")).toBe(sessionKey);
+    expect(chatUrl.hash).toBe(`#token=${encodeURIComponent(gatewayToken)}`);
+  });
+
+  it.each(planningEvidenceFixtures)(
+    "accepts current-attempt planning evidence for $scenario.id",
+    async (fixture) => {
+      const { readOptions, result } = runPlanningEvidenceFixture(fixture);
+
+      await expect(result).resolves.toMatchObject({ status: "pass" });
+      expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
+    },
+  );
+
+  it.each(planningEvidenceFixtures)(
+    "rejects stale prior-attempt planning evidence for $scenario.id",
+    async (fixture) => {
+      const currentSummary = {
+        eventCursor: 8,
+        ...(fixture.scenario.execution.runtime === "codex"
+          ? {
+              assistantMirrors: [
+                { identity: "current-turn:assistant", text: fixture.outboundText },
+              ],
+            }
+          : {}),
+        successfulToolCallCounts: {},
+      };
+      const { readOptions, result } = runPlanningEvidenceFixture(fixture, currentSummary);
+
+      await expect(result).rejects.toThrow(fixture.failureMessage);
+      expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
+    },
+  );
+
   it("runs the canonical reaction lifecycle with target-bound actions", async () => {
     const state = createQaBusState();
     const actionTargets: unknown[] = [];

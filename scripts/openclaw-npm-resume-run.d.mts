@@ -43,10 +43,24 @@ export function validateOpenClawNpmResumeRun(
   input: OpenClawNpmResumeValidationInput,
 ): OpenClawNpmResumeIdentity;
 
+export function runOpenClawNpmResumeGh(
+  args: string[],
+  params?: {
+    execFileSyncImpl?: (
+      command: string,
+      args: string[],
+      options: {
+        encoding: "utf8";
+        killSignal: "SIGKILL";
+        maxBuffer: number;
+        timeout: number;
+      },
+    ) => string;
+  },
+): string;
+
 export function resolveOpenClawNpmResumeRun(options: {
   repo: string;
   runId: string;
   runGh?: (args: string[]) => string;
 }): OpenClawNpmResumeIdentity;
-
-export function main(argv?: string[]): void;

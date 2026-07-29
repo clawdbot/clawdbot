@@ -258,6 +258,18 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(() => FeishuConfigSchema.parse({ allowBots: "mentions" })).toThrow();
   });
 
+  it("keeps VC auto-join default-off without forcing account overrides", () => {
+    const result = FeishuConfigSchema.parse({ accounts: { main: {} } });
+    expect(result.vcAutoJoin).toBeUndefined();
+    expect(result.accounts?.main?.vcAutoJoin).toBeUndefined();
+
+    expect(FeishuConfigSchema.parse({ vcAutoJoin: true }).vcAutoJoin).toBe(true);
+    expect(
+      FeishuConfigSchema.parse({ accounts: { main: { vcAutoJoin: true } } }).accounts?.main
+        ?.vcAutoJoin,
+    ).toBe(true);
+  });
+
   it("accepts top-level and account-level nested streaming config", () => {
     const result = FeishuConfigSchema.parse({
       streaming: {

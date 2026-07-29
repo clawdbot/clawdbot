@@ -5,6 +5,7 @@ import { CHANNEL_IDS } from "../channels/ids.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
@@ -14,6 +15,7 @@ import {
   schemaHasChildren,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "./schema.tiers.js";
 
 type ConfigSchema = Record<string, unknown>;
 
@@ -142,7 +144,10 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<ConfigUiHint, "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder">
+    Pick<
+      ConfigUiHint,
+      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+    >
   >;
   configSchema?: JsonSchemaNode;
 };
@@ -388,7 +393,7 @@ function applyHeartbeatTargetHints(
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
   const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.list.*.heartbeat.target"];
+  const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
@@ -538,6 +543,21 @@ function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   });
 }
 
+/**
+ * Materialize the presentation hints that need the merged schema: tiers resolve
+ * per path, then shared channel leaves get their help, then tags derive.
+ */
+function resolveMergedUiHints(schema: ConfigSchema, hints: ConfigUiHints): ConfigUiHints {
+  return applyDerivedTags(
+    applySharedChannelFieldHelp(
+      applyResolvedConfigTierHints(
+        schema,
+        applyConfigTierHints(hints, { includePluginOwnedChannels: true }),
+      ),
+    ),
+  );
+}
+
 function buildBaseConfigSchema(): ConfigSchemaResponse {
   if (cachedBase) {
     return cachedBase;
@@ -554,10 +574,11 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
+  const mergedSchema = applyChannelSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
-    schema: applyChannelSchemas(generated.schema, bundledChannels),
-    uiHints: mergedHints,
+    schema: mergedSchema,
+    uiHints: resolveMergedUiHints(mergedSchema, mergedHints),
   };
   cachedBase = next;
   return next;
@@ -603,7 +624,7 @@ export function buildConfigSchema(params?: {
   const merged = {
     ...base,
     schema: mergedSchema,
-    uiHints: mergedHints,
+    uiHints: resolveMergedUiHints(mergedSchema, mergedHints),
   };
   if (cacheKey) {
     setMergedSchemaCache(cacheKey, merged);

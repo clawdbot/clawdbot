@@ -10,6 +10,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
@@ -34,8 +35,17 @@ import type {
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  hasUnavailableSkillSecretOwners,
+  isSkillSecretOwnerUnavailable,
+  resolveBundledAllowlist,
+  shouldIncludeSkill,
+} from "./config.js";
+import {
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+  resolveSkillKey,
+} from "./frontmatter.js";
 import {
   loadSkillsFromDirSafe,
   readSkillFrontmatterSafe,
@@ -1218,12 +1228,13 @@ function loadSkillEntries(
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
-  const personalAgentsSkills = workspaceOnly
-    ? []
-    : loadSkills({
-        dir: personalAgentsSkillsDir,
-        source: "agents-skills-personal",
-      });
+  const personalAgentsSkills =
+    workspaceOnly || !isDefaultStateDir()
+      ? []
+      : loadSkills({
+          dir: personalAgentsSkillsDir,
+          source: "agents-skills-personal",
+        });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = workspaceOnly
     ? []
@@ -1407,6 +1418,8 @@ function buildRenderedSkillsPrompt(params: {
   total: number;
   format: SkillsPromptFormat;
 }): string {
+  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
+  // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
   const limitNote = buildSkillsLimitNote({
     truncated,
@@ -1502,6 +1515,7 @@ export function buildWorkspaceSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
@@ -1607,8 +1621,72 @@ export function resolveSkillsPromptForRun(params: {
   eligibility?: SkillEligibilityContext;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
+  if (params.skillsSnapshot && !snapshotPrompt) {
+    return "";
+  }
+  const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
+    (skill) => !skill.skillKey,
+  );
   if (snapshotPrompt) {
-    return snapshotPrompt;
+    const snapshotHasUnavailableSkill =
+      params.skillsSnapshot?.skills.some((skill) =>
+        isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
+      ) ||
+      (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
+    if (
+      snapshotHasUnavailableSkill &&
+      params.skillsSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+    ) {
+      return "";
+    }
+    if (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners()) {
+      return "";
+    }
+    const unavailableNames = new Set(
+      params.skillsSnapshot?.skills
+        .filter(
+          (skill) => skill.skillKey !== undefined && isSkillSecretOwnerUnavailable(skill.skillKey),
+        )
+        .map((skill) => escapeXml(skill.name)),
+    );
+    if (unavailableNames.size === 0) {
+      return snapshotPrompt;
+    }
+    const catalogOpen = "<available_skills>";
+    const catalogClose = "</available_skills>";
+    const catalogStart = snapshotPrompt.indexOf(catalogOpen);
+    const catalogEnd = snapshotPrompt.indexOf(catalogClose, catalogStart + catalogOpen.length);
+    if (
+      catalogStart < 0 ||
+      catalogEnd < 0 ||
+      snapshotPrompt.includes(catalogOpen, catalogStart + catalogOpen.length) ||
+      snapshotPrompt.includes(catalogClose, catalogEnd + catalogClose.length)
+    ) {
+      return "";
+    }
+    const bodyStart = catalogStart + catalogOpen.length;
+    const catalogBody = snapshotPrompt.slice(bodyStart, catalogEnd);
+    const blockPattern = /\n[ ]{2}<skill>\n[\s\S]*?\n[ ]{2}<\/skill>/g;
+    let cursor = 0;
+    let filteredBody = "";
+    for (const match of catalogBody.matchAll(blockPattern)) {
+      const gap = catalogBody.slice(cursor, match.index);
+      const block = match[0];
+      const name = /^[ ]{4}<name>(.*)<\/name>$/m.exec(block)?.[1];
+      if (gap.trim() || !name) {
+        return "";
+      }
+      filteredBody += gap;
+      if (!unavailableNames.has(name)) {
+        filteredBody += block;
+      }
+      cursor = (match.index ?? 0) + block.length;
+    }
+    const tail = catalogBody.slice(cursor);
+    if (tail.trim()) {
+      return "";
+    }
+    return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
   }
   if (params.entries && params.entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {

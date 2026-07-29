@@ -8,6 +8,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 const mistralMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
   payloads: [] as unknown[],
+  requestOptions: [] as unknown[],
   randomUUIDs: [] as string[],
   streamError: new Error("stop before network") as unknown,
   streamResult: undefined as unknown,
@@ -37,8 +38,9 @@ vi.mock("@mistralai/mistralai", async () => {
       }
 
       chat = {
-        stream: vi.fn(async (payload: unknown) => {
+        stream: vi.fn(async (payload: unknown, requestOptions: unknown) => {
           mistralMockState.payloads.push(payload);
+          mistralMockState.requestOptions.push(requestOptions);
           if (mistralMockState.streamResult !== undefined) {
             return mistralMockState.streamResult;
           }
@@ -92,6 +94,7 @@ describe("Mistral provider", () => {
   beforeEach(() => {
     mistralMockState.configs = [];
     mistralMockState.payloads = [];
+    mistralMockState.requestOptions = [];
     mistralMockState.randomUUIDs = [];
     mistralMockState.streamError = new Error("stop before network");
     mistralMockState.streamResult = undefined;
@@ -772,6 +775,82 @@ describe("Mistral provider", () => {
     const systemMessage = payload.messages.find((message) => message.role === "system");
     expect(systemMessage?.content).toBe("Stable\nDynamic");
     expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+  });
+
+  it("uses prompt cache affinity unless caching is disabled", async () => {
+    for (const cacheRetention of [undefined, "none"] as const) {
+      mistralMockState.payloads = [];
+      mistralMockState.requestOptions = [];
+      await streamSimpleMistral(makeMistralModel(), context, {
+        apiKey: "fixture",
+        sessionId: "session-affinity",
+        promptCacheKey: "prompt-cache-key",
+        ...(cacheRetention ? { cacheRetention } : {}),
+      }).result();
+
+      const payload = mistralMockState.payloads[0] as { promptCacheKey?: string };
+      const requestOptions = mistralMockState.requestOptions[0] as {
+        headers?: Record<string, string>;
+      };
+      if (cacheRetention === "none") {
+        expect(payload.promptCacheKey).toBeUndefined();
+        expect(requestOptions.headers?.["x-affinity"]).toBeUndefined();
+      } else {
+        expect(payload.promptCacheKey).toBe("prompt-cache-key");
+        expect(requestOptions.headers?.["x-affinity"]).toBe("session-affinity");
+      }
+    }
+  });
+
+  it("uses the session id as the prompt cache key when no dedicated key is supplied", async () => {
+    await streamSimpleMistral(makeMistralModel(), context, {
+      apiKey: "fixture",
+      sessionId: "session-cache-key",
+    }).result();
+
+    expect((mistralMockState.payloads[0] as { promptCacheKey?: string }).promptCacheKey).toBe(
+      "session-cache-key",
+    );
+  });
+
+  it.each([
+    ["SDK camel case", { promptTokensDetails: { cachedTokens: 64 } }],
+    ["wire snake case", { prompt_tokens_details: { cached_tokens: 64 } }],
+  ])("accounts for cached prompt tokens from %s usage", async (_label, cacheUsage) => {
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "response-cache-usage",
+            model: "mistral-small-latest",
+            usage: {
+              promptTokens: 100,
+              completionTokens: 10,
+              totalTokens: 110,
+              ...cacheUsage,
+            },
+            choices: [
+              {
+                finishReason: "stop",
+                delta: { content: "ok", toolCalls: [] },
+              },
+            ],
+          },
+        };
+      },
+    };
+
+    const result = await streamMistral(makeMistralModel(), context, {
+      apiKey: "fixture",
+    }).result();
+
+    expect(result.usage).toMatchObject({
+      input: 36,
+      output: 10,
+      cacheRead: 64,
+      cacheWrite: 0,
+      totalTokens: 110,
+    });
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {

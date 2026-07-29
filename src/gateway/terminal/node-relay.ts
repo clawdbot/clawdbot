@@ -65,6 +65,7 @@ export async function createNodeRelayBackend(params: {
   registry: NodeRegistry;
   nodeId: string;
   expectedConnId: string;
+  expectedPairingGeneration?: string;
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
@@ -82,6 +83,9 @@ export async function createNodeRelayBackend(params: {
     .invoke({
       nodeId: params.nodeId,
       expectedConnId: params.expectedConnId,
+      ...(params.expectedPairingGeneration
+        ? { expectedPairingGeneration: params.expectedPairingGeneration }
+        : {}),
       command: params.command,
       params: params.params,
       timeoutMs: 0,

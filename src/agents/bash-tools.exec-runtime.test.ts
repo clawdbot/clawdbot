@@ -520,6 +520,9 @@ describe("exec notifyOnExit suppression", () => {
 
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
+    expect(message).toContain("external side effects may already have completed");
+    expect(message).toContain("Verify the resulting state before retrying");
+    expect(message).toContain("Do not automatically rerun non-idempotent commands");
     expect(options.sessionKey).toBe("agent:main:main");
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const heartbeat = requireHeartbeatCall();
@@ -731,6 +734,10 @@ describe("runExecProcess exit outcomes", () => {
     expect(outcome.failureKind).toBe("overall-timeout");
     expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("30 seconds");
+    expect(outcome.reason).toContain("external side effects may already have completed");
+    expect(outcome.reason).toContain("Verify the resulting state before retrying");
+    expect(outcome.reason).toContain("Do not automatically rerun non-idempotent commands");
+    expect(outcome.reason).toContain("known to be safe to retry");
     expect(outcome.reason).toContain("background=true");
     expect(outcome.reason).toContain("yieldMs");
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");

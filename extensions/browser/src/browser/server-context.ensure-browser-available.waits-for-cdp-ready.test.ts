@@ -562,7 +562,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
       {
         allowPrivateNetwork: true,
         allowedHostnames: ["browserless"],
-        hostnameAllowlist: ["browserless"],
       },
     );
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
@@ -573,7 +572,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
       {
         allowPrivateNetwork: true,
         allowedHostnames: ["browserless"],
-        hostnameAllowlist: ["browserless"],
       },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();

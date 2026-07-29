@@ -242,6 +242,7 @@ function createQaMultipassPlan(params: {
   fastMode?: boolean;
   thinkingDefault?: string;
   allowFailures?: boolean;
+  failFast?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];
@@ -288,6 +289,7 @@ function createQaMultipassPlan(params: {
       ...(params.fastMode ? ["--fast"] : []),
       ...(params.thinkingDefault ? ["--thinking", params.thinkingDefault] : []),
       ...(params.allowFailures ? ["--allow-failures"] : []),
+      ...(params.failFast ? ["--fail-fast"] : []),
       ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
       ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
       ...(params.channelDriverSelection
@@ -572,6 +574,7 @@ export async function runQaMultipass(params: {
   alternateModel?: string;
   fastMode?: boolean;
   allowFailures?: boolean;
+  failFast?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];

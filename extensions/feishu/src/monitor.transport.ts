@@ -33,6 +33,7 @@ type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  setSocketTerminator?: (terminate: (() => void) | undefined) => void;
   /**
    * Optional status sink for Feishu health tracking. Lifecycle callbacks
    * publish connected state; validated inbound webhook requests publish
@@ -203,6 +204,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  setSocketTerminator,
   statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
@@ -253,6 +255,7 @@ export async function monitorWebSocket({
         onReconnected: publishWsConnected,
         onReconnecting: publishWsReconnecting,
       });
+      setSocketTerminator?.(() => wsClient?.close({ force: true }));
       if (abortSignal?.aborted) {
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
         break;
@@ -265,10 +268,12 @@ export async function monitorWebSocket({
       if (cycleEnd === "abort") {
         log(`feishu[${accountId}]: abort signal received, stopping`);
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
+        setSocketTerminator?.(undefined);
         return;
       }
 
       cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
+      setSocketTerminator?.(undefined);
       if (abortSignal?.aborted) {
         break;
       }
@@ -292,6 +297,7 @@ export async function monitorWebSocket({
       }
     } catch (err) {
       cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
+      setSocketTerminator?.(undefined);
       if (abortSignal?.aborted) {
         break;
       }
@@ -315,6 +321,7 @@ export async function monitorWebSocket({
     }
   }
   cleanupFeishuWsClient({ accountId, wsClient: undefined, error, clearIdentity: true });
+  setSocketTerminator?.(undefined);
 }
 
 export async function monitorWebhook({

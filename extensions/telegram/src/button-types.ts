@@ -20,6 +20,10 @@ import {
   buildTelegramNativeCommandCallbackData,
   buildTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
+import {
+  buildTelegramQuestionCallbackData,
+  hasTelegramQuestionCallbackPrefix,
+} from "./question-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -43,6 +47,8 @@ function toTelegramButtonStyle(
 
 function toTelegramInlineButton(
   button: MessagePresentationButton,
+  optionIndex: number,
+  options?: { allowWebAppButtons?: boolean },
 ): TelegramInlineButton | undefined {
   const style = toTelegramButtonStyle(button.style);
   const action = resolveMessagePresentationButtonAction(button);
@@ -53,10 +59,19 @@ function toTelegramInlineButton(
     return { text: button.label, url: action.url, style };
   }
   if (action.type === "web-app") {
-    return action.url ? { text: button.label, web_app: { url: action.url }, style } : undefined;
+    return options?.allowWebAppButtons === true && action.url
+      ? { text: button.label, web_app: { url: action.url }, style }
+      : undefined;
   }
   if (action.type === "approval") {
     const callbackData = buildTelegramApprovalCallbackData(action);
+    return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
+  }
+  if (action.type === "question") {
+    const callbackData = buildTelegramQuestionCallbackData({
+      questionId: action.questionId,
+      optionIndex,
+    });
     return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
   }
   if (action.type === "command") {
@@ -73,8 +88,11 @@ function toTelegramInlineButton(
   }
   // Reserve the full approval prefix, including malformed values, so legacy
   // plugin callbacks cannot be consumed by the approval handler.
+  const normalizedCallbackValue = action.value.trim();
   const needsOpaqueEnvelope =
-    Boolean(button.action) || hasTelegramApprovalCallbackPrefix(action.value);
+    Boolean(button.action) ||
+    hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
+    hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
   const callbackData = sanitizeTelegramCallbackData(
     needsOpaqueEnvelope ? buildTelegramOpaqueCallbackData(action.value) : action.value,
   );
@@ -84,11 +102,13 @@ function toTelegramInlineButton(
 function chunkInteractiveButtons(
   buttons: readonly MessagePresentationButton[],
   rows: TelegramInlineButton[][],
+  options?: { allowWebAppButtons?: boolean },
 ) {
+  // Index is position in the question's options; core emits one buttons block in option order.
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
     const row = buttons
       .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
-      .map(toTelegramInlineButton)
+      .map((button, offset) => toTelegramInlineButton(button, i + offset, options))
       .filter((button): button is TelegramInlineButton => Boolean(button));
     if (row.length > 0) {
       rows.push(row);
@@ -101,13 +121,14 @@ function chunkInteractiveButtons(
  */
 function buildTelegramInteractiveButtons(
   interactive?: LegacyInteractiveReply,
+  options?: { allowWebAppButtons?: boolean },
 ): TelegramInlineButtons | undefined {
   const rows = reduceLegacyInteractiveReply(
     interactive,
     [] as TelegramInlineButton[][],
     (state, block) => {
       if (block.type === "buttons") {
-        chunkInteractiveButtons(block.buttons, state);
+        chunkInteractiveButtons(block.buttons, state, options);
         return state;
       }
       if (block.type === "select") {
@@ -129,6 +150,7 @@ function buildTelegramInteractiveButtons(
 /** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
+  options?: { allowWebAppButtons?: boolean },
 ): TelegramInlineButtons | undefined {
   const rows: TelegramInlineButton[][] = [];
   for (const block of presentation?.blocks ?? []) {
@@ -136,7 +158,7 @@ export function buildTelegramPresentationButtons(
       continue;
     }
     if (block.type === "buttons") {
-      chunkInteractiveButtons(block.buttons, rows);
+      chunkInteractiveButtons(block.buttons, rows, options);
       continue;
     }
     chunkInteractiveButtons(
@@ -152,14 +174,17 @@ export function buildTelegramPresentationButtons(
 }
 
 /** Resolve Telegram inline buttons, preserving explicit and legacy button precedence. */
-export function resolveTelegramInlineButtons(params: {
-  buttons?: TelegramInlineButtons;
-  presentation?: unknown;
-  interactive?: unknown;
-}): TelegramInlineButtons | undefined {
+export function resolveTelegramInlineButtons(
+  params: {
+    buttons?: TelegramInlineButtons;
+    presentation?: unknown;
+    interactive?: unknown;
+  },
+  options?: { allowWebAppButtons?: boolean },
+): TelegramInlineButtons | undefined {
   return (
     params.buttons ??
-    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive)) ??
-    buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation))
+    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive), options) ??
+    buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
 }

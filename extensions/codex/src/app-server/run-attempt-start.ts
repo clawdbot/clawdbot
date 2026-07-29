@@ -159,7 +159,12 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.codexSandboxPolicy = startupResult.sandboxPolicy;
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
-      data: { phase: "thread_ready", threadId: state.thread.threadId },
+      data: {
+        phase: "thread_ready",
+        threadId: state.thread.threadId,
+        action: state.thread.lifecycle.action,
+        clientId: state.client.getInstanceId(),
+      },
     });
   } catch (error) {
     activateNativePreToolUseFailureFallback();

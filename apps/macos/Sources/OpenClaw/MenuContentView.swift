@@ -14,6 +14,7 @@ struct MenuContent: View {
     private let healthStore = HealthStore.shared
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
+    private let dashboardManager = DashboardManager.shared
     private let activityStore = WorkActivityStore.shared
     private let nodesStore = NodesStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
@@ -138,12 +139,14 @@ struct MenuContent: View {
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
-            Button {
-                QuickChatController.shared.toggle()
-            } label: {
-                Label("Quick Chat", systemImage: "text.bubble")
+            if self.state.quickChatEnabled {
+                Button {
+                    QuickChatController.shared.toggle()
+                } label: {
+                    Label("Quick Chat", systemImage: "text.bubble")
+                }
+                .globalKeyboardShortcut(.toggleQuickChat)
             }
-            .globalKeyboardShortcut(.toggleQuickChat)
             if self.state.canvasEnabled {
                 Button {
                     AppNavigationActions.toggleCanvas()
@@ -199,14 +202,9 @@ struct MenuContent: View {
     }
 
     private var connectionLabel: String {
-        switch self.state.connectionMode {
-        case .unconfigured:
-            "OpenClaw Not Configured"
-        case .remote:
-            "Remote OpenClaw Active"
-        case .local:
-            "OpenClaw Active"
-        }
+        DashboardGatewayMenuModel.connectionLabel(
+            mode: self.state.connectionMode,
+            entries: self.dashboardManager.gatewayEntries)
     }
 
     private func loadBrowserControlEnabled() async {
@@ -355,8 +353,12 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        let deviceId = DeviceIdentityStore.loadOrCreate(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)
+        else {
+            return ("Mac identity unavailable", .red)
+        }
+        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)

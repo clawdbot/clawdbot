@@ -169,6 +169,7 @@ describe("node-host SQLite config", () => {
       version: 1,
       nodeId: "node-custom",
       displayName: "Build Node",
+      installedAppsSharing: false,
       gateway: {
         host: "gateway.local",
         port: 18443,
@@ -184,10 +185,36 @@ describe("node-host SQLite config", () => {
     });
   });
 
+  it("keeps installed-app sharing disabled by default and persists an explicit enable", async () => {
+    const { env } = makeTestEnv();
+    const initial = await configureNodeHost({
+      fallbackDisplayName: "node",
+      gateway: {},
+      env,
+      nowMs: 1,
+    });
+    expect(initial.installedAppsSharing).toBe(false);
+
+    const enabled = await configureNodeHost({
+      fallbackDisplayName: "node",
+      gateway: {},
+      installedAppsSharing: true,
+      env,
+      nowMs: 2,
+    });
+    expect(enabled.installedAppsSharing).toBe(true);
+    closeOpenClawStateDatabaseForTest();
+    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
+  });
+
   it("adds the gateway context-path column to an existing state database", async () => {
     const { env } = makeTestEnv();
     const database = openOpenClawStateDatabase({ env });
-    database.db.exec("ALTER TABLE node_host_config DROP COLUMN gateway_context_path");
+    database.db.exec(`
+      ALTER TABLE node_host_config DROP COLUMN gateway_context_path;
+      PRAGMA user_version = 5;
+      UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
+    `);
     closeOpenClawStateDatabaseForTest();
 
     const configured = await configureNodeHost({

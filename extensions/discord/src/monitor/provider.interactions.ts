@@ -27,6 +27,7 @@ import {
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import { createDiscordQuestionButton } from "./questions.js";
 import type { ThreadBindingManager } from "./thread-bindings.types.js";
 
 type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
@@ -111,6 +112,20 @@ export function createDiscordProviderInteractionSurface(params: {
   }
 
   const components: BaseMessageInteractiveComponent[] = [
+    createDiscordQuestionButton({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      authContext: {
+        cfg: params.cfg,
+        accountId: params.accountId,
+        discordConfig: params.discordConfig,
+        runtime: params.runtime,
+        token: params.token,
+        guildEntries: params.guildEntries,
+        allowFrom: params.allowFrom,
+        dmPolicy: params.dmPolicy,
+      },
+    }),
     createDiscordCommandArgFallbackButton({
       cfg: params.cfg,
       discordConfig: params.discordConfig,

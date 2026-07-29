@@ -1,28 +1,40 @@
 // Context engine tests cover context extraction and prompt context assembly.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearMemoryPluginState,
-  registerMemoryPromptSection,
+  registerMemoryPromptPreparation,
+  registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
-import { buildMemorySystemPromptAddition, delegateCompactionToRuntime } from "./delegate.js";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
+} from "./delegate.js";
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
-  registerContextEngine,
   registerContextEngineForOwner,
   getContextEngineRegistration,
   listContextEngineQuarantines,
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "./registry.test-support.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -34,8 +46,14 @@ import type {
   IngestResult,
 } from "./types.js";
 
-type ContextEngineFactory = Parameters<typeof registerContextEngine>[1];
+type ContextEngineFactory = Parameters<typeof registerContextEngineForOwner>[1];
 type ContextEngineFactoryContext = Parameters<ContextEngineFactory>[0];
+
+function registerTestContextEngine(id: string, factory: ContextEngineFactory) {
+  return registerContextEngineForOwner(id, factory, `test:${id}`, {
+    allowSameOwnerRefresh: true,
+  });
+}
 
 const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionDirectMock: vi.fn(),
@@ -83,6 +101,16 @@ function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): A
   return { role, content: text, timestamp: Date.now() } as AgentMessage;
 }
 
+let restoreContextEngineRegistry = () => {};
+
+beforeAll(() => {
+  restoreContextEngineRegistry = captureContextEngineRegistryStateForTests();
+});
+
+afterAll(() => {
+  restoreContextEngineRegistry();
+});
+
 let uniqueEngineIdCounter = 0;
 function uniqueEngineId(prefix: string): string {
   uniqueEngineIdCounter += 1;
@@ -91,7 +119,7 @@ function uniqueEngineId(prefix: string): string {
 
 function registerPromptTrackingEngine(engineId: string) {
   const calls: Array<Record<string, unknown>> = [];
-  registerContextEngine(engineId, () => ({
+  registerTestContextEngine(engineId, () => ({
     info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
     async ingest() {
       return { ingested: false };
@@ -563,7 +591,7 @@ describe("Engine contract tests", () => {
 
   it("a mock engine implementing ContextEngine can be registered and resolved", async () => {
     const factory = () => new MockContextEngine();
-    registerContextEngine("mock", factory);
+    registerTestContextEngine("mock", factory);
 
     const engine = await resolveContextEngine(configWithSlot("mock"));
     expect(engine).toBeInstanceOf(MockContextEngine);
@@ -626,6 +654,7 @@ describe("Engine contract tests", () => {
         tokensBefore: 0,
         tokensAfter: 0,
         details: undefined,
+        sessionTarget,
       },
     });
   });
@@ -667,6 +696,159 @@ describe("Engine contract tests", () => {
     expect(result.result).not.toHaveProperty("sessionFile");
   });
 
+  it("allows the caller key to rebind to a legacy successor session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-"));
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:successor";
+    try {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId: "before-compaction", updatedAt: 1 },
+      );
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:aaa-successor-alias", storePath },
+        { sessionId: "after-compaction", updatedAt: 2 },
+      );
+      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        reason: undefined,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          tokensAfter: 40,
+          details: undefined,
+          sessionId: "after-compaction",
+          sessionFile: `sqlite:main:after-compaction:${storePath}`,
+        },
+      });
+
+      const result = await delegateCompactionToRuntime({
+        agentId: "main",
+        sessionId: "before-compaction",
+        sessionKey,
+        tokenBudget: 4096,
+      });
+
+      expect(result.result?.sessionTarget).toMatchObject({
+        agentId: "main",
+        sessionId: "after-compaction",
+        sessionKey,
+        storePath,
+      });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a structured successor key from another agent", async () => {
+    installCompactRuntimeSpy();
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "s-agent-conflict",
+        sessionKey: "agent:main:s-agent-conflict",
+        sessionTarget: {
+          agentId: "worker",
+          sessionId: "s-agent-conflict",
+          sessionKey: "agent:main:s-agent-conflict",
+          storePath: "/tmp/openclaw-agent.sqlite",
+        },
+        tokenBudget: 4096,
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
+  });
+
+  it("rejects a successor marker that changes the caller store", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 100,
+        sessionId: "store-redirect-successor",
+        sessionFile: "sqlite:main:store-redirect-successor:/tmp/other.sqlite",
+      },
+    });
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "store-redirect-source",
+        sessionKey: "agent:main:store-redirect",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "store-redirect-source",
+          sessionKey: "agent:main:store-redirect",
+          storePath: "/tmp/caller.sqlite",
+        },
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
+  });
+
+  it("rejects contradictory marker and top-level successor identities", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 100,
+        sessionId: "top-level-successor",
+        sessionFile: "sqlite:main:marker-successor:/tmp/openclaw-agent.sqlite",
+      },
+    });
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "source-session",
+        sessionKey: "agent:main:successor-conflict",
+      }),
+    ).rejects.toThrow("successor identity is inconsistent");
+  });
+
+  it("rejects an internally consistent successor for another caller agent", async () => {
+    installCompactRuntimeSpy();
+
+    await expect(
+      delegateCompactionToRuntime({
+        agentId: "main",
+        sessionId: "s-agent-redirect",
+        sessionKey: "agent:main:s-agent-redirect",
+        sessionTarget: {
+          agentId: "worker",
+          sessionId: "s-agent-redirect",
+          sessionKey: "agent:worker:s-agent-redirect",
+        },
+        tokenBudget: 4096,
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
+  });
+
+  it("rejects a legacy successor marker for another caller agent", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+        tokensAfter: 40,
+        details: undefined,
+        sessionId: "worker-successor",
+        sessionFile: "sqlite:worker:worker-successor:/tmp/worker-sessions.json",
+      },
+    });
+
+    await expect(
+      delegateCompactionToRuntime({
+        agentId: "main",
+        sessionId: "main-session",
+        sessionKey: "global",
+        tokenBudget: 4096,
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
+  });
+
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
     installCompactRuntimeSpy();
     const controller = new AbortController();
@@ -694,7 +876,7 @@ describe("Engine contract tests", () => {
   });
 
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
-    registerMemoryPromptSection(({ citationsMode }) => [
+    registerTestMemoryPromptBuilder(({ citationsMode }) => [
       "## Memory Recall",
       `citations=${citationsMode ?? "auto"}`,
       "",
@@ -709,7 +891,7 @@ describe("Engine contract tests", () => {
   });
 
   it("passes agent context through delegated memory prompt assembly", () => {
-    registerMemoryPromptSection(({ agentId, agentSessionKey, sandboxed }) => [
+    registerTestMemoryPromptBuilder(({ agentId, agentSessionKey, sandboxed }) => [
       "## Agent Memory",
       `agent=${agentId} session=${agentSessionKey} sandboxed=${sandboxed}`,
       "",
@@ -734,6 +916,20 @@ describe("Engine contract tests", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("prepares async memory state before context-engine prompt rendering", async () => {
+    const prepare = vi.fn(async () => ["## Prepared Memory", "loaded from sqlite", ""]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    await expect(
+      prepareMemorySystemPromptAddition({
+        availableTools: new Set(["wiki_search"]),
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+      }),
+    ).resolves.toBe("## Prepared Memory\nloaded from sqlite");
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -741,16 +937,16 @@ describe("Engine contract tests", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Registry tests", () => {
-  it("registerContextEngine() stores retrievable factories", () => {
+  it("registerTestContextEngine() stores retrievable factories", () => {
     const factory = () => new MockContextEngine();
-    registerContextEngine("reg-test-2", factory);
+    registerTestContextEngine("reg-test-2", factory);
 
     expect(getContextEngineRegistration("reg-test-2")?.factory).toBe(factory);
   });
 
   it("tracks all registered ids", () => {
-    registerContextEngine("reg-test-a", () => new MockContextEngine());
-    registerContextEngine("reg-test-b", () => new MockContextEngine());
+    registerTestContextEngine("reg-test-a", () => new MockContextEngine());
+    registerTestContextEngine("reg-test-b", () => new MockContextEngine());
 
     expect(getContextEngineRegistration("reg-test-a")).toBeDefined();
     expect(getContextEngineRegistration("reg-test-b")).toBeDefined();
@@ -802,44 +998,6 @@ describe("Registry tests", () => {
 
     expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
   });
-
-  it("public registerContextEngine cannot spoof owner or refresh existing ids", () => {
-    const ownedFactory = () => new MockContextEngine();
-    expect(
-      registerContextEngineForOwner("public-owner-guard", ownedFactory, "owner-a", {
-        allowSameOwnerRefresh: true,
-      }),
-    ).toEqual({ ok: true });
-
-    const spoofAttempt = (
-      registerContextEngine as unknown as (
-        id: string,
-        factory: ContextEngineFactory,
-        opts?: { owner?: string },
-      ) => ReturnType<typeof registerContextEngine>
-    )("public-owner-guard", () => new MockContextEngine(), { owner: "owner-a" });
-
-    expect(spoofAttempt).toEqual({
-      ok: false,
-      existingOwner: "owner-a",
-    });
-    expect(getContextEngineRegistration("public-owner-guard")?.factory).toBe(ownedFactory);
-  });
-
-  it("public registerContextEngine reserves the default legacy id", () => {
-    const legacyAttempt = (
-      registerContextEngine as unknown as (
-        id: string,
-        factory: ContextEngineFactory,
-        opts?: { owner?: string },
-      ) => ReturnType<typeof registerContextEngine>
-    )("legacy", () => new MockContextEngine(), { owner: "core" });
-
-    expect(legacyAttempt).toEqual({
-      ok: false,
-      existingOwner: "core",
-    });
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -860,7 +1018,7 @@ describe("Legacy sessionKey compatibility", () => {
   it("memoizes legacy mode after the first strict compatibility retry", async () => {
     const engineId = `legacy-sessionkey-${Date.now().toString(36)}`;
     const strictEngine = new LegacySessionKeyStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
+    registerTestContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     const firstAssembled = await engine.assemble({
@@ -885,7 +1043,7 @@ describe("Legacy sessionKey compatibility", () => {
   it("retries strict ingest once and ingests each message only once", async () => {
     const engineId = `legacy-sessionkey-ingest-${Date.now().toString(36)}`;
     const strictEngine = new LegacySessionKeyStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
+    registerTestContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     const firstMessage = makeMockMessage("user", "first");
@@ -912,7 +1070,7 @@ describe("Legacy sessionKey compatibility", () => {
   it("retries strict maintain once and memoizes legacy mode there too", async () => {
     const engineId = `legacy-sessionkey-maintain-${Date.now().toString(36)}`;
     const strictEngine = new LegacySessionKeyStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
+    registerTestContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
 
@@ -930,7 +1088,7 @@ describe("Legacy sessionKey compatibility", () => {
   it("keeps learning rejected legacy keys after runtimeSettings marks an engine legacy", async () => {
     const engineId = uniqueEngineId("legacy-runtime-then-assemble");
     const strictEngine = new LegacyRuntimeThenAssembleStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
+    registerTestContextEngine(engineId, () => strictEngine);
 
     const runtimeSettings = { schemaVersion: 1 } as never;
     const engine = await resolveContextEngine(configWithSlot(engineId));
@@ -968,7 +1126,7 @@ describe("Legacy sessionKey compatibility", () => {
   it("quarantines and falls back for non-compat runtime errors", async () => {
     const engineId = `sessionkey-runtime-${Date.now().toString(36)}`;
     const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine(engineId);
-    registerContextEngine(engineId, () => runtimeErrorEngine);
+    registerTestContextEngine(engineId, () => runtimeErrorEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     const message = makeMockMessage();
@@ -998,7 +1156,7 @@ describe("Legacy sessionKey compatibility", () => {
       engineId,
       'Unknown sessionKey "agent:main:missing"',
     );
-    registerContextEngine(engineId, () => runtimeErrorEngine);
+    registerTestContextEngine(engineId, () => runtimeErrorEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     const message = makeMockMessage();
@@ -1027,7 +1185,7 @@ describe("Default engine selection", () => {
     // Registration is idempotent (Map.set), so calling again is safe.
     registerLegacyContextEngine();
     // Register a lightweight custom stub so we don't need external resources.
-    registerContextEngine("test-engine", () => {
+    registerTestContextEngine("test-engine", () => {
       const engine: ContextEngine = {
         info: { id: "test-engine", name: "Custom Test Engine", version: "0.0.0" },
         async ingest() {
@@ -1084,7 +1242,7 @@ describe("Factory context passing", () => {
         },
       };
     };
-    registerContextEngine(engineId, factory);
+    registerTestContextEngine(engineId, factory);
 
     const cfg = configWithSlot(engineId);
     await resolveContextEngine(cfg, {
@@ -1117,7 +1275,7 @@ describe("Factory context passing", () => {
         },
       };
     };
-    registerContextEngine(engineId, factory);
+    registerTestContextEngine(engineId, factory);
 
     const engine = await resolveContextEngine(configWithSlot(engineId), {
       agentDir: "/tmp/agent",
@@ -1272,18 +1430,18 @@ describe("Invalid engine fallback", () => {
         name: "factory throws",
         engineId: uniqueEngineId("factory-throw"),
         register: (engineId: string) => {
-          registerContextEngine(engineId, () => {
+          registerTestContextEngine(engineId, () => {
             throw new Error("plugin version mismatch");
           });
         },
         expectedError: (engineId: string) =>
-          `[context-engine] Context engine "${engineId}" owner=public-sdk failed during factory: plugin version mismatch; quarantining it for this process and falling back to default engine "legacy".`,
+          `[context-engine] Context engine "${engineId}" owner=test:${engineId} failed during factory: plugin version mismatch; quarantining it for this process and falling back to default engine "legacy".`,
       },
       {
         name: "missing info metadata",
         engineId: uniqueEngineId("invalid-info"),
         register: (engineId: string) => {
-          registerContextEngine(
+          registerTestContextEngine(
             engineId,
             () =>
               ({
@@ -1300,13 +1458,13 @@ describe("Invalid engine fallback", () => {
           );
         },
         expectedError: (engineId: string) =>
-          `[context-engine] Context engine "${engineId}" owner=public-sdk failed during contract-validation: Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.; quarantining it for this process and falling back to default engine "legacy".`,
+          `[context-engine] Context engine "${engineId}" owner=test:${engineId} failed during contract-validation: Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.; quarantining it for this process and falling back to default engine "legacy".`,
       },
       {
         name: "missing lifecycle methods",
         engineId: uniqueEngineId("invalid-methods"),
         register: (engineId: string) => {
-          registerContextEngine(
+          registerTestContextEngine(
             engineId,
             () =>
               ({
@@ -1318,16 +1476,16 @@ describe("Invalid engine fallback", () => {
           );
         },
         expectedError: (engineId: string) =>
-          `[context-engine] Context engine "${engineId}" owner=public-sdk failed during contract-validation: Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().; quarantining it for this process and falling back to default engine "legacy".`,
+          `[context-engine] Context engine "${engineId}" owner=test:${engineId} failed during contract-validation: Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().; quarantining it for this process and falling back to default engine "legacy".`,
       },
       {
         name: "contract validation throws",
         engineId: uniqueEngineId("validation-throw"),
         register: (engineId: string) => {
-          registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
+          registerTestContextEngine(engineId, () => 42n as unknown as ContextEngine);
         },
         expectedError: (engineId: string) =>
-          `[context-engine] Context engine "${engineId}" owner=public-sdk failed during contract-validation: Do not know how to serialize a BigInt; quarantining it for this process and falling back to default engine "legacy".`,
+          `[context-engine] Context engine "${engineId}" owner=test:${engineId} failed during contract-validation: Do not know how to serialize a BigInt; quarantining it for this process and falling back to default engine "legacy".`,
       },
     ] as const;
 
@@ -1353,7 +1511,7 @@ describe("Invalid engine fallback", () => {
       throw new Error("lcm db is corrupt");
     });
     let factoryCalls = 0;
-    registerContextEngine(engineId, () => {
+    registerTestContextEngine(engineId, () => {
       factoryCalls += 1;
       return {
         info: { id: "lcm", name: "Lossless Context Manager" },
@@ -1382,13 +1540,13 @@ describe("Invalid engine fallback", () => {
     expect(listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
-        owner: "public-sdk",
+        owner: `test:${engineId}`,
         operation: "assemble",
         reason: "lcm db is corrupt",
       }),
     ]);
     expect(console.error).toHaveBeenCalledWith(
-      `[context-engine] Context engine "${engineId}" owner=public-sdk failed during assemble: lcm db is corrupt; quarantining it for this process and falling back to default engine "legacy".`,
+      `[context-engine] Context engine "${engineId}" owner=test:${engineId} failed during assemble: lcm db is corrupt; quarantining it for this process and falling back to default engine "legacy".`,
     );
   });
 
@@ -1487,7 +1645,7 @@ describe("Invalid engine fallback", () => {
       }),
     ]);
 
-    registerContextEngine(engineId, () => ({
+    registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Late Registered Engine" },
       async ingest() {
         return { ingested: true };
@@ -1511,7 +1669,7 @@ describe("Invalid engine fallback", () => {
     const abortError = new Error("compaction aborted");
     abortError.name = "AbortError";
     const controller = new AbortController();
-    registerContextEngine(engineId, () => ({
+    registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Abort Aware Engine" },
       async ingest() {
         return { ingested: true };
@@ -1543,7 +1701,7 @@ describe("Invalid engine fallback", () => {
 
   it("quarantines subagent preparation failures while failing the active spawn closed", async () => {
     const engineId = uniqueEngineId("prepare-subagent-fail");
-    registerContextEngine(engineId, () => ({
+    registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Spawn Aware Engine" },
       async ingest() {
         return { ingested: true };
@@ -1633,7 +1791,7 @@ describe("Invalid engine fallback", () => {
     // (e.g. "lcm"). That id is metadata, not the lookup key.
     const engineId = `plugin-slot-${Date.now().toString(36)}`;
     const internalInfoId = "lcm";
-    registerContextEngine(
+    registerTestContextEngine(
       engineId,
       () =>
         ({
@@ -1755,7 +1913,7 @@ describe("assemble() prompt forwarding", () => {
   it("retries strict legacy assemble without sessionKey, prompt, and runtimeSettings", async () => {
     const engineId = `prompt-legacy-${Date.now().toString(36)}`;
     const strictEngine = new LegacyAssembleStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
+    registerTestContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     const result = await engine.assemble({
@@ -1793,7 +1951,7 @@ describe("assemble() prompt forwarding", () => {
     const resolveStrictEngine = async () => {
       const engineId = uniqueEngineId("runtime-settings-legacy");
       const strictEngine = new LegacyRuntimeSettingsStrictEngine(engineId);
-      registerContextEngine(engineId, () => strictEngine);
+      registerTestContextEngine(engineId, () => strictEngine);
       const engine = await resolveContextEngine(configWithSlot(engineId));
       return { engine, strictEngine };
     };
@@ -1901,7 +2059,7 @@ describe("Initialization guard", () => {
 //
 // Published builds may split the context-engine registry across multiple
 // output chunks.  The Symbol.for() keyed global ensures that a plugin
-// calling registerContextEngine() from chunk A is visible to
+// registering an owned engine from chunk A is visible to
 // resolveContextEngine() imported from chunk B.
 //
 // These tests exercise the invariant that failed in 2026.3.7 when
@@ -1915,7 +2073,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const dynamicChunk = await import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-dynamic`);
     const chunks = [
       {
-        registerContextEngine,
+        registerContextEngineForOwner,
         getContextEngineRegistration,
         resolveContextEngine,
       },
@@ -1935,7 +2093,7 @@ describe("Bundle chunk isolation (#40096)", () => {
         return { ok: true, compacted: false };
       },
     });
-    chunks[0].registerContextEngine(engineId, factory);
+    chunks[0].registerContextEngineForOwner(engineId, factory, `test:${engineId}`);
 
     expect(chunks[1].getContextEngineRegistration(engineId)?.factory).toBe(factory);
     const engine = await chunks[1].resolveContextEngine(configWithSlot(engineId));
@@ -1945,7 +2103,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const registrationTasks = chunks.map((chunk, i) =>
       Promise.resolve().then(() => {
         const id = `concurrent-${ts}-${i}`;
-        chunk.registerContextEngine(id, () => new MockContextEngine());
+        chunk.registerContextEngineForOwner(id, () => new MockContextEngine(), `test:${id}`);
       }),
     );
     await Promise.all(registrationTasks);

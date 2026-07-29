@@ -15,6 +15,19 @@ import org.junit.Test
 
 class WearProtocolTest {
   @Test
+  fun realtimeTalkSnapshotCarriesAttemptCorrelation() {
+    val snapshot =
+      WearRealtimeTalkSnapshot(
+        attemptId = "attempt-7",
+        active = true,
+        listening = true,
+        status = WearRealtimeTalkStatus.LISTENING,
+      )
+
+    assertEquals(snapshot, WearRealtimeTalkCodec.decode(WearRealtimeTalkCodec.encode(snapshot)))
+  }
+
+  @Test
   fun roundTripsEveryEnvelopeKind() {
     val messages =
       listOf(
@@ -54,9 +67,17 @@ class WearProtocolTest {
       mapOf(
         WearRpcMethod.ProxyStatus to "proxy.status",
         WearRpcMethod.SessionsList to "sessions.list",
+        WearRpcMethod.AgentsList to "agents.list",
+        WearRpcMethod.AgentsSelect to "agents.select",
+        WearRpcMethod.ModelsList to "models.list",
+        WearRpcMethod.ModelsSelect to "models.select",
+        WearRpcMethod.GatewayConnect to "gateway.connect",
+        WearRpcMethod.GatewayDisconnect to "gateway.disconnect",
         WearRpcMethod.ChatHistory to "chat.history",
         WearRpcMethod.ChatSend to "chat.send",
         WearRpcMethod.ChatAbort to "chat.abort",
+        WearRpcMethod.TalkStart to "talk.start",
+        WearRpcMethod.TalkStop to "talk.stop",
       )
     methodNames.forEach { (method, wireName) ->
       val request = WearMessage.Request(requestId = "req-1", method = method)
@@ -70,6 +91,7 @@ class WearProtocolTest {
         WearEventType.Chat to "chat",
         WearEventType.Connection to "connection",
         WearEventType.Resync to "resync",
+        WearEventType.Talk to "talk",
       )
     eventNames.forEach { (event, wireName) ->
       val message = WearMessage.Event(sequence = 1, event = event)
@@ -81,8 +103,22 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
+    assertEquals("/openclaw/wear/v1/realtime/audio", WearProtocol.REALTIME_AUDIO_CHANNEL_PATH)
     assertEquals("openclaw_phone_proxy_v1", WearProtocol.PHONE_CAPABILITY)
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
+    assertEquals("gateway_offline", WearConnectionFailure.GatewayOffline.wireValue)
+    assertEquals("incompatible", WearConnectionFailure.Incompatible.wireValue)
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      WearConnectionFailure.fromWireValue("incompatible"),
+    )
+    assertEquals(null, WearConnectionFailure.fromWireValue("future-failure"))
+    assertEquals("agent-controls", WearProxyCapability.AgentControls.wireValue)
+    assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
+    assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)
+    assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
+    assertEquals(WearProxyCapability.AgentControls, WearProxyCapability.fromWireValue("agent-controls"))
+    assertEquals(null, WearProxyCapability.fromWireValue("future-capability"))
   }
 
   @Test

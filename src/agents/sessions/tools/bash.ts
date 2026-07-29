@@ -18,7 +18,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import {
   buildShellCommandInvocation,
   getBashShellConfig,
-  getShellEnv,
+  getBashShellEnv,
   killProcessTree,
 } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -76,12 +76,12 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           buffer: false,
           cwd,
           detached: process.platform !== "win32",
-          env: env ?? getShellEnv(),
+          env: env ?? getBashShellEnv(shellConfig.shell),
           ...(invocation.input === undefined ? {} : { input: invocation.input }),
           reject: false,
           stdio: [invocation.stdin, "pipe", "pipe"],
         });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child);
+        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
@@ -93,9 +93,10 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
           }, timeoutMs);
         }
-        // Stream stdout and stderr.
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
+        // Stream stdout and stderr. Tag each pipe so downstream decode state
+        // stays per-stream; a pending sequence on one must not eat the other.
+        child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
+        child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
@@ -160,8 +161,9 @@ function resolveSpawnContext(
   command: string,
   cwd: string,
   spawnHook?: BashSpawnHook,
+  shellPath?: string,
 ): BashSpawnContext {
-  const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+  const baseContext: BashSpawnContext = { command, cwd, env: getBashShellEnv(shellPath) };
   return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -322,7 +324,7 @@ export function createBashToolDefinition(
       void ctx;
       resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
@@ -373,11 +375,11 @@ export function createBashToolDefinition(
         onUpdate({ content: [], details: undefined });
       }
 
-      const handleData = (data: Buffer) => {
+      const handleData = (data: Buffer, stream?: "stdout" | "stderr") => {
         if (!acceptingOutput) {
           return;
         }
-        output.append(data);
+        output.append(data, stream);
         scheduleOutputUpdate();
       };
 

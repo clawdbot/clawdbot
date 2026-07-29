@@ -100,12 +100,17 @@ export type ChannelAccountPredicate = (entry: ChannelAccountEntry) => boolean;
 function createChannelAccountSecretOwner(
   channelKey: string,
   accountId: string,
+  channel: Record<string, unknown>,
+  account: Record<string, unknown>,
+  contract?: unknown,
 ): SecretAssignmentOwner {
+  const { accounts: _accounts, ...channelDefaults } = channel;
   return {
     ownerKind: "account",
     ownerId: `${channelKey}:${normalizeAccountId(accountId)}`,
     requiredForGateway: false,
     disposition: "isolate",
+    contract: contract ?? { channel: channelDefaults, account },
   };
 }
 
@@ -199,6 +204,7 @@ export function hasConfiguredSecretInputValue(
 
 function collectTopLevelChannelFieldAssignments(params: {
   channelKey: string;
+  channel: Record<string, unknown>;
   fieldPath: string;
   value: unknown;
   expected: "string" | "string-or-object";
@@ -230,14 +236,27 @@ function collectTopLevelChannelFieldAssignments(params: {
   }
   // One inherited ref can own several accounts. Duplicate only the assignment metadata so a
   // failed shared credential degrades every consumer without collapsing unrelated accounts.
-  for (const { accountId } of owners) {
+  const { accounts: _accounts, ...channelDefaults } = params.channel;
+  const inheritedContract = {
+    channel: channelDefaults,
+    consumers: owners
+      .map(({ accountId, account }) => ({ accountId: normalizeAccountId(accountId), account }))
+      .toSorted((left, right) => left.accountId.localeCompare(right.accountId)),
+  };
+  for (const { accountId, account } of owners) {
     collectSecretInputAssignment({
       value: params.value,
       path: params.fieldPath,
       expected: params.expected,
       defaults: params.defaults,
       context: params.context,
-      owner: createChannelAccountSecretOwner(params.channelKey, accountId),
+      owner: createChannelAccountSecretOwner(
+        params.channelKey,
+        accountId,
+        params.channel,
+        account,
+        inheritedContract,
+      ),
       apply: params.apply,
     });
   }
@@ -256,6 +275,7 @@ export function collectSimpleChannelFieldAssignments(params: {
 }): void {
   collectTopLevelChannelFieldAssignments({
     channelKey: params.channelKey,
+    channel: params.channel,
     value: params.channel[params.field],
     fieldPath: `channels.${params.channelKey}.${params.field}`,
     expected: "string",
@@ -285,7 +305,7 @@ export function collectSimpleChannelFieldAssignments(params: {
       context: params.context,
       active: enabled,
       inactiveReason: params.accountInactiveReason,
-      owner: createChannelAccountSecretOwner(params.channelKey, accountId),
+      owner: createChannelAccountSecretOwner(params.channelKey, accountId, params.channel, account),
       apply: (value) => {
         account[params.field] = value;
       },
@@ -309,6 +329,7 @@ export function collectConditionalChannelFieldAssignments(params: {
 }): void {
   collectTopLevelChannelFieldAssignments({
     channelKey: params.channelKey,
+    channel: params.channel,
     value: params.channel[params.field],
     fieldPath: `channels.${params.channelKey}.${params.field}`,
     expected: "string",
@@ -340,7 +361,12 @@ export function collectConditionalChannelFieldAssignments(params: {
         typeof params.accountInactiveReason === "function"
           ? params.accountInactiveReason(entry)
           : params.accountInactiveReason,
-      owner: createChannelAccountSecretOwner(params.channelKey, entry.accountId),
+      owner: createChannelAccountSecretOwner(
+        params.channelKey,
+        entry.accountId,
+        params.channel,
+        entry.account,
+      ),
       apply: (value) => {
         entry.account[params.field] = value;
       },
@@ -367,6 +393,7 @@ export function collectNestedChannelFieldAssignments(params: {
   if (isRecord(topLevelNested)) {
     collectTopLevelChannelFieldAssignments({
       channelKey: params.channelKey,
+      channel: params.channel,
       value: topLevelNested[params.field],
       fieldPath: `channels.${params.channelKey}.${params.nestedKey}.${params.field}`,
       expected: "string",
@@ -403,7 +430,12 @@ export function collectNestedChannelFieldAssignments(params: {
         typeof params.accountInactiveReason === "function"
           ? params.accountInactiveReason(entry)
           : params.accountInactiveReason,
-      owner: createChannelAccountSecretOwner(params.channelKey, entry.accountId),
+      owner: createChannelAccountSecretOwner(
+        params.channelKey,
+        entry.accountId,
+        params.channel,
+        entry.account,
+      ),
       apply: (value) => {
         nested[params.field] = value;
       },

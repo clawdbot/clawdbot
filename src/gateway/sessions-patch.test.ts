@@ -1,9 +1,11 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -31,6 +33,30 @@ const OPENAI_GPT_ID = "gpt-5.4";
 const EMPTY_CFG = {} as OpenClawConfig;
 
 type ApplySessionsPatchArgs = Parameters<typeof applySessionsPatchToStore>[0];
+type ProviderAuthMetadataSnapshot = NonNullable<
+  ApplySessionsPatchArgs["providerAuthMetadataSnapshot"]
+>;
+
+const EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT = {
+  plugins: [],
+} satisfies ProviderAuthMetadataSnapshot;
+const BYTEPLUS_PROVIDER_AUTH_METADATA_SNAPSHOT = {
+  plugins: [
+    {
+      id: "byteplus",
+      channels: [],
+      providers: ["byteplus", "byteplus-plan"],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/plugins/byteplus",
+      source: "test",
+      manifestPath: "/plugins/byteplus/openclaw.plugin.json",
+      providerAuthAliases: { "byteplus-plan": "byteplus" },
+    } satisfies PluginManifestRecord,
+  ],
+} satisfies ProviderAuthMetadataSnapshot;
 
 async function runPatch(params: {
   patch: ApplySessionsPatchArgs["patch"];
@@ -39,6 +65,8 @@ async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  providerAuthMetadataSnapshot?: ApplySessionsPatchArgs["providerAuthMetadataSnapshot"];
+  archivedBy?: SessionCreatedActor;
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
@@ -47,6 +75,8 @@ async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
+    archivedBy: params.archivedBy,
   });
 }
 
@@ -121,6 +151,7 @@ async function applyMainModelPatch(params: {
   cfg?: OpenClawConfig;
   model: string | null;
   catalogRefs?: string[];
+  providerAuthMetadataSnapshot?: ProviderAuthMetadataSnapshot;
 }) {
   return expectPatchOk(
     await runPatch({
@@ -129,6 +160,8 @@ async function applyMainModelPatch(params: {
       patch: { key: MAIN_SESSION_KEY, model: params.model },
       loadGatewayModelCatalog:
         params.catalogRefs === undefined ? undefined : loadCatalog(...params.catalogRefs),
+      providerAuthMetadataSnapshot:
+        params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT,
     }),
   );
 }
@@ -271,23 +304,49 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("archives and restores sessions without retaining a pin", async () => {
+  test("attributes the archive transition and clears attribution on restore", async () => {
+    const archivedBy = { type: "human" as const, id: "profile-ada", label: "Ada" };
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ pinnedAt: 10 }),
         patch: { key: MAIN_SESSION_KEY, archived: true },
+        archivedBy,
       }),
     );
     expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.archivedBy).toEqual(archivedBy);
     expect(archived.pinnedAt).toBeUndefined();
+
+    const idempotent = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      }),
+    );
+    expect(idempotent.archivedAt).toBe(archived.archivedAt);
+    expect(idempotent.archivedBy).toEqual(archivedBy);
 
     const restored = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt }),
+        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
         patch: { key: MAIN_SESSION_KEY, archived: false },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
+    expect(restored.archivedBy).toBeUndefined();
+  });
+
+  test("does not fabricate archive attribution without an actor", async () => {
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+    );
+
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.archivedBy).toBeUndefined();
   });
 
   test("pins active sessions and rejects pinned archived sessions", async () => {
@@ -306,7 +365,11 @@ describe("gateway sessions patch", () => {
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {
-    const store = mainStoreEntry({ archivedAt: 10, lastReadAt: 20 });
+    const store = mainStoreEntry({
+      archivedAt: 10,
+      lastReadAt: 20,
+      agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
+    });
     const unread = expectPatchOk(
       await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
     );
@@ -321,6 +384,47 @@ describe("gateway sessions patch", () => {
     expect(read.lastReadAt).toEqual(expect.any(Number));
     expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
     expect(read.markedUnreadAt).toBeUndefined();
+    expect(read.agentStatus).toBeUndefined();
+  });
+
+  test("stores sanitized agent status with attention and a bounded TTL", async () => {
+    const before = Date.now();
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          statusNote: "  Blocked:\n need the staging password  ",
+          attention: "key",
+        },
+      }),
+    );
+    expect(entry.agentStatus).toMatchObject({
+      note: "Blocked: need the staging password",
+      attention: "key",
+    });
+    expect(entry.agentStatus?.expiresAt).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(entry.agentStatus?.expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, statusNote: "Waiting", ttlMinutes: 121 },
+      }),
+      "use 1-120",
+    );
+  });
+
+  test("clears the whole agent status explicitly", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          agentStatus: { note: "Waiting", attention: "flag", expiresAt: Date.now() + 60_000 },
+        }),
+        patch: { key: MAIN_SESSION_KEY, attention: null },
+      }),
+    );
+    expect(entry.agentStatus).toBeUndefined();
   });
 
   test("persists thinkingLevel=off (does not clear)", async () => {
@@ -477,6 +581,50 @@ describe("gateway sessions patch", () => {
     expect(entry.category).toBe("Research");
   });
 
+  test("canonicalizes and clears session icons", async () => {
+    const icon = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          icon: "  svg:<svg viewBox='0 0 24 24'><path d='M1 2' fill='currentColor'/></svg>  ",
+        },
+      }),
+    );
+    expect(icon.icon).toBe(
+      'svg:<svg viewBox="0 0 24 24"><path d="M1 2" fill="currentColor"/></svg>',
+    );
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ icon: "🦞" }),
+        patch: { key: MAIN_SESSION_KEY, icon: null },
+      }),
+    );
+    expect(cleared.icon).toBeUndefined();
+  });
+
+  test.each([
+    ["script", "svg:<svg><script>alert(1)</script></svg>"],
+    ["event handler", 'svg:<svg onload="alert(1)"></svg>'],
+    [
+      "xlink href",
+      'svg:<svg xmlns:xlink="http://www.w3.org/1999/xlink"><path xlink:href="#x"/></svg>',
+    ],
+    ["URL paint", 'svg:<svg><path fill="url(#paint)"/></svg>'],
+    ["DOCTYPE", "svg:<!DOCTYPE svg><svg></svg>"],
+    ["oversized payload", `svg:<svg><title>${"x".repeat(4096)}</title></svg>`],
+    ["double root", "svg:<svg></svg><svg></svg>"],
+  ])("rejects hostile session SVG icons: %s", async (_label, icon) => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, icon },
+      }),
+      "invalid icon",
+    );
+  });
+
   test("rejects empty category", async () => {
     expectPatchError(
       await runPatch({
@@ -593,6 +741,7 @@ describe("gateway sessions patch", () => {
       store,
       model: "byteplus-plan/ark-code-latest",
       catalogRefs: ["byteplus-plan/ark-code-latest"],
+      providerAuthMetadataSnapshot: BYTEPLUS_PROVIDER_AUTH_METADATA_SNAPSHOT,
     });
     expectModelSelection(entry, "byteplus-plan", "ark-code-latest");
     expectAuthOverride(entry, { profile: "byteplus:work", compactionCount: 2 });
@@ -897,6 +1046,27 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
+  test("supports uncataloged configured primary and session override refs", async () => {
+    const primary = "openai/o3";
+    const override = "openai/o1";
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary },
+              modelPolicy: { allow: [] },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: override },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expectModelSelection(entry, "openai", "o1");
+  });
+
   test("persists provider-qualified aliases without cross-provider collisions", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -921,16 +1091,6 @@ describe("gateway sessions patch", () => {
 
     expectModelSelection(entry, "lmstudio-moe", "qwen3.6-35b-a3b");
     expect(entry.modelOverrideSource).toBe("user");
-  });
-
-  test("sets spawnDepth for subagent sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:subagent:child",
-        patch: { key: "agent:main:subagent:child", spawnDepth: 2 },
-      }),
-    );
-    expect(entry.spawnDepth).toBe(2);
   });
 
   test("validates thinking patches with live catalog reasoning metadata", async () => {
@@ -1190,40 +1350,44 @@ describe("gateway sessions patch", () => {
     expect(entry).toMatchObject({ label: "new label", thinkingLevel: "max" });
   });
 
-  test("sets spawnedBy for ACP sessions", async () => {
+  test("sets an immutable completion owner for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
         storeKey: "agent:main:acp:child",
         patch: {
           key: "agent:main:acp:child",
-          spawnedBy: "agent:main:main",
+          completionOwnerSessionKey: "agent:main:main",
         },
       }),
     );
-    expect(entry.spawnedBy).toBe("agent:main:main");
+    expect(entry.completionOwnerSessionKey).toBe("agent:main:main");
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: {
+        key: "agent:main:acp:child",
+        completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      },
+    });
+    expectPatchError(result, "completionOwnerSessionKey cannot be changed once set");
   });
 
-  test("sets spawnedWorkspaceDir for subagent sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:subagent:child",
-        patch: {
-          key: "agent:main:subagent:child",
-          spawnedWorkspaceDir: "/tmp/subagent-workspace",
-        },
-      }),
-    );
-    expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
-  });
-
-  test("sets spawnDepth for ACP sessions", async () => {
+  test("sets an immutable requester policy snapshot version for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
         storeKey: "agent:main:acp:child",
-        patch: { key: "agent:main:acp:child", spawnDepth: 2 },
+        patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: 1 },
       }),
     );
-    expect(entry.spawnDepth).toBe(2);
+    expect(entry.inheritedToolPolicyVersion).toBe(1);
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: null },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion cannot be cleared once set");
   });
 
   test("sets inheritedToolDeny for ACP sessions", async () => {
@@ -1264,25 +1428,18 @@ describe("gateway sessions patch", () => {
     expect(entry.inheritedToolDeny?.at(-1)).toBe("exec");
   });
 
-  test("rejects spawnDepth on non-subagent sessions", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
-    });
-    expectPatchError(result, "spawnDepth is only supported");
-  });
-
-  test("rejects spawnedWorkspaceDir on non-subagent sessions", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
-    });
-    expectPatchError(result, "spawnedWorkspaceDir is only supported");
-  });
-
   test("rejects inheritedToolDeny on non-subagent sessions", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, inheritedToolDeny: ["exec"] },
     });
     expectPatchError(result, "inheritedToolDeny is only supported");
+  });
+
+  test("rejects inheritedToolPolicyVersion on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolPolicyVersion: 1 },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion is only supported");
   });
 
   test("rejects inheritedToolAllow on non-subagent sessions", async () => {

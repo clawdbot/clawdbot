@@ -27,6 +27,7 @@ import { resolveCodexBindingAppServerConnection } from "./binding-connection.js"
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
+  resolveCodexAppServerHomeScope,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -37,12 +38,33 @@ import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
+  createCodexSessionGenerationSupersededError,
   reclaimCurrentCodexSessionGeneration,
+  resolveCodexRunSessionBindingAuthority,
+  scopeCodexRunBindingStore,
   sessionBindingIdentity,
+  type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+
+function applyStoredBindingPermissions(params: {
+  appServer: ReturnType<typeof resolveCodexBindingAppServerConnection>["appServer"];
+  binding: CodexAppServerThreadBinding | undefined;
+  execPolicyTouched: boolean;
+}) {
+  if (params.execPolicyTouched || params.binding?.connectionScope === "supervision") {
+    return params.appServer;
+  }
+  // `/codex permissions` owns per-session policy. Explicit OpenClaw exec config
+  // and supervised private connections remain authoritative when present.
+  return {
+    ...params.appServer,
+    approvalPolicy: params.binding?.approvalPolicy ?? params.appServer.approvalPolicy,
+    sandbox: params.binding?.sandbox ?? params.appServer.sandbox,
+  };
+}
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -98,30 +120,61 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     agentId: sessionAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  const bindingIdentity = sessionBindingIdentity({
+  let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     config: params.config,
   });
-  const bindingStore = options.bindingStore;
+  let bindingStore = options.bindingStore;
   preDynamicStartupStages.mark("session-agent");
   let activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
+  // The public runner carries a resolved store target. Its durable row must
+  // authorize a stable-key fence before an old generation can read its binding.
+  if (
+    bindingIdentity.kind === "session" &&
+    bindingIdentity.sessionKey &&
+    (params.sessionTarget?.storePath || params.config?.session?.store)
+  ) {
+    const authority = resolveCodexRunSessionBindingAuthority({
+      identity: bindingIdentity,
+      config: params.config,
+      storePath: params.sessionTarget?.storePath,
+    });
+    if (authority === "superseded") {
+      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
+    }
+    if (authority === "ephemeral") {
+      // Stable-key fences protect only durable session rows. Ephemeral callers rotate
+      // physical ids, so sharing that owner would strand every run after the first.
+      const logicalIdentity = bindingIdentity;
+      const physicalIdentity = {
+        kind: "session",
+        agentId: bindingIdentity.agentId,
+        sessionId: bindingIdentity.sessionId,
+      } as const;
+      bindingStore = scopeCodexRunBindingStore({
+        bindingStore,
+        logicalIdentity,
+        physicalIdentity,
+      });
+      bindingIdentity = physicalIdentity;
+    }
+  }
   let startupBinding = await bindingStore.read(bindingIdentity);
   if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const reclaimed = await reclaimCurrentCodexSessionGeneration({
       bindingStore,
       identity: bindingIdentity,
       config: params.config,
+      storePath: params.sessionTarget?.storePath,
     });
     if (!reclaimed) {
-      throw new Error(
-        `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-      );
+      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
     startupBinding = await bindingStore.read(bindingIdentity);
   }
@@ -136,16 +189,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
   }
   const resolveRuntimeOptionsForBinding = (selection: { modelProvider?: string; model?: string }) =>
-    resolveCodexBindingAppServerConnection({
+    applyStoredBindingPermissions({
+      appServer: resolveCodexBindingAppServerConnection({
+        binding: startupBinding,
+        pluginConfig,
+        execPolicy,
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        agentDir,
+        openClawSandboxActive: sandbox?.enabled === true,
+      }).appServer,
       binding: startupBinding,
-      pluginConfig,
-      execPolicy,
-      modelProvider: selection.modelProvider,
-      model: selection.model,
-      config: params.config,
-      agentDir,
-      openClawSandboxActive: sandbox?.enabled === true,
-    }).appServer;
+      execPolicyTouched: execPolicy.touched,
+    });
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const preparedAuthRoute = usesSupervisionConnection
@@ -181,6 +238,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,
+        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
         config: params.config,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
@@ -223,20 +281,25 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
+  if (effectiveWorkspace !== resolvedWorkspace) {
+    await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
+  }
   preDynamicStartupStages.mark("effective-workspace");
+  const shouldPromoteApprovalPolicy =
+    beforeToolCallPolicy.hasBeforeToolCallHook ||
+    beforeToolCallPolicy.trustedToolPolicies.length > 0;
   const resolvePolicyAppServer = () =>
     resolveCodexAppServerForOpenClawToolPolicy({
       appServer: configuredAppServer,
       pluginConfig,
       env: process.env,
-      shouldPromote:
-        beforeToolCallPolicy.hasBeforeToolCallHook ||
-        beforeToolCallPolicy.trustedToolPolicies.length > 0,
+      shouldPromote: shouldPromoteApprovalPolicy,
       execPolicy,
       canUseUntrustedApprovalPolicy:
-        configuredAppServer.start.transport !== "stdio" ||
-        isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+        shouldPromoteApprovalPolicy &&
+        configuredAppServer.approvalPolicy === "never" &&
+        (configuredAppServer.start.transport !== "stdio" ||
+          isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted")),
     });
   let policyAppServer = resolvePolicyAppServer();
   let appServer = resolveCodexAppServerForModelProvider({
@@ -258,6 +321,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
+    turnSucceeded: false,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,
@@ -292,6 +356,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   } else {
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
+  const startupBindingBeforeRotation = startupBinding;
   startupBinding = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
     bindingStore,
@@ -305,20 +370,24 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
-  reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-  configuredAppServer = resolveRuntimeOptionsForBinding({
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-  });
-  policyAppServer = resolvePolicyAppServer();
-  appServer = resolveCodexAppServerForModelProvider({
-    appServer: policyAppServer,
-    provider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-    config: params.config,
-    env: process.env,
-    agentDir,
-  });
+  // Rotation returns the original binding on the common resume path; only a
+  // cleared or replaced native thread changes its model, policy, or connection.
+  if (startupBinding !== startupBindingBeforeRotation) {
+    reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
+    configuredAppServer = resolveRuntimeOptionsForBinding({
+      modelProvider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+    });
+    policyAppServer = resolvePolicyAppServer();
+    appServer = resolveCodexAppServerForModelProvider({
+      appServer: policyAppServer,
+      provider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+      config: params.config,
+      env: process.env,
+      agentDir,
+    });
+  }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
@@ -328,16 +397,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     modelProvider?: string;
     model?: string;
   }) =>
-    resolveCodexBindingAppServerConnection({
+    applyStoredBindingPermissions({
+      appServer: resolveCodexBindingAppServerConnection({
+        binding: mutable.startupBinding,
+        pluginConfig,
+        execPolicy,
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        agentDir,
+        openClawSandboxActive: sandbox?.enabled === true,
+      }).appServer,
       binding: mutable.startupBinding,
-      pluginConfig,
-      execPolicy,
-      modelProvider: selection.modelProvider,
-      model: selection.model,
-      config: params.config,
-      agentDir,
-      openClawSandboxActive: sandbox?.enabled === true,
-    }).appServer;
+      execPolicyTouched: execPolicy.touched,
+    });
   return {
     params,
     options,

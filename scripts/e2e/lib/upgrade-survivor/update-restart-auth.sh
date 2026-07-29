@@ -242,12 +242,18 @@ prepare_update_restart_probe_current_install() {
   local port="$1"
   local log_file="$2"
   local command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
+  local doctor_log="${log_file}.doctor"
   local start_epoch
   local ready_epoch
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1; then
+    echo "candidate device identity migration failed" >&2
+    cat "$doctor_log" >&2 || true
+    return 1
+  fi
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
   gateway_pid="$!"

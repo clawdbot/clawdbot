@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.AndroidVoiceNoteRecordingEngine
+import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.VoiceNoteRecorderController
 import ai.openclaw.app.chat.VoiceNoteRecorderState
@@ -30,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,12 +51,15 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun rememberVoiceNoteRecorderController(
   viewModel: MainViewModel,
-  onFinished: (PendingAttachment) -> Unit,
+  ownerKey: ChatComposerOwner,
+  mainSessionKey: String,
+  onFinished: (String, PendingAttachment) -> Unit,
 ): VoiceNoteRecorderController {
   val context = LocalContext.current.applicationContext
   val lifecycleOwner = LocalLifecycleOwner.current
   val scope = rememberCoroutineScope()
   val currentOnFinished by rememberUpdatedState(onFinished)
+  val ownerTracker = remember { VoiceNoteRecorderOwnerTracker(ownerKey) }
   lateinit var controller: VoiceNoteRecorderController
   controller =
     remember(context, viewModel, scope) {
@@ -69,9 +74,10 @@ internal fun rememberVoiceNoteRecorderController(
           scope.launch(Dispatchers.IO) {
             val attachment = runCatching { stageVoiceNoteAttachment(recording) }
             withContext(Dispatchers.Main) {
+              if (!controller.canCommitPreparation(recording.id)) return@withContext
               attachment.fold(
                 onSuccess = {
-                  currentOnFinished(it)
+                  currentOnFinished(recording.id, it)
                   controller.completePreparation()
                 },
                 onFailure = { controller.reportFailure("Could not prepare voice note.") },
@@ -81,6 +87,9 @@ internal fun rememberVoiceNoteRecorderController(
         },
       )
     }
+  LaunchedEffect(controller, ownerKey, mainSessionKey) {
+    if (!ownerTracker.moveTo(ownerKey, mainSessionKey)) controller.cancel()
+  }
   DisposableEffect(controller, lifecycleOwner) {
     val observer =
       LifecycleEventObserver { _, event ->
@@ -93,6 +102,22 @@ internal fun rememberVoiceNoteRecorderController(
     }
   }
   return controller
+}
+
+internal class VoiceNoteRecorderOwnerTracker(
+  initialOwner: ChatComposerOwner,
+) {
+  private var owner = initialOwner
+
+  /** Returns false only when the next owner represents a genuinely different chat. */
+  fun moveTo(
+    next: ChatComposerOwner,
+    mainSessionKey: String,
+  ): Boolean {
+    val retain = owner == next || shouldMigrateComposerDraft(owner, next, mainSessionKey)
+    owner = next
+    return retain
+  }
 }
 
 @Composable
@@ -116,6 +141,9 @@ internal fun VoiceNotePreparing(modifier: Modifier = Modifier) {
 }
 
 @Composable
+internal fun voiceNoteRecordLabel(): String = nativeString("Record voice note")
+
+@Composable
 internal fun VoiceNoteRecordButton(
   enabled: Boolean,
   onClick: () -> Unit,
@@ -130,7 +158,7 @@ internal fun VoiceNoteRecordButton(
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.Default.Mic, contentDescription = nativeString("Record voice note"), modifier = Modifier.size(18.dp))
+      Icon(imageVector = Icons.Default.Mic, contentDescription = voiceNoteRecordLabel(), modifier = Modifier.size(18.dp))
     }
   }
 }

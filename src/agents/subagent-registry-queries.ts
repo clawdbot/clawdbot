@@ -13,6 +13,12 @@ function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
 }
 
+function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
+  return entry.collect
+    ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
+    : resolveControllerSessionKey(entry);
+}
+
 /** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -34,18 +40,20 @@ export function listRunsForRequesterFromRuns(
   const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
   const upperBound = requesterRunMatchesScope?.endedAt;
 
-  return [...runs.values()].filter((entry) => {
+  const results: SubagentRunRecord[] = [];
+  for (const entry of runs.values()) {
     if (entry.requesterSessionKey !== key) {
-      return false;
+      continue;
     }
     if (typeof lowerBound === "number" && entry.createdAt < lowerBound) {
-      return false;
+      continue;
     }
     if (typeof upperBound === "number" && entry.createdAt > upperBound) {
-      return false;
+      continue;
     }
-    return true;
-  });
+    results.push(entry);
+  }
+  return results;
 }
 
 /** Lists runs controlled by the normalized controller session key. */
@@ -57,7 +65,13 @@ export function listRunsForControllerFromRuns(
   if (!key) {
     return [];
   }
-  return [...runs.values()].filter((entry) => resolveControllerSessionKey(entry) === key);
+  const results: SubagentRunRecord[] = [];
+  for (const entry of runs.values()) {
+    if (resolveControllerSessionKey(entry) === key) {
+      results.push(entry);
+    }
+  }
+  return results;
 }
 
 type LatestRunPair = {
@@ -372,6 +386,7 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
+  options?: { collect?: boolean },
 ): number {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -389,8 +404,13 @@ export function countActiveRunsForSessionFromRuns(
   };
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  // Records already carry collect, and spawn admission is not request-hot, so a
+  // filtered snapshot is simpler than maintaining a second registry index.
   for (const entry of runs.values()) {
-    if (resolveControllerSessionKey(entry) !== key) {
+    if (options?.collect !== undefined && (entry.collect === true) !== options.collect) {
+      continue;
+    }
+    if (resolveConcurrencyOwnerSessionKey(entry) !== key) {
       continue;
     }
     const existing = latestByChildSessionKey.get(entry.childSessionKey);

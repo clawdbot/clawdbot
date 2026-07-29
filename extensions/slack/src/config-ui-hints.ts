@@ -11,9 +11,13 @@ export const slackChannelConfigUiHints = {
     label: "Slack Enterprise Grid Org Install",
     help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
+  postAs: {
+    label: "Slack Identity",
+    help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
-    dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
+    dmPolicy: { channelKey: "slack" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Slack channel IDs",
@@ -47,22 +51,6 @@ export const slackChannelConfigUiHints = {
     label: "Slack Bot Loop Cooldown Seconds",
     help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
   },
-  socketMode: {
-    label: "Slack Socket Mode Transport",
-    help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
-  },
-  "socketMode.clientPingTimeout": {
-    label: "Slack Socket Mode Pong Timeout",
-    help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
-  },
-  "socketMode.serverPingTimeout": {
-    label: "Slack Socket Mode Server Ping Timeout",
-    help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
-  },
-  "socketMode.pingPongLoggingEnabled": {
-    label: "Slack Socket Mode Ping/Pong Logging",
-    help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
-  },
   relay: {
     label: "Slack Relay Mode",
     help: 'Relay-delivered Slack events. Use with mode="relay" when openclaw-slack-router owns the Slack Socket Mode connection.',
@@ -94,10 +82,6 @@ export const slackChannelConfigUiHints = {
   userTokenReadOnly: {
     label: "Slack User Token Read Only",
     help: "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
-  },
-  "capabilities.interactiveReplies": {
-    label: "Slack Interactive Replies",
-    help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
   },
   execApprovals: {
     label: "Slack Exec Approvals",

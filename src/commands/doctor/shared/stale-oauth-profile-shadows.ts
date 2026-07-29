@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  listAgentEntries,
-} from "../../../agents/agent-scope.js";
+import { resolveAgentDir, listAgentEntries } from "../../../agents/agent-scope.js";
 import {
   isLegacyOAuthRef,
   LEGACY_OAUTH_REF_PROVIDER,
@@ -17,13 +13,14 @@ import {
   hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
-import { resolveAuthStorePath } from "../../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { shortenHomePath } from "../../../utils.js";
+import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
 
 type StaleOAuthProfileShadow = {
   agentDir: string;
@@ -116,7 +113,7 @@ export async function scanStaleOAuthProfileShadows(params: {
 }): Promise<StaleOAuthProfileShadow[]> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const mainAgentDir = resolveDefaultAgentDir({}, env);
+  const mainAgentDir = resolveSharedMainAuthAgentDir(env);
   const mainAuthPath = path.resolve(resolveAuthStorePath(mainAgentDir));
   const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
   if (!mainStore) {
@@ -297,7 +294,7 @@ export async function repairStaleOAuthProfileShadows(params: {
     byAgentDir.set(hit.agentDir, existing);
   }
   for (const [agentDir, agentHits] of byAgentDir) {
-    const mainStore = loadPersistedAuthProfileStore(resolveDefaultAgentDir({}, env));
+    const mainStore = loadPersistedAuthProfileStore(resolveSharedMainAuthAgentDir(env));
     if (!mainStore) {
       continue;
     }

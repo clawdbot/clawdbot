@@ -6,7 +6,8 @@ const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
 const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
@@ -218,6 +219,25 @@ describe("buildXiaomiSpeechProvider", () => {
       ]);
       expect(body.audio).toEqual({ format: "mp3", voice: "default_en" });
       expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects malformed base64 audio", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: "ZE==" } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      await expect(
+        provider.synthesize({
+          text: "Hello from OpenClaw.",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("Xiaomi TTS API returned malformed base64 audio data");
     });
 
     it("omits voice and uses configured style for Xiaomi voice design models", async () => {

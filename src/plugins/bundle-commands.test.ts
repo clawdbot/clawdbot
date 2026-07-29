@@ -8,6 +8,11 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const mocks = vi.hoisted(() => ({
   plugins: [] as PluginManifestRecord[],
+  warn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: mocks.warn }),
 }));
 
 vi.mock("./manifest-registry.js", () => ({
@@ -36,6 +41,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   mocks.plugins = [];
+  mocks.warn.mockReset();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -94,7 +100,7 @@ function expectEnabledClaudeBundleCommands(
 }
 
 describe("loadEnabledClaudeBundleCommands", () => {
-  it("loads enabled Claude bundle markdown commands and skips disabled-model-invocation entries", async () => {
+  it("loads enabled Claude bundle markdown commands and honors invocation policy", async () => {
     const homeDir = await createTempDir("openclaw-bundle-commands-home-");
     const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
     await withEnvAsync(
@@ -129,8 +135,20 @@ describe("loadEnabledClaudeBundleCommands", () => {
               ],
             },
             {
-              relativePath: "commands/disabled.md",
-              contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
+              relativePath: "commands/model-hidden.md",
+              contents: ["---", "disable-model-invocation: on", "---", "Manual only."],
+            },
+            {
+              relativePath: "commands/user-enabled.md",
+              contents: ["---", "user-invocable: on", "---", "User enabled."],
+            },
+            {
+              relativePath: "commands/user-hidden.md",
+              contents: ["---", "user-invocable: off", "---", "User hidden."],
+            },
+            {
+              relativePath: "commands/user-hidden-false.md",
+              contents: ["---", "user-invocable: false", "---", "User hidden."],
             },
             {
               relativePath: "commands/not-frontmatter.md",
@@ -149,6 +167,17 @@ describe("loadEnabledClaudeBundleCommands", () => {
         });
 
         expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "compound-bundle",
+            rawName: "model-hidden",
+            description: "Manual only.",
+            promptTemplate: "Manual only.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "model-hidden.md",
+            ),
+          },
           {
             pluginId: "compound-bundle",
             rawName: "not-frontmatter",
@@ -173,6 +202,17 @@ describe("loadEnabledClaudeBundleCommands", () => {
           },
           {
             pluginId: "compound-bundle",
+            rawName: "user-enabled",
+            description: "User enabled.",
+            promptTemplate: "User enabled.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "user-enabled.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
             rawName: "workflows:review",
             description: "Run a structured review",
             promptTemplate: "Review the code. $ARGUMENTS",
@@ -185,8 +225,51 @@ describe("loadEnabledClaudeBundleCommands", () => {
           },
         ]);
         const rawNames = commands.map((entry) => entry.rawName);
-        expect(rawNames).not.toContain("disabled");
+        expect(rawNames).not.toContain("user-hidden");
+        expect(rawNames).not.toContain("user-hidden-false");
       },
     );
+  });
+
+  it("warns and skips oversized bundle commands without dropping siblings", async () => {
+    const homeDir = await createTempDir("openclaw-bundle-commands-oversized-");
+    const workspaceDir = await createTempDir("openclaw-bundle-commands-oversized-ws-");
+
+    await writeClaudeBundleCommandFixture({
+      homeDir,
+      pluginId: "oversized-test",
+      commands: [
+        {
+          relativePath: "commands/normal.md",
+          contents: [
+            "---",
+            "description: Normal command that should be loaded",
+            "---",
+            "This is a normal command.",
+          ],
+        },
+      ],
+    });
+
+    const pluginRoot = resolveBundlePluginRoot(homeDir, "oversized-test");
+    const oversizedFilePath = path.join(pluginRoot, "commands", "oversized.md");
+    await fs.mkdir(path.dirname(oversizedFilePath), { recursive: true });
+    const oversizedContent = Buffer.alloc(1 * 1024 * 1024 + 1, "x");
+    await fs.writeFile(oversizedFilePath, oversizedContent);
+
+    const commands = loadEnabledClaudeBundleCommands({
+      workspaceDir,
+      cfg: {
+        plugins: {
+          entries: { "oversized-test": { enabled: true } },
+        },
+      },
+    });
+
+    expect(commands.map((entry) => entry.rawName)).toEqual(["normal"]);
+    expect(mocks.warn).toHaveBeenCalledOnce();
+    const warning = String(mocks.warn.mock.calls[0]?.[0]);
+    expect(warning).toContain(oversizedFilePath);
+    expect(warning).toContain("1048576");
   });
 });

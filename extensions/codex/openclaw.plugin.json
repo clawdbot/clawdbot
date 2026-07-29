@@ -541,7 +541,7 @@
     },
     "appServer.transport": {
       "label": "Transport",
-      "help": "Use stdio to spawn Codex locally, unix for the shared local control socket, or websocket for a remote app-server.",
+      "help": "Use stdio to spawn Codex locally or unix for the shared local control socket. Remote websocket transport is experimental and unsupported by Codex.",
       "advanced": true
     },
     "appServer.homeScope": {

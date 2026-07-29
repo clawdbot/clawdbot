@@ -5,13 +5,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearSessionStoreCacheForTest,
-  saveSessionStore,
-  updateSessionStore,
-} from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  saveLegacySessionStore as saveSessionStore,
+  updateLegacySessionStore as updateSessionStore,
+} from "../infra/state-migrations.legacy-session-store.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 
@@ -234,29 +234,33 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
   });
 
-  it("expands home-relative cached bundled skill locations before classifying them", () => {
+  it("uses the OS home for cached OCM paths when OPENCLAW_HOME differs", () => {
     const homeDir = path.join(root, "home");
-    const stalePath = "~/old-runtime/node_modules/openclaw/skills/doctor/SKILL.md";
+    const currentBundledSkillsDir = path.join(homeDir, ".ocm/current/node_modules/openclaw/skills");
+    const expectedPath = path.join(currentBundledSkillsDir, "doctor", "SKILL.md");
+    const currentPath = "~/.ocm/current/node_modules/openclaw/skills/doctor/SKILL.md";
+    const stalePath = "~/.ocm/old/node_modules/openclaw/skills/doctor/SKILL.md";
 
     const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
-      bundledSkillsDir,
-      env: { HOME: homeDir },
+      bundledSkillsDir: currentBundledSkillsDir,
+      env: { HOME: homeDir, OPENCLAW_HOME: path.join(root, "ocm-profile") },
       store: {
-        "agent:home": sessionEntry({
-          skillsSnapshot: {
-            prompt: skillPrompt(stalePath),
-            skills: [{ name: "doctor" }],
-          },
+        "agent:current": sessionEntry({
+          skillsSnapshot: { prompt: skillPrompt(currentPath), skills: [{ name: "doctor" }] },
+        }),
+        "agent:stale": sessionEntry({
+          skillsSnapshot: { prompt: skillPrompt(stalePath), skills: [{ name: "doctor" }] },
         }),
       },
+      pathExists: (filePath) => filePath === expectedPath,
     });
 
     expect(findings).toEqual([
       {
-        sessionKey: "agent:home",
+        sessionKey: "agent:stale",
         field: "skillsSnapshot.prompt",
         cachedPath: stalePath,
-        expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
+        expectedPath,
       },
     ]);
   });
@@ -502,18 +506,14 @@ describe("doctor session snapshot stale runtime metadata", () => {
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
     const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main": sessionEntry({
-          skillsSnapshot: {
-            prompt,
-            skills: [{ name: "doctor" }],
-          },
-        }),
-      },
-      { skipMaintenance: true },
-    );
+    await saveSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt,
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain(stalePath);
     expect(raw).toContain("promptRef");
@@ -698,17 +698,13 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     await backupStarted;
 
     const supervisedKey = "agent:main:harness:codex:supervision:concurrent";
-    const concurrentWrite = updateSessionStore(
-      storePath,
-      (store) => {
-        store[supervisedKey] = sessionEntry({
-          sessionId: "supervised-session",
-          agentHarnessId: "codex",
-          modelSelectionLocked: true,
-        });
-      },
-      { requireWriteSuccess: true, skipMaintenance: true },
-    );
+    const concurrentWrite = updateSessionStore(storePath, (store) => {
+      store[supervisedKey] = sessionEntry({
+        sessionId: "supervised-session",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      });
+    });
     releaseBackup();
     await Promise.all([repair, concurrentWrite]);
 
@@ -779,18 +775,14 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
     const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main": sessionEntry({
-          skillsSnapshot: {
-            prompt,
-            skills: [{ name: "doctor" }],
-          },
-        }),
-      },
-      { skipMaintenance: true },
-    );
+    await saveSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt,
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
 
     const rawBefore = await fs.readFile(storePath, "utf-8");
     expect(rawBefore).toContain("promptRef");
@@ -939,18 +931,14 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
     const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main": sessionEntry({
-          skillsSnapshot: {
-            prompt,
-            skills: [{ name: "doctor" }],
-          },
-        }),
-      },
-      { skipMaintenance: true },
-    );
+    await saveSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt,
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
 
     const rawBefore = await fs.readFile(storePath, "utf-8");
     expect(rawBefore).toContain("promptRef");

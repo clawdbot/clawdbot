@@ -25,8 +25,6 @@ import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeAgentReplyEvent,
   PluginHookBeforeAgentReplyResult,
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -152,13 +150,6 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
-  // Defensive default for the legacy compatibility hook (#48534). With
-  // before_agent_start unbudgeted, an unresponsive handler (e.g. a memory
-  // plugin waiting on a hung subprocess) blocked the entire agent pipeline
-  // because both the embedded setup and prompt-build paths await this hook.
-  // The runner is fail-open for this hook name, so a timed-out handler is
-  // logged and the run proceeds without its modifications.
-  before_agent_start: 15_000,
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
   // unresolved; timeout fail-opens with the original final answer.
@@ -801,29 +792,6 @@ export function createHookRunner(
       event,
       ctx,
       { mergeResults: mergeAgentTurnPrepare },
-    );
-  }
-
-  /**
-   * @deprecated Use runBeforeModelResolve and runBeforePromptBuild.
-   *
-   * Run before_agent_start hook.
-   * Legacy compatibility hook that combines model resolve + prompt build phases.
-   */
-  async function runBeforeAgentStart(
-    event: PluginHookBeforeAgentStartEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<PluginHookBeforeAgentStartResult | undefined> {
-    return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
-      "before_agent_start",
-      withAgentRunId(event, ctx),
-      ctx,
-      {
-        mergeResults: (acc, next) => ({
-          ...mergeBeforePromptBuild(acc, next),
-          ...mergeBeforeModelResolve(acc, next),
-        }),
-      },
     );
   }
 
@@ -1594,7 +1562,6 @@ export function createHookRunner(
     runBeforeModelResolve,
     runAgentTurnPrepare,
     runBeforePromptBuild,
-    runBeforeAgentStart,
     runBeforeAgentReply,
     runModelCallStarted,
     runModelCallEnded,

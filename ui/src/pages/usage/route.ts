@@ -1,6 +1,7 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { CostUsageSummary } from "../../api/types.ts";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -36,7 +37,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     timeZone: "local",
     agentId: context.agentSelection.state.scopeId,
   };
-  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
+  if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
     return {
       gateway,
       gatewaySnapshot,
@@ -88,8 +89,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
 }
 
 export const page = definePage({
-  id: "usage",
-  path: "/usage",
+  ...routePageSpec("usage"),
   loader: loadUsageRouteData,
   component: () =>
     import("./usage-page.ts").then(() => ({

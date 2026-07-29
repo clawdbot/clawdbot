@@ -44,7 +44,7 @@ const DEFAULT_ENV = {
 describe("resolveGatewayConnectionAuth", () => {
   const cases: ConnectionAuthCase[] = [
     {
-      name: "local mode defaults to env-first token/password",
+      name: "local mode defaults to config-first token/password",
       cfgLocal: cfg({
         gateway: {
           mode: "local",
@@ -59,52 +59,29 @@ describe("resolveGatewayConnectionAuth", () => {
         },
       }),
       env: DEFAULT_ENV,
-      expected: {
-        token: "env-token",
-        password: "env-password", // pragma: allowlist secret
-      },
-    },
-    {
-      name: "local mode supports config-first token/password",
-      cfgLocal: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            token: "config-token",
-            password: "config-password", // pragma: allowlist secret
-          },
-        },
-      }),
-      env: DEFAULT_ENV,
-      options: {
-        localTokenPrecedence: "config-first",
-        localPasswordPrecedence: "config-first", // pragma: allowlist secret
-      },
       expected: {
         token: "config-token",
         password: "config-password", // pragma: allowlist secret
       },
     },
     {
-      name: "local mode precedence can mix env-first token with config-first password",
+      name: "local mode supports explicit env-first token/password",
       cfgLocal: cfg({
         gateway: {
           mode: "local",
-          auth: {},
-          remote: {
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
+          auth: {
+            token: "config-token",
+            password: "config-password", // pragma: allowlist secret
           },
         },
       }),
       env: DEFAULT_ENV,
       options: {
-        localTokenPrecedence: "env-first",
-        localPasswordPrecedence: "config-first", // pragma: allowlist secret
+        localPrecedence: "env-first",
       },
       expected: {
         token: "env-token",
-        password: "remote-password", // pragma: allowlist secret
+        password: "env-password", // pragma: allowlist secret
       },
     },
     {
@@ -220,6 +197,20 @@ describe("resolveGatewayConnectionAuth", () => {
     });
   });
 
+  it("resolves an env-template local token through the configured auth path", async () => {
+    await expect(
+      resolveGatewayConnectionAuth({
+        config: cfg({
+          gateway: {
+            mode: "local",
+            auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+          },
+        }),
+        env: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
+      }),
+    ).resolves.toEqual({ token: "env-token", password: undefined });
+  });
+
   it("resolves config-first token SecretRef even when OPENCLAW env token exists", async () => {
     const config = cfg({
       gateway: {
@@ -242,7 +233,6 @@ describe("resolveGatewayConnectionAuth", () => {
     const resolved = await resolveGatewayConnectionAuth({
       config,
       env,
-      localTokenPrecedence: "config-first",
     });
     expect(resolved).toEqual({
       token: "config-first-token",
@@ -273,7 +263,6 @@ describe("resolveGatewayConnectionAuth", () => {
     const resolved = await resolveGatewayConnectionAuth({
       config,
       env,
-      localPasswordPrecedence: "config-first", // pragma: allowlist secret
     });
     expect(resolved).toEqual({
       token: undefined,
@@ -303,7 +292,6 @@ describe("resolveGatewayConnectionAuth", () => {
       resolveGatewayConnectionAuth({
         config,
         env,
-        localTokenPrecedence: "config-first",
       }),
     ).rejects.toThrow("gateway.auth.token");
   });
@@ -331,7 +319,6 @@ describe("resolveGatewayConnectionAuth", () => {
       resolveGatewayConnectionAuth({
         config,
         env,
-        localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).rejects.toThrow("gateway.auth.password");
   });

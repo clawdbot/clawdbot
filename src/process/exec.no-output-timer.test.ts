@@ -34,7 +34,8 @@ describe("runCommandWithTimeout no-output timer", () => {
       ";",
     );
     const result = await runCommandWithTimeout([process.execPath, "-e", script], {
-      timeoutMs: 2_000,
+      // Output capture is independent from watchdog timing; Vitest owns the
+      // test deadline so a loaded worker cannot race the child's exit event.
       maxOutputBytes: 5,
     });
 

@@ -400,6 +400,7 @@ docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
     -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
+    -v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
     -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"

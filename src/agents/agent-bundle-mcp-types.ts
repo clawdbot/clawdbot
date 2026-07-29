@@ -99,6 +99,10 @@ export type SessionMcpRuntime = {
    */
   isRequesterScopedServer?: (serverName: string) => boolean;
   mcpAppsEnabled?: boolean;
+  /** Latest non-persisted App context, owned by the exact live view that supplied it. */
+  pendingMcpAppModelContext?: { owner: object; text: string; leased?: boolean };
+  /** Blocks a deferred-retirement view from restoring context across reset. */
+  mcpAppModelContextRevoked?: boolean;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;

@@ -1,5 +1,6 @@
 // Control UI tests cover realtime talk google live behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -345,7 +346,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
 
     expect(ws.binaryType).toBe("arraybuffer");
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
     const readyEvent = requireFirstTalkEvent(onTalkEvent);
     expect(readyEvent.type).toBe("session.ready");
     expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
@@ -373,7 +374,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     await transport.start();
     latestWebSocket().emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
   });
 
   it("stops queued output when Google Live sends interruption", async () => {
@@ -391,12 +392,12 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    await waitForFast(() => expect(createdSources).toHaveLength(1));
 
     const source = createdSources[0];
     ws.emitMessage(encodeJsonFrame({ serverContent: { interrupted: true } }));
 
-    await vi.waitFor(() => expect(source?.stop).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(source?.stop).toHaveBeenCalledTimes(1));
     const cancelledEvent = onTalkEvent.mock.calls.find(
       ([event]) => event.type === "turn.cancelled",
     )?.[0];
@@ -426,7 +427,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
         "transcript.done",
         "output.text.delta",
@@ -501,15 +502,15 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("thinking", undefined));
-    await vi.waitFor(() => expect(listeners.size).toBe(1));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("thinking", undefined));
+    await waitForFast(() => expect(listeners.size).toBe(1));
 
     transport.stop();
     for (const listener of listeners) {
       listener({ event: "chat", payload: { runId, state: "final", message: { text: "done" } } });
     }
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client["request"]).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
     });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
@@ -544,7 +545,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(listeners.size).toBe(1));
+    await waitForFast(() => expect(listeners.size).toBe(1));
     for (const listener of listeners) {
       listener({
         event: "chat",
@@ -552,7 +553,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       });
     }
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
         toolResponse: {
           functionResponses: [
@@ -605,7 +606,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(onStatus).toHaveBeenCalledWith("error", "Google Live socket rejected the tool result"),
     );
     expect(
@@ -664,7 +665,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    await waitForFast(() => expect(createdSources).toHaveLength(1));
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
@@ -678,7 +679,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
@@ -690,7 +691,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
@@ -737,7 +738,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    await waitForFast(() => expect(createdSources).toHaveLength(1));
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
@@ -751,7 +752,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
@@ -763,7 +764,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
@@ -810,7 +811,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    await waitForFast(() => expect(createdSources).toHaveLength(1));
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
@@ -824,7 +825,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
@@ -836,7 +837,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);

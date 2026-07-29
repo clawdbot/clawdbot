@@ -15,6 +15,7 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
@@ -160,16 +161,23 @@ type SkillWorkshopToolOptions = {
   origin?: SkillProposalOrigin;
   /** Internal reviewers may inspect and draft bounded pending proposals, never change lifecycle state. */
   proposalOnly?: boolean;
+  /** Marks proposals created by an autonomous capture pipeline. */
+  autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional durable completion latch shared across runner retries. */
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
 };
 
-function buildSkillWorkshopToolDescription(proposalOnly: boolean): string {
-  return proposalOnly
-    ? "Inspect reusable-procedure proposals and create or revise pending proposals. Live-skill updates and lifecycle actions are unavailable."
-    : "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.";
+function buildSkillWorkshopToolDescription(
+  proposalOnly: boolean,
+  supportsCompletion: boolean,
+): string {
+  if (!proposalOnly) {
+    return `Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+  }
+  const completion = supportsCompletion ? " complete = durably finish this review." : "";
+  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -178,7 +186,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     label: "Skill Workshop",
     name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
-    description: buildSkillWorkshopToolDescription(options.proposalOnly === true),
+    description: buildSkillWorkshopToolDescription(
+      options.proposalOnly === true,
+      options.proposalReviewCompletion !== undefined,
+    ),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
@@ -216,7 +227,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const limit = readListLimitParam(params);
         const proposals = listProposalEntries({
           proposals: (
-            await listSkillProposals({ workspaceDir: options.workspaceDir, env: options.env })
+            await listSkillProposals({
+              agentId: options.agentId,
+              workspaceDir: options.workspaceDir,
+              env: options.env,
+            })
           ).proposals,
           status,
           query,
@@ -231,7 +246,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "inspect") {
-        const proposal = await readProposalForInspect(params, options.workspaceDir, options.env);
+        const proposal = await readProposalForInspect(
+          params,
+          options.workspaceDir,
+          options.env,
+          options.agentId,
+        );
         return proposalResult(proposal, {
           contentText: formatProposalInspect(proposal),
           includeContent: true,
@@ -241,6 +261,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
@@ -255,6 +276,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "reject") {
         const rejected = await rejectSkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
@@ -267,6 +289,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "quarantine") {
         const quarantined = await quarantineSkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
@@ -311,6 +334,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         if (action === "create") {
           proposal = await proposeCreateSkill({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             config: options.config,
             env: options.env,
             name: readStringParam(params, "name", { required: true }),
@@ -318,6 +342,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             content: proposalContent,
             supportFiles,
             createdBy: "skill-workshop",
+            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
@@ -326,9 +351,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         } else if (action === "update") {
           proposal = await proposeUpdateSkill({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             config: options.config,
             env: options.env,
-            agentId: options.agentId,
             skillName: readStringParam(params, "skill_name", {
               required: true,
               label: "skill_name",
@@ -337,6 +362,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             content: proposalContent,
             supportFiles,
             createdBy: "skill-workshop",
+            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
@@ -349,10 +375,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             }),
             name: readStringParam(params, "name"),
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             env: options.env,
           });
           proposal = await reviseSkillProposal({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             config: options.config,
             env: options.env,
             proposalId: pendingProposal.record.id,

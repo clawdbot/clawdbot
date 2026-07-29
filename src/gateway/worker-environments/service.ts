@@ -92,7 +92,6 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
-const STALE_ATTACHED_BUNDLE_ERROR = "Attached worker build no longer matches the Gateway";
 
 function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
   return createHash("sha256").update(idempotencyKey).digest("hex");
@@ -793,14 +792,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         (!record.bootstrapReceipt ||
           !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle))
       ) {
-        // A new Gateway build rejects the old worker at admission. Tear it down now so placement
-        // reconciliation can fail-stop cleanly instead of reporting active until the next turn.
-        await failBootstrap(
-          record,
-          leaseId,
-          provider,
-          new Error(STALE_ATTACHED_BUNDLE_ERROR),
-        ).catch(() => undefined);
+        // A new Gateway build rejects the old worker at admission. This is expected lifecycle
+        // teardown, not a bootstrap failure. `leaseId` above came from this record, so provider
+        // inspection and destruction share the same durable lease identity.
+        await finishDestroy(record, provider).catch(() => undefined);
       }
       return;
     }
@@ -894,7 +889,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         profileSnapshot: requireWorkerProfile({
           install: profile.install ?? "bundle",
           settings,
-          ...(profile.lifetime ? { lifetime: profile.lifetime } : {}),
         }),
         provisionOperationId: `provision:${digest}`,
       });
@@ -1534,6 +1528,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           options.liveEvents?.rotateCredential({
             credentialHash: minted.credentialHash,
             environmentId: binding.environmentId,
+            newProcessTurn: true,
             previousCredentialHash: previous.credentialHash,
             runEpoch: binding.ownerEpoch,
             sessionId: binding.sessionId,

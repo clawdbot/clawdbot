@@ -86,7 +86,6 @@ import type {
   ProviderCatalogResult as _ProviderCatalogResult,
   ProviderDefaultThinkingPolicyContext as _ProviderDefaultThinkingPolicyContext,
   ProviderDeferSyntheticProfileAuthContext as _ProviderDeferSyntheticProfileAuthContext,
-  ProviderDiscoveryContext as _ProviderDiscoveryContext,
   ProviderFailoverErrorContext as _ProviderFailoverErrorContext,
   ProviderFetchUsageSnapshotContext as _ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext as _ProviderModernModelPolicyContext,
@@ -223,7 +222,6 @@ export type ProviderCatalogContext = _ProviderCatalogContext;
 export type ProviderCatalogResult = _ProviderCatalogResult;
 export type ProviderDefaultThinkingPolicyContext = _ProviderDefaultThinkingPolicyContext;
 export type ProviderDeferSyntheticProfileAuthContext = _ProviderDeferSyntheticProfileAuthContext;
-export type ProviderDiscoveryContext = _ProviderDiscoveryContext;
 export type ProviderFailoverErrorContext = _ProviderFailoverErrorContext;
 export type ProviderFetchUsageSnapshotContext = _ProviderFetchUsageSnapshotContext;
 export type ProviderModernModelPolicyContext = _ProviderModernModelPolicyContext;
@@ -287,6 +285,9 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
+  PluginHookMessageReceivedEvent,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
