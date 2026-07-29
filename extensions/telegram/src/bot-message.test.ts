@@ -335,7 +335,7 @@ describe("telegram bot message processor", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
-      "⚠️ dispatch exploded\n\nPlease try again, or use /new to start a fresh session.",
+      "Something went wrong while processing your request. Please try again.",
       { message_thread_id: 456 },
     );
     expect(runtimeError).toHaveBeenCalledWith(
@@ -822,7 +822,7 @@ describe("telegram bot message processor", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
-      "⚠️ dispatch exploded\n\nPlease try again, or use /new to start a fresh session.",
+      "Something went wrong while processing your request. Please try again.",
       undefined,
     );
   });
@@ -842,7 +842,7 @@ describe("telegram bot message processor", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
-      "⚠️ dispatch exploded\n\nPlease try again, or use /new to start a fresh session.",
+      "Something went wrong while processing your request. Please try again.",
       undefined,
     );
     expect(runtimeError).toHaveBeenCalledWith(
