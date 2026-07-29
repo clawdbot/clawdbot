@@ -2545,6 +2545,7 @@ setInterval(() => {}, 1000);
     for (const script of [macos, windows]) {
       expect(script).toContain('readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF")');
       expect(script).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF");
+      expect(script).toContain('const expectedBranch = this.devTargetCommit ? "HEAD" : "main"');
       expect(script).toContain("dev update checkout head");
     }
     expect(macos).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}");
