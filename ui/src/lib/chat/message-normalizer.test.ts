@@ -242,6 +242,42 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves managed media playback and artifact metadata", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            fileName: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            kind: "audio",
+            label: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
     it("does not normalize non-assistant structured audio blocks as attachments", () => {
       const result = normalizeMessage({
         role: "user",

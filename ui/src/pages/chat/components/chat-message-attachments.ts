@@ -1,12 +1,10 @@
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
-import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
+import "./chat-video-player.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { getChatMediaSourceController } from "./chat-media-source.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
@@ -19,6 +17,7 @@ import {
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
   type AttachmentItem,
+  type ArtifactDownloadResolver,
   type ChatMediaResource,
 } from "./chat-message-media.ts";
 
@@ -30,6 +29,11 @@ type AssistantAttachmentAvailability =
       mediaTicketExpiresAt?: number;
       refreshAfter?: number;
       refreshAttempts?: number;
+      playback?: "native" | "transcode";
+      sizeBytes?: number;
+      durationMs?: number;
+      width?: number;
+      height?: number;
     }
   | { status: "unavailable"; reason: string; checkedAt: number; retryAttempted?: true };
 
@@ -232,6 +236,11 @@ export function resolveAssistantAttachmentAvailability(
           available?: boolean;
           mediaTicket?: string;
           mediaTicketExpiresAt?: string;
+          playback?: "native" | "transcode";
+          sizeBytes?: number;
+          durationMs?: number;
+          width?: number;
+          height?: number;
           reason?: string;
         } | null;
         if (payload?.available === true) {
@@ -252,6 +261,13 @@ export function resolveAssistantAttachmentAvailability(
           const availability: AssistantAttachmentAvailability = {
             status: "available",
             ...(mediaTicket ? { mediaTicket, mediaTicketExpiresAt } : {}),
+            ...(payload.playback === "native" || payload.playback === "transcode"
+              ? { playback: payload.playback }
+              : {}),
+            ...(typeof payload.sizeBytes === "number" ? { sizeBytes: payload.sizeBytes } : {}),
+            ...(typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {}),
+            ...(typeof payload.width === "number" ? { width: payload.width } : {}),
+            ...(typeof payload.height === "number" ? { height: payload.height } : {}),
           };
           resource.retryAttempted = false;
           setAssistantAttachmentAvailability(resource, availability);
@@ -321,29 +337,202 @@ function renderAssistantAttachmentStatusCard(params: {
   `;
 }
 
-function videoCardFor(media: HTMLVideoElement): HTMLElement | null {
-  return media.closest<HTMLElement>(".chat-assistant-attachment-card--video");
-}
+type ManagedAttachmentAvailability =
+  | { status: "checking" }
+  | {
+      status: "available";
+      url: string;
+      expiresAt?: number;
+      refreshAfter?: number;
+      refreshAttempts?: number;
+    }
+  | { status: "unavailable"; reason: string; checkedAt: number };
 
-function markVideoMetadataLoaded(media: HTMLVideoElement, loaded: boolean): void {
-  videoCardFor(media)?.toggleAttribute("data-metadata-loaded", loaded);
-}
-
-function markVideoUnplayable(media: HTMLVideoElement, unplayable: boolean): void {
-  videoCardFor(media)?.toggleAttribute("data-unplayable", unplayable);
-}
-
-function syncVideoSource(media: HTMLVideoElement, source: string, sourceIdentity: string): void {
-  getChatMediaSourceController(media).updateSource(media, source, sourceIdentity);
-}
-
-function recoverVideoSource(media: HTMLVideoElement): boolean {
-  const recovered = getChatMediaSourceController(media).handleError(media);
-  if (recovered) {
-    markVideoMetadataLoaded(media, false);
-    markVideoUnplayable(media, false);
+function isManagedOutgoingMediaSource(source: string): boolean {
+  try {
+    const parsed = new URL(source, window.location.origin);
+    return (
+      parsed.origin === window.location.origin &&
+      parsed.pathname.startsWith("/api/chat/media/outgoing/")
+    );
+  } catch {
+    return false;
   }
-  return recovered;
+}
+
+function resolveManagedOutgoingMediaSessionKey(source: string): string | null {
+  try {
+    const encodedSessionKey = new URL(source, window.location.origin).pathname.split("/")[5];
+    return encodedSessionKey ? decodeURIComponent(encodedSessionKey) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setManagedAttachmentAvailability(
+  resource: ChatMediaResource<ManagedAttachmentAvailability>,
+  availability: ManagedAttachmentAvailability,
+): void {
+  if (!isChatMediaResourceCurrent(resource)) {
+    return;
+  }
+  resource.value = availability;
+  bumpAssistantAttachmentAvailabilityRenderVersion();
+  const refreshAt =
+    availability.status === "available" && availability.expiresAt !== undefined
+      ? (availability.refreshAfter ??
+        availability.expiresAt - ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS)
+      : availability.status === "unavailable" && !resource.retryAttempted
+        ? availability.checkedAt + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+        : undefined;
+  scheduleChatMediaResourceRefresh(resource, refreshAt, () => {
+    if (resource.value !== availability) {
+      return;
+    }
+    if (availability.status === "unavailable") {
+      resource.retryAttempted = true;
+      resource.value = undefined;
+    }
+    bumpAssistantAttachmentAvailabilityRenderVersion();
+    notifyChatMediaResourceSubscribers(resource);
+  });
+}
+
+function resolveManagedAttachmentAvailability(
+  attachment: AttachmentItem["attachment"],
+  resolveArtifactDownload: ArtifactDownloadResolver | undefined,
+  onRequestUpdate: (() => void) | undefined,
+): ManagedAttachmentAvailability {
+  if (!isManagedOutgoingMediaSource(attachment.url)) {
+    return { status: "available", url: attachment.url };
+  }
+  if (!attachment.artifactId || !resolveArtifactDownload) {
+    if (new URL(attachment.url, window.location.origin).searchParams.get("mediaTicket")?.trim()) {
+      return { status: "available", url: attachment.url };
+    }
+    return {
+      status: "unavailable",
+      reason: t("chat.attachments.unavailable"),
+      checkedAt: Date.now(),
+    };
+  }
+  const sessionKey = resolveManagedOutgoingMediaSessionKey(attachment.url);
+  if (!sessionKey) {
+    return {
+      status: "unavailable",
+      reason: t("chat.attachments.unavailable"),
+      checkedAt: Date.now(),
+    };
+  }
+  const cacheKey = `${attachment.url}::${attachment.artifactId}`;
+  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+    "managed-media",
+    cacheKey,
+    onRequestUpdate,
+    attachment.url,
+  );
+  let cached = resource.value;
+  const now = Date.now();
+  if (cached?.status === "unavailable") {
+    setManagedAttachmentAvailability(resource, cached);
+    return cached;
+  }
+  if (cached?.status === "available" && cached.expiresAt !== undefined && cached.expiresAt <= now) {
+    resource.value = undefined;
+    cached = undefined;
+    bumpAssistantAttachmentAvailabilityRenderVersion();
+  }
+  if (cached?.status === "available") {
+    const refreshAt =
+      cached.refreshAfter ??
+      (cached.expiresAt === undefined
+        ? undefined
+        : cached.expiresAt - ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS);
+    if (refreshAt === undefined || refreshAt > now) {
+      setManagedAttachmentAvailability(resource, cached);
+      return cached;
+    }
+  }
+  if (resource.pending) {
+    return cached?.status === "available" ? cached : { status: "checking" };
+  }
+  const current = cached?.status === "available" ? cached : null;
+  const keepCurrentForRetry = () => {
+    if (!current || (current.expiresAt !== undefined && current.expiresAt <= Date.now())) {
+      return null;
+    }
+    const refreshAttempts = current.refreshAttempts ?? 0;
+    const refreshAfter =
+      current.expiresAt === undefined
+        ? undefined
+        : refreshAttempts < ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES
+          ? Math.min(Date.now() + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS, current.expiresAt)
+          : current.expiresAt;
+    const retryAvailability: ManagedAttachmentAvailability = {
+      ...current,
+      ...(refreshAfter !== undefined ? { refreshAfter } : {}),
+      refreshAttempts: refreshAttempts + 1,
+    };
+    setManagedAttachmentAvailability(resource, retryAvailability);
+    return retryAvailability;
+  };
+  if (!current) {
+    setManagedAttachmentAvailability(resource, { status: "checking" });
+  }
+  const pending = Promise.resolve()
+    .then(() => resolveArtifactDownload({ sessionKey, artifactId: attachment.artifactId! }))
+    .then((result) => {
+      if (!isChatMediaResourceCurrent(resource)) {
+        return null;
+      }
+      const url = result?.url.trim();
+      if (!url) {
+        const retryAvailability = keepCurrentForRetry();
+        if (retryAvailability) {
+          return retryAvailability;
+        }
+        const unavailable: ManagedAttachmentAvailability = {
+          status: "unavailable",
+          reason: t("chat.attachments.unavailable"),
+          checkedAt: Date.now(),
+        };
+        setManagedAttachmentAvailability(resource, unavailable);
+        return unavailable;
+      }
+      const parsedExpiresAt = Date.parse(result?.expiresAt ?? "");
+      const expiresAt = Number.isFinite(parsedExpiresAt)
+        ? parsedExpiresAt
+        : Date.now() + 5 * 60_000;
+      const availability: ManagedAttachmentAvailability = {
+        status: "available",
+        url,
+        expiresAt,
+      };
+      resource.retryAttempted = false;
+      setManagedAttachmentAvailability(resource, availability);
+      return availability;
+    })
+    .catch(() => {
+      const retryAvailability = keepCurrentForRetry();
+      if (retryAvailability) {
+        return retryAvailability;
+      }
+      const unavailable: ManagedAttachmentAvailability = {
+        status: "unavailable",
+        reason: t("chat.attachments.unavailable"),
+        checkedAt: Date.now(),
+      };
+      setManagedAttachmentAvailability(resource, unavailable);
+      return unavailable;
+    })
+    .finally(() => {
+      if (resource.pending === pending) {
+        resource.pending = undefined;
+      }
+      notifyChatMediaResourceSubscribers(resource);
+    });
+  resource.pending = pending;
+  return current ?? { status: "checking" };
 }
 
 export function renderAssistantAttachments(
@@ -355,6 +544,7 @@ export function renderAssistantAttachments(
   onAssistantAttachmentLoaded?: () => void,
   onRequestOpenImage?: () => number,
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void,
+  resolveArtifactDownload?: ArtifactDownloadResolver,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -362,17 +552,55 @@ export function renderAssistantAttachments(
   return html`
     <div class="chat-assistant-attachments">
       ${attachments.map(({ attachment }) => {
-        const availability = resolveAssistantAttachmentAvailability(
+        const assistantAvailability = resolveAssistantAttachmentAvailability(
           attachment.url,
           localMediaPreviewRoots,
           basePath,
           authToken,
           onRequestUpdate,
         );
-        const attachmentUrl =
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
+        const managedAvailability =
+          assistantAvailability.status === "available"
+            ? resolveManagedAttachmentAvailability(
+                attachment,
+                resolveArtifactDownload,
+                onRequestUpdate,
+              )
             : null;
+        const availability =
+          assistantAvailability.status !== "available"
+            ? assistantAvailability
+            : managedAvailability?.status === "unavailable"
+              ? managedAvailability
+              : managedAvailability?.status === "checking"
+                ? managedAvailability
+                : assistantAvailability;
+        const attachmentUrl =
+          assistantAvailability.status === "available" &&
+          managedAvailability?.status === "available"
+            ? isLocalAssistantAttachmentSource(attachment.url)
+              ? buildAssistantAttachmentUrl(
+                  attachment.url,
+                  basePath,
+                  assistantAvailability.mediaTicket,
+                )
+              : managedAvailability.url
+            : null;
+        const playback =
+          assistantAvailability.status === "available"
+            ? (assistantAvailability.playback ?? attachment.playback ?? "native")
+            : (attachment.playback ?? "native");
+        const sizeBytes =
+          assistantAvailability.status === "available"
+            ? (assistantAvailability.sizeBytes ?? attachment.sizeBytes)
+            : attachment.sizeBytes;
+        const durationMs =
+          assistantAvailability.status === "available"
+            ? (assistantAvailability.durationMs ?? attachment.durationMs)
+            : attachment.durationMs;
+        const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
+          ? (authToken ?? null)
+          : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -421,6 +649,10 @@ export function renderAssistantAttachments(
               .src=${attachmentUrl}
               .sourceIdentity=${attachment.url}
               .label=${attachment.label}
+              .playback=${playback}
+              .authToken=${playbackAuthToken}
+              .sizeBytes=${sizeBytes}
+              .durationMs=${durationMs}
               .voiceNote=${attachment.isVoiceNote === true}
               .onMediaLoaded=${onAssistantAttachmentLoaded}
             ></openclaw-chat-audio-player>
@@ -438,85 +670,21 @@ export function renderAssistantAttachments(
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
-          const dimensions =
-            attachment.width && attachment.height
-              ? { "aspect-ratio": `${attachment.width} / ${attachment.height}` }
-              : {};
-          const downloadHref = safeAttachmentHref(attachmentUrl);
           return html`
-            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-              <div class="chat-assistant-attachment-card__header">
-                <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
-                ${downloadHref
-                  ? html`<a
-                      class="chat-assistant-attachment-card__download"
-                      href=${downloadHref}
-                      download=${attachment.label}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label=${t("chat.mediaPlayer.download", {
-                        filename: attachment.label,
-                      })}
-                      title=${t("chat.mediaPlayer.download", { filename: attachment.label })}
-                      >${icons.download}</a
-                    >`
-                  : nothing}
-              </div>
-              <div class="chat-assistant-video-frame" style=${styleMap(dimensions)}>
-                <span class="chat-assistant-video-frame__placeholder" aria-hidden="true"
-                  >${icons.monitor}</span
-                >
-                <video
-                  controls
-                  preload="metadata"
-                  ${ref((element) => {
-                    if (element instanceof HTMLVideoElement) {
-                      syncVideoSource(element, attachmentUrl, attachment.url);
-                    }
-                  })}
-                  @loadedmetadata=${(event: Event) => {
-                    const media = event.currentTarget as HTMLVideoElement;
-                    getChatMediaSourceController(media).handleLoadedMetadata(media);
-                    markVideoMetadataLoaded(media, true);
-                    markVideoUnplayable(media, false);
-                    onAssistantAttachmentLoaded?.();
-                  }}
-                  @ended=${(event: Event) => {
-                    const media = event.currentTarget as HTMLVideoElement;
-                    if (getChatMediaSourceController(media).handleEnded(media)) {
-                      markVideoMetadataLoaded(media, false);
-                    }
-                  }}
-                  @seeking=${(event: Event) => {
-                    const media = event.currentTarget as HTMLVideoElement;
-                    if (media.error) {
-                      recoverVideoSource(media);
-                    }
-                  }}
-                  @error=${(event: Event) => {
-                    const media = event.currentTarget as HTMLVideoElement;
-                    if (!recoverVideoSource(media)) {
-                      markVideoUnplayable(media, true);
-                    }
-                  }}
-                ></video>
-              </div>
-              <div class="chat-assistant-video-fallback">
-                <div class="chat-assistant-attachment-card__reason">
-                  ${t("chat.mediaPlayer.videoUnavailable")}
-                </div>
-                ${downloadHref
-                  ? html`<a
-                      class="chat-assistant-attachment-card__link"
-                      href=${downloadHref}
-                      download=${attachment.label}
-                      target="_blank"
-                      rel="noreferrer"
-                      >${t("chat.mediaPlayer.download", { filename: attachment.label })}</a
-                    >`
-                  : nothing}
-              </div>
-            </div>
+            <openclaw-chat-video-player
+              .src=${attachmentUrl}
+              .sourceIdentity=${attachment.url}
+              .label=${attachment.label}
+              .playback=${playback}
+              .authToken=${playbackAuthToken}
+              .mediaWidth=${assistantAvailability.status === "available"
+                ? (assistantAvailability.width ?? attachment.width)
+                : attachment.width}
+              .mediaHeight=${assistantAvailability.status === "available"
+                ? (assistantAvailability.height ?? attachment.height)
+                : attachment.height}
+              .onMediaLoaded=${onAssistantAttachmentLoaded}
+            ></openclaw-chat-video-player>
           `;
         }
         if (!attachmentUrl) {
