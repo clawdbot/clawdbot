@@ -2473,7 +2473,7 @@ describe("qa mock openai server", () => {
     expect(structuredThreadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await structuredThreadMemorySummary.json())).toContain("ORBIT-22");
 
-    const systemFallbackThreadMemorySummary = await postResponses(server, {
+    const unavailableThreadMemorySummary = await postResponses(server, {
       stream: false,
       input: [
         {
@@ -2494,8 +2494,31 @@ describe("qa mock openai server", () => {
         },
       ],
     });
-    expect(systemFallbackThreadMemorySummary.status).toBe(200);
-    expect(JSON.stringify(await systemFallbackThreadMemorySummary.json())).toContain("ORBIT-22");
+    expect(unavailableThreadMemorySummary.status).toBe(200);
+    const unavailableThreadMemoryText = JSON.stringify(await unavailableThreadMemorySummary.json());
+    expect(unavailableThreadMemoryText).toContain("NONE");
+    expect(unavailableThreadMemoryText).not.toContain("ORBIT-22");
+
+    const emptyThreadMemorySummary = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        },
+        makeUserInput(
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({ results: [] }),
+        },
+      ],
+    });
+    expect(emptyThreadMemorySummary.status).toBe(200);
+    const emptyThreadMemoryText = JSON.stringify(await emptyThreadMemorySummary.json());
+    expect(emptyThreadMemoryText).toContain("NONE");
+    expect(emptyThreadMemoryText).not.toContain("ORBIT-22");
 
     const memoryFollowup = await postResponses(server, {
       stream: true,
@@ -2517,6 +2540,7 @@ describe("qa mock openai server", () => {
                 path: "sessions/qa-session-memory-ranking.jsonl",
                 startLine: 2,
                 endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
           }),
@@ -2548,11 +2572,13 @@ describe("qa mock openai server", () => {
                 path: "MEMORY.md",
                 startLine: 1,
                 endLine: 2,
+                snippet: "Project Nebula stale codename: ORBIT-9.",
               },
               {
                 path: "sessions/qa-session-memory-ranking.jsonl",
                 startLine: 2,
                 endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
           }),
@@ -2563,6 +2589,81 @@ describe("qa mock openai server", () => {
     expect(await memoryFollowupPrefersSessionResult.text()).toContain(
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
+
+    const pathOnlySessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                startLine: 2,
+                endLine: 3,
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    expect(pathOnlySessionMemory.status).toBe(200);
+    const pathOnlySessionMemoryText = await pathOnlySessionMemory.text();
+    expect(pathOnlySessionMemoryText).toContain('"name":"memory_get"');
+    expect(pathOnlySessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const unavailableSessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-10.",
+              },
+            ],
+            unavailable: true,
+            error: "database is not open",
+          }),
+        },
+      ],
+    });
+    expect(unavailableSessionMemory.status).toBe(200);
+    const unavailableSessionMemoryText = await unavailableSessionMemory.text();
+    expect(unavailableSessionMemoryText).toContain("NONE");
+    expect(unavailableSessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const differentlyRankedSessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-9.",
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    expect(differentlyRankedSessionMemory.status).toBe(200);
+    const differentlyRankedSessionMemoryText = await differentlyRankedSessionMemory.text();
+    expect(differentlyRankedSessionMemoryText).toContain("codename is ORBIT-9");
+    expect(differentlyRankedSessionMemoryText).not.toContain("codename is ORBIT-10");
 
     const activeMemorySearch = await postResponses(server, {
       stream: true,

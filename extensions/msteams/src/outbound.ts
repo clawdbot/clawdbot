@@ -18,7 +18,7 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
-import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
 import { createAccountScopedMSTeamsPollStore } from "./poll-store-scoped.js";
 import { createMSTeamsPollStoreState } from "./polls.js";
@@ -27,6 +27,12 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
+
+function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number {
+  return typeof configuredLimit === "number" && configuredLimit > 0
+    ? Math.min(configuredLimit, MSTEAMS_TEXT_CHUNK_LIMIT)
+    : MSTEAMS_TEXT_CHUNK_LIMIT;
+}
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
@@ -120,6 +126,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    resolveMSTeamsEffectiveTextChunkLimit(fallbackLimit),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
@@ -201,9 +209,13 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
       if (text.trim()) {
         const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
+        const msteamsCfg = resolveMSTeamsAccountConfig(cfg, accountId);
         const chunks = resolveTextChunksWithFallback(
           text,
-          chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
+          chunkTextForOutbound(
+            text,
+            resolveMSTeamsEffectiveTextChunkLimit(msteamsCfg.textChunkLimit),
+          ),
         );
         let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
         for (const chunk of chunks) {

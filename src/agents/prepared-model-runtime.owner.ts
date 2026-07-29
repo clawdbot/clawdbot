@@ -538,16 +538,26 @@ async function buildSnapshot(
     ...(catalogMode === "static" ? { providerIds } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
-  const staticEntries = providerStaticModels.map(toStaticCatalogEntry);
-  // Config reload publishes a replacement snapshot. Keep the synchronous inline projection
-  // at that lifecycle boundary instead of rebuilding it on every model resolution in a turn.
-  const inlineProviderModels = buildInlineProviderModels(input.config.models?.providers ?? {});
   const configuredRuntimeModels = prepareConfiguredRuntimeModels({
     config: input.config,
     env,
     providerStaticModels,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
+  const staticModels = new Map<string, ProviderRuntimeModel>();
+  for (const model of [
+    ...configuredRuntimeModels.map((configured) => configured.model),
+    ...providerStaticModels,
+  ]) {
+    const modelKey = `${normalizeProviderId(model.provider)}\0${model.id.trim().toLowerCase()}`;
+    if (!staticModels.has(modelKey)) {
+      staticModels.set(modelKey, model);
+    }
+  }
+  const staticEntries = [...staticModels.values()].map(toStaticCatalogEntry);
+  // Config reload publishes a replacement snapshot. Keep the synchronous inline projection
+  // at that lifecycle boundary instead of rebuilding it on every model resolution in a turn.
+  const inlineProviderModels = buildInlineProviderModels(input.config.models?.providers ?? {});
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the
     // credential map and parsed catalog remain owned by the lifecycle snapshot.

@@ -556,6 +556,48 @@ describe("buildCodexMigrationProvider", () => {
     expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
   });
 
+  it("discovers installed plugins from the API-key curated marketplace", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/installed") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-api-curated",
+              path: path.join(
+                fixture.codexHome,
+                ".tmp/plugins/.agents/plugins/api_marketplace.json",
+              ),
+              interface: null,
+              plugins: [
+                pluginSummary("google-calendar@openai-api-curated", {
+                  name: "google-calendar",
+                  installed: true,
+                  enabled: true,
+                }),
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+        } satisfies v2.PluginInstalledResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const source = await discoverCodexSource({ input: fixture.codexHome });
+
+    expect(source.pluginDiscoveryError).toBeUndefined();
+    expect(source.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginName: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          migratable: true,
+        }),
+      ]),
+    );
+  });
+
   it("ignores unrelated marketplace errors when no curated plugins are installed", async () => {
     const fixture = await createCodexFixture();
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {

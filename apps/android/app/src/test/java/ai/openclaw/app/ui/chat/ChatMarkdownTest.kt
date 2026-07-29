@@ -123,6 +123,28 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun type6HtmlBlockCannotAbsorbTheDetailsCloser() {
+    val blocks =
+      parseChatMarkdownBlocks(
+        """
+        <details>
+        <summary>X</summary>
+
+        <div>body</div>
+        </details>
+
+        Following
+        """.trimIndent(),
+      )
+    val disclosure = blocks[0] as ChatMarkdownRenderBlock.Disclosure
+    val html = (disclosure.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node as HtmlBlock
+    val following = (blocks[1] as ChatMarkdownRenderBlock.CommonMark).node as Paragraph
+
+    assertTrue(html.literal.contains("body"))
+    assertEquals("Following", (following.firstChild as org.commonmark.node.Text).literal)
+  }
+
+  @Test
   fun unsupportedNestedDetailsBalanceWithoutClosingOuterDisclosure() {
     val blocks =
       parseChatMarkdownBlocks(

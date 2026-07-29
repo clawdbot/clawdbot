@@ -23,6 +23,7 @@ import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
@@ -1309,6 +1310,11 @@ class MainViewModel private constructor(
   ) = ensureRuntime().resolveInlineWidgetResource(path, failedResource)
 
   internal suspend fun loadChatImageArtifact(artifactId: String) = ensureRuntime().loadChatImageArtifact(artifactId)
+
+  internal suspend fun loadChatMediaArtifact(
+    artifactId: String,
+    kind: GatewayMediaKind,
+  ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind)
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)

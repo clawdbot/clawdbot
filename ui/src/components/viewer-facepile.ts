@@ -43,10 +43,11 @@ function readPresenceEntries(value: unknown): PresenceEntry[] {
 
 function projectPresenceViewers(
   entries: readonly PresenceEntry[],
+  authenticatedSelfUserId?: string,
   selfInstanceId?: string,
 ): { users: readonly PresenceViewer[]; selfUserId?: string } {
   const grouped = new Map<string, PresenceEntry[]>();
-  let selfUserId: string | undefined;
+  let selfUserId = normalized(authenticatedSelfUserId);
   for (const entry of entries) {
     if (entry.reason === "disconnect" || !entry.user?.id) {
       continue;
@@ -58,7 +59,7 @@ function projectPresenceViewers(
     } else {
       grouped.set(userId, [entry]);
     }
-    if (selfInstanceId && entry.instanceId === selfInstanceId) {
+    if (!selfUserId && selfInstanceId && entry.instanceId === selfInstanceId) {
       selfUserId = userId;
     }
   }
@@ -79,29 +80,41 @@ function projectPresenceViewers(
 }
 
 let cachedPresencePayload: unknown;
+let cachedAuthenticatedSelfUserId: string | undefined;
 let cachedSelfInstanceId: string | undefined;
 let cachedPresenceProjection: ReturnType<typeof projectPresenceViewers> | undefined;
 
-function projectPresencePayload(value: unknown, selfInstanceId?: string) {
+function projectPresencePayload(
+  value: unknown,
+  authenticatedSelfUserId?: string,
+  selfInstanceId?: string,
+) {
   if (
     cachedPresenceProjection &&
     cachedPresencePayload === value &&
+    cachedAuthenticatedSelfUserId === authenticatedSelfUserId &&
     cachedSelfInstanceId === selfInstanceId
   ) {
     return cachedPresenceProjection;
   }
   cachedPresencePayload = value;
+  cachedAuthenticatedSelfUserId = authenticatedSelfUserId;
   cachedSelfInstanceId = selfInstanceId;
-  cachedPresenceProjection = projectPresenceViewers(readPresenceEntries(value), selfInstanceId);
+  cachedPresenceProjection = projectPresenceViewers(
+    readPresenceEntries(value),
+    authenticatedSelfUserId,
+    selfInstanceId,
+  );
   return cachedPresenceProjection;
 }
 
 export function hasSessionPresenceViewers(
   value: unknown,
+  authenticatedSelfUserId: string | undefined,
   selfInstanceId: string | undefined,
   sessionKey: string,
 ): boolean {
-  const projection = projectPresencePayload(value, selfInstanceId);
+  const projection = projectPresencePayload(value, authenticatedSelfUserId, selfInstanceId);
   return projection.users.some(
     (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
   );
@@ -155,7 +168,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
   }
 }
 
-function renderPresenceCardRow(user: PresenceViewer, isSelf: boolean) {
+function renderPresenceCardRow(user: PresenceViewer) {
   const label = presenceViewerLabel(user);
   // The email doubles as the label when no display name exists; repeating it
   // as a subtitle would just echo the same line.
@@ -163,11 +176,7 @@ function renderPresenceCardRow(user: PresenceViewer, isSelf: boolean) {
   return html`<div class="sidebar-hover-card__person" data-viewer-id=${user.id}>
     <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
     <span class="sidebar-hover-card__person-text">
-      <span class="sidebar-hover-card__person-name"
-        >${label}${isSelf
-          ? html` <span class="sidebar-hover-card__you">(${t("presence.you")})</span>`
-          : nothing}</span
-      >
+      <span class="sidebar-hover-card__person-name">${label}</span>
       ${subtitle
         ? html`<span class="sidebar-hover-card__person-email">${subtitle}</span>`
         : nothing}
@@ -177,6 +186,7 @@ function renderPresenceCardRow(user: PresenceViewer, isSelf: boolean) {
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) presencePayload: unknown;
+  @property({ attribute: false }) selfUserId?: string;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
@@ -185,7 +195,11 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
 
   override render() {
-    const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
+    const projection = projectPresencePayload(
+      this.presencePayload,
+      this.selfUserId,
+      this.selfInstanceId,
+    );
     const sessionKey = this.sessionKey;
     const users = sessionKey
       ? projection.users.filter(
@@ -193,7 +207,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
         )
       : this.variant === "footer"
         ? projection.users.filter((user) => user.id !== projection.selfUserId)
-        : projection.users;
+        : projection.users.filter((user) => user.id !== projection.selfUserId);
     if (users.length === 0) {
       return nothing;
     }
@@ -232,10 +246,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
     if (this.variant !== "footer") {
       return facepile;
     }
-    // Self anchors the hover card; everyone else keeps the projection order.
-    const roster = [...projection.users].toSorted((a, b) =>
-      a.id === projection.selfUserId ? -1 : b.id === projection.selfUserId ? 1 : 0,
-    );
+    const roster = projection.users.filter((user) => user.id !== projection.selfUserId);
     return html`
       <openclaw-tooltip class="sidebar-hover-tooltip">
         <span
@@ -256,9 +267,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
               tabindex="0"
               aria-label=${`${t("presence.rosterTitle")} · ${roster.length}`}
             >
-              ${roster.map((user) =>
-                renderPresenceCardRow(user, user.id === projection.selfUserId),
-              )}
+              ${roster.map((user) => renderPresenceCardRow(user))}
             </div>
           </section>
           <div class="sidebar-hover-card__divider" role="separator"></div>

@@ -2135,7 +2135,7 @@ export const en: TranslationMap = {
       rollbackConfirmDescription:
         "Remove diary entries and staged memories created by session backfill for this agent.",
       rollbackWarning:
-        "Tracked session cursors stay in place, so removed entries will not be staged again.",
+        "Session backfill cursors are rewound, so the same candidates can be staged again.",
       rollbackComplete: "Session backfill rolled back",
       rollbackCounts: "{diary} diary entries and {staged} staged entries removed",
       unavailable: "Session backfill is unavailable on this Gateway.",
@@ -2230,6 +2230,10 @@ export const en: TranslationMap = {
     targetLabel: "URL or command",
     nameInvalid: "Server names use letters, numbers, dots, dashes, or underscores.",
     targetInvalid: "Enter a URL for HTTP transports or a valid command line for stdio.",
+    sessionEnableFailed:
+      "The server was saved disabled globally, but enabling it for this session failed: {error}",
+    sessionChanged: "The active session changed before it could be enabled.",
+    sessionUnavailable: "The active session is unavailable; refresh and try again.",
     nameTaken: "An MCP server named “{name}” already exists.",
     missing: "MCP server “{name}” was not found in the configuration.",
     missingTransport: "missing transport",
@@ -2690,6 +2694,11 @@ export const en: TranslationMap = {
       title: "Tool Search",
       description:
         "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
+    },
+    loopDetection: {
+      title: "Tool-loop detection",
+      description:
+        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
     },
     localModelLean: {
       title: "Lean tools for local models",
@@ -3714,12 +3723,12 @@ export const en: TranslationMap = {
       loadingPage: "Loading wiki page…",
       dreamsTab: "Dreams",
       insightsTab: "Imported Insights",
-      palaceTab: "Memory Palace",
+      wikiTab: "Memory Wiki",
       dreamsExplainer:
         "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin.",
       insightsExplainer:
         "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
-      palaceExplainer:
+      wikiExplainer:
         "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
       copyArchivePath: "Copy archive path",
       loadingInsights: "Loading imported insights…",
@@ -3735,9 +3744,9 @@ export const en: TranslationMap = {
       riskReasons: "Risk reasons:",
       labels: "Labels:",
       openSourcePage: "Open source page",
-      loadingPalace: "Loading memory palace…",
-      emptyPalace: "Memory palace is not populated yet",
-      emptyPalaceHint:
+      loadingWiki: "Loading memory wiki…",
+      emptyWiki: "Memory wiki is not populated yet",
+      emptyWikiHint:
         "Right now the wiki mostly has raw source imports and operational reports. This tab becomes useful once syntheses, entities, or concepts start getting written.",
       claims: "Claims",
       openQuestions: "Open questions",
@@ -3747,7 +3756,7 @@ export const en: TranslationMap = {
       id: "Id:",
       openWikiPage: "Open wiki page",
       unavailable: "Memory Wiki is not enabled",
-      unavailablePluginPrefix: "Imported Insights and Memory Palace are provided by the bundled",
+      unavailablePluginPrefix: "Imported Insights and Memory Wiki are provided by the bundled",
       unavailablePluginSuffix: "plugin.",
       enablePrefix: "Enable",
       enableSuffix: ", then reload this tab.",
@@ -3813,7 +3822,7 @@ export const en: TranslationMap = {
       tidyingKnowledgeGraph: "tidying the knowledge graph…",
       replayingConversations: "replaying today's conversations…",
       weavingShortTerm: "weaving short-term into long-term…",
-      defragmentingMindPalace: "defragmenting the mind palace…",
+      defragmentingMemoryLane: "defragmenting memory lane…",
       filingLooseThoughts: "filing away loose thoughts…",
       connectingDots: "connecting distant dots…",
       compostingContext: "composting old context windows…",
@@ -5003,7 +5012,22 @@ export const en: TranslationMap = {
         manageSkills: "Manage skills",
         browseConnectors: "Browse connectors",
         addMcpServer: "Add MCP server…",
-        toolAccess: "Tool access",
+        addMcpServerTitle: "Add MCP server",
+        addMcpServerDescription: "Configure the server and choose where it is enabled.",
+        scopeLabel: "Availability",
+        scopeSession: "This session",
+        scopeEverywhere: "Everywhere",
+        scopeSessionHint:
+          "The server is saved globally disabled and enabled only for this session.",
+        scopeEverywhereHint: "The server is saved and enabled for every session.",
+        toolAccess: {
+          label: "Tool access",
+          loading: "Loading tools…",
+          loadFailed: "Couldn’t load tools.",
+          noTools: "No tools available for this connector.",
+          summary: "{enabled} of {total} tools on",
+          summaryOne: "{enabled} of {total} tool on",
+        },
         enabledCount: "{count} on",
         loadingSkills: "Loading skills…",
         skillsLoadFailed: "Couldn’t load skills.",
@@ -5488,7 +5512,8 @@ export const en: TranslationMap = {
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Timezone",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp: "Optional. Any valid IANA timezone.",
+      timezoneHelp:
+        "Optional. Leave blank to use the Gateway host timezone, or enter any valid IANA timezone.",
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Isolated session",

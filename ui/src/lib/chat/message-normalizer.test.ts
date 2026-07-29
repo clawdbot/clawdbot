@@ -36,6 +36,33 @@ describe("message-normalizer", () => {
         expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
       },
     );
+
+    it.each([undefined, null, "malformed block", 42, true, []])(
+      "preserves valid assistant text after the malformed content block %o",
+      (block) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: [block, { type: "output_text", text: "The valid answer remains visible." }],
+          }),
+        ).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "The valid answer remains visible." }],
+        });
+      },
+    );
+
+    it("preserves valid tool blocks after malformed content", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: [null, { type: "tool_use", name: "read", args: { path: "notes.md" } }],
+        }),
+      ).toMatchObject({
+        role: "toolResult",
+        content: [{ type: "tool_use", name: "read", args: { path: "notes.md" } }],
+      });
+    });
   });
 
   describe("normalizeMessage", () => {

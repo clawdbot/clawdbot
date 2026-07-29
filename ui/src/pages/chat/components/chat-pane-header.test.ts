@@ -273,15 +273,17 @@ describe("chat pane header", () => {
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
-  it("renders a resolved owner avatar with the header attribution semantics", async () => {
+  it("renders the durable session actor avatar with the header attribution semantics", async () => {
     const mounted = mount({
       showOwnerChip: true,
-      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
-      ownerUser: {
-        id: "profile-ada",
-        name: "Ada",
-        avatarUrl: "/api/users/profile-ada/avatar",
-      },
+      session: row({
+        createdActor: {
+          type: "human",
+          id: "profile-ada",
+          label: "Ada",
+          avatarUrl: "/api/users/profile-ada/avatar?v=7",
+        },
+      }),
     });
 
     await vi.waitFor(() => {

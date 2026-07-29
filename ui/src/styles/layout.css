@@ -1414,6 +1414,12 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+.sidebar-session-catalog-provider-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
 .sidebar-session-group-count {
   flex: 0 0 auto;
   color: var(--muted);

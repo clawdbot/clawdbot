@@ -1165,54 +1165,7 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
-.sw-mode-switch {
-  --track-width: 0;
-  --indicator-color: var(--accent);
-  display: inline-block;
-}
-
-.sw-mode-switch::part(nav) {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 3px;
-}
-
-.sw-mode-switch::part(body) {
-  display: none;
-}
-
-.sw-mode-switch__opt::part(base) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: none;
-  padding: 6px 14px;
-  border-radius: 999px;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--muted);
-  transition: color 160ms ease;
-  white-space: nowrap;
-}
-
-.sw-mode-switch__opt:hover::part(base) {
-  color: var(--text);
-}
-
-.sw-mode-switch__opt[active]::part(base) {
-  color: var(--text-strong);
-  font-weight: 600;
-}
-
-.sw-mode-switch__opt:focus-visible::part(base) {
-  outline: none;
-  box-shadow: none;
-}
-
-.sw-mode-switch__icon {
+.sw-mode-tabs__icon {
   width: 14px;
   height: 14px;
   stroke: currentColor;

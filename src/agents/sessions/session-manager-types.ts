@@ -113,6 +113,7 @@ export type SessionEntry =
 export type FileEntry = SessionHeader | SessionEntry;
 
 export type AppendPersistenceOptions = {
+  appendIntent?: "active-branch";
   config?: OpenClawConfig;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;

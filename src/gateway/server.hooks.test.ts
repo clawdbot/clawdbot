@@ -87,6 +87,17 @@ function mockIsolatedRunOk(): void {
   });
 }
 
+function mockIsolatedRunAfterStartOnce(result: {
+  status: "ok" | "error" | "skipped";
+  summary: string;
+  delivered?: boolean;
+}) {
+  cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+    (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+    return result;
+  });
+}
+
 async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promise<void> {
   await expect
     .poll(() => cronIsolatedRun.mock.calls.length, { timeout: timeoutMs, interval: 10 })
@@ -422,7 +433,7 @@ describe("gateway server hooks", () => {
       await waitForCronIsolatedRuns(2);
       expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
 
-      cronIsolatedRun.mockResolvedValueOnce({
+      mockIsolatedRunAfterStartOnce({
         status: "error",
         summary: "boom",
         delivered: false,
@@ -445,7 +456,7 @@ describe("gateway server hooks", () => {
 
     await withGatewayServer(async ({ port }) => {
       cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
+      mockIsolatedRunAfterStartOnce({
         status: "error",
         summary: "boom",
         delivered: false,

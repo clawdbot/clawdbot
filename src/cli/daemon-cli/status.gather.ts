@@ -39,6 +39,7 @@ import {
   formatPortDiagnostics,
   inspectPortConnections,
   inspectPortUsage,
+  inspectPortUsages,
   type PortConnection,
   type PortListener,
   type PortUsageStatus,
@@ -495,15 +496,19 @@ async function inspectDaemonPortStatuses(params: {
   daemonPort: number;
   cliPort: number;
 }): Promise<{ portStatus?: PortStatusSummary; portCliStatus?: PortStatusSummary }> {
-  const [portDiagnostics, portCliDiagnostics] = await Promise.all([
-    inspectPortUsage(params.daemonPort).catch(() => null),
-    params.cliPort !== params.daemonPort
-      ? inspectPortUsage(params.cliPort).catch(() => null)
-      : null,
-  ]);
+  if (params.cliPort === params.daemonPort) {
+    const portDiagnostics = await inspectPortUsage(params.daemonPort).catch(() => null);
+    return {
+      portStatus: toPortStatusSummary(portDiagnostics),
+      portCliStatus: undefined,
+    };
+  }
+  const portDiagnosticsByPort = await inspectPortUsages([params.daemonPort, params.cliPort]).catch(
+    () => new Map(),
+  );
   return {
-    portStatus: toPortStatusSummary(portDiagnostics),
-    portCliStatus: toPortStatusSummary(portCliDiagnostics),
+    portStatus: toPortStatusSummary(portDiagnosticsByPort.get(params.daemonPort) ?? null),
+    portCliStatus: toPortStatusSummary(portDiagnosticsByPort.get(params.cliPort) ?? null),
   };
 }
 

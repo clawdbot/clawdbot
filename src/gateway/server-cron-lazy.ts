@@ -262,6 +262,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async remove(id) {
       return await (await load()).state.cron.remove(id);
     },
+    async removeStaleJobFamily(family) {
+      return await (await load()).state.cron.removeStaleJobFamily(family);
+    },
     async removeAgentJobsTransactional(agentId, commit) {
       return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
     },

@@ -94,6 +94,30 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
     expect(result).toBeUndefined();
   });
 
+  it("does not inherit modifying hook timeout defaults", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+        return { handled: true };
+      });
+      const registry = createMockPluginRegistry([{ hookName: "before_agent_reply", handler }]);
+      const runner = createHookRunner(registry, {
+        modifyingHookTimeoutMsByHook: { before_agent_reply: 10 },
+      });
+
+      const resultPromise = runner.runBeforeAgentReply(EVENT, TEST_PLUGIN_AGENT_CTX);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(resultPromise).resolves.toEqual({ handled: true });
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("catches errors with catchErrors: true and continues to next handler", async () => {
     const logger = { warn: vi.fn(), error: vi.fn() };
     const failing = vi.fn().mockRejectedValue(new Error("boom"));

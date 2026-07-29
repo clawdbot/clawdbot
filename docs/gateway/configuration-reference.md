@@ -604,6 +604,9 @@ See [Plugins](/tools/plugin).
     allowRealIpFallback: false,
     nodes: {
       pairing: {
+        // Silent same-host pairing and access upgrades. Default: enabled.
+        // Set false to require explicit approval for every device.
+        autoApproveLocal: true,
         // Optional. Default unset/disabled.
         autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
         // SSH-verified auto-approval. Default: enabled (true).
@@ -688,6 +691,7 @@ See [Plugins](/tools/plugin).
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
+- `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the one-time persistent enable for classified commands such as `camera.snap`, `camera.clip`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Computer and mobile UI control instead rely on default-off node-local enablement plus pairing. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
@@ -925,8 +929,13 @@ Validation and safety notes:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+  - Direct announce delivery requires both a concrete `channel` and `to`; supplying only one fails before the run is scheduled.
+  - Omit both delivery fields for completion-only hooks, or set `deliver: false` to ignore supplied destination data.
+  - The request waits up to 15 seconds for runner admission, not run completion. `200` means the agent runner was entered.
+  - Pre-run failures return `{ ok: false, error, runId }`: `409` for session admission conflicts, `502` for other preparation failures, and `503` when the 15-second admission deadline expires. Timed-out queued work is canceled and will not start later.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
+  - Mapped `agent` actions use the same admission wait and `200`/`409`/`502`/`503` outcomes.
 
 <Accordion title="Mapping details">
 
@@ -941,7 +950,8 @@ Validation and safety notes:
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
-- `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
+- `deliver: true` sends the final reply to a channel; mapped hooks may use `channel: "last"`.
+- `deliver: false` keeps the mapped run completion-only.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
 </Accordion>

@@ -137,6 +137,7 @@ overrides:
   brace-expansion: 5.0.8
   file-type: 22.0.1
   form-data: 4.0.6
+  "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
   ip-address: 10.3.1
   minimatch: 10.2.5
   path-to-regexp: 8.4.2

@@ -5,6 +5,7 @@
  * error handling and priority ordering.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
@@ -100,6 +101,11 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
+import {
+  createPluginToolMatcherScope,
+  pluginToolMatcherCoversTool,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 // Re-export types for consumers
 
@@ -240,6 +246,7 @@ function getHooksForName<K extends PluginHookName>(
   registry: HookRunnerRegistry,
   hookName: K,
   ctx?: unknown,
+  toolName?: string,
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
     .filter((hook) => {
@@ -258,7 +265,17 @@ function getHooksForName<K extends PluginHookName>(
         hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
       );
     })
+    .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+export function getToolHookMatcherScope(
+  registry: HookRunnerRegistry,
+  hookName: "before_tool_call" | "after_tool_call",
+): PluginToolMatcherScope | undefined {
+  return createPluginToolMatcherScope(
+    getHooksForName(registry, hookName).map((registration) => registration.matcher),
+  );
 }
 
 function getHooksForNameAndPlugin<K extends PluginHookName>(
@@ -290,6 +307,9 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
+  // Prompt-build hooks may start nested agent runs through any caller. The
+  // mutable token lets detached descendants dispatch after the outer run settles.
+  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
@@ -541,12 +561,8 @@ export function createHookRunner(
     normalizePositiveTimeoutMs(hook.timeoutMs) ??
     normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
-  const getClaimingHookTimeoutMs = (
-    hookName: PluginHookName,
-    hook: PluginHookRegistration,
-  ): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs) ??
-    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+  const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs);
 
   const withHookTimeout = async <T>(
     promise: Promise<T>,
@@ -590,8 +606,9 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     optionsValue: VoidHookRunOptions = {},
+    matcherToolName?: string,
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
     }
@@ -626,8 +643,9 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     policy: ModifyingHookPolicy<K, TResult> = {},
+    matcherToolName?: string,
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return undefined;
     }
@@ -728,7 +746,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return handlerResult;
@@ -779,7 +797,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
@@ -834,12 +852,22 @@ export function createHookRunner(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    return runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
-      "before_prompt_build",
-      event,
-      ctx,
-      { mergeResults: mergeBeforePromptBuild },
-    );
+    if (beforePromptBuildDispatch.getStore()?.active) {
+      return undefined;
+    }
+    const token = { active: true };
+    return await beforePromptBuildDispatch.run(token, async () => {
+      try {
+        return await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
+          "before_prompt_build",
+          event,
+          ctx,
+          { mergeResults: mergeBeforePromptBuild },
+        );
+      } finally {
+        token.active = false;
+      }
+    });
   }
 
   async function runAgentTurnPrepare(
@@ -1273,6 +1301,7 @@ export function createHookRunner(
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
       },
+      event.toolName,
     );
   }
 
@@ -1284,7 +1313,7 @@ export function createHookRunner(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
   /**

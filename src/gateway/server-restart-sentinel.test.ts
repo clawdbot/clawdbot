@@ -2670,6 +2670,67 @@ describe("scheduleRestartSentinelWake", () => {
     expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
+  it.each(["config-patch", "config-apply"] as const)(
+    "consumes a targetless %s acknowledgement without waking an agent",
+    async (kind) => {
+      mocks.readRestartSentinel.mockResolvedValue({
+        version: 1,
+        revision: 123,
+        payload: {
+          kind,
+          status: "ok",
+          ts: 123,
+          sessionKey: undefined,
+          deliveryContext: undefined,
+          threadId: undefined,
+          message: null,
+          doctorHint: "Run openclaw doctor --non-interactive",
+          stats: {
+            mode: kind === "config-patch" ? "config.patch" : "config.apply",
+            root: "/tmp/openclaw.json",
+            requiresRestart: true,
+          },
+        },
+      });
+
+      await scheduleRestartSentinelWake({ deps: {} as never });
+
+      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
+      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+      expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+      expect(mocks.drainPendingSessionDeliveries).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves an explicit targetless config restart note", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      revision: 123,
+      payload: {
+        kind: "config-patch",
+        status: "ok",
+        ts: 123,
+        message: "restart message",
+        stats: { mode: "config.patch", requiresRestart: true },
+      },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:main:main",
+    });
+  });
+
   it("durably wakes the main session when the sentinel has no sessionKey", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {

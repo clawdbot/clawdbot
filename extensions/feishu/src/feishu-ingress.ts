@@ -50,8 +50,14 @@ type FeishuIngressOptions = {
   adoptionStallTimeoutMs?: number;
 };
 
+export type FeishuWebhookInvoker = (
+  data: unknown,
+  params?: { needCheck?: boolean },
+) => Promise<{ kind: "durable" | "non-durable"; value: unknown }>;
+
 type FeishuDurableIngress = {
   invoke: Lark.EventDispatcher["invoke"];
+  invokeWebhook: FeishuWebhookInvoker;
   resolveLifecycle: (data: unknown) => FeishuIngressLifecycle | undefined;
   setSocketTerminator: (terminate: (() => void) | undefined) => void;
   start: () => void;
@@ -434,7 +440,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
       options.runtime.error?.(`feishu ingress drain failed: ${formatErrorMessage(error)}`),
   });
 
-  const invoke: Lark.EventDispatcher["invoke"] = async (data, params) => {
+  const invokeWebhook: FeishuWebhookInvoker = async (data, params) => {
     let rawEnvelope: string;
     try {
       const serialized = JSON.stringify(data);
@@ -455,7 +461,10 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
     // exists. Claim-side validation then dead-letters them without retry.
     const facts = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, true);
     if (!facts) {
-      return await options.dispatcher.invoke(data, params);
+      return {
+        kind: "non-durable",
+        value: await options.dispatcher.invoke(data, params),
+      };
     }
     try {
       await monitor.admit(rawEnvelope, {
@@ -465,11 +474,14 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
       socketTerminator?.();
       throw error;
     }
-    return undefined;
+    return { kind: "durable", value: undefined };
   };
+  const invoke: Lark.EventDispatcher["invoke"] = async (data, params) =>
+    (await invokeWebhook(data, params)).value;
 
   return {
     invoke,
+    invokeWebhook,
     resolveLifecycle: (data) => {
       const eventId = isRecord(data) ? readString(data.event_id) : null;
       return eventId ? activeLifecycles.get(eventId) : undefined;

@@ -55,7 +55,8 @@ function createDeferred<T>() {
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
     cancelable: true,
-    key: "b",
+    key: "и",
+    code: "KeyB",
     metaKey: true,
     shiftKey,
   });

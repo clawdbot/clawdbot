@@ -30,6 +30,9 @@ type ZaloWebhookTarget = {
   acceptWebhook: (rawEvent: string) => Promise<void>;
 };
 
+const ZALO_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const ZALO_WEBHOOK_ACCEPTED_VALUE = "durable";
+
 const webhookTargets = new Map<string, ZaloWebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
   windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -177,6 +180,9 @@ async function handleZaloWebhookRequest(
         return true;
       }
 
+      // The spool persisted the envelope above; mark the ack as durable so
+      // proxies can distinguish it from other 200s (same marker as #104407).
+      res.setHeader(ZALO_WEBHOOK_ACCEPTED_HEADER, ZALO_WEBHOOK_ACCEPTED_VALUE);
       res.statusCode = 200;
       res.end("ok");
       return true;

@@ -158,6 +158,12 @@ public enum SessionFileKind: String, Codable, Sendable {
     case read = "read"
 }
 
+public enum SessionFilePreviewKind: String, Codable, Sendable {
+    case text = "text"
+    case image = "image"
+    case unsupported = "unsupported"
+}
+
 public enum SessionFileRelevance: String, Codable, Sendable {
     case modified = "modified"
     case read = "read"
@@ -4840,21 +4846,25 @@ public struct SessionCreatedActor: Codable, Sendable {
     public let type: AnyCodable
     public let id: String?
     public let label: String?
+    public let avatarurl: String?
 
     public init(
         type: AnyCodable,
         id: String? = nil,
-        label: String? = nil)
+        label: String? = nil,
+        avatarurl: String? = nil)
     {
         self.type = type
         self.id = id
         self.label = label
+        self.avatarurl = avatarurl
     }
 
     private enum CodingKeys: String, CodingKey {
         case type
         case id
         case label
+        case avatarurl = "avatarUrl"
     }
 }
 
@@ -5298,21 +5308,25 @@ public struct SessionSharingIdentity: Codable, Sendable {
     public let type: AnyCodable
     public let id: String
     public let label: String?
+    public let avatarurl: String?
 
     public init(
         type: AnyCodable,
         id: String,
-        label: String? = nil)
+        label: String? = nil,
+        avatarurl: String? = nil)
     {
         self.type = type
         self.id = id
         self.label = label
+        self.avatarurl = avatarurl
     }
 
     private enum CodingKeys: String, CodingKey {
         case type
         case id
         case label
+        case avatarurl = "avatarUrl"
     }
 }
 
@@ -6898,6 +6912,9 @@ public struct SessionFileEntry: Codable, Sendable {
     public let updatedatms: Int?
     public let content: String?
     public let hash: String?
+    public let mimetype: String?
+    public let contentencoding: AnyCodable?
+    public let previewkind: SessionFilePreviewKind?
 
     public init(
         path: String,
@@ -6908,7 +6925,10 @@ public struct SessionFileEntry: Codable, Sendable {
         size: Int? = nil,
         updatedatms: Int? = nil,
         content: String? = nil,
-        hash: String? = nil)
+        hash: String? = nil,
+        mimetype: String? = nil,
+        contentencoding: AnyCodable? = nil,
+        previewkind: SessionFilePreviewKind? = nil)
     {
         self.path = path
         self.workspacepath = workspacepath
@@ -6919,6 +6939,9 @@ public struct SessionFileEntry: Codable, Sendable {
         self.updatedatms = updatedatms
         self.content = content
         self.hash = hash
+        self.mimetype = mimetype
+        self.contentencoding = contentencoding
+        self.previewkind = previewkind
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6931,6 +6954,9 @@ public struct SessionFileEntry: Codable, Sendable {
         case updatedatms = "updatedAtMs"
         case content
         case hash
+        case mimetype = "mimeType"
+        case contentencoding = "contentEncoding"
+        case previewkind = "previewKind"
     }
 }
 
@@ -7473,6 +7499,34 @@ public struct SessionsMessagesUnsubscribeParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+    }
+}
+
+public struct SessionsViewerPresenceSetParams: Codable, Sendable {
+    public let sessionkeys: [String]
+
+    public init(
+        sessionkeys: [String])
+    {
+        self.sessionkeys = sessionkeys
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkeys = "sessionKeys"
+    }
+}
+
+public struct SessionsViewerPresenceSetResult: Codable, Sendable {
+    public let sessionkeys: [String]
+
+    public init(
+        sessionkeys: [String])
+    {
+        self.sessionkeys = sessionkeys
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkeys = "sessionKeys"
     }
 }
 

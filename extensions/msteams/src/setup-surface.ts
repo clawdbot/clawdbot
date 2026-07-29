@@ -1,6 +1,5 @@
 // Msteams plugin module implements setup surface behavior.
 import {
-  createAccountScopedGroupAccessSection,
   mergeAllowFromEntries,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
@@ -10,7 +9,8 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup-runtime";
+} from "openclaw/plugin-sdk/setup";
+import { createAccountScopedGroupAccessSection } from "openclaw/plugin-sdk/setup-runtime";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
