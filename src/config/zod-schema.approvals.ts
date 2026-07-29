@@ -1,5 +1,3 @@
-Source: Web Fetch
----
 // Defines command approval Zod schema fragments.
 import { z } from "zod";
 
