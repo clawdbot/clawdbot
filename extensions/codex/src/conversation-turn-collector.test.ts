@@ -233,6 +233,44 @@ describe("codex conversation turn collector", () => {
     await expect(completion).rejects.toThrow("codex app-server turn interrupted");
   });
 
+  it("confirms a terminal notification that arrives after the bound turn times out", async () => {
+    vi.useFakeTimers();
+    const collector = createCodexConversationTurnCollector("thread-1");
+    collector.setTurnId("turn-1");
+    const completion = collector.wait({ timeoutMs: 100 });
+    const timedOut = expect(completion).rejects.toBeInstanceOf(CodexConversationTurnTimeoutError);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await timedOut;
+
+    const terminal = collector.waitForTerminal({ timeoutMs: 5_000 });
+    collector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
+      },
+    });
+
+    await expect(terminal).resolves.toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects when an acknowledged interrupted turn never reaches terminal state", async () => {
+    vi.useFakeTimers();
+    const collector = createCodexConversationTurnCollector("thread-1");
+    collector.setTurnId("turn-1");
+    const terminal = collector.waitForTerminal({ timeoutMs: 5_000 });
+    const assertion = expect(terminal).rejects.toThrow(
+      "codex app-server interrupted turn did not complete",
+    );
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("rejects an interrupted turn buffered before its turn id is known", async () => {
     const collector = createCodexConversationTurnCollector("thread-1");
 

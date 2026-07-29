@@ -717,6 +717,7 @@ async function runBoundTurn(params: {
   let client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
   let activeTurnId: string | undefined;
+  let collector: ReturnType<typeof createCodexConversationTurnCollector> | undefined;
   let activeTurnCleanup: () => void = () => undefined;
   let retiredUnsafeClient: CodexAppServerClient | undefined;
   let notificationCleanup: () => void = () => undefined;
@@ -834,7 +835,7 @@ async function runBoundTurn(params: {
         throw new Error("Codex conversation binding changed while resuming on a new client.");
       }
     }
-    const collector = createCodexConversationTurnCollector(threadId);
+    collector = createCodexConversationTurnCollector(threadId);
     notificationCleanup = client.addNotificationHandler((notification) =>
       collector.handleNotification(notification),
     );
@@ -911,7 +912,7 @@ async function runBoundTurn(params: {
     };
   } catch (error) {
     const timedOut = error instanceof CodexConversationTurnTimeoutError;
-    if (timedOut && activeTurnId) {
+    if (timedOut && activeTurnId && collector) {
       try {
         // Keep the exact turn, notification handlers, and lease alive until
         // Codex confirms the interrupt; otherwise provider inference survives.
@@ -920,6 +921,7 @@ async function runBoundTurn(params: {
           { threadId, turnId: activeTurnId },
           { timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS },
         );
+        await collector.waitForTerminal({ timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS });
       } catch (interruptError) {
         embeddedAgentLog.debug("codex conversation turn interrupt failed during timeout cleanup", {
           threadId,
