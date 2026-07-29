@@ -455,9 +455,12 @@ describe("JSON console style process output", () => {
     async (modifier) => {
       let failure: CliProcessFailure | undefined;
       try {
+        // This covers unknown-root fallback, not bundled catalog discovery. Keep the child
+        // hermetic while retaining the plugin-registration decision path before Commander.
         await runCliProcess({
           args: ["openclaw-json-console-missing-command", modifier],
           config: loggingConfig,
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
         });
       } catch (error) {
         failure = error as CliProcessFailure;
