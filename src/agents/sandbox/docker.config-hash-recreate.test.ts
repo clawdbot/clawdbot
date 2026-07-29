@@ -190,11 +190,11 @@ function createSandboxConfig(
 async function ensureSandboxCreateCallForTest(params: {
   cfg: SandboxConfig;
   workspaceDir?: string;
-  sessionKey?: string;
+  scopeKey?: string;
 }): Promise<SpawnCall> {
   const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
   await ensureSandboxContainer({
-    sessionKey: params.sessionKey ?? "agent:main:session-1",
+    scopeKey: params.scopeKey ?? "shared",
     workspaceDir,
     agentWorkspaceDir: workspaceDir,
     cfg: params.cfg,
@@ -236,7 +236,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.readRegistryEntry.mockResolvedValue(null);
 
     const params = {
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg,
@@ -251,6 +251,30 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
     expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
     expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the canonical non-shared scope for Docker names, labels, and registry identity", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    cfg.scope = "agent";
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      scopeKey,
+    });
+
+    const containerName = createCall.args[createCall.args.indexOf("--name") + 1];
+    expect(containerName).toMatch(/^oc-test-workspace-[a-f0-9]{32}$/);
+    expect(createCall.args).toContain(`openclaw.sessionKey=${scopeKey}`);
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]).toMatchObject({
+      containerName,
+      sessionKey: scopeKey,
+    });
   });
 
   it("recreates shared container when array-order change alters hash", async () => {
@@ -291,7 +315,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     const containerName = await ensureSandboxContainer({
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg: newCfg,
@@ -380,7 +404,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     await ensureSandboxContainer({
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg,
@@ -409,7 +433,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     await expect(
       ensureSandboxContainer({
-        sessionKey: "agent:main:session-1",
+        scopeKey: "shared",
         workspaceDir,
         agentWorkspaceDir: workspaceDir,
         cfg,

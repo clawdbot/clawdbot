@@ -148,6 +148,8 @@ export type ChatProps = {
   canSend: boolean;
   disabledReason: string | null;
   disabledBanner?: ChatComposerDisabledBanner;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
@@ -281,6 +283,13 @@ export function renderChat(props: ChatProps) {
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
+  const showModelSetupSplash =
+    props.modelSetupRequired === true &&
+    props.messages.length === 0 &&
+    props.toolMessages.length === 0 &&
+    props.streamSegments.length === 0 &&
+    !props.stream &&
+    props.queue.length === 0;
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) => {
         if (requestVersion === undefined) {
@@ -360,6 +369,8 @@ export function renderChat(props: ChatProps) {
       onCompanionPrefill:
         props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,
+      modelSetupRequired: props.modelSetupRequired,
+      onModelSetup: props.onModelSetup,
       backgroundTasks: props.backgroundTasks,
       onFocusComposer: () =>
         chatSection
@@ -592,7 +603,7 @@ export function renderChat(props: ChatProps) {
                   sessions: props.swarmSessions ?? [],
                   sessionKey: props.sessionKey,
                 })}
-                ${chatColumnFooter}
+                ${showModelSetupSplash ? nothing : chatColumnFooter}
               </div>
               ${props.sessionRailReady
                 ? html`

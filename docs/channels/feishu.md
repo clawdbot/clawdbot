@@ -387,6 +387,10 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 
 Per-account gates live under `accounts.<id>.tools`.
 
+`feishu_doc` creates title-only documents. To add Markdown, pass the returned
+`document_id` as `doc_token` in a separate `write` action. A `create` request
+that includes `content` fails without creating an empty document.
+
 Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
 directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
 keeps the legacy root-directory lookup available through `drive:drive:readonly`.

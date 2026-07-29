@@ -53,6 +53,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   repoRoot?: string | null;
   /** Stable identity derived from repoRoot; null means the run is outside a repository. */
   projectKey?: string | null;
+  /** Session active project set, ordered most-recent first; empty before run binding. */
+  activeProjectKeys: readonly string[];
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
@@ -555,6 +557,7 @@ async function buildSnapshot(
   return Object.freeze({
     ...(input.agentId ? { agentId: input.agentId } : {}),
     agentDir: input.agentDir,
+    activeProjectKeys: [],
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,

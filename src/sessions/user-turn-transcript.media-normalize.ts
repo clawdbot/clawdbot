@@ -26,6 +26,10 @@ function normalizeStructuredMediaKind(value: string | null | undefined): MediaFa
     : undefined;
 }
 
+function normalizePositiveInteger(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 export function resolveTranscriptMediaPath(
   pathValue: string,
   workspaceDir: string | undefined,
@@ -51,11 +55,17 @@ export function normalizeStructuredMediaEntryForTranscript(
     normalizeOptionalText(media.contentType) ??
     (kind || !legacyKind || !MIME_TYPE_PATTERN.test(legacyKind) ? undefined : legacyKind) ??
     mimeTypeFromFilePath(mediaPath ?? mediaUrl);
+  const durationMs = normalizePositiveInteger(media.durationMs);
+  const width = normalizePositiveInteger(media.width);
+  const height = normalizePositiveInteger(media.height);
   return {
     ...(mediaPath ? { path: mediaPath } : {}),
     ...(mediaUrl ? { url: mediaUrl } : {}),
     ...(contentType ? { contentType } : {}),
     ...(kind ? { kind } : {}),
+    ...(durationMs ? { durationMs } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
     ...(media.transcribed === true ? { transcribed: true } : {}),
     ...(messageId ? { messageId } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),

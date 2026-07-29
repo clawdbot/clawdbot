@@ -166,7 +166,11 @@ export class CustodianPage extends OpenClawLightDomElement {
           })
         : nothing;
     return html`
-      <section class="custodian custodian--page">
+      <section
+        class="custodian custodian--page ${this.store.setupRequired
+          ? "custodian--setup-required"
+          : ""}"
+      >
         <header class="custodian__header custodian__column">
           <div class="custodian__identity">
             <div class="custodian__mark" aria-hidden="true">

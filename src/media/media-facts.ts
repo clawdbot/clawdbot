@@ -9,6 +9,9 @@ export type MediaFact = {
   url?: string;
   contentType?: string;
   kind?: MediaKind;
+  durationMs?: number;
+  width?: number;
+  height?: number;
   transcribed?: boolean;
   messageId?: string;
   workspaceDir?: string;
@@ -212,6 +215,9 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
       ...(fact.url ? { url: fact.url } : {}),
       ...(fact.contentType && !bareLegacyKind ? { contentType: fact.contentType } : {}),
       ...(explicitKind ? { kind: explicitKind } : {}),
+      ...(fact.durationMs ? { durationMs: fact.durationMs } : {}),
+      ...(fact.width ? { width: fact.width } : {}),
+      ...(fact.height ? { height: fact.height } : {}),
       ...(fact.transcribed ? { transcribed: true } : {}),
       ...(fact.messageId ? { messageId: fact.messageId } : {}),
       ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
@@ -300,6 +306,10 @@ type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   transcribed?: (media: TInput, index: number) => boolean;
 };
 
+function normalizePositiveInteger(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 export type MediaFactLegacyProjection = {
   /** @deprecated Use `media[0]?.path`. */
   MediaPath?: string;
@@ -330,11 +340,17 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
 ): MediaFact {
   const workspaceDir = normalizeOptionalString(media.workspaceDir) ?? defaults.workspaceDir;
   const contentType = normalizeOptionalString(media.contentType);
+  const durationMs = normalizePositiveInteger(media.durationMs);
+  const width = normalizePositiveInteger(media.width);
+  const height = normalizePositiveInteger(media.height);
   const normalized: MediaFact = {
     path: normalizeOptionalString(media.path),
     url: normalizeOptionalString(media.url),
     contentType,
     kind: media.kind ?? defaults.kind ?? kindFromMime(contentType),
+    ...(durationMs ? { durationMs } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
     transcribed: media.transcribed === true || defaults.transcribed?.(media, index) === true,
     messageId: normalizeOptionalString(media.messageId) ?? defaults.messageId,
     ...(workspaceDir ? { workspaceDir } : {}),
@@ -416,6 +432,9 @@ function resolveMediaFactsWithPrecedence(
           ? (legacyContentType ?? fact?.contentType)
           : (fact?.contentType ?? legacyContentType),
         kind: fact?.kind,
+        durationMs: fact?.durationMs,
+        width: fact?.width,
+        height: fact?.height,
         transcribed: legacyProjectionWins
           ? fact
             ? fact.transcribed === true

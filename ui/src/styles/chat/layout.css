@@ -4726,6 +4726,12 @@ openclaw-chat-page {
   color: var(--text);
 }
 
+.agent-chat__welcome--setup .agent-chat__hint {
+  max-width: 36ch;
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+
 .agent-chat__welcome-avatar {
   width: 96px;
   height: 96px;

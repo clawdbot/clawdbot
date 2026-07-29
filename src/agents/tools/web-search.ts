@@ -80,12 +80,13 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
 /** Creates the `web_search` tool, or `null` when web search is disabled by config. */
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
+  enabled?: boolean;
   agentDir?: string;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
 }): AnyAgentTool | null {
-  if (isWebSearchDisabled(options?.config)) {
+  if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
   }
 
