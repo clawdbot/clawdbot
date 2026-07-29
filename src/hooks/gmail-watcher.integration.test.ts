@@ -1,24 +1,21 @@
 /**
- * Integration proof for issue #106612.
- *
  * Runs startGmailWatcher and stopGmailWatcher with NO mocks for spawn or
  * killProcessTree. A fake `gog` binary is placed on PATH; it spawns a
  * credential-helper child and deliberately does NOT kill it on SIGTERM,
  * simulating the real bug. The test asserts that stopGmailWatcher removes
  * both the gog process and its descendant via the process-group signal.
  */
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // Only run when explicitly opted in — requires real subprocess spawning.
-const RUN = process.env["OPENCLAW_INTEGRATION_TEST"] === "1";
+const RUN = process.platform !== "win32" && process.env["OPENCLAW_INTEGRATION_TEST"] === "1";
 
 function alive(pid: number): boolean {
   try {
-    execSync(`kill -0 ${pid} 2>/dev/null`);
+    process.kill(pid, 0);
     return true;
   } catch {
     return false;
@@ -28,27 +25,30 @@ function alive(pid: number): boolean {
 describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () => {
   let tmpDir: string;
   let savedPath: string | undefined;
+  let gogPid: number | undefined;
+  let helperPid: number | undefined;
+  let stopWatcher: (() => Promise<void>) | undefined;
 
   beforeAll(() => {
-    tmpDir = join(tmpdir(), `gog-integration-${process.pid}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "openclaw-gog-integration-"));
 
     // fake gog: handles `watch start` (exits 0) and `watch serve`
-    // (spawns a credential-helper sleep and does NOT kill it on SIGTERM)
+    // (spawns a credential-helper that ignores SIGTERM)
     const gogScript = join(tmpDir, "gog");
     writeFileSync(
       gogScript,
       [
         "#!/bin/bash",
+        'SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"',
         'case "$*" in',
         '  *"watch start"*) echo "[gog] watch registered"; exit 0 ;;',
         '  *"watch serve"*)',
         '    echo "[gog] serve started pid=$$"',
-        `    echo $$ > ${tmpDir}/gog.pid`,
-        "    sleep 99999 &",
+        '    echo $$ > "$SCRIPT_DIR/gog.pid"',
+        `    /bin/bash -c 'trap "" TERM; while true; do sleep 1; done' &`,
         "    HELPER=$!",
         '    echo "[gog] credential-helper spawned pid=$HELPER"',
-        `    echo $HELPER > ${tmpDir}/helper.pid`,
+        '    echo $HELPER > "$SCRIPT_DIR/helper.pid"',
         "    trap 'echo \"[gog] SIGTERM (child NOT killed)\"; exit 0' TERM",
         "    while true; do sleep 0.3; done ;;",
         "esac",
@@ -60,7 +60,26 @@ describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () =>
     process.env["PATH"] = `${tmpDir}:${savedPath ?? ""}`;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    try {
+      await stopWatcher?.();
+    } catch {
+      // Force cleanup below; this test must not leave subprocesses behind on failure.
+    }
+    if (gogPid !== undefined) {
+      try {
+        process.kill(-gogPid, "SIGKILL");
+      } catch {
+        // The process group may already be gone.
+      }
+    }
+    if (helperPid !== undefined) {
+      try {
+        process.kill(helperPid, "SIGKILL");
+      } catch {
+        // The helper may already be gone with its process group.
+      }
+    }
     if (savedPath !== undefined) {
       process.env["PATH"] = savedPath;
     }
@@ -69,6 +88,7 @@ describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () =>
 
   it("stopGmailWatcher removes gog and its credential-helper descendant", async () => {
     const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
+    stopWatcher = stopGmailWatcher;
 
     const result = await startGmailWatcher({
       hooks: {
@@ -94,8 +114,8 @@ describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () =>
       });
     }
 
-    const gogPid = Number.parseInt(readFileSync(join(tmpDir, "gog.pid"), "utf8").trim(), 10);
-    const helperPid = Number.parseInt(readFileSync(join(tmpDir, "helper.pid"), "utf8").trim(), 10);
+    gogPid = Number.parseInt(readFileSync(join(tmpDir, "gog.pid"), "utf8").trim(), 10);
+    helperPid = Number.parseInt(readFileSync(join(tmpDir, "helper.pid"), "utf8").trim(), 10);
 
     console.log(`\ngog pid=${gogPid}, credential-helper pid=${helperPid}`);
     expect(alive(gogPid)).toBe(true);

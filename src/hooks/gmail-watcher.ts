@@ -166,27 +166,56 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 function settleProcess(proc: ChildProcess): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
+    let processSettled = false;
+    let graceElapsed = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(finalTimeout);
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+      }
+      if (finalTimeout) {
+        clearTimeout(finalTimeout);
+      }
       resolve();
     };
+    const settleAfterEscalation = () => {
+      processSettled = true;
+      if (graceElapsed) {
+        settle();
+      }
+    };
+    const finalTimeout = setTimeout(() => {
+      if (!settled) {
+        log.warn("gog process did not exit after SIGKILL; giving up");
+        settle();
+      }
+    }, 8_000);
 
-    proc.on("exit", settle);
-    proc.on("close", settle);
-    proc.on("error", settle);
+    proc.on("exit", settleAfterEscalation);
+    proc.on("close", settleAfterEscalation);
+    proc.on("error", settleAfterEscalation);
 
     // killProcessTree sends SIGTERM to the process group (Unix) or uses taskkill /T
     // (Windows) and escalates to SIGKILL after graceMs, reaching any descendants
     // spawned by gog that plain proc.kill() would miss.
     if (typeof proc.pid === "number") {
+      const graceMs = 3_000;
       killProcessTree(proc.pid, {
-        graceMs: 3_000,
+        graceMs,
         detached: process.platform !== "win32",
       });
+      // killProcessTree owns escalation but intentionally unrefs its timer.
+      // Keep shutdown referenced until that escalation has had a chance to run.
+      graceTimer = setTimeout(() => {
+        graceElapsed = true;
+        if (processSettled) {
+          settle();
+        }
+      }, graceMs + 25);
     } else {
       // pid absent means spawn never started; direct kill clears any lingering state.
       try {
@@ -194,14 +223,8 @@ function settleProcess(proc: ChildProcess): Promise<void> {
       } catch {
         /* process may not exist */
       }
+      graceElapsed = true;
     }
-
-    const finalTimeout: ReturnType<typeof setTimeout> = setTimeout(() => {
-      if (!settled) {
-        log.warn("gog process did not exit after SIGKILL; giving up");
-        settle();
-      }
-    }, 8_000);
   });
 }
 
