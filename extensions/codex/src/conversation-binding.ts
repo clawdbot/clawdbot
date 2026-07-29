@@ -835,9 +835,10 @@ async function runBoundTurn(params: {
         throw new Error("Codex conversation binding changed while resuming on a new client.");
       }
     }
-    collector = createCodexConversationTurnCollector(threadId);
+    const turnCollector = createCodexConversationTurnCollector(threadId);
+    collector = turnCollector;
     notificationCleanup = client.addNotificationHandler((notification) =>
-      collector.handleNotification(notification),
+      turnCollector.handleNotification(notification),
     );
     requestCleanup = client.addRequestHandler(async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
@@ -900,8 +901,8 @@ async function runBoundTurn(params: {
       threadId,
       turnId: activeTurnId,
     });
-    collector.setTurnId(activeTurnId);
-    const completion = await collector.wait({
+    turnCollector.setTurnId(activeTurnId);
+    const completion = await turnCollector.wait({
       timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
     });
     const replyText = completion.replyText.trim();
