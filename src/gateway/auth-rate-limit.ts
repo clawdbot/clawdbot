@@ -425,7 +425,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     entries.clear();
     loopbackPenaltyUntil.clear();
     overflowLockedUntil = undefined;
-    for (const key of [...loopbackPenaltyWaiters.keys()]) {
+    for (const key of loopbackPenaltyWaiters.keys()) {
       releaseLoopbackWaiters(key);
     }
   }
