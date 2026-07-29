@@ -72,4 +72,32 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
   it("does not flag when delivery was intentionally denied by send policy", () => {
     expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, sendPolicyDenied: true })).toBe(false);
   });
+
+  it("flags a multi-sentence CJK private final with fullwidth terminators (#115555)", () => {
+    expect(
+      shouldWarnAboutPrivateMessageToolFinal({
+        ...base,
+        finalText:
+          "これは非常に重要な問題です。ユーザーは毎日この機能を使用しています。しかし、現在の実装では正しく動作していません。",
+      }),
+    ).toBe(true);
+  });
+
+  it("flags a multi-sentence CJK private final with mixed fullwidth terminators (#115555)", () => {
+    expect(
+      shouldWarnAboutPrivateMessageToolFinal({
+        ...base,
+        finalText: "私は元気です！あなたは？",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flag a short CJK private final with one sentence terminator (#115555)", () => {
+    expect(
+      shouldWarnAboutPrivateMessageToolFinal({
+        ...base,
+        finalText: "こんにちは。",
+      }),
+    ).toBe(false);
+  });
 });
