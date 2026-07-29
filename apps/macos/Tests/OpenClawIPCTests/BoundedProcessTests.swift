@@ -4,9 +4,9 @@ import Testing
 @testable import OpenClaw
 
 struct BoundedProcessTests {
-    @Test func `captures output without waiting for inherited handles`() throws {
+    @Test func `captures output without waiting for inherited handles`() async throws {
         let startedAt = ContinuousClock.now
-        let result = try BoundedProcess.run(
+        let result = try await BoundedProcess.run(
             path: "/bin/sh",
             arguments: ["-c", "sleep 5 & echo $!; echo ready"],
             timeout: 1)
@@ -20,7 +20,7 @@ struct BoundedProcessTests {
         #expect(self.waitUntilGone(childPID))
     }
 
-    @Test func `times out and reaps a TERM-resistant process group`() throws {
+    @Test func `times out and reaps a TERM-resistant process group`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -30,7 +30,7 @@ struct BoundedProcessTests {
 
         let startedAt = ContinuousClock.now
         do {
-            _ = try BoundedProcess.run(
+            _ = try await BoundedProcess.run(
                 path: "/bin/sh",
                 arguments: [
                     "-c",
@@ -57,6 +57,38 @@ struct BoundedProcessTests {
         #expect(ContinuousClock.now - startedAt < .seconds(3))
         #expect(self.waitUntilGone(parentPID))
         #expect(self.waitUntilGone(childPID))
+    }
+
+    @Test func `rejects excessive output and reaps the producer`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pidFile = directory.appendingPathComponent("producer.pid")
+
+        let startedAt = ContinuousClock.now
+        do {
+            _ = try await BoundedProcess.run(
+                path: "/bin/sh",
+                arguments: [
+                    "-c",
+                    """
+                    echo $$ > "$PID_FILE"
+                    while :; do
+                        printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'
+                    done
+                    """,
+                ],
+                environment: ["PID_FILE": pidFile.path],
+                timeout: 5)
+            Issue.record("Expected output limit failure")
+        } catch {
+            #expect(!(error is BoundedProcessError))
+        }
+
+        let producerPID = try self.readPID(from: pidFile)
+        #expect(ContinuousClock.now - startedAt < .seconds(2))
+        #expect(self.waitUntilGone(producerPID))
     }
 
     private func readPID(from file: URL) throws -> pid_t {
