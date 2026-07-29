@@ -42547,6 +42547,86 @@
     },
     {
       "kind": "conditional-branch",
+      "line": 318,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "SELECT token, scopes_json, updated_at_ms\nFROM device_auth_tokens\nWHERE device_id = ? AND role = ?",
+      "surface": "apple",
+      "id": "native.apple.6c93865909d0ac99"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 323,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "SELECT token, scopes_json, updated_at_ms\nFROM device_auth_profile_tokens\nWHERE profile = ? AND device_id = ? AND role = ?",
+      "surface": "apple",
+      "id": "native.apple.91337103c0d6f8e9"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 361,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms)\nVALUES (?, ?, ?, ?, ?)\nON CONFLICT(device_id, role) DO UPDATE SET\n  token = excluded.token,\n  scopes_json = excluded.scopes_json,\n  updated_at_ms = excluded.updated_at_ms",
+      "surface": "apple",
+      "id": "native.apple.afdd665916ca5d03"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 369,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "INSERT INTO device_auth_profile_tokens (profile, device_id, role, token, scopes_json, updated_at_ms)\nVALUES (?, ?, ?, ?, ?, ?)\nON CONFLICT(profile, device_id, role) DO UPDATE SET\n  token = excluded.token,\n  scopes_json = excluded.scopes_json,\n  updated_at_ms = excluded.updated_at_ms",
+      "surface": "apple",
+      "id": "native.apple.c98b158c22d02be3"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 396,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "SELECT role FROM device_auth_tokens WHERE device_id = ? ORDER BY role",
+      "surface": "apple",
+      "id": "native.apple.49e17ee48b41775e"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 397,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "SELECT role FROM device_auth_profile_tokens WHERE profile = ? AND device_id = ? ORDER BY role",
+      "surface": "apple",
+      "id": "native.apple.439b97141f26f04e"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 418,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "SELECT scopes_json FROM device_auth_tokens WHERE device_id = ? AND role = ?",
+      "surface": "apple",
+      "id": "native.apple.69d43b7f0fe589af"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 419,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "SELECT scopes_json FROM device_auth_profile_tokens WHERE profile = ? AND device_id = ? AND role = ?",
+      "surface": "apple",
+      "id": "native.apple.df7675d7ee753091"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 437,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "DELETE FROM device_auth_tokens WHERE device_id = ? AND role = ?",
+      "surface": "apple",
+      "id": "native.apple.0884a44ca725f09b"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 438,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+      "source": "DELETE FROM device_auth_profile_tokens WHERE profile = ? AND device_id = ? AND role = ?",
+      "surface": "apple",
+      "id": "native.apple.44d09c38f5f82708"
+    },
+    {
+      "kind": "conditional-branch",
       "line": 393,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift",
       "source": "Retry once",
