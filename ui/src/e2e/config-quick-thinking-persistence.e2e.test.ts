@@ -75,9 +75,7 @@ describeControlUiE2e("Control UI Models settings behavior persistence mocked Gat
     const gateway = await installMockGateway(page);
 
     try {
-      const response = await page.goto(
-        `${server.baseUrl}settings/general#settings-general-model`,
-      );
+      const response = await page.goto(`${server.baseUrl}settings/general#settings-general-model`);
       expect(response?.status()).toBe(200);
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
