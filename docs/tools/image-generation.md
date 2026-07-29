@@ -540,10 +540,10 @@ openclaw infer image generate \
 
 The same `--output-format`, `--background`, and `--quality` flags are available
 on `openclaw infer image edit`; `--openai-background` remains as an
-OpenAI-specific alias. Use `--openai-moderation` for OpenAI image generation or
-Responses-backed edits. The direct OpenAI Images API does not support
-moderation for edits, so explicitly requesting it fails rather than silently
-ignoring the option. Bundled providers other than OpenAI do not declare
+OpenAI-specific alias. Use `--openai-moderation low|auto` with both OpenAI image
+generation and reference-image edits. The direct OpenAI Images API and the
+ChatGPT/Codex OAuth Responses backend both support the moderation hint.
+Bundled providers other than OpenAI do not declare
 explicit background control today, so `background: "transparent"` is reported
 as ignored for them.
 
