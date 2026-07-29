@@ -49,6 +49,49 @@ struct RemotePortTunnelTests {
         #expect(process.terminationStatus == SIGTERM)
     }
 
+    @Test func `termination escalates for a TERM-resistant child`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-tunnel-term-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readyFile = directory.appendingPathComponent("ready")
+        let childPIDFile = directory.appendingPathComponent("child.pid")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [
+            "-c",
+            """
+            trap '' TERM
+            /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do :; done' &
+            while [ ! -s "$CHILD_PID_FILE" ]; do :; done
+            echo ready > "$READY_FILE"
+            while :; do :; done
+            """,
+        ]
+        process.environment = [
+            "READY_FILE": readyFile.path,
+            "CHILD_PID_FILE": childPIDFile.path,
+        ]
+        try process.run()
+        let readyDeadline = Date().addingTimeInterval(1)
+        while !FileManager.default.fileExists(atPath: readyFile.path), Date() < readyDeadline {
+            usleep(10000)
+        }
+        #expect(FileManager.default.fileExists(atPath: readyFile.path))
+        let childPID = try #require(pid_t(
+            String(contentsOf: childPIDFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)))
+
+        let startedAt = ContinuousClock.now
+        RemotePortTunnel._testTerminateAndWait(process)
+
+        #expect(ContinuousClock.now - startedAt < .seconds(2))
+        #expect(!process.isRunning)
+        #expect(process.terminationReason == .uncaughtSignal)
+        #expect(process.terminationStatus == SIGKILL)
+        #expect(awaitProcessExit(childPID))
+    }
+
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -139,5 +182,17 @@ struct RemotePortTunnelTests {
                 sshHost: "gateway.example") == 18789)
         }
     }
+}
+
+private func awaitProcessExit(_ pid: pid_t) -> Bool {
+    let deadline = Date().addingTimeInterval(1)
+    while Date() < deadline {
+        errno = 0
+        if kill(pid, 0) == -1, errno == ESRCH {
+            return true
+        }
+        usleep(10000)
+    }
+    return false
 }
 #endif
