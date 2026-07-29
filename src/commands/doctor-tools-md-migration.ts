@@ -436,7 +436,7 @@ async function recoverInterruptedAgentsClaim(params: {
       throw error;
     }
   }
-  await publishNoClobber(claimPath, agentsPath);
+  await publishFileNoClobber(claimPath, agentsPath, NO_CLOBBER_PUBLICATION);
   await fs.rm(claimPath);
 }
 
