@@ -473,6 +473,16 @@ describe("setupWizardCommand", () => {
       expectedError: "URL must start with ws:// or wss://",
     },
     {
+      label: "remote URL in local mode",
+      options: { mode: "local" as const, remoteUrl: "wss://gateway.example.invalid" },
+      expectedError: "--remote-url requires --mode remote in non-interactive setup.",
+    },
+    {
+      label: "remote token in default local mode",
+      options: { remoteToken: "fixture-token" },
+      expectedError: "--remote-token requires --mode remote in non-interactive setup.",
+    },
+    {
       label: "unsupported daemon runtime while daemon install is skipped",
       options: { daemonRuntime: "bogus" as never, installDaemon: false },
       expectedError: "Invalid --daemon-runtime",

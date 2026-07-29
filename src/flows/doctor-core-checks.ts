@@ -311,7 +311,7 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   async detect(ctx) {
     const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
       config: ctx.cfg,
-      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off",
     });
     if (!diagnostic) {
       return [];

@@ -1,5 +1,6 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   isCloudModelRef,
@@ -82,6 +83,18 @@ export type OllamaModelShowInfo = {
   capabilities?: string[];
 };
 
+type OllamaModelRequestOptions = {
+  apiKey?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+export function throwIfOllamaRequestAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw toErrorObject(signal.reason, "Ollama request aborted");
+  }
+}
+
 function buildOllamaModelShowCacheKey(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
@@ -135,7 +148,7 @@ function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
-  opts?: { apiKey?: string; timeoutMs?: number },
+  opts?: OllamaModelRequestOptions,
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
@@ -152,6 +165,7 @@ export async function queryOllamaModelShowInfo(
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
       timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_SHOW_TIMEOUT_MS, OLLAMA_SHOW_TIMEOUT_MS),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
@@ -197,6 +211,7 @@ export async function queryOllamaModelShowInfo(
       await release();
     }
   } catch {
+    throwIfOllamaRequestAborted(opts?.signal);
     return {};
   }
 }
@@ -204,12 +219,12 @@ export async function queryOllamaModelShowInfo(
 async function queryOllamaModelShowInfoCached(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
-  opts?: { apiKey?: string; timeoutMs?: number },
+  opts?: OllamaModelRequestOptions,
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model, opts?.apiKey);
-  // Request-scoped deadlines must not shorten an unrelated shared catalog probe.
-  if (!cacheKey || opts?.timeoutMs !== undefined) {
+  // Caller-owned deadlines and cancellation must not affect a shared catalog probe.
+  if (!cacheKey || opts?.timeoutMs !== undefined || opts?.signal) {
     return await queryOllamaModelShowInfo(normalizedApiBase, model.name, opts);
   }
 
@@ -239,11 +254,12 @@ export async function queryOllamaContextWindow(
 export async function enrichOllamaModelsWithContext(
   apiBase: string,
   models: OllamaTagModel[],
-  opts?: { apiKey?: string; concurrency?: number; timeoutMs?: number },
+  opts?: OllamaModelRequestOptions & { concurrency?: number },
 ): Promise<OllamaModelWithContext[]> {
   const concurrency = Math.max(1, Math.floor(opts?.concurrency ?? OLLAMA_SHOW_CONCURRENCY));
   const enriched: OllamaModelWithContext[] = [];
   for (let index = 0; index < models.length; index += concurrency) {
+    throwIfOllamaRequestAborted(opts?.signal);
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
       batch.map(async (model) => {
@@ -262,7 +278,7 @@ export async function enrichOllamaModelsWithContext(
 export async function enrichOllamaCompletionModels(
   apiBase: string,
   models: OllamaTagModel[],
-  opts?: { apiKey?: string; requireCompletionCapability?: boolean },
+  opts?: OllamaModelRequestOptions & { requireCompletionCapability?: boolean },
 ): Promise<OllamaModelWithContext[]> {
   const completionModels: OllamaModelWithContext[] = [];
   const probeLimit = Math.min(models.length, MAX_OLLAMA_DISCOVERY_PROBES);
@@ -271,10 +287,11 @@ export async function enrichOllamaCompletionModels(
     index < probeLimit && completionModels.length < OLLAMA_CONTEXT_ENRICH_LIMIT;
     index += OLLAMA_SHOW_CONCURRENCY
   ) {
+    throwIfOllamaRequestAborted(opts?.signal);
     const batch = await enrichOllamaModelsWithContext(
       apiBase,
       models.slice(index, Math.min(index + OLLAMA_SHOW_CONCURRENCY, probeLimit)),
-      opts?.apiKey ? { apiKey: opts.apiKey } : undefined,
+      opts,
     );
     for (const model of batch) {
       const canComplete = model.capabilities?.includes("completion");
@@ -389,7 +406,7 @@ type OllamaModelsFetchDeps = {
 
 export async function fetchOllamaModels(
   baseUrl: string,
-  opts?: { apiKey?: string; timeoutMs?: number },
+  opts?: OllamaModelRequestOptions,
   deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
@@ -401,6 +418,7 @@ export async function fetchOllamaModels(
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
       timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_TAGS_TIMEOUT_MS, OLLAMA_TAGS_TIMEOUT_MS),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: "ollama-provider-models.tags",
       ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
@@ -421,6 +439,7 @@ export async function fetchOllamaModels(
       await release();
     }
   } catch {
+    throwIfOllamaRequestAborted(opts?.signal);
     return { reachable: false, models: [] };
   }
 }
