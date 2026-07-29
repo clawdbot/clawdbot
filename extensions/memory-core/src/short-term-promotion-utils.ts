@@ -151,7 +151,7 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   // The composite detector below still requires the full signal combination, so widening
   // the lead check to anywhere in the first 200 chars closes the leak without creating
   // false positives for ordinary durable notes that merely mention the word in prose.
-  const head = withoutPrefix.slice(0, 200);
+  const head = truncateUtf16Safe(withoutPrefix, 200);
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
