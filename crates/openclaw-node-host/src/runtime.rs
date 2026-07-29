@@ -15,9 +15,15 @@ use tokio::{
     task::JoinSet,
 };
 
-use crate::node::{
-    ClientError, InvocationResult, NodeConnectOptions, NodeInvocation, NodeSession,
-    NodeSessionEvent,
+use crate::{
+    duplex::{
+        InputBuffer, InputDisposition, InvocationIo, InvocationProgress,
+        DEFAULT_PENDING_INPUT_BYTES,
+    },
+    node::{
+        ClientError, InvocationResult, NodeConnectOptions, NodeInvocation, NodeSession,
+        NodeSessionEvent,
+    },
 };
 
 const DEFAULT_MAX_CONCURRENCY: usize = 8;
@@ -26,6 +32,7 @@ const DEFAULT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_HANDLER_TIMEOUT: Duration = Duration::from_mins(5);
 const DEFAULT_RESULT_GRACE: Duration = Duration::from_millis(100);
+const DUPLEX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, HandlerError>> + Send>>;
 type Handler = Arc<dyn Fn(InvocationContext) -> HandlerFuture + Send + Sync>;
@@ -74,6 +81,8 @@ impl CancellationToken {
 pub struct InvocationContext {
     pub invocation: NodeInvocation,
     pub cancellation: CancellationToken,
+    /// Present only for commands registered through `duplex_command`.
+    pub io: Option<InvocationIo>,
 }
 
 /// Structured handler rejection returned to the Gateway.
@@ -119,6 +128,13 @@ pub enum RuntimeError {
 struct Registration {
     command: String,
     handler: Handler,
+    duplex: bool,
+}
+
+#[derive(Clone)]
+struct RegisteredHandler {
+    handler: Handler,
+    duplex: bool,
 }
 
 /// Builder for a reusable command runtime with explicit resource bounds.
@@ -149,7 +165,25 @@ impl Default for CommandRuntimeBuilder {
 impl CommandRuntimeBuilder {
     /// Register one exact command name and asynchronous handler.
     #[must_use]
-    pub fn command<F, Fut>(mut self, command: impl Into<String>, handler: F) -> Self
+    pub fn command<F, Fut>(self, command: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+    {
+        self.register(command, handler, false)
+    }
+
+    /// Register one exact command with ordered invocation input and progress output.
+    #[must_use]
+    pub fn duplex_command<F, Fut>(self, command: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+    {
+        self.register(command, handler, true)
+    }
+
+    fn register<F, Fut>(mut self, command: impl Into<String>, handler: F, duplex: bool) -> Self
     where
         F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
@@ -157,6 +191,7 @@ impl CommandRuntimeBuilder {
         self.registrations.push(Registration {
             command: command.into(),
             handler: Arc::new(move |context| Box::pin(handler(context))),
+            duplex,
         });
         self
     }
@@ -219,7 +254,13 @@ impl CommandRuntimeBuilder {
                 return Err(RuntimeBuildError::ReservedCommand(command));
             }
             if handlers
-                .insert(command.clone(), registration.handler)
+                .insert(
+                    command.clone(),
+                    RegisteredHandler {
+                        handler: registration.handler,
+                        duplex: registration.duplex,
+                    },
+                )
                 .is_some()
             {
                 return Err(RuntimeBuildError::DuplicateCommand(command));
@@ -243,7 +284,7 @@ impl CommandRuntimeBuilder {
 }
 
 struct RuntimeInner {
-    handlers: BTreeMap<String, Handler>,
+    handlers: BTreeMap<String, RegisteredHandler>,
     permits: Arc<Semaphore>,
     delivery_capacity: usize,
     session_scopes: Mutex<HashMap<usize, SessionScope>>,
@@ -280,7 +321,10 @@ impl CommandRuntime {
         options.activate()
     }
 
-    /// Dispatch one invocation and complete it through the node session.
+    /// Dispatch one ordinary invocation and complete it through the node session.
+    ///
+    /// Duplex commands fail with `DUPLEX_REQUIRES_RUN` because this one-shot API does not own
+    /// the session event loop needed to route ordered input and cancellation.
     /// # Errors
     ///
     /// Returns a client/result error, or fails closed when the bounded direct
@@ -290,6 +334,23 @@ impl CommandRuntime {
         session: &NodeSession,
         invocation: NodeInvocation,
     ) -> Result<(), RuntimeError> {
+        if self
+            .inner
+            .handlers
+            .get(&invocation.command)
+            .is_some_and(|handler| handler.duplex)
+        {
+            return session
+                .complete_invocation(
+                    &invocation,
+                    failure(
+                        "DUPLEX_REQUIRES_RUN",
+                        "duplex commands require CommandRuntime::run",
+                    ),
+                )
+                .await
+                .map_err(Into::into);
+        }
         let scope = self.session_scope(session);
         let active = scope.active.clone();
         let Ok(permit) = self.inner.permits.clone().try_acquire_owned() else {
@@ -307,7 +368,7 @@ impl CommandRuntime {
             return completion.map_err(Into::into);
         };
         let evaluation = tokio::select! {
-            evaluation = self.evaluate_with_scope(invocation.clone(), active.clone()) => evaluation,
+            evaluation = self.evaluate_with_scope(invocation.clone(), active.clone(), Some(session.clone())) => evaluation,
             closed = session.wait_closed() => {
                 active.cancel_all();
                 drop(permit);
@@ -396,9 +457,7 @@ impl CommandRuntime {
                                 }
                             }
                         }
-                        Ok(NodeSessionEvent::InvocationCancelled { invoke_id, .. }) => {
-                            active.cancel(&invoke_id);
-                        }
+                        Ok(control) => route_invocation_control(&active, control),
                         Err(error) => {
                             stop_runtime_tasks(&active, &mut tasks, &mut overload_task).await;
                             session.close().await;
@@ -445,7 +504,12 @@ impl CommandRuntime {
         let runtime = self.clone();
         let task_session = session.clone();
         let cancellation = CancellationToken::new();
-        let tracking = active.track(&invocation.id, &cancellation);
+        let duplex = self
+            .inner
+            .handlers
+            .get(&invocation.command)
+            .is_some_and(|handler| handler.duplex);
+        let tracking = active.track(&invocation.id, &invocation.node_id, &cancellation, duplex);
         tasks.spawn(async move {
             let Evaluation {
                 result,
@@ -453,7 +517,12 @@ impl CommandRuntime {
             } = match tracking {
                 Some(tracking) => {
                     runtime
-                        .evaluate_tracked(invocation.clone(), cancellation, tracking)
+                        .evaluate_tracked(
+                            invocation.clone(),
+                            cancellation,
+                            tracking,
+                            Some(task_session.clone()),
+                        )
                         .await
                 }
                 None => Evaluation::untracked(failure(
@@ -481,7 +550,7 @@ impl CommandRuntime {
             result,
             mut tracking,
         } = self
-            .evaluate_with_scope(invocation, ActiveInvocations::default())
+            .evaluate_with_scope(invocation, ActiveInvocations::default(), None)
             .await;
         if let Some(tracking) = tracking.as_mut() {
             tracking.disarm();
@@ -495,15 +564,23 @@ impl CommandRuntime {
         &self,
         invocation: NodeInvocation,
         active: ActiveInvocations,
+        session: Option<NodeSession>,
     ) -> Evaluation {
         let cancellation = CancellationToken::new();
-        let Some(tracking) = active.track(&invocation.id, &cancellation) else {
+        let duplex = self
+            .inner
+            .handlers
+            .get(&invocation.command)
+            .is_some_and(|handler| handler.duplex);
+        let Some(tracking) =
+            active.track(&invocation.id, &invocation.node_id, &cancellation, duplex)
+        else {
             return Evaluation::untracked(failure(
                 "DUPLICATE_INVOCATION",
                 "invocation id is already executing",
             ));
         };
-        self.evaluate_tracked(invocation, cancellation, tracking)
+        self.evaluate_tracked(invocation, cancellation, tracking, session)
             .await
     }
 
@@ -512,8 +589,9 @@ impl CommandRuntime {
         invocation: NodeInvocation,
         cancellation: CancellationToken,
         tracking: ActiveInvocation,
+        session: Option<NodeSession>,
     ) -> Evaluation {
-        let Some(handler) = self.inner.handlers.get(&invocation.command).cloned() else {
+        let Some(registration) = self.inner.handlers.get(&invocation.command).cloned() else {
             return Evaluation::tracked(
                 failure("COMMAND_NOT_FOUND", "no handler registered for command"),
                 tracking,
@@ -542,10 +620,18 @@ impl CommandRuntime {
                 tracking,
             );
         };
+        let duplex = InvocationDuplex::start(
+            registration.duplex,
+            session,
+            &invocation,
+            &cancellation,
+            &tracking,
+        );
         let Ok(future) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            handler(InvocationContext {
+            (registration.handler)(InvocationContext {
                 invocation: invocation.clone(),
                 cancellation: cancellation.clone(),
+                io: duplex.io.clone(),
             })
         })) else {
             tracking.cancel();
@@ -560,6 +646,8 @@ impl CommandRuntime {
             }
             None => Ok(AssertUnwindSafe(future).catch_unwind().await),
         };
+
+        duplex.stop().await;
 
         let result = match outcome {
             Err(_) => {
@@ -676,6 +764,79 @@ async fn stop_runtime_tasks(
     let _ = delivery.await;
 }
 
+fn route_invocation_control(active: &ActiveInvocations, event: NodeSessionEvent) {
+    match event {
+        NodeSessionEvent::InvocationInput {
+            invoke_id,
+            node_id,
+            seq,
+            payload_json,
+        } => {
+            if active.input(&invoke_id, &node_id, seq, payload_json) == InputDisposition::Overflow {
+                active.cancel(&invoke_id);
+            }
+        }
+        NodeSessionEvent::InvocationCancelled { invoke_id, .. } => active.cancel(&invoke_id),
+        NodeSessionEvent::Invocation(_) => unreachable!("invocations are dispatched separately"),
+    }
+}
+
+struct InvocationDuplex {
+    io: Option<InvocationIo>,
+    progress: Option<InvocationProgress>,
+    heartbeat_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl InvocationDuplex {
+    fn start(
+        enabled: bool,
+        session: Option<NodeSession>,
+        invocation: &NodeInvocation,
+        cancellation: &CancellationToken,
+        tracking: &ActiveInvocation,
+    ) -> Self {
+        let progress = enabled
+            .then_some(session)
+            .flatten()
+            .map(|session| InvocationProgress::new(session, invocation, cancellation.clone()));
+        let io = progress
+            .as_ref()
+            .map(|progress| InvocationIo::new(tracking.input_receiver(), progress.clone()));
+        let heartbeat_task = progress.as_ref().map(|progress| {
+            let progress = progress.clone();
+            let cancellation = cancellation.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        () = cancellation.cancelled() => break,
+                        () = tokio::time::sleep(DUPLEX_HEARTBEAT_INTERVAL) => {
+                            if progress.heartbeat().await.is_err() {
+                                cancellation.cancel();
+                                break;
+                            }
+                        }
+                    }
+                }
+            })
+        });
+        Self {
+            io,
+            progress,
+            heartbeat_task,
+        }
+    }
+
+    async fn stop(self) {
+        if let Some(progress) = &self.progress {
+            progress.stop();
+        }
+        if let Some(heartbeat_task) = self.heartbeat_task {
+            heartbeat_task.abort();
+            let _ = heartbeat_task.await;
+        }
+    }
+}
+
 struct Evaluation {
     result: InvocationResult,
     tracking: Option<ActiveInvocation>,
@@ -701,12 +862,20 @@ struct ActiveInvocation {
     active: ActiveInvocations,
     id: String,
     cancellation: CancellationToken,
+    input: Option<Arc<InputBuffer>>,
     cancel_on_drop: bool,
 }
 
 impl ActiveInvocation {
     fn cancel(&self) {
         self.cancellation.cancel();
+    }
+
+    fn input_receiver(&self) -> crate::duplex::InvocationInputReceiver {
+        self.input
+            .as_ref()
+            .expect("duplex tracking owns input")
+            .receiver()
     }
 
     fn disarm(&mut self) {
@@ -725,22 +894,40 @@ impl Drop for ActiveInvocation {
 
 #[derive(Clone, Default)]
 struct ActiveInvocations {
-    inner: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    inner: Arc<Mutex<HashMap<String, ActiveInvocationState>>>,
+}
+
+struct ActiveInvocationState {
+    node_id: String,
+    cancellation: CancellationToken,
+    input: Option<Arc<InputBuffer>>,
 }
 
 impl ActiveInvocations {
-    fn track(&self, id: &str, cancellation: &CancellationToken) -> Option<ActiveInvocation> {
+    fn track(
+        &self,
+        id: &str,
+        node_id: &str,
+        cancellation: &CancellationToken,
+        duplex: bool,
+    ) -> Option<ActiveInvocation> {
         let mut active = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match active.entry(id.to_owned()) {
             Entry::Vacant(entry) => {
-                entry.insert(cancellation.clone());
+                let input = duplex.then(|| InputBuffer::new(DEFAULT_PENDING_INPUT_BYTES));
+                entry.insert(ActiveInvocationState {
+                    node_id: node_id.to_owned(),
+                    cancellation: cancellation.clone(),
+                    input: input.clone(),
+                });
                 Some(ActiveInvocation {
                     active: self.clone(),
                     id: id.to_owned(),
                     cancellation: cancellation.clone(),
+                    input,
                     cancel_on_drop: true,
                 })
             }
@@ -749,33 +936,62 @@ impl ActiveInvocations {
     }
 
     fn untrack(&self, id: &str) {
-        self.inner
+        let removed = self
+            .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);
+        if let Some(input) = removed.and_then(|state| state.input) {
+            input.close();
+        }
     }
 
     fn cancel(&self, id: &str) {
-        if let Some(cancellation) = self
+        let state = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
-            .cloned()
-        {
+            .map(|state| (state.cancellation.clone(), state.input.clone()));
+        if let Some((cancellation, input)) = state {
             cancellation.cancel();
+            if let Some(input) = input {
+                input.close();
+            }
         }
     }
 
+    fn input(&self, id: &str, node_id: &str, seq: u64, payload: String) -> InputDisposition {
+        let input = {
+            let active = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(state) = active.get(id) else {
+                return InputDisposition::Ignored;
+            };
+            if state.node_id != node_id {
+                return InputDisposition::Ignored;
+            }
+            state.input.clone()
+        };
+        input.map_or(InputDisposition::Ignored, |input| input.push(seq, payload))
+    }
+
     fn cancel_all(&self) {
-        let mut active = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for cancellation in active.values() {
-            cancellation.cancel();
+        let active = {
+            let mut locked = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *locked)
+        };
+        for state in active.values() {
+            state.cancellation.cancel();
+            if let Some(input) = &state.input {
+                input.close();
+            }
         }
-        active.clear();
     }
 }
 
@@ -842,6 +1058,7 @@ mod tests {
     async fn routes_success_and_structured_handler_failure() {
         let runtime = CommandRuntime::builder()
             .command("example.ok", |context| async move {
+                assert!(context.io.is_none());
                 Ok(json!({"echo": context.invocation.params}))
             })
             .command("example.fail", |_context| async {
@@ -1034,12 +1251,17 @@ mod tests {
                 .evaluate_with_scope(
                     invocation("same-id", "example.block", Value::Null),
                     first_active,
+                    None,
                 )
                 .await
         });
         entered.notified().await;
         let duplicate = runtime
-            .evaluate_with_scope(invocation("same-id", "example.block", Value::Null), active)
+            .evaluate_with_scope(
+                invocation("same-id", "example.block", Value::Null),
+                active,
+                None,
+            )
             .await;
         assert_eq!(
             failure_code(&duplicate.result),
@@ -1050,6 +1272,28 @@ mod tests {
             first.await.unwrap().result,
             InvocationResult::Success(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn gateway_cancellation_closes_duplex_input() {
+        let active = ActiveInvocations::default();
+        let cancellation = CancellationToken::new();
+        let tracking = active
+            .track("invoke-1", "node-1", &cancellation, true)
+            .unwrap();
+        let input = tracking.input_receiver();
+        let waiting = tokio::spawn(async move { input.recv().await });
+
+        active.cancel("invoke-1");
+
+        assert!(cancellation.is_cancelled());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("input receiver woke")
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1079,6 +1323,7 @@ mod tests {
                 .evaluate_with_scope(
                     invocation("invoke-1", "example.block", Value::Null),
                     task_active,
+                    None,
                 )
                 .await
         });
@@ -1177,8 +1422,12 @@ mod tests {
         let second = ActiveInvocations::default();
         let first_token = CancellationToken::new();
         let second_token = CancellationToken::new();
-        let first_tracking = first.track("same-id", &first_token).unwrap();
-        let mut second_tracking = second.track("same-id", &second_token).unwrap();
+        let first_tracking = first
+            .track("same-id", "node-1", &first_token, false)
+            .unwrap();
+        let mut second_tracking = second
+            .track("same-id", "node-2", &second_token, false)
+            .unwrap();
 
         first.cancel_all();
 

@@ -450,7 +450,16 @@ impl PartialEq for NodeInvocation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeSessionEvent {
     Invocation(NodeInvocation),
-    InvocationCancelled { invoke_id: String, node_id: String },
+    InvocationInput {
+        invoke_id: String,
+        node_id: String,
+        seq: u64,
+        payload_json: String,
+    },
+    InvocationCancelled {
+        invoke_id: String,
+        node_id: String,
+    },
 }
 
 impl NodeInvocation {
@@ -656,7 +665,7 @@ impl NodeSession {
         self.gateway.next_event().await.map_err(map_gateway_error)
     }
 
-    /// Receive the next invocation or cancellation event for this node.
+    /// Receive the next invocation, ordered input, or cancellation event for this node.
     /// # Errors
     ///
     /// Returns an activation, payload, lag, transport, or closed-session error.
@@ -671,6 +680,9 @@ impl NodeSession {
                     return parse_invocation(event.payload, Instant::now())
                         .map(NodeSessionEvent::Invocation);
                 }
+                "node.invoke.input" => {
+                    return parse_invocation_input(event.payload);
+                }
                 "node.invoke.cancel" => {
                     return parse_invocation_cancel(event.payload);
                 }
@@ -682,7 +694,7 @@ impl NodeSession {
     /// Receive the next authorized node invocation.
     ///
     /// Embeddings that execute more than one invocation concurrently should use
-    /// [`Self::next_node_event`] so Gateway cancellation events are not discarded.
+    /// [`Self::next_node_event`] so Gateway input and cancellation events are not discarded.
     /// # Errors
     ///
     /// Returns an activation, payload, lag, transport, or closed-session error.
@@ -788,6 +800,34 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
         GatewayClientError::InvalidFrame(error) => ClientError::InvalidFrame(error),
         GatewayClientError::EventLagged(count) => ClientError::EventLagged(count),
     }
+}
+
+fn parse_invocation_input(payload: Value) -> Result<NodeSessionEvent, ClientError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[serde(rename_all = "camelCase")]
+    struct Payload {
+        id: String,
+        node_id: String,
+        seq: u64,
+        #[serde(rename = "payloadJSON")]
+        json: String,
+    }
+
+    let payload: Payload = serde_json::from_value(payload).map_err(|error| {
+        ClientError::InvalidFrame(format!("invalid node.invoke.input: {error}"))
+    })?;
+    if payload.json.len() > crate::duplex::MAX_INPUT_FRAME_BYTES {
+        return Err(ClientError::InvalidFrame(
+            "node.invoke.input payloadJSON exceeds 16 KiB".into(),
+        ));
+    }
+    Ok(NodeSessionEvent::InvocationInput {
+        invoke_id: require_non_empty_result_field("input invocation id", payload.id)?,
+        node_id: require_non_empty_result_field("input invocation node id", payload.node_id)?,
+        seq: payload.seq,
+        payload_json: payload.json,
+    })
 }
 
 fn parse_invocation_cancel(payload: Value) -> Result<NodeSessionEvent, ClientError> {
@@ -899,6 +939,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_gateway_invocation_input() {
+        assert_eq!(
+            parse_invocation_input(json!({
+                "id": "invoke-1",
+                "nodeId": "node-1",
+                "seq": 2,
+                "payloadJSON": "{\"kind\":\"data\"}"
+            }))
+            .expect("valid Gateway input"),
+            NodeSessionEvent::InvocationInput {
+                invoke_id: "invoke-1".into(),
+                node_id: "node-1".into(),
+                seq: 2,
+                payload_json: "{\"kind\":\"data\"}".into(),
+            }
+        );
+    }
 
     #[test]
     fn parses_gateway_invocation_cancellation() {
