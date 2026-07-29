@@ -24,15 +24,25 @@ struct PermissionManagerTests {
         #expect(ensured.keys.count == caps.count)
     }
 
-    @Test func `location status matches authorization always`() async {
-        let status = CLLocationManager().authorizationStatus
-        let results = await PermissionManager.grantedStatus([.location])
-        #expect(results[.location] == (status == .authorizedAlways))
+    @Test func `location status reuses shared requester`() async {
+        let expected = LocationPermissionRequester.shared.authorizationStatus
+        let actual = await PermissionManager.locationAuthorizationStatus()
+        #expect(actual == expected)
     }
 
-    @Test func `ensure location non interactive matches authorization always`() async {
-        let status = CLLocationManager().authorizationStatus
+    @Test func `location status matches canonical authorization`() async {
+        let status = await PermissionManager.locationAuthorizationStatus()
+        let results = await PermissionManager.grantedStatus([.location])
+        let expected = CLLocationManager.locationServicesEnabled()
+            && PermissionManager.isLocationAuthorized(status: status, requireAlways: false)
+        #expect(results[.location] == expected)
+    }
+
+    @Test func `ensure location non interactive matches canonical authorization`() async {
+        let status = await PermissionManager.locationAuthorizationStatus()
         let ensured = await PermissionManager.ensure([.location], interactive: false)
-        #expect(ensured[.location] == (status == .authorizedAlways))
+        let expected = CLLocationManager.locationServicesEnabled()
+            && PermissionManager.isLocationAuthorized(status: status, requireAlways: false)
+        #expect(ensured[.location] == expected)
     }
 }

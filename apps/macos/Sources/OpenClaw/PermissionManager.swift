@@ -174,7 +174,7 @@ enum PermissionManager {
             }
             return false
         }
-        let status = CLLocationManager().authorizationStatus
+        let status = await self.locationAuthorizationStatus()
         switch status {
         case .authorizedAlways, .authorizedWhenInUse, .authorized:
             return true
@@ -196,6 +196,10 @@ enum PermissionManager {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
         return mic && speech
+    }
+
+    static func locationAuthorizationStatus() async -> CLAuthorizationStatus {
+        await LocationPermissionRequester.shared.authorizationStatus
     }
 
     static func ensureVoiceWakePermissions(interactive: Bool) async -> Bool {
@@ -241,7 +245,7 @@ enum PermissionManager {
                     ? .granted : .notGranted
 
             case .location:
-                let status = CLLocationManager().authorizationStatus
+                let status = await self.locationAuthorizationStatus()
                 results[cap] = CLLocationManager.locationServicesEnabled()
                     && self.isLocationAuthorized(status: status, requireAlways: false) ? .granted : .notGranted
             }
@@ -301,6 +305,11 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     override init() {
         super.init()
         self.manager.delegate = self
+    }
+
+    var authorizationStatus: CLAuthorizationStatus {
+        // Core Location retains per-manager framework state, so status polling must reuse this process-lifetime owner.
+        self.manager.authorizationStatus
     }
 
     func request(always: Bool) async -> CLAuthorizationStatus {
