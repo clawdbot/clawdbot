@@ -111,6 +111,52 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toBe(true);
   });
 
+  it("evicts the freshly idlest session when the claimed victim becomes active mid-spawn", async () => {
+    vi.useFakeTimers();
+    try {
+      const ptys: FakeTerminalPty[] = [];
+      let releaseSpawn: (() => void) | undefined;
+      let gateNextSpawn = false;
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async () => {
+          const pty = makeFakePty();
+          ptys.push(pty);
+          if (gateNextSpawn) {
+            await new Promise<void>((resolve) => {
+              releaseSpawn = resolve;
+            });
+          }
+          return pty;
+        },
+        maxSessions: 2,
+      });
+      const oldest = await manager.open(baseOpenRequest({ owner: agentOwner }));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const newer = await manager.open(baseOpenRequest({ owner: agentOwner }));
+      if (!oldest.ok || !newer.ok) {
+        throw new Error("expected agent opens");
+      }
+
+      gateNextSpawn = true;
+      const opening = manager.open(baseOpenRequest({ owner: agentOwner }));
+      await vi.waitFor(() => expect(releaseSpawn).toBeDefined());
+      // The claimed (oldest) session becomes active during the spawn, making
+      // the newer session the genuinely idlest candidate.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(manager.writeAgent("agent:main:main", oldest.sessionId, "busy\r")).toBe(true);
+      releaseSpawn?.();
+
+      const outcome = await opening;
+      expect(outcome.ok).toBe(true);
+      expect(manager.size).toBe(2);
+      expect(expectDefined(ptys[0], "oldest pty invariant").killed).toBe(false);
+      expect(expectDefined(ptys[1], "newer pty invariant").killed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("holds the cap when concurrent opens complete out of order", async () => {
     const gates: Array<(pty: FakeTerminalPty) => void> = [];
     const spawned: FakeTerminalPty[] = [];

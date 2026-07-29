@@ -190,10 +190,11 @@ export class TerminalSessionManager {
       // spawns that finish out of order register past the hard cap. Evicting
       // for a reservation whose spawn later fails is the safer direction.
       if (this.sessions.size + this.opening >= this.maxSessions) {
-        const victim =
-          !claimed.closed && claimed.viewers.size === 0
-            ? claimed
-            : this.claimLongestIdleAgentSession();
+        // Reselect fresh: the idle ranking goes stale across the spawn await —
+        // the claimed session may now be viewer-attached or active while an
+        // idler alternative exists. The released claim rejoins the pool, so a
+        // still-idlest claimed session is simply selected again.
+        const victim = this.claimLongestIdleAgentSession();
         if (!victim) {
           try {
             backend.kill();
