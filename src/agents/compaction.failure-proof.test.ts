@@ -1,6 +1,5 @@
 // Real-behavior proof: failed compaction must surface as CompactionError,
 // report the actual provider failure, and leave the transcript unrotated.
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,7 +37,7 @@ describe("compaction failure real-behavior proof", () => {
       new TypeError("Cannot convert undefined or null to object"),
     );
 
-    const messages: AgentMessage[] = [
+    const messages: UserMessage[] = [
       { role: "user", content: "first user request", timestamp: 1 } satisfies UserMessage,
       { role: "user", content: "second user request", timestamp: 2 } satisfies UserMessage,
       { role: "user", content: "third user request", timestamp: 3 } satisfies UserMessage,
