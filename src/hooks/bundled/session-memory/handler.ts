@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -434,7 +435,11 @@ const saveSessionToMemory: HookHandler = (event) => {
     // one transaction. An in-flight rebuild throws here and schedules repair,
     // so the async writer falls back to the authoritative transcript rows.
   }
-  const writePromise = saveSessionMemoryNow(event, capturedEvents);
+  const writePromise = isAutoReset
+    ? saveSessionMemoryNow(event, capturedEvents)
+    : runWithGatewayIndependentRootWorkContinuation(() =>
+        saveSessionMemoryNow(event, capturedEvents),
+      );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);
