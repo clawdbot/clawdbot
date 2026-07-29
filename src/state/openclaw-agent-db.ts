@@ -126,6 +126,10 @@ function readExistingSchemaMeta(db: DatabaseSync): ExistingSchemaMeta | null {
   };
 }
 
+function isOpenClawSharedMemoryDatabasePath(pathname: string): boolean {
+  return pathname.includes(path.sep + "memory" + path.sep + "shared-");
+}
+
 function assertExistingSchemaOwner(
   existing: ExistingSchemaMeta | null,
   agentId: string,
@@ -144,6 +148,10 @@ function assertExistingSchemaOwner(
     throw new Error(`OpenClaw agent database ${pathname} has no agent owner.`);
   }
   if (normalizeAgentId(existing.agentId) !== agentId) {
+    // Shared memory databases are intentionally cross-agent; skip ownership assertion.
+    if (isOpenClawSharedMemoryDatabasePath(pathname)) {
+      return;
+    }
     throw new Error(
       `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
     );
@@ -266,12 +274,17 @@ export function openOpenClawAgentDatabase(
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
     if (cached.agentId !== agentId) {
-      throw new Error(
-        `OpenClaw agent database ${pathname} is already open for agent ${cached.agentId}; requested agent ${agentId}.`,
-      );
+      // Shared memory databases are intentionally cross-agent; skip cache hit
+      // and let the code below create a new connection for the requesting agent.
+      if (!isOpenClawSharedMemoryDatabasePath(pathname)) {
+        throw new Error(
+          `OpenClaw agent database ${pathname} is already open for agent ${cached.agentId}; requested agent ${agentId}.`,
+        );
+      }
+    } else {
+      registerAgentDatabase({ agentId, path: pathname, env: options.env });
+      return cached;
     }
-    registerAgentDatabase({ agentId, path: pathname, env: options.env });
-    return cached;
   }
   if (cached) {
     // A closed handle can leave Kysely and WAL helpers cached; clear both before reopening.
