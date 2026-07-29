@@ -123,6 +123,14 @@ describe("Buzz message events", () => {
         "+new",
       ].join("\n"),
     );
+    const boundaryContext = formatBuzzMessageForAgent({
+      ...message!,
+      diff: {
+        ...message!.diff!,
+        description: `${"a".repeat(252)}😀tail`,
+      },
+    });
+    expect(Buffer.from(boundaryContext, "utf8").toString("utf8")).toBe(boundaryContext);
   });
 
   it("ignores non-channel events", () => {

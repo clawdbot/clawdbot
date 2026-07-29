@@ -163,7 +163,7 @@ function boundedDiffContextValue(value: string): string {
   if (singleLine.length <= BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS) {
     return singleLine;
   }
-  return `${singleLine.slice(0, BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS - 3)}...`;
+  return `${truncateUtf16Safe(singleLine, BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS - 3)}...`;
 }
 
 export function formatBuzzMessageForAgent(message: BuzzInboundMessage): string {
