@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue } from "./protocol.js";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
@@ -16,10 +17,6 @@ type ProjectedMessageGroup = {
   results: ProjectedToolReference[];
   bytes: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() || undefined : undefined;

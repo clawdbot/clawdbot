@@ -118,9 +118,9 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
     <div class="chat-reply-pill">
       <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
       <span class="chat-reply-pill__label">
-        ${replyTarget.kind === "current"
-          ? "Replying to current message"
-          : `Replying to ${replyTarget.id}`}
+        ${t("chat.messages.replyingTo", {
+          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
+        })}
       </span>
     </div>
   `;
@@ -362,7 +362,9 @@ export function renderGroupedMessage(
         ${duplicateCount > 1
           ? html`<div
               class="chat-duplicate-count"
-              aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+              aria-label=${t("chat.messages.duplicatesCollapsed", {
+                count: String(duplicateCount),
+              })}
             >
               ×${duplicateCount}
             </div>`
@@ -525,7 +527,9 @@ export function renderGroupedMessage(
       ${duplicateCount > 1
         ? html`<div
             class="chat-duplicate-count"
-            aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+            aria-label=${t("chat.messages.duplicatesCollapsed", {
+              count: String(duplicateCount),
+            })}
           >
             ×${duplicateCount}
           </div>`

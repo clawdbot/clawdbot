@@ -5,8 +5,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import type { SessionStatus } from "../status/types.js";
 import { formatTokenCount } from "../utils/token-format.js";
-import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
 export const formatKTokens = formatTokenCount;

@@ -230,6 +230,38 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
   });
 
+  it("allows only one authenticated client registration per socket", async () => {
+    vi.useFakeTimers();
+    const clients = new Set();
+    const socket = createGatewayWsTestSocket({ ping: true });
+    const { passed } = await connectTestWs({ clients, socket });
+    const handlerParams = passed as {
+      setClient: (client: unknown) => boolean;
+    };
+    const firstClient = {
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "first-client",
+      usesSharedGatewayAuth: false,
+    };
+    const racedClient = {
+      ...firstClient,
+      connId: "raced-client",
+    };
+
+    expect(handlerParams.setClient(firstClient)).toBe(true);
+    expect(handlerParams.setClient(racedClient)).toBe(false);
+    expect(clients).toEqual(new Set([firstClient]));
+
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledOnce();
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(clients.size).toBe(0);
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledOnce();
+  });
+
   it("continues protocol pings after pong and stops when the connection closes", async () => {
     vi.useFakeTimers();
     const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {

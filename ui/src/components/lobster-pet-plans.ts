@@ -10,6 +10,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import {
   LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
   lobsterPetName,
   mulberry32,
   SPOT_ZONES,
@@ -308,7 +309,11 @@ export function resolveLobsterLoadIdentity(
     ...base,
     oldFriend: true,
     friendName: getLobsterdexEntries().get(palette.id)?.name ?? null,
-    look: { ...look, palette },
+    look: {
+      ...look,
+      palette,
+      chimeraParts: palette.id === "chimera" ? canonicalLobsterLook(palette).chimeraParts : null,
+    },
   };
 }
 
@@ -330,7 +335,7 @@ export const LOBSTER_BOTTLE_FORTUNES = [
   "somewhere, a test is green because of you",
   "swim sideways when forward fails",
   "the reef remembers kind commits",
-  "even the abyss keeps a night light",
+  "even the deep keeps a night light",
   "barnacles are only patient passengers",
   "no current lasts forever",
   "bury your treasure in version control",

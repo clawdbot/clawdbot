@@ -1,6 +1,7 @@
 // Memory Core plugin module implements manager reindex state behavior.
 import {
   hashText,
+  MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPaths,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -13,6 +14,7 @@ export type MemoryIndexMeta = {
   scopeHash?: string;
   chunkTokens: number;
   chunkOverlap: number;
+  chunkingVersion?: number;
   vectorDims?: number;
   ftsTokenizer?: string;
   provenanceVersion?: number;
@@ -149,6 +151,12 @@ export function resolveMemoryIndexIdentityState(params: {
     return {
       status: "mismatched",
       reason: "index provenance classifier changed",
+    };
+  }
+  if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
+    return {
+      status: "mismatched",
+      reason: "index chunking implementation changed",
     };
   }
   const expectedModel = params.provider?.model?.trim() || "fts-only";

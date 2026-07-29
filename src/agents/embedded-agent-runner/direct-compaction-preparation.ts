@@ -150,7 +150,11 @@ export async function prepareDirectCompactionAttempt(
     };
   };
   const preparedModelRuntime = params.preparedModelRuntime;
-  const preparedStores = preparedModelRuntime.createStores();
+  const modelResolutionOptions = {
+    ...preparedModelRuntime.createStores(),
+    preparedModelRuntime,
+    workspaceDir: resolvedWorkspace,
+  };
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     runtimeProvider,
     modelId,
@@ -158,9 +162,7 @@ export async function prepareDirectCompactionAttempt(
     params.config,
     {
       ...initialModelAuth,
-      authStorage: preparedStores.authStorage,
-      modelRegistry: preparedStores.modelRegistry,
-      workspaceDir: resolvedWorkspace,
+      ...modelResolutionOptions,
     },
   );
   if (!model) {
@@ -199,12 +201,10 @@ export async function prepareDirectCompactionAttempt(
     Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
   >[0]) =>
     resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
-      authStorage,
-      modelRegistry,
+      ...modelResolutionOptions,
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
       preferBundledStaticCatalogTransport: true,
-      workspaceDir: resolvedWorkspace,
       authProfileId: profileId,
       authProfileMode: resolvedAuthProfileMode,
     });

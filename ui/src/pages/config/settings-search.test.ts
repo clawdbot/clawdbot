@@ -82,13 +82,31 @@ describe("findSettingsSearchBlocks", () => {
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "memory",
-        search: "?section=memory",
+        pathname: "/settings/memory/settings",
         hash: "#memory-backend",
       }),
     ]);
+
+    expect(
+      findSettingsSearchBlocks({
+        query: "backend",
+        schema: {
+          type: "object",
+          properties: {
+            memory: {
+              type: "object",
+              properties: { backend: { type: "string", title: "Backend" } },
+            },
+          },
+        },
+        value: { memory: { backend: "builtin" } },
+        uiHints: { "memory.backend": { advanced: false } },
+        basePath: "/ui",
+      }),
+    ).toEqual([expect.objectContaining({ pathname: "/ui/settings/memory/settings" })]);
   });
 
-  it("opens the Memory page on the tab whose editor renders the matched field", () => {
+  it("opens every Memory schema match on the merged Settings tab", () => {
     const memorySchema = {
       type: "object",
       properties: {
@@ -110,7 +128,6 @@ describe("findSettingsSearchBlocks", () => {
       "memory.search.embeddingModel": { advanced: false },
     };
 
-    // Only the Search tab renders memory.search; Overview would show nothing.
     const searchOnly = findSettingsSearchBlocks({
       query: "embedding model",
       schema: memorySchema,
@@ -118,11 +135,12 @@ describe("findSettingsSearchBlocks", () => {
       uiHints,
     });
     expect(searchOnly).toEqual([
-      expect.objectContaining({ routeId: "memory", search: "?section=memory&tab=search" }),
+      expect.objectContaining({
+        routeId: "memory",
+        pathname: "/settings/memory/settings",
+      }),
     ]);
 
-    // A section-level hit is not exclusive to one tab or to the curated rows, so
-    // it keeps the default Overview editor destination.
     const sectionWide = findSettingsSearchBlocks({
       query: "memory",
       schema: memorySchema,
@@ -132,12 +150,12 @@ describe("findSettingsSearchBlocks", () => {
     expect(sectionWide).toEqual([
       expect.objectContaining({
         routeId: "memory",
-        search: "?section=memory",
+        pathname: "/settings/memory/settings",
         hash: "#config-section-memory",
       }),
     ]);
 
-    // Curated-only: the anchor wins, and the search tab is not selected.
+    // Curated-only: Settings still wins, with the row-specific anchor.
     const backendOnly = findSettingsSearchBlocks({
       query: "backend",
       schema: memorySchema,
@@ -147,7 +165,7 @@ describe("findSettingsSearchBlocks", () => {
     expect(backendOnly).toEqual([
       expect.objectContaining({
         routeId: "memory",
-        search: "?section=memory",
+        pathname: "/settings/memory/settings",
         hash: "#memory-backend",
       }),
     ]);
@@ -183,7 +201,10 @@ describe("findSettingsSearchBlocks", () => {
     // Another plugin owns the slot: memory.backend and its sub-config are unread.
     expect(find({ plugins: { slots: { memory: "memory-lancedb" } } })).toEqual([]);
     expect(find({ memory: { backend: "qmd" } })).toEqual([
-      expect.objectContaining({ routeId: "memory", search: "?section=memory" }),
+      expect.objectContaining({
+        routeId: "memory",
+        pathname: "/settings/memory/settings",
+      }),
     ]);
   });
 
@@ -335,6 +356,8 @@ describe("findSettingsSearchBlocks", () => {
   });
 
   it.each([
+    ["language", "Language", "#settings-language"],
+    ["locale", "Language", "#settings-language"],
     ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
     ["live agent activity", "Sidebar", "#settings-appearance-sidebar"],
     ["session observer", "Sidebar", "#settings-appearance-sidebar"],
@@ -375,6 +398,41 @@ describe("findSettingsSearchBlocks", () => {
       expect.objectContaining({
         routeId: "worktrees",
         label: "Managed Worktrees",
+        hash: "",
+      }),
+    ]);
+  });
+
+  it("routes profile statistics searches to Usage", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "usage statistics",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "usage",
+        label: "Usage statistics",
+        hash: "",
+      }),
+    ]);
+  });
+
+  it("finds archived workspace threads using translated filter text", async () => {
+    await i18n.setLocale("es");
+
+    const matches = findSettingsSearchBlocks({
+      query: "archivadas",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "sessions",
         hash: "",
       }),
     ]);

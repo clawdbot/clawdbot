@@ -57,10 +57,19 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option      | Effect                                                                                                                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `priority`  | Ordering; higher runs first.                                                                                                                                                                      |
-| `timeoutMs` | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
+| Option             | Effect                                                                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `priority`         | Ordering; higher runs first.                                                                                                                                                                      |
+| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                  |
+| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
+| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                             |
+
+Trigger eligibility is enforced by the host before it invokes the handler. A
+hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
+inactive for user turns and does not block recovery of an interrupted user
+turn. Omitted, empty, malformed, or partly unknown lists remain unrestricted
+so dispatch and recovery fail closed. Other hook kinds do not accept this
+option.
 
 Operators can set hook budgets without patching plugin code:
 
@@ -88,9 +97,19 @@ positive integer up to 600000 ms. Prefer per-hook overrides for known-slow
 hooks so one plugin does not get a longer budget everywhere.
 
 A timed-out handler promise continues running because hook callbacks do not
-receive a cancellation signal. The hook dispatch can release its Gateway
-admission while that plugin work is still in progress. Plugins that own
-long-running work must provide their own cancellation and shutdown lifecycle.
+receive a timeout-owned cancellation signal. `before_tool_call` receives the
+owning tool call's `ctx.abortSignal`, but hook timeout expiry does not abort it.
+The hook dispatch can release its Gateway admission while that plugin work is
+still in progress. Plugins that own long-running work must provide their own
+cancellation and shutdown lifecycle.
+
+Policy hooks `before_tool_call` and `before_install` use a 15-second default per
+handler. A timeout fails closed: the tool call or installation is rejected
+instead of continuing without a policy decision.
+
+`gateway_stop` uses a five-second default per handler. Timed-out handlers are
+logged and shutdown continues so plugin cleanup cannot consume the Gateway
+process watchdog.
 
 Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
 15-second default per handler. If one times out, OpenClaw logs the plugin error
@@ -185,6 +204,60 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 | `cron_reconciled`                | Reconcile against the complete Gateway cron state after startup or reload                            |
 | `cron_changed`                   | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | **`before_install`**             | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
+| **`skill_proposal_evaluate`**    | Evaluate one exact Skill Workshop draft and return attributed findings, metrics, or a decision       |
+| `skill_proposal_changed`         | Observe durable Skill Workshop proposal lifecycle events after they commit                           |
+| `skill_changed`                  | Observe committed live-skill create, update, and removal events                                      |
+
+### Skill lifecycle and evaluation
+
+Use `skill_proposal_evaluate` for static analyzers, security scanners,
+benchmarks, model-based graders, or other third-party evaluators. OpenClaw
+passes an immutable candidate bundle with file hashes and a tree hash. Update
+proposals also include the complete current skill as `baseline`. Text files use
+UTF-8 content; binary files use base64.
+
+Evaluator registrations run concurrently. Give each evaluator a stable
+`registrationId`:
+
+```typescript
+api.on(
+  "skill_proposal_evaluate",
+  async (event) => {
+    const score = await evaluateBundle(event.candidate, event.baseline);
+    return {
+      evaluatorVersion: "rules-2026-07",
+      mode: "baseline-comparison",
+      decision: score.regressed ? "revise" : "pass",
+      summary: score.summary,
+      metrics: score.metrics,
+      findings: score.findings,
+    };
+  },
+  { registrationId: "quality-regression", timeoutMs: 90_000 },
+);
+```
+
+Stored outcomes identify the evaluator, plugin id, plugin package version,
+status, and returned result. Timeouts and thrown errors are recorded as
+attributed error outcomes; they do not fail the whole evaluation. Applying a
+proposal is blocked only when a completed evaluator returns
+`decision: "block"`. Apply revalidates the evaluated target tree under the
+Workshop mutation lock, so any live skill asset drift requires reevaluation.
+The combined persisted evaluator result is capped at 512 KiB.
+
+`skill_proposal_changed` fires after the matching proposal row and append-only
+lifecycle event commit. It carries the event id, sequence, exact proposal
+revision hash, optional correlation id, and evaluation outcomes.
+`skill_changed` fires after a live skill create, update, or removal commits and
+includes before/after artifacts with content, tree, declared, and source
+versions when available.
+
+These hooks are primitives, not an optimization scheduler. A plugin or external
+controller can observe a durable proposal event, evaluate its exact revision hash,
+revise with that hash and a correlation id, then repeat. OpenClaw does not
+automatically revise proposals or run an unbounded evaluation loop.
+Event replay is byte-bounded and returns `nextSequence` when another page is
+available.
 
 ### Channel pairing requests
 
@@ -238,6 +311,9 @@ provider payloads, start the Gateway with `--raw-stream` and
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- optional `ctx.abortSignal`, which aborts when the owning tool call is
+  cancelled; handlers should pass it to cancellable I/O and remove any
+  listeners they register
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
@@ -599,8 +675,9 @@ across equivalent finalize decisions, and `maxAttempts` caps how many extra
 passes the host will allow before continuing with the natural final answer.
 
 Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
-`before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-`agent_end`, or `before_agent_run`) must set:
+`agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`,
+`llm_output`, `before_agent_finalize`, `agent_end`, or `before_agent_run`) must
+set:
 
 ```json
 {
@@ -616,8 +693,11 @@ Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 }
 ```
 
-Prompt-mutating hooks and durable next-turn injections can be disabled per
-plugin with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
+`agent_turn_prepare` and `before_prompt_build` also mutate prompt construction,
+so they require conversation access and remain subject to
+`plugins.entries.<id>.hooks.allowPromptInjection`. Prompt-mutating hooks and
+durable next-turn injections can be disabled per plugin by setting that option
+to `false`.
 
 ### Session extensions and next-turn injections
 

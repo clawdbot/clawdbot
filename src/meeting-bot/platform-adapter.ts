@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createMeetingChromeTransport } from "./chrome-transport.js";
+import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
 import { createMeetingConfiguredNodeHost } from "./node-host.js";
 import type {
   MeetingBrowserAdapter,
@@ -8,8 +9,21 @@ import type {
   MeetingPlatformAdapter as MeetingPlatformAdapterContract,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
+import { registerMeetingPluginCli } from "./plugin-cli.js";
+import { createMeetingPluginConfigSchema } from "./plugin-config.js";
 import { createMeetingPluginEntryOptions } from "./plugin-entry.js";
-import { createMeetingRuntimeProbes } from "./runtime-probes.js";
+import {
+  createMeetingChromeRuntimeBindings,
+  createMeetingPluginChromeTransport,
+  createMeetingPluginCliMetadata,
+  createMeetingPluginNodeHostHandler,
+  createMeetingPluginNodeInvokePolicy,
+  createMeetingPluginShellEntry,
+  createMeetingPluginTypes,
+} from "./plugin-shell.js";
+import { createMeetingRuntimeFacade } from "./runtime-facade.js";
+import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
+import { createMeetingRuntimeSetup } from "./runtime-setup.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -363,32 +377,21 @@ function createMeetingPlatformAdapter<
   };
 }
 
-function isMeetingTalkBackMode(mode: string): boolean {
-  return mode === "agent" || mode === "bidi";
-}
-
-function isMeetingRealtimeRouteReady(
-  mode: string,
-  health:
-    | (MeetingBrowserHealth & {
-        audioInputRouted?: boolean;
-        audioOutputRouted?: boolean;
-      })
-    | undefined,
-): boolean {
-  return (
-    isMeetingTalkBackMode(mode) &&
-    health?.inCall === true &&
-    health.micMuted === false &&
-    health.audioInputRouted === true &&
-    health.audioOutputRouted === true &&
-    health.manualAction === undefined
-  );
-}
-
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
+  createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
+  createCliMetadata: createMeetingPluginCliMetadata,
+  createPluginChromeTransport: createMeetingPluginChromeTransport,
+  createPluginConfigSchema: createMeetingPluginConfigSchema,
+  createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
+  createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
+  createPluginShellEntry: createMeetingPluginShellEntry,
+  createRuntimeFacade: createMeetingRuntimeFacade,
+  createRuntimeSetup: createMeetingRuntimeSetup,
+  pluginTypes: createMeetingPluginTypes,
+  registerPluginCli: registerMeetingPluginCli,
+  resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
   createRuntimeProbes: createMeetingRuntimeProbes,
   createNodeHostHandler: createMeetingConfiguredNodeHost,
   createPluginEntry: createMeetingPluginEntryOptions,

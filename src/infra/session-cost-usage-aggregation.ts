@@ -23,7 +23,7 @@ import {
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
-  listUsageCountedTranscriptFiles,
+  listUsageCountedTranscriptStats,
   resolveUsageCostTranscriptFile,
   type UsageCostTranscriptFile,
 } from "./session-cost-usage-collection.js";
@@ -130,9 +130,10 @@ export function readUsageCostRollups(
   agentId: string,
   pricingFingerprint: string,
   databasePath?: string,
+  rows = readSessionCostUsageRollupRows(agentId, databasePath),
 ): Map<string, UsageCostStoredRollup> {
   const result = new Map<string, UsageCostStoredRollup>();
-  for (const row of readSessionCostUsageRollupRows(agentId, databasePath)) {
+  for (const row of rows) {
     try {
       const entry = normalizeUsageCostRollup(JSON.parse(row.valueJson), pricingFingerprint);
       if (entry) {
@@ -351,6 +352,38 @@ function scanRecordsIntoRollup(params: {
   return { countedRecords, parsedRecords };
 }
 
+function createUsageRollupScan(params: {
+  pricingFingerprint: string;
+  appendOnly: boolean;
+  previous?: UsageCostStoredRollup;
+  resolveCost: UsageCostResolver;
+}) {
+  const previous = params.appendOnly ? params.previous?.entry : undefined;
+  const rollup = previous
+    ? cloneSessionUsageRollupData(previous.rollup)
+    : createSessionUsageRollupData();
+  let countedRecords = 0;
+  let parsedRecords = 0;
+  return {
+    addRecords(records: Iterable<Record<string, unknown>>): void {
+      const counts = scanRecordsIntoRollup({ records, rollup, resolveCost: params.resolveCost });
+      countedRecords += counts.countedRecords;
+      parsedRecords += counts.parsedRecords;
+    },
+    finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
+      return {
+        version: USAGE_COST_ROLLUP_VERSION,
+        pricingFingerprint: params.pricingFingerprint,
+        checkpoint,
+        scannedAt: Date.now(),
+        parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
+        countedRecords: (previous?.countedRecords ?? 0) + countedRecords,
+        rollup,
+      };
+    },
+  };
+}
+
 async function scanJsonlUsageRollup(params: {
   file: UsageCostTranscriptFile;
   previous?: UsageCostStoredRollup;
@@ -374,25 +407,12 @@ async function scanJsonlUsageRollup(params: {
     identityMatches && previousAnchor === previousCheckpoint?.anchorHash && params.previous,
   );
   const startOffset = appendOnly ? (previousCheckpoint?.parsedOffset ?? 0) : 0;
-  const rollup =
-    appendOnly && params.previous
-      ? cloneSessionUsageRollupData(params.previous.entry.rollup)
-      : createSessionUsageRollupData();
-  let countedRecords = 0;
-  let parsedRecords = 0;
+  const scan = createUsageRollupScan({ ...params, appendOnly });
   const processedOffset = await scanJsonlRange({
     filePath: params.file.filePath,
     startOffset,
     endOffset: params.file.size,
-    onRecord: (record) => {
-      const entry = parseUsageCostTranscriptEntry(record, params.resolveCost);
-      if (!entry) {
-        return;
-      }
-      const counted = appendParsedEntryToRollup(rollup, entry);
-      countedRecords += counted.countedRecord ? 1 : 0;
-      parsedRecords += counted.parsedRecord ? 1 : 0;
-    },
+    onRecord: (record) => scan.addRecords([record]),
   });
   const postStats = await fs.promises.stat(params.file.filePath);
   if (
@@ -406,24 +426,15 @@ async function scanJsonlUsageRollup(params: {
   if (!anchorHash) {
     throw new Error(`transcript checkpoint unavailable: ${params.file.filePath}`);
   }
-  return {
-    version: USAGE_COST_ROLLUP_VERSION,
-    pricingFingerprint: params.pricingFingerprint,
-    checkpoint: {
-      kind: "jsonl",
-      parsedOffset: processedOffset,
-      observedSize: params.file.size,
-      observedMtimeMs: params.file.mtimeMs,
-      device: params.file.device ?? 0,
-      inode: params.file.inode ?? 0,
-      anchorHash,
-    },
-    scannedAt: Date.now(),
-    parsedRecords: (appendOnly ? (params.previous?.entry.parsedRecords ?? 0) : 0) + parsedRecords,
-    countedRecords:
-      (appendOnly ? (params.previous?.entry.countedRecords ?? 0) : 0) + countedRecords,
-    rollup,
-  };
+  return scan.finish({
+    kind: "jsonl",
+    parsedOffset: processedOffset,
+    observedSize: params.file.size,
+    observedMtimeMs: params.file.mtimeMs,
+    device: params.file.device ?? 0,
+    inode: params.file.inode ?? 0,
+    anchorHash,
+  });
 }
 
 function selectIncrementalSqliteRecords(
@@ -520,15 +531,8 @@ async function scanSqliteUsageRollup(params: {
           ? [event as Record<string, unknown>]
           : [],
       );
-  const rollup =
-    appendOnly && params.previous
-      ? cloneSessionUsageRollupData(params.previous.entry.rollup)
-      : createSessionUsageRollupData();
-  const counts = scanRecordsIntoRollup({
-    records: allRecords,
-    rollup,
-    resolveCost: params.resolveCost,
-  });
+  const scan = createUsageRollupScan({ ...params, appendOnly });
+  scan.addRecords(allRecords);
   const postFile = await resolveUsageCostTranscriptFile(params.file.filePath);
   if (!postFile || (postFile.maxSeq ?? 0) < maxSeq || (postFile.eventCount ?? 0) < eventCount) {
     throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
@@ -543,25 +547,15 @@ async function scanSqliteUsageRollup(params: {
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId
     : (scanSessionTranscriptTree(allRows.map((row) => row.event)).leafId ?? undefined);
-  return {
-    version: USAGE_COST_ROLLUP_VERSION,
-    pricingFingerprint: params.pricingFingerprint,
-    checkpoint: {
-      kind: "sqlite",
-      maxSeq,
-      eventCount,
-      size: params.file.size,
-      mtimeMs: params.file.mtimeMs,
-      anchorHash: snapshotAnchorHash,
-      ...(visibleLeafId ? { visibleLeafId } : {}),
-    },
-    scannedAt: Date.now(),
-    parsedRecords:
-      (appendOnly ? (params.previous?.entry.parsedRecords ?? 0) : 0) + counts.parsedRecords,
-    countedRecords:
-      (appendOnly ? (params.previous?.entry.countedRecords ?? 0) : 0) + counts.countedRecords,
-    rollup,
-  };
+  return scan.finish({
+    kind: "sqlite",
+    maxSeq,
+    eventCount,
+    size: params.file.size,
+    mtimeMs: params.file.mtimeMs,
+    anchorHash: snapshotAnchorHash,
+    ...(visibleLeafId ? { visibleLeafId } : {}),
+  });
 }
 
 async function scanUsageFileForRollup(params: {
@@ -595,8 +589,8 @@ export async function refreshCostUsageCacheForAgent(params: {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
-    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-    const discoveredFiles = await listUsageCountedTranscriptFiles(
+    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
+    const discoveredFiles = await listUsageCountedTranscriptStats(
       params.agentId,
       params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
     );
@@ -616,6 +610,7 @@ export async function refreshCostUsageCacheForAgent(params: {
       agentId: params.agentId,
       databasePath,
       liveKeys: new Set(files.map((file) => file.filePath)),
+      rows,
     });
 
     const requestedPaths = new Set<string>();

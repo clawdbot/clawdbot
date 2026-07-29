@@ -28,7 +28,7 @@ import type {
 } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
-import type { MutableCronSession } from "./run-session-state.js";
+import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -100,13 +100,25 @@ export async function runCronIsolatedAgentTurn(params: {
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = isFastTestRuntimeEnv();
-  const prepared = await prepareCronRunContext({
-    input: { ...params, abortSignal },
-    isFastTestEnv,
-    onLifecycleInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
-  });
+  let prepared: Awaited<ReturnType<typeof prepareCronRunContext>>;
+  try {
+    prepared = await prepareCronRunContext({
+      input: { ...params, abortSignal },
+      isFastTestEnv,
+      onLifecycleInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
+    });
+  } catch (err) {
+    if (err instanceof CronSessionLifecycleClaimError) {
+      return {
+        status: "error",
+        error: err.message,
+        admissionDisposition: err.admissionDisposition,
+      };
+    }
+    throw err;
+  }
   if (!prepared.ok) {
-    return prepared.result;
+    return { ...prepared.result, admissionDisposition: "rejected" };
   }
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
@@ -271,6 +283,14 @@ export async function runCronIsolatedAgentTurn(params: {
       status: "error",
       error,
       executionStarted,
+      ...(!executionStarted
+        ? {
+            admissionDisposition:
+              err instanceof CronSessionLifecycleClaimError
+                ? err.admissionDisposition
+                : ("rejected" as const),
+          }
+        : {}),
       // Carry the already-resolved run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via

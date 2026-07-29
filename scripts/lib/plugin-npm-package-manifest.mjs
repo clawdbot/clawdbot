@@ -115,6 +115,59 @@ function assertPluginNpmRuntimeBuildExists(plan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
+function resolvePackagedChannelStateMetadata(metadata, metadataKey, plan) {
+  if (
+    !metadata ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata) ||
+    typeof metadata.specifier !== "string" ||
+    !metadata.specifier.trim()
+  ) {
+    return metadata;
+  }
+
+  const normalizedSpecifier = normalizePackPath(metadata.specifier);
+  const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
+  const runtimeSpecifier = plan.runtimeBuildOutputs.find((runtimePath) => {
+    const normalizedRuntimePath = normalizePackPath(runtimePath);
+    return (
+      normalizedRuntimePath === normalizedSpecifier ||
+      normalizedRuntimePath.replace(/^dist\//u, "").replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
+    );
+  });
+  if (!runtimeSpecifier) {
+    throw new Error(
+      `channel ${metadataKey} specifier '${metadata.specifier}' has no package-local runtime output for ${plan.pluginDir}`,
+    );
+  }
+
+  // Published plugins omit source files; installed channel probes must load
+  // the exact ESM or CommonJS sidecar emitted by the package runtime build.
+  return {
+    ...metadata,
+    specifier: runtimeSpecifier,
+  };
+}
+
+function resolvePackagedChannelMetadata(plan) {
+  const channel = plan.packageJson.openclaw?.channel;
+  if (!channel || typeof channel !== "object" || Array.isArray(channel)) {
+    return channel;
+  }
+
+  const packagedChannel = { ...channel };
+  for (const metadataKey of ["configuredState", "persistedAuthState"]) {
+    if (Object.hasOwn(channel, metadataKey)) {
+      packagedChannel[metadataKey] = resolvePackagedChannelStateMetadata(
+        channel[metadataKey],
+        metadataKey,
+        plan,
+      );
+    }
+  }
+  return packagedChannel;
+}
+
 function hasPackageRuntimeDependencies(packageJson) {
   return (
     Object.keys(packageJson.dependencies ?? {}).length > 0 ||
@@ -375,7 +428,11 @@ function installPackageLocalBundledDependencies(params) {
     fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
   }
   try {
-    fs.writeFileSync(packageLockPath, generateNpmPackageLock(params.packageDir), "utf8");
+    fs.writeFileSync(
+      packageLockPath,
+      generateNpmPackageLock(params.packageDir, { installStrategy: "shallow" }),
+      "utf8",
+    );
     const result = spawnNpmSync(
       [
         "ci",
@@ -445,6 +502,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   }
   assertPluginNpmRuntimeBuildExists(plan);
 
+  const packagedChannel = resolvePackagedChannelMetadata(plan);
   const packageJson = {
     ...plan.packageJson,
     files: plan.packageFiles,
@@ -452,6 +510,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     peerDependenciesMeta: plan.packagePeerMetadata.peerDependenciesMeta,
     openclaw: {
       ...plan.packageJson.openclaw,
+      ...(packagedChannel ? { channel: packagedChannel } : {}),
       runtimeExtensions: plan.runtimeExtensions,
       ...(plan.runtimeSetupEntry
         ? {

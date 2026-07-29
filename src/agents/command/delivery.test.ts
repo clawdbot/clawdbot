@@ -45,6 +45,13 @@ type MediaNormalizerOptions = {
   workspaceDir?: unknown;
   messageProvider?: unknown;
 };
+type ReplyPayloadSendingHookArgs = {
+  kind?: unknown;
+  channel?: unknown;
+  sessionKey?: unknown;
+  runId?: unknown;
+  context?: Record<string, unknown>;
+};
 
 const slackOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -125,6 +132,7 @@ function latestOutboundDeliveryArgs(): {
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
+  replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
@@ -139,6 +147,7 @@ function latestOutboundDeliveryArgs(): {
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
+    replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
   };
 }
 
@@ -354,6 +363,53 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
     expect(result.deliverySucceeded).toBe(true);
     expect(deliverySignal?.aborted).toBe(false);
+  });
+
+  it("passes final reply hook metadata through durable delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+        replyAccountId: "workspace-1",
+        threadId: "thread-1",
+        runId: "run-1",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    expect(latestOutboundDeliveryArgs().replyPayloadSendingHook).toEqual({
+      kind: "final",
+      channel: "slack",
+      sessionKey: "agent:tester:slack:direct:alice",
+      runId: "run-1",
+      context: {
+        channelId: "slack",
+        accountId: "workspace-1",
+        conversationId: "#general",
+        sessionKey: "agent:tester:slack:direct:alice",
+        runId: "run-1",
+      },
+    });
   });
 
   it("renders response prefix templates with the selected runtime model", async () => {

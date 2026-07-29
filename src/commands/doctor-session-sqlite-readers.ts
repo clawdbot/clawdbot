@@ -5,6 +5,7 @@ import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLoadedFileEntry, type FileEntry } from "../agents/sessions/session-manager.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
+import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -425,6 +426,63 @@ export function readOnlySqliteTranscriptSnapshot(
     return {
       ok: true,
       rows: validRows.map((row) => ({ eventJson: row.event_json, seq: row.seq })),
+    };
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    database?.close();
+  }
+}
+
+/** Reads exact row metadata for a guarded transcript replacement without opening a writer. */
+export function readOnlySqliteTranscriptStorageSnapshot(
+  sqlitePath: string,
+  sessionId: string,
+):
+  | { ok: true; rows: SqliteTranscriptStorageRow[]; sessionKey?: string }
+  | { ok: false; error: unknown } {
+  if (!fs.existsSync(sqlitePath)) {
+    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
+  }
+  let database: DatabaseSync | undefined;
+  try {
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    const rows = database
+      .prepare(
+        "SELECT created_at, event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
+      )
+      .all(sessionId) as Array<{
+      created_at?: unknown;
+      event_json?: unknown;
+      seq?: unknown;
+    }>;
+    const sessionKeyRow = database
+      .prepare("SELECT session_key FROM session_windows WHERE session_id = ? LIMIT 1")
+      .get(sessionId) as { session_key?: unknown } | undefined;
+    const storageRows: SqliteTranscriptStorageRow[] = [];
+    for (const row of rows) {
+      if (
+        typeof row.created_at !== "number" ||
+        typeof row.event_json !== "string" ||
+        typeof row.seq !== "number"
+      ) {
+        return {
+          ok: false,
+          error: new Error(`Invalid transcript row metadata for session ${sessionId}`),
+        };
+      }
+      storageRows.push({
+        createdAt: row.created_at,
+        eventJson: row.event_json,
+        seq: row.seq,
+      });
+    }
+    return {
+      ok: true,
+      rows: storageRows,
+      ...(typeof sessionKeyRow?.session_key === "string"
+        ? { sessionKey: sessionKeyRow.session_key }
+        : {}),
     };
   } catch (error) {
     return { ok: false, error };

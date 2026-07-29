@@ -143,6 +143,7 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
+  expandScenarioChannels?: boolean;
   channelDriver?: string;
   channel?: string;
   runner?: string;
@@ -275,22 +276,18 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
   if (!value?.trim()) {
     return undefined;
   }
-  const runtimes = value
-    .split(",")
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean)
-    .map(normalizeQaRuntimeId);
-  if (runtimes.length !== 2) {
+  const runtimeNames = value.split(",");
+  if (runtimeNames.length !== 2) {
     throw new Error('--runtime-pair must use exactly two runtimes, e.g. "openclaw,codex".');
   }
-  const [left, right] = runtimes;
+  const [left, right] = runtimeNames.map((part) => normalizeQaRuntimeId(part.trim().toLowerCase()));
   if (!left || !right) {
     throw new Error('--runtime-pair only supports "openclaw" and "codex".');
   }
   if (left === right) {
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
-  return ["openclaw", "codex"];
+  return [left, right];
 }
 
 function parseQaRuntimePairLaneFilters(input: string[] | undefined): QaRuntimePairLane[] {
@@ -648,22 +645,20 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
   );
   const taxonomyScenarios = membership.selectedScenarios;
-  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
-    throw new Error(
-      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
-    );
-  }
   const missingScenarioIds = membership.excludedScenarioIds;
-  if (missingScenarioIds.length > 0) {
-    throw new Error(
-      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
-    );
-  }
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
+  const missingScenarioIdSet = new Set(missingScenarioIds);
+  const executionScenarios =
+    missingScenarioIds.length > 0
+      ? [
+          ...taxonomyScenarios,
+          ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
+        ]
+      : taxonomyScenarios;
   const executionSelection = resolveQaRunProfileExecutionSelection({
-    scenarios: taxonomyScenarios,
+    scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
     primaryModel,
     channelDriver: profileReport.channelDriver,
@@ -678,6 +673,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       .join(", ");
     throw new Error(
       `qa run --qa-profile ${profile} cannot run explicitly selected scenario(s): ${exclusions}.`,
+    );
+  }
+  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
+    );
+  }
+  if (missingScenarioIds.length > 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
     );
   }
   const scenarios = executionSelection.selectedScenarios;
@@ -706,6 +711,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
+      expandScenarioChannels: true,
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
@@ -798,6 +804,31 @@ async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<
       process.env.OPENCLAW_QA_PROFILE = previousProfile;
     }
   }
+}
+
+function resolveQaReportOnlyOptionalScenarioNames(params: {
+  scenarioIds: readonly string[];
+  explicitScenarioSelection?: boolean;
+}): ReadonlySet<string> | undefined {
+  if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
+    return undefined;
+  }
+  return new Set(
+    readQaScenarioPack()
+      .scenarios.filter((scenario) => {
+        if (scenario.execution.kind !== "flow") {
+          return false;
+        }
+        const toolCoverage = scenario.execution.config?.toolCoverage;
+        return (
+          typeof toolCoverage === "object" &&
+          toolCoverage !== null &&
+          "required" in toolCoverage &&
+          toolCoverage.required === false
+        );
+      })
+      .map((scenario) => scenario.title),
+  );
 }
 
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
@@ -949,6 +980,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     if (!allowFailures) {
       const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
         result.summaryPath,
+        {
+          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+            scenarioIds,
+            explicitScenarioSelection: opts.explicitScenarioSelection,
+          }),
+        },
       );
       if (blockingScenarioCount > 0) {
         process.exitCode = 1;
@@ -974,6 +1011,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     evidenceMode: opts.evidenceMode,
     transportId,
     channelDriver,
+    ...(opts.expandScenarioChannels ? { expandScenarioChannels: true } : {}),
     ...(liveAdapterFactories
       ? {
           adapterFactories: liveAdapterFactories,
@@ -1011,8 +1049,19 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite report: ${result.reportPath}\n`);
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      if (!allowFailures && result.scenarios.some((scenario) => scenario.status !== "pass")) {
-        process.exitCode = 1;
+      if (!allowFailures) {
+        const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+          result.summaryPath,
+          {
+            optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+              scenarioIds,
+              explicitScenarioSelection: opts.explicitScenarioSelection,
+            }),
+          },
+        );
+        if (blockingScenarioCount > 0) {
+          process.exitCode = 1;
+        }
       }
       return result;
     }
@@ -1024,6 +1073,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
       const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
         result.summaryPath,
+        {
+          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+            scenarioIds,
+            explicitScenarioSelection: opts.explicitScenarioSelection,
+          }),
+        },
       );
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;

@@ -28,13 +28,14 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
+import { writeSkillProposalRollback } from "./store-sqlite-rollback.js";
 import {
-  createSkillProposalRollback,
+  hashSkillProposalContent,
   readSkillProposalManifest,
   readSkillProposalRollback,
   updateSkillProposalRecord,
-  writeSkillProposalRollback,
 } from "./store.js";
+import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -56,6 +57,29 @@ afterEach(async () => {
 
 async function makeWorkspace(): Promise<string> {
   return await tempDirs.make("openclaw-skill-workshop-");
+}
+
+function createSkillProposalRollback(params: {
+  proposalId: string;
+  targetSkillFile: string;
+  action: "create" | "update";
+  previousContent?: string;
+  supportFiles?: SkillProposalRollback["supportFiles"];
+}): SkillProposalRollback {
+  return {
+    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+    proposalId: params.proposalId,
+    writtenAt: new Date().toISOString(),
+    targetSkillFile: params.targetSkillFile,
+    action: params.action,
+    ...(params.previousContent !== undefined
+      ? {
+          previousContent: params.previousContent,
+          previousContentHash: hashSkillProposalContent(params.previousContent),
+        }
+      : {}),
+    ...(params.supportFiles ? { supportFiles: params.supportFiles } : {}),
+  };
 }
 
 describe("skill workshop proposals", () => {
@@ -155,6 +179,30 @@ describe("skill workshop proposals", () => {
       filePath: applied.targetSkillFile,
     });
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
+  });
+
+  it("persists the reason when applying a proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Reviewed Skill",
+      description: "Proposal approved after review",
+      content: "# Reviewed Skill\n\nUse the reviewed workflow.\n",
+    });
+
+    const applied = await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      reason: "  approved after operator review  ",
+    });
+
+    expect(applied.record.statusReason).toBe("approved after operator review");
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: {
+        status: "applied",
+        statusReason: "approved after operator review",
+      },
+    });
   });
 
   it.runIf(process.platform !== "win32")(
@@ -869,6 +917,7 @@ describe("skill workshop proposals", () => {
         proposalId: sibling.record.id,
         targetSkillFile: sibling.record.target.skillFile,
         action: "create",
+        supportFiles: [{ path: "references/proof.md", existed: false }],
       }),
     });
     await writeSkillProposalRollback({
@@ -877,6 +926,7 @@ describe("skill workshop proposals", () => {
         proposalId: proposal.record.id,
         targetSkillFile: proposal.record.target.skillFile,
         action: "create",
+        supportFiles: [{ path: "references/proof.md", existed: false }],
       }),
     });
     await expect(readSkillProposalRollback(sibling.record.id)).resolves.toBeNull();
@@ -905,6 +955,148 @@ describe("skill workshop proposals", () => {
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("Only pending proposals can be applied. Current status: applied.");
   });
+
+  it("restores and retries a create apply interrupted after a support write", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Partial Create",
+      description: "Recover a partially written create",
+      content: "# Partial Create\n\nRetry after recovery.\n",
+      supportFiles: [{ path: "references/proof.md", content: "Partial support.\n" }],
+    });
+    const supportFile = path.join(proposal.record.target.skillDir, "references", "proof.md");
+    await writeSkillProposalRollback({
+      proposalId: proposal.record.id,
+      rollback: createSkillProposalRollback({
+        proposalId: proposal.record.id,
+        targetSkillFile: proposal.record.target.skillFile,
+        action: "create",
+        supportFiles: [{ path: "references/proof.md", existed: false }],
+      }),
+    });
+    await fs.mkdir(path.dirname(supportFile), { recursive: true });
+    await fs.writeFile(supportFile, "Partial support.\n", "utf8");
+
+    closeOpenClawStateDatabaseForTest();
+    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+      proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+    });
+    await expect(fs.access(supportFile)).rejects.toThrow();
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { status: "applied" } });
+    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("Partial support.\n");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "recovers a partial create through the apply config",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-workshop-recovery-symlink-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Partial Symlink",
+        description: "Recover an allowed symlink target",
+        content: "# Partial Symlink\n\nRetry after recovery.\n",
+        supportFiles: [{ path: "references/proof.md", content: "Symlink support.\n" }],
+      });
+      const targetSupportFile = path.join(
+        targetSkillsDir,
+        "partial-symlink",
+        "references",
+        "proof.md",
+      );
+      await writeSkillProposalRollback({
+        proposalId: proposal.record.id,
+        rollback: createSkillProposalRollback({
+          proposalId: proposal.record.id,
+          targetSkillFile: proposal.record.target.skillFile,
+          action: "create",
+          supportFiles: [{ path: "references/proof.md", existed: false }],
+        }),
+      });
+      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
+      await fs.writeFile(targetSupportFile, "Symlink support.\n", "utf8");
+
+      closeOpenClawStateDatabaseForTest();
+      await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+        proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+      });
+      await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Symlink support.\n");
+
+      await expect(
+        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ record: { status: "applied" } });
+      await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Symlink support.\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "uses the proposal environment for symlink recovery",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-workshop-recovery-env-symlink-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const configDir = await tempDirs.make("openclaw-workshop-recovery-env-config-");
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(configPath, JSON.stringify(config), "utf8");
+      const env = { ...testState.env, OPENCLAW_CONFIG_PATH: configPath };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        env,
+        name: "Profile Symlink",
+        description: "Recover through the proposal profile",
+        content: "# Profile Symlink\n\nRetry after recovery.\n",
+        supportFiles: [{ path: "references/proof.md", content: "Profile support.\n" }],
+      });
+      const targetSupportFile = path.join(
+        targetSkillsDir,
+        "profile-symlink",
+        "references",
+        "proof.md",
+      );
+      await writeSkillProposalRollback({
+        proposalId: proposal.record.id,
+        rollback: createSkillProposalRollback({
+          proposalId: proposal.record.id,
+          targetSkillFile: proposal.record.target.skillFile,
+          action: "create",
+          supportFiles: [{ path: "references/proof.md", existed: false }],
+        }),
+        store: { env },
+      });
+      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
+      await fs.writeFile(targetSupportFile, "Profile support.\n", "utf8");
+
+      closeOpenClawStateDatabaseForTest();
+      await expect(listSkillProposals({ workspaceDir, env })).resolves.toMatchObject({
+        proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+      });
+      await expect(fs.access(targetSupportFile)).rejects.toThrow();
+
+      await expect(
+        applySkillProposal({ workspaceDir, config, env, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ record: { status: "applied" } });
+      await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Profile support.\n");
+    },
+  );
 
   it("does not reconcile an interrupted apply from a tampered proposal draft", async () => {
     const workspaceDir = await makeWorkspace();
@@ -940,6 +1132,45 @@ describe("skill workshop proposals", () => {
     });
   });
 
+  it("does not overwrite an interrupted target outside rollback facts", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Tampered Target",
+      description: "Fail closed when live state is neither previous nor proposed",
+      content: "# Tampered Target\n\nCanonical body.\n",
+    });
+    await writeSkillProposalRollback({
+      proposalId: proposal.record.id,
+      rollback: createSkillProposalRollback({
+        proposalId: proposal.record.id,
+        targetSkillFile: proposal.record.target.skillFile,
+        action: "create",
+      }),
+    });
+    await fs.mkdir(proposal.record.target.skillDir, { recursive: true });
+    await fs.writeFile(proposal.record.target.skillFile, "# External change\n", "utf8");
+
+    closeOpenClawStateDatabaseForTest();
+    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+      proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+    });
+    await expect(fs.readFile(proposal.record.target.skillFile, "utf8")).resolves.toBe(
+      "# External change\n",
+    );
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.not.toBeNull();
+
+    const startedAt = Date.now();
+    await expect(
+      rejectSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        reason: "external target retained",
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
   it("reconciles an update apply interrupted after the live skill write", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "interrupted-update");
@@ -964,6 +1195,7 @@ describe("skill workshop proposals", () => {
         targetSkillFile: proposal.record.target.skillFile,
         action: "update",
         previousContent,
+        supportFiles: [{ path: "references/proof.md", existed: false }],
       }),
     });
     await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
@@ -974,6 +1206,60 @@ describe("skill workshop proposals", () => {
     await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "applied" })],
     });
+  });
+
+  it("restores and retries a mixed update apply", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "partial-update");
+    const supportFile = path.join(skillDir, "references", "proof.md");
+    await writeSkill({
+      dir: skillDir,
+      name: "partial-update",
+      description: "Recover mixed update writes",
+      body: "# Partial Update\n\nOld body.\n",
+    });
+    await fs.mkdir(path.dirname(supportFile), { recursive: true });
+    await fs.writeFile(supportFile, "Old support.\n", "utf8");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const previousContent = await fs.readFile(skillFile, "utf8");
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "partial-update",
+      content: "# Partial Update\n\nNew body.\n",
+      supportFiles: [{ path: "references/proof.md", content: "New support.\n" }],
+    });
+    await writeSkillProposalRollback({
+      proposalId: proposal.record.id,
+      rollback: createSkillProposalRollback({
+        proposalId: proposal.record.id,
+        targetSkillFile: skillFile,
+        action: "update",
+        previousContent,
+        supportFiles: [
+          {
+            path: "references/proof.md",
+            existed: true,
+            previousContent: "Old support.\n",
+            previousContentHash: hashSkillProposalContent("Old support.\n"),
+          },
+        ],
+      }),
+    });
+    await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
+
+    closeOpenClawStateDatabaseForTest();
+    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+      proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+    });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(previousContent);
+    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("Old support.\n");
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { status: "applied" } });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("New body.");
+    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("New support.\n");
   });
 
   it("does not reconcile another agent's interrupted apply before authorization", async () => {

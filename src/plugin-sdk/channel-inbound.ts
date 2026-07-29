@@ -197,6 +197,7 @@ export {
 export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   /** @deprecated Pass ordered facts as the context's `media` field. */
   buildChannelInboundMediaPayload,
   formatMediaPlaceholderText,

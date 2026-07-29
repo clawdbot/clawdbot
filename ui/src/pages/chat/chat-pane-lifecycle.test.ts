@@ -45,7 +45,11 @@ describe("chat pane first-turn attachment lifecycle", () => {
     } as unknown as GatewayBrowserClient;
     const context = {
       basePath: "",
-      gateway: { snapshot: { client, hello: null } },
+      gateway: {
+        snapshot: { client, hello: null },
+        subscribe: vi.fn(() => vi.fn()),
+        subscribeEvents: vi.fn(() => vi.fn()),
+      },
       config: {
         current: {
           assistantIdentity: {
@@ -648,7 +652,9 @@ function createConfirmationOwner() {
   document.body.appendChild(owner);
   confirmationOwners.add(owner);
   openChatRewindConfirmation(trigger, vi.fn());
-  return owner;
+  const popover = [...document.querySelectorAll<HTMLElement>(".chat-delete-confirm")].at(-1);
+  expect(popover).toBeInstanceOf(HTMLElement);
+  return { owner, popover: popover! };
 }
 
 afterEach(() => {
@@ -699,11 +705,11 @@ describe("chat pane presentation teardown", () => {
     expect(captureClickListeners).toHaveLength(2);
     expect(captureKeydownListeners).toHaveLength(2);
 
-    pane.appendChild(paneConfirmation);
+    pane.appendChild(paneConfirmation.owner);
     pane.disconnectedCallback();
 
-    expect(pane.querySelector(".chat-delete-confirm")).toBeNull();
-    expect(siblingConfirmation.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(paneConfirmation.popover.isConnected).toBe(false);
+    expect(siblingConfirmation.popover.isConnected).toBe(true);
     expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListeners[0], true);
     expect(removeDocumentListener).not.toHaveBeenCalledWith(
       "click",
@@ -736,7 +742,7 @@ describe("chat pane presentation teardown", () => {
       sessions: {} as SessionCapability,
     });
     window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
-    const owner = createConfirmationOwner();
+    const confirmation = createConfirmationOwner();
 
     try {
       for (const callback of frameCallbacks.splice(0)) {
@@ -750,7 +756,7 @@ describe("chat pane presentation teardown", () => {
       )?.[1];
       expect(captureClickListener).toBeDefined();
       expect(captureKeydownListener).toBeDefined();
-      pane.appendChild(owner);
+      pane.appendChild(confirmation.owner);
 
       const stopAfterReset = new Error("stop after thread presentation reset");
       vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
@@ -758,12 +764,12 @@ describe("chat pane presentation teardown", () => {
       });
 
       expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
-      expect(owner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(confirmation.popover.isConnected).toBe(false);
       expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListener, true);
       expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListener, true);
     } finally {
-      dismissConfirmedActionPopovers(owner);
-      owner.remove();
+      dismissConfirmedActionPopovers(confirmation.owner);
+      confirmation.owner.remove();
     }
   });
 });

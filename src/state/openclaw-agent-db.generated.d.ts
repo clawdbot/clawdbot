@@ -143,18 +143,23 @@ export interface MemoryIndexChunkProvenance {
   supersedes_key: string | null;
 }
 
+export interface MemoryIndexChunkRecallMetadata {
+  chunk_id: string;
+  importance: number | null;
+  project_key: string | null;
+  triggers: string | null;
+}
+
 export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
   id: string;
-  importance: number | null;
   model: string;
   path: string;
   source: Generated<string>;
   start_line: number;
   text: string;
-  triggers: string | null;
   updated_at: number;
 }
 
@@ -423,6 +428,7 @@ export interface DB {
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
+  memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;

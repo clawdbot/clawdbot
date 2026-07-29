@@ -253,6 +253,7 @@ type DispatchGatewayMethodInProcessOptions = {
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
@@ -324,6 +325,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     onAccepted: options?.onAccepted,
     requestIdPrefix: "plugin-subagent",
     timeoutMs: options?.timeoutMs,
+    ...(options?.signal ? { signal: options.signal } : {}),
   });
 }
 
@@ -507,6 +509,8 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+type GatewayRuntimeNodes = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
+
 export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
   return {
     async list(params) {
@@ -516,14 +520,12 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         params?.connected === true
           ? nodes.filter(
               (node) =>
-                node !== null &&
                 typeof node === "object" &&
-                (node as { connected?: unknown }).connected === true,
+                (node as { connected?: unknown } | null)?.connected === true,
             )
           : nodes;
-      const projectedNodes = projectGatewayRuntimeNodes(filteredNodes);
       return {
-        nodes: projectedNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+        nodes: projectGatewayRuntimeNodes(filteredNodes) as GatewayRuntimeNodes,
       };
     },
     async invoke(params) {
@@ -538,7 +540,7 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         pluginTrustedOfficialInstall: scope?.pluginTrustedOfficialInstall,
         requestedScopes: normalizeOperatorScopeList(params.scopes),
       });
-      const payload = await dispatchGatewayMethodInProcess<unknown>(
+      return await dispatchGatewayMethodInProcess<unknown>(
         "node.invoke",
         {
           nodeId: params.nodeId,
@@ -550,9 +552,9 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         {
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
           ...(syntheticScopes ? { forceSyntheticClient: true, syntheticScopes } : {}),
+          ...(params.signal ? { signal: params.signal } : {}),
         },
       );
-      return payload;
     },
   };
 }

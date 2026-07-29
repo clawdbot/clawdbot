@@ -45,9 +45,18 @@ that supervise the Gateway as a child process, see
 
 Frame shapes:
 
-- Request: `{type:"req", id, method, params}`
+- Request: `{type:"req", id, method, params, traceparent?}`
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
+
+After authentication, a client may include a W3C `traceparent` string on each
+request frame. The Gateway continues a valid value as a child trace context for
+that request. Missing or syntactically malformed values within the
+128-character field limit keep the default fresh request trace and do not fail
+the RPC; longer values make the request frame invalid. The initial `connect`
+request never establishes trace context for later frames. Use a separate
+`traceparent` for each logical request on a long-lived connection; do not treat
+the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Clients should branch on `code` and `details.code`; `message` remains human-readable
@@ -198,8 +207,9 @@ operator token:
 ```
 
 This operator handoff is bounded on purpose: enough to start the mobile
-operator loop and native setup, including `operator.talk.secrets` for Talk
-config reads, but no pairing-mutation scopes and no `operator.admin`. Broader
+operator loop and native setup, with `operator.write` satisfying Talk sessions
+and `operator.talk.secrets` covering Talk config reads, but no pairing-mutation scopes
+and no `operator.admin`. Broader
 pairing/admin access needs a separate approved pairing or token flow. Persist
 `hello-ok.auth.deviceTokens` only when bootstrap auth ran over a trusted
 transport (`wss://` or loopback/local pairing).
@@ -302,7 +312,12 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk`
 - `operator.talk.secrets`
+
+`operator.write` continues to satisfy `operator.talk` for compatibility with
+existing clients. Voice-device setup can issue the narrower Talk grant without
+general Gateway write access.
 
 `talk.config` with `includeSecrets: true` requires `operator.talk.secrets` (or
 `operator.admin`). When secrets are included, read the active Talk provider
@@ -323,11 +338,11 @@ already hold a lower operator scope.
 method scope (`operator.pairing`), based on the pending request's declared
 `commands` (`src/infra/node-pairing-authz.ts`):
 
-| Declared commands                                                                                                             | Required scopes                       |
-| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                          | `operator.pairing`                    |
-| ordinary commands                                                                                                             | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                                                        | Required scopes                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                                                     | `operator.pairing`                    |
+| ordinary commands                                                                                                                                        | `operator.pairing` + `operator.write` |
+| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 ### Caps/commands/permissions (node)
 
@@ -511,7 +526,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Talk and TTS">
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
-    - `talk.session.create` creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
+    - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` as needed, and returns room/session metadata plus recent Talk events, never the plaintext token or its hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state clears.

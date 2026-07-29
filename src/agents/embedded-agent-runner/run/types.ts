@@ -141,6 +141,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Signals that the attempt's own run-timeout watchdog is active. */
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
@@ -240,6 +242,8 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
+  /** Exact provider-response count when the harness can observe model iterations directly. */
+  modelIterations?: number;
   messagesSnapshot: AgentMessage[];
   /**
    * Complete application transcript frozen through a settled tool boundary.

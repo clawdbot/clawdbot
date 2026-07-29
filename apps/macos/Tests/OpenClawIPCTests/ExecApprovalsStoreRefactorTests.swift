@@ -112,6 +112,70 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `migration cache logs once and recovers after the legacy identity clears`() {
+        let stateDirectoryURL = URL(fileURLWithPath: "/tmp/openclaw-migration-cache-test")
+        let legacyFileURL = stateDirectoryURL.appendingPathComponent("exec-approvals.json")
+        let error = ExecApprovalsLegacyMigrationRequiredError(
+            stateDirectoryURL: stateDirectoryURL,
+            legacyFileURL: legacyFileURL)
+        var identity: ExecApprovalsMigrationRequiredCache.FileIdentity? = .init(
+            device: 1,
+            inode: 2,
+            modificationSeconds: 3,
+            modificationNanoseconds: 4)
+        var identityReadCount = 0
+        var events: [ExecApprovalsMigrationLogEvent] = []
+        let cache = ExecApprovalsMigrationRequiredCache(
+            identityReader: { _ in
+                identityReadCount += 1
+                return identity
+            },
+            onEvent: { events.append($0) })
+
+        cache.record(error)
+        #expect(cache.cachedError(stateDirectoryURL: stateDirectoryURL) == error)
+        #expect(cache.cachedError(stateDirectoryURL: stateDirectoryURL) == error)
+        #expect(identityReadCount == 3)
+        #expect(events == [.required(error)])
+
+        identity = nil
+        #expect(cache.cachedError(stateDirectoryURL: stateDirectoryURL) == nil)
+        cache.markResolved(stateDirectoryURL: stateDirectoryURL)
+        #expect(identityReadCount == 4)
+        #expect(events == [
+            .required(error),
+            .recovered(stateDirectoryPath: stateDirectoryURL.path),
+        ])
+    }
+
+    @Test
+    func `legacy migration failure is typed and removal recovers without restart`() async throws {
+        try await self.withTempHomeAndStateDir { _, stateDirectoryURL in
+            let legacyFileURL = stateDirectoryURL.appendingPathComponent("exec-approvals.json")
+            try FileManager.default.createDirectory(
+                at: stateDirectoryURL,
+                withIntermediateDirectories: true)
+            try Data(#"{"version":1,"agents":{}}"#.utf8).write(to: legacyFileURL)
+
+            let first = ExecApprovalsStore.resolveResult(agentId: "main")
+            guard case .failure(.migrationRequired) = first else {
+                Issue.record("expected typed migration-required failure")
+                return
+            }
+            let second = ExecApprovalsStore.resolveResult(agentId: "main")
+            guard case .failure(.migrationRequired) = second else {
+                Issue.record("expected cached migration-required failure")
+                return
+            }
+
+            try FileManager.default.removeItem(at: legacyFileURL)
+            let recovered = try ExecApprovalsStore.resolveResult(agentId: "main").get()
+            #expect(recovered.agent.security == .full)
+            #expect(recovered.agent.ask == .off)
+        }
+    }
+
+    @Test
     func `effective home owns the default approvals database and socket paths`() async throws {
         let root = self.realTemporaryDirectory
             .appendingPathComponent("openclaw-effective-home-\(UUID().uuidString)", isDirectory: true)

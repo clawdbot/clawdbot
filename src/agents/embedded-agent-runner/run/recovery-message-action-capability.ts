@@ -52,6 +52,7 @@ export function createRecoveryMessageActionTurnCapability(
     agentId: params.agentId,
     runId: params.runId,
     sessionKey: params.sessionKey,
+    sourceReplySessionKey: params.sessionKey,
     sessionId: params.sessionId,
     requesterAccountId: params.agentAccountId,
     requesterSenderId: params.senderId ?? undefined,

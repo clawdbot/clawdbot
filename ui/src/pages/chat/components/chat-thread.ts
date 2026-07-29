@@ -17,7 +17,7 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
-import { COPY_LABEL } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
@@ -174,6 +174,8 @@ type ChatThreadProps = {
   onCompanionQuestion?: (question: string) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
   backgroundTasks?: BackgroundTasksProps;
 };
@@ -931,7 +933,7 @@ export function renderChatPinnedMessages(
           requestUpdate();
         }}
       >
-        ${icons.bookmark} ${entries.length} pinned
+        ${icons.bookmark} ${t("chat.thread.pinnedCount", { count: String(entries.length) })}
         <span class="collapse-chevron ${state.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
           >${icons.chevronDown}</span
         >
@@ -943,7 +945,7 @@ export function renderChatPinnedMessages(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? userRoleLabel : "Assistant"}</span
+                      >${role === "user" ? userRoleLabel : t("common.assistant")}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${truncateUtf16Safe(text, 100)}${text.length > 100 ? "..." : ""}</span
@@ -1125,7 +1127,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const menu = document.createElement("div");
   menu.className = "chat-reply-context-menu";
   menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", "Message actions");
+  menu.setAttribute("aria-label", t("chat.messages.actions"));
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
@@ -1210,9 +1212,9 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   if (canCopy) {
     const action = createMessageActionContextButton({
-      label: COPY_LABEL,
+      label: copyMarkdownLabel(),
       disabled: false,
-      tooltip: COPY_LABEL,
+      tooltip: copyMarkdownLabel(),
       onClick: () => {
         removeReplyContextMenu();
         copyButton?.click();
@@ -1453,7 +1455,6 @@ function renderChatThreadContents(
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
-    waitingApproval: Boolean(props.waitingApproval),
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,

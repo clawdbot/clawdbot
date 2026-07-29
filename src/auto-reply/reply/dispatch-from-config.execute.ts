@@ -21,6 +21,7 @@ import {
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -74,6 +75,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     recordRoutedBlockReplyDelivery,
     replyConfig,
     replyContextAccountId,
+    replyOperationRunState,
     replyResolver,
     replyRoute,
     resolveToolDeliveryPayload,
@@ -125,6 +127,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               ctx,
               {
                 ...getReplyOptions(),
+                [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
                 sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
                 ...({

@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayAuthTokenForService: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
+  isDefaultInstallIdentity: vi.fn(() => true),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   needsNodeRuntimeMigration: vi.fn(() => false),
@@ -53,6 +54,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  isDefaultInstallIdentity: mocks.isDefaultInstallIdentity,
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
@@ -421,6 +423,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     vi.clearAllMocks();
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.isDefaultInstallIdentity.mockReturnValue(true);
     mocks.readRuntime.mockResolvedValue({ status: "unknown" });
     mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue(null);
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
@@ -484,6 +487,21 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     expectNoteContaining("6144 MiB", "Gateway heap");
     expectNoteContaining("adaptive default", "Gateway heap");
+  });
+
+  it("skips service audit and rewrite for a non-default install identity", async () => {
+    mocks.isDefaultInstallIdentity.mockReturnValue(false);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.readCommand).not.toHaveBeenCalled();
+    expect(mocks.auditGatewayServiceConfig).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+    expectNoteContaining(
+      "service management skipped: non-default state dir or config path",
+      "Gateway",
+    );
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
@@ -1714,6 +1732,41 @@ describe("maybeScanExtraGatewayServices", () => {
       "system",
     );
     expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
+  });
+
+  it("renders cleanup hints only for the detected extra macOS gateway", async () => {
+    mockProcessPlatform("darwin");
+    const extraService = {
+      platform: "darwin" as const,
+      label: "com.example.openclaw-gateway",
+      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      scope: "user" as const,
+      legacy: false,
+    };
+    mocks.findExtraGatewayServices.mockResolvedValue([extraService]);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([
+      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    ]);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalledWith([extraService]);
+    expectNoteContaining("com.example.openclaw-gateway", "Cleanup hints");
+    expectNoNoteContaining("ai.openclaw.gateway", "Cleanup hints");
+  });
+
+  it("does not render generic cleanup hints for legacy gateway services", async () => {
+    setupLegacyMacService();
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), {
+      ...makeDoctorPrompts(),
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+    });
+
+    expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalledWith([]);
+    expectNoNoteContaining("ai.openclaw.gateway", "Cleanup hints");
   });
 
   it("threads deep scans through structured extra gateway service detection", async () => {

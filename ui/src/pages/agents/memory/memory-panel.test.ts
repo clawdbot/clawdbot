@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { nothing } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import { i18n } from "../../../i18n/index.ts";
+import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { en } from "../../../i18n/locales/en.ts";
 import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
@@ -24,6 +27,30 @@ type TestMemoryPanel = HTMLElement & {
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
 };
+
+let restoreTranslations = () => {};
+
+beforeAll(() => {
+  const dreaming =
+    en.dreaming && typeof en.dreaming === "object" ? (en.dreaming as TranslationMap) : {};
+  const wiki =
+    dreaming.wiki && typeof dreaming.wiki === "object" ? (dreaming.wiki as TranslationMap) : {};
+  i18n.registerTranslation("en", {
+    ...en,
+    dreaming: {
+      ...dreaming,
+      wiki: {
+        ...wiki,
+        noContent: "No wiki content available.",
+      },
+    },
+  });
+  restoreTranslations = () => i18n.registerTranslation("en", en);
+});
+
+afterAll(() => {
+  restoreTranslations();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -203,6 +230,19 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
       fromLine: 1,
       lineCount: 5000,
       agentId: "support",
+    });
+  });
+
+  it("uses localized empty content for wiki previews", async () => {
+    const client = {
+      request: vi.fn(async () => ({ title: "Empty", path: "empty.md", content: "" })),
+    } as unknown as GatewayBrowserClient;
+    const page = createPage(contextWithGateway(client, true));
+    document.body.append(page);
+    await page.updateComplete;
+
+    await expect(page.openWikiPage("empty.md")).resolves.toMatchObject({
+      content: "No wiki content available.",
     });
   });
 

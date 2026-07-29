@@ -84,6 +84,9 @@ describe("subagent registry persistence resume", () => {
         task: "do the thing",
         cleanup: "keep",
         createdAt: Date.now(),
+        execution: { status: "running" },
+        completion: { required: false },
+        delivery: { status: "not_required" },
       };
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       await writeSubagentSessionEntry({

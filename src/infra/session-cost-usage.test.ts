@@ -12,10 +12,15 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  resetRemoteModelCatalogOverlayForTest,
+  setRemoteModelCatalogOverlaySourcesForTest,
+} from "../model-catalog/remote-overlay.test-support.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as formatDatetime from "./format-time/format-datetime.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
   acquireSessionCostUsageRefreshLock,
   readSessionCostUsageRollupRows,
@@ -642,6 +647,93 @@ describe("session cost usage", () => {
       expect(costSpy.mock.calls.length).toBeLessThanOrEqual(2);
     } finally {
       costSpy.mockRestore();
+    }
+  });
+
+  it("keeps rollup rows bounded with a multi-megabyte hosted pricing catalog", async () => {
+    const root = await makeSessionCostRoot("large-pricing-fingerprint");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const sessionFile = path.join(sessionsDir, "large-pricing.jsonl");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-07-28T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "catalog-model-0",
+          usage: { input: 10, output: 20, totalTokens: 30 },
+        },
+      }),
+      "utf8",
+    );
+    const pricing = Object.fromEntries(
+      Array.from({ length: 40_000 }, (_, index) => [
+        `openai/catalog-model-${index}`,
+        { input: index + 1, output: index + 2, cacheRead: index + 3 },
+      ]),
+    );
+    const bundleJson = JSON.stringify({
+      schemaVersion: 1,
+      generatedAt: 200,
+      minVersion: "2026.7.0",
+      sourceCommit: "large-rollup-pricing-test",
+      providers: {
+        openai: { models: [{ id: "catalog-model-0", cost: { input: 1, output: 2 } }] },
+      },
+      pricing,
+    });
+    expect(Buffer.byteLength(bundleJson)).toBeGreaterThan(2 * 1024 * 1024);
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog: () => ({
+        id: 1,
+        source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+        bundle_json: bundleJson,
+        generated_at: 200,
+        min_version: "2026.7.0",
+        etag: null,
+        last_modified: null,
+        checked_at: 200,
+      }),
+    });
+    resetRemoteModelCatalogOverlayForTest();
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "catalog-model-0", name: "Catalog model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    try {
+      await withStateDir(root, async () => {
+        const pricingFingerprint = usageFormat.resolveModelCostConfigFingerprint(config);
+        expect(pricingFingerprint).toMatch(/^[0-9a-f]{64}$/u);
+
+        await refreshCostUsageCacheForAgent({
+          agentId: "main",
+          config,
+          sessionFiles: [sessionFile],
+        });
+
+        const row = readSessionCostUsageRollupRows("main").find(
+          (candidate) => candidate.key === sessionFile,
+        );
+        expect(row).toBeDefined();
+        expect(Buffer.byteLength(row?.valueJson ?? "")).toBeLessThan(32 * 1024);
+        expect(JSON.parse(row?.valueJson ?? "null")).toMatchObject({
+          pricingFingerprint,
+        });
+      });
+    } finally {
+      setRemoteModelCatalogOverlaySourcesForTest();
+      resetRemoteModelCatalogOverlayForTest();
     }
   });
 

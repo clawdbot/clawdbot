@@ -362,16 +362,12 @@ jobs:
           if-no-files-found: error
 
   run_live_matrix:
-    name: Run Matrix live QA lane (shard ${{ matrix.shard }}/5)
+    name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
     if: github.event_name != 'workflow_call' || inputs.run_matrix
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -393,27 +389,19 @@ jobs:
 
       - name: Run Matrix live lane
         id: run_lane
-        continue-on-error: true
         shell: bash
         env:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
         run: |
           set -euo pipefail
 
-          output_dir=".artifacts/qa-e2e/matrix-live-shard-${{ matrix.shard }}-of-5-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${output_dir}"
-
-          matrix_help="$(pnpm openclaw qa matrix --help 2>&1)"
-          if ! grep -Fq -- "--shard <index/total>" <<<"${matrix_help}"; then
-            echo "Selected target predates profile-free Matrix catalog sharding; update the target revision." >&2
-            exit 1
-          fi
 
           pnpm openclaw qa matrix \
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
-            --shard "${{ matrix.shard }}/5" \
             --fast
 
       - name: Upload Matrix QA artifacts
@@ -421,24 +409,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}-shard-{1}-of-5', inputs.expected_sha, matrix.shard) || format('qa-live-matrix-{0}-{1}-shard-{2}-of-5', github.run_id, github.run_attempt, matrix.shard) }}
-          path: .artifacts/qa-e2e/matrix-live-shard-${{ matrix.shard }}-of-5-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}
+          path: .artifacts/qa-e2e/matrix-live-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: error
-
-      - name: Enforce Matrix QA shard result
-        if: always()
-        shell: bash
-        env:
-          RUN_OUTCOME: ${{ steps.run_lane.outcome }}
-          UPLOAD_OUTCOME: ${{ steps.upload_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-
-          if [[ "${RUN_OUTCOME:-failure}" != "success" || "${UPLOAD_OUTCOME:-failure}" != "success" ]]; then
-            echo "Matrix QA shard failed: run=${RUN_OUTCOME:-missing}, upload=${UPLOAD_OUTCOME:-missing}." >&2
-            exit 1
-          fi
 
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases

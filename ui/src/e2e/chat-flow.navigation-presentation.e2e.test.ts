@@ -16,6 +16,73 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("coalesces persisted same-session split panes during cold startup", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    await context.addInitScript(() => {
+      localStorage.setItem(
+        "openclaw.control.settings.v1:ws://127.0.0.1:18789",
+        JSON.stringify({
+          chatSplitLayout: {
+            activePaneId: "p1",
+            columns: [
+              {
+                id: "c1",
+                panes: [{ id: "p1", sessionKey: "agent:main:session-a" }],
+                paneWeights: [1],
+              },
+              {
+                id: "c2",
+                panes: [{ id: "p2", sessionKey: "agent:main:session-a" }],
+                paneWeights: [1],
+              },
+            ],
+            columnWeights: [0.5, 0.5],
+          },
+        }),
+      );
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup", "chat.startup"],
+      historyMessages: [
+        {
+          content: [{ type: "text", text: "Shared cold startup proof." }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
+      await expect
+        .poll(() =>
+          panes.evaluateAll((nodes) =>
+            nodes.map((node) =>
+              Boolean(
+                (node as HTMLElement & { state?: { chatLoading?: boolean } }).state?.chatLoading,
+              ),
+            ),
+          ),
+        )
+        .toEqual([true, true]);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+
+      await gateway.resolveDeferred("chat.startup");
+      await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("restores a scrolled session after switching away while new messages arrive", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

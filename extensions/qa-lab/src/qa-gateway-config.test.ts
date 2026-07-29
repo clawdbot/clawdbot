@@ -1,4 +1,5 @@
 // Qa Lab tests cover qa gateway config plugin behavior.
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildQaGatewayConfig,
@@ -59,6 +60,21 @@ function expectQaLabPluginEnabled(cfg: ReturnType<typeof buildQaGatewayConfig>) 
 }
 
 describe("buildQaGatewayConfig", () => {
+  it("stamps fresh QA configs with the current OpenClaw version", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
+    expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
+  });
+
   it("keeps mock-openai as the default provider lane", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",

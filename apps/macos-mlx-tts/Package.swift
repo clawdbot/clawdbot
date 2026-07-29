@@ -13,13 +13,17 @@ let package = Package(
         .executable(name: "openclaw-mlx-tts", targets: ["OpenClawMLXTTSHelper"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", exact: "0.1.3"),
+        // Progressive Fish chunks and cancellation from upstream PR #237.
+        .package(
+            url: "https://github.com/Blaizzy/mlx-audio-swift",
+            revision: "2de211cf80ada19a75f291e491430e2af8e4befe"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
     ],
     targets: [
         .target(
             name: "OpenClawMLXTTSRuntime",
             dependencies: [
+                .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
             ],

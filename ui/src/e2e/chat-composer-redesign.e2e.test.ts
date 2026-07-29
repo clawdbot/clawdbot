@@ -130,6 +130,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const settings = composer.getByRole("button", { name: "View", exact: true });
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const microphonePicker = page.getByRole("button", { name: "Microphone input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
@@ -407,9 +408,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionKey: "main",
         state: "delta",
       });
-      // Streaming content replaces the spark as the working signal.
+      // The working row stays attached with elapsed/token telemetry throughout streaming.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => spark.isVisible()).toBe(true);
       await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
       const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
         await Promise.all([
@@ -538,6 +539,26 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(false);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gateway.setOnline(false);
+      await expect.poll(() => voice.isDisabled()).toBe(true);
+      await expect
+        .poll(async () => {
+          const [voiceBackground, pickerBackground] = await Promise.all([
+            voice.evaluate((node) => getComputedStyle(node).backgroundColor),
+            microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor),
+          ]);
+          return voiceBackground === pickerBackground;
+        })
+        .toBe(true);
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await composerShell.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/voice-picker-disabled-background.png`,
+        });
+      }
     } finally {
       await context.close();
     }
@@ -547,6 +568,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.3-codex-spark",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {

@@ -1,4 +1,6 @@
 // Full-suite Vitest shard definitions used by test-projects and CI planning.
+import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
+
 export const autoReplyCoreTestInclude = [
   "src/auto-reply/*.test.ts",
   "src/auto-reply/usage-bar/*.test.ts",
@@ -101,14 +103,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents-core-isolated.config.ts",
-      "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-embedded-agent.config.ts",
-      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
-      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
-      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
-      "test/vitest/vitest.agents-support.config.ts",
-      "test/vitest/vitest.agents-tools.config.ts",
+      ...agentVitestProjectConfigs,
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.plugin-sdk-light.config.ts",
       "test/vitest/vitest.plugin-sdk.config.ts",
