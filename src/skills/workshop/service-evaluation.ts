@@ -5,6 +5,7 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "../../plugins/hook-types.js";
+import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import {
   createSkillProposalEvent,
   dispatchSkillProposalChanged,
@@ -12,7 +13,10 @@ import {
   normalizeSkillProposalCorrelationId,
   runSkillProposalEvaluators,
 } from "./plugin-hooks.js";
-import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
+import {
+  buildSkillProposalEvaluationBundles,
+  readSkillProposalBaselineTreeSha256,
+} from "./proposal-bundle.js";
 import { readRequiredProposal } from "./service-query.js";
 import {
   hashSkillProposalContent,
@@ -62,6 +66,13 @@ export async function evaluateSkillProposal(
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
       const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
+      if (
+        shouldRunEvaluators &&
+        read.record.kind === "create" &&
+        (await readWorkspaceSkillFile(read.record.target.skillFile)) !== null
+      ) {
+        throw new Error(`Skill proposal ${read.record.id} changed before evaluation started.`);
+      }
       return {
         read,
         bundles: shouldRunEvaluators
@@ -127,6 +138,7 @@ export async function evaluateSkillProposal(
       trigger: evaluation.trigger,
       outcomeCount: evaluation.outcomes.length,
     },
+    evaluation,
   });
   const stored = await withSkillProposalTargetLock(
     read.record,
@@ -149,6 +161,29 @@ export async function evaluateSkillProposal(
         await readProposalSupportFiles(current.record, storeOptions(input.env));
       } catch {
         throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+      }
+      if (bundles && current.record.kind === "create") {
+        let targetContent: string | null;
+        try {
+          targetContent = await readWorkspaceSkillFile(current.record.target.skillFile);
+        } catch {
+          throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+        }
+        if (targetContent !== null) {
+          throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+        }
+      } else if (bundles?.baseline) {
+        let currentBaselineTreeSha256: string;
+        try {
+          currentBaselineTreeSha256 = await readSkillProposalBaselineTreeSha256(
+            current.record.target.skillDir,
+          );
+        } catch {
+          throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+        }
+        if (currentBaselineTreeSha256 !== bundles.baseline.treeSha256) {
+          throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+        }
       }
       return recordSkillProposalEvaluation({
         proposalId: read.record.id,

@@ -47,6 +47,10 @@ export async function buildSkillProposalEvaluationBundles(params: {
   };
 }
 
+export async function readSkillProposalBaselineTreeSha256(skillDir: string): Promise<string> {
+  return snapshotFromFiles(await readSkillTreeFiles(skillDir)).treeSha256;
+}
+
 async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {
   const scanned = await walkDirectory(skillDir, {
     maxDepth: 16,

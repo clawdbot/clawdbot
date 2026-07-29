@@ -129,11 +129,26 @@ describe("Skill Workshop proposal evaluation", () => {
         record: { evaluation: { id: evaluated.evaluation.id } },
       },
     );
-    expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
-    ).toEqual(["created", "evaluation_completed"]);
+    const eventsAfterEvaluation = listSkillProposalEvents({
+      workspaceDir,
+      proposalId: proposal.record.id,
+    }).events;
+    expect(eventsAfterEvaluation.map((event) => event.type)).toEqual([
+      "created",
+      "evaluation_completed",
+    ]);
+    expect(eventsAfterEvaluation[1]).toMatchObject({
+      evaluation: {
+        id: evaluated.evaluation.id,
+        outcomes: [
+          {
+            evaluatorId: "nvidia.skill-eval",
+            pluginId: "nvidia-tools",
+            result: { decision: "revise" },
+          },
+        ],
+      },
+    });
 
     const revised = await reviseSkillProposal({
       workspaceDir,
@@ -148,6 +163,11 @@ describe("Skill Workshop proposal evaluation", () => {
         (event) => event.type,
       ),
     ).toEqual(["created", "evaluation_completed", "revised"]);
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events[1],
+    ).toMatchObject({
+      evaluation: { id: evaluated.evaluation.id },
+    });
   });
 
   it("overlays update candidates and discards results after a concurrent revision", async () => {
@@ -288,6 +308,85 @@ describe("Skill Workshop proposal evaluation", () => {
         "PROPOSAL.md",
       ),
       "# Concurrent Drift\n\nReplaced while evaluating.\n",
+    );
+    release?.();
+
+    await expect(evaluating).rejects.toThrow("changed while evaluation was running");
+    expect(
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+    ).toBeUndefined();
+  });
+
+  it("discards evaluator results when the live skill baseline changes during evaluation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-baseline-drift-");
+    const skillDir = path.join(workspaceDir, "skills", "baseline-drift");
+    await fs.mkdir(skillDir, { recursive: true });
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      skillFile,
+      "---\nname: baseline-drift\ndescription: Existing skill\n---\n\n# Existing\n",
+    );
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      agentId: "main",
+      skillName: "baseline-drift",
+      content: "# Existing\n\nUpdated.\n",
+    });
+    let release: (() => void) | undefined;
+    hookMocks.evaluate.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [];
+    });
+
+    const evaluating = evaluateSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
+    await fs.writeFile(
+      skillFile,
+      "---\nname: baseline-drift\ndescription: Existing skill\n---\n\n# Concurrent update\n",
+    );
+    release?.();
+
+    await expect(evaluating).rejects.toThrow("changed while evaluation was running");
+    expect(
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+    ).toBeUndefined();
+  });
+
+  it("discards create evaluator results when the target appears during evaluation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-create-drift-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Create Drift",
+      description: "Reject evaluator results after the target appears",
+      content: "# Create Drift\n",
+    });
+    let release: (() => void) | undefined;
+    hookMocks.evaluate.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [];
+    });
+
+    const evaluating = evaluateSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
+    await fs.mkdir(proposal.record.target.skillDir, { recursive: true });
+    await fs.writeFile(
+      proposal.record.target.skillFile,
+      "---\nname: create-drift\ndescription: Concurrent skill\n---\n\n# Concurrent\n",
     );
     release?.();
 

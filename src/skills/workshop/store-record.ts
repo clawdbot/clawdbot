@@ -11,6 +11,7 @@ import { hasValidProposalOriginProvenance } from "./proposal-origin-validation.j
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   SKILL_WORKSHOP_SCHEMA,
+  type SkillProposalEvaluation,
   type SkillProposalRecord,
   type SkillProposalRollback,
   type SkillProposalSupportFile,
@@ -44,7 +45,7 @@ export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | nu
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
     !hasValidProposalOriginProvenance(record) ||
     !isValidSupportFileList(record.supportFiles) ||
-    !isValidEvaluation(record.evaluation) ||
+    (record.evaluation !== undefined && !parseSkillProposalEvaluation(record.evaluation)) ||
     !record.target ||
     typeof record.target !== "object" ||
     typeof record.target.skillName !== "string" ||
@@ -59,11 +60,12 @@ export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | nu
   return record;
 }
 
-function isValidEvaluation(value: SkillProposalRecord["evaluation"]): boolean {
-  if (value === undefined) {
-    return true;
+export function parseSkillProposalEvaluation(raw: unknown): SkillProposalEvaluation | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
   }
-  return (
+  const value = raw as SkillProposalEvaluation;
+  if (
     typeof value.id === "string" &&
     value.id.length > 0 &&
     value.id.length <= 128 &&
@@ -80,7 +82,10 @@ function isValidEvaluation(value: SkillProposalRecord["evaluation"]): boolean {
     Array.isArray(value.outcomes) &&
     value.outcomes.length <= 64 &&
     value.outcomes.every(isValidEvaluationOutcome)
-  );
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function isValidEvaluationOutcome(

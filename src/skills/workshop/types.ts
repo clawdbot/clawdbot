@@ -51,6 +51,7 @@ export type SkillProposalEvent = {
   actor: SkillProposalEventActor;
   correlationId?: string;
   payload?: Record<string, string | number | boolean | null>;
+  evaluation?: SkillProposalEvaluation;
 };
 
 export type SkillProposalOrigin = {

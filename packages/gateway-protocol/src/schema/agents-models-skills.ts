@@ -847,6 +847,7 @@ export const SkillProposalLifecycleEventSchema = closedObject({
   actor: SkillProposalLifecycleEventActorSchema,
   correlationId: Type.Optional(NonEmptyString),
   payload: Type.Optional(SkillProposalLifecycleEventPayloadSchema),
+  evaluation: Type.Optional(SkillProposalEvaluationSchema),
 });
 
 /** Lists durable proposal lifecycle events after an optional sequence cursor. */

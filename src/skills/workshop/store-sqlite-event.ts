@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { parseSkillProposalEvaluation } from "./store-record.js";
 import { parseJson } from "./store-sqlite-record.js";
 import {
   openSkillWorkshopStore,
@@ -14,12 +15,14 @@ import {
 import type {
   SkillProposalEvent,
   SkillProposalEventActor,
+  SkillProposalEvaluation,
   SkillProposalEventsListInput,
   SkillProposalEventsListResult,
   SkillProposalEventType,
 } from "./types.js";
 
 export type NewSkillProposalEvent = Omit<SkillProposalEvent, "sequence">;
+const STORED_EVENT_DATA_VERSION = 1;
 
 export function appendSkillProposalEvent(
   database: DatabaseSync,
@@ -39,7 +42,14 @@ export function appendSkillProposalEvent(
         occurred_at: event.occurredAt,
         actor_json: JSON.stringify(event.actor),
         correlation_id: event.correlationId ?? null,
-        payload_json: event.payload ? JSON.stringify(event.payload) : null,
+        payload_json:
+          event.payload || event.evaluation
+            ? JSON.stringify([
+                STORED_EVENT_DATA_VERSION,
+                event.payload ?? null,
+                event.evaluation ?? null,
+              ])
+            : null,
       })
       .returning("sequence"),
   );
@@ -106,7 +116,7 @@ export function listStoredSkillProposalEvents(
   const hasMore = rows.length > limit;
   const events = rows.slice(0, limit).flatMap((row) => {
     const actor = parseSkillProposalEventActor(parseJson(row.actor_json));
-    const payload = parseSkillProposalEventPayload(parseJson(row.payload_json));
+    const storedData = parseSkillProposalEventData(parseJson(row.payload_json));
     if (!actor || !isSkillProposalEventType(row.event_type)) {
       return [];
     }
@@ -121,7 +131,8 @@ export function listStoredSkillProposalEvents(
         occurredAt: row.occurred_at,
         actor,
         ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
-        ...(payload ? { payload } : {}),
+        ...(storedData.payload ? { payload: storedData.payload } : {}),
+        ...(storedData.evaluation ? { evaluation: storedData.evaluation } : {}),
       },
     ];
   });
@@ -157,12 +168,31 @@ function parseSkillProposalEventActor(value: unknown): SkillProposalEventActor |
   return actor;
 }
 
+function parseSkillProposalEventData(value: unknown): {
+  payload?: Record<string, string | number | boolean | null>;
+  evaluation?: SkillProposalEvaluation;
+} {
+  if (value === undefined) {
+    return {};
+  }
+  if (Array.isArray(value)) {
+    if (value.length !== 3 || value[0] !== STORED_EVENT_DATA_VERSION) {
+      return {};
+    }
+    const payload = parseSkillProposalEventPayload(value[1]);
+    const evaluation = parseSkillProposalEvaluation(value[2]) ?? undefined;
+    return {
+      ...(payload ? { payload } : {}),
+      ...(evaluation ? { evaluation } : {}),
+    };
+  }
+  const payload = parseSkillProposalEventPayload(value);
+  return payload ? { payload } : {};
+}
+
 function parseSkillProposalEventPayload(
   value: unknown,
 ): Record<string, string | number | boolean | null> | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -180,6 +210,9 @@ function parseSkillProposalEventPayload(
     )
   ) {
     return undefined;
+  }
+  if (entries.length === 0) {
+    return {};
   }
   return Object.fromEntries(entries);
 }

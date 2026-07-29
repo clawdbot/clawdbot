@@ -9,7 +9,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { listSkillProposals } from "./service.js";
+import { createSkillProposalEvent } from "./plugin-hooks.js";
+import { listSkillProposalEvents, listSkillProposals, proposeCreateSkill } from "./service.js";
+import { updateSkillProposalRecord } from "./store.js";
 
 let testState: OpenClawTestState;
 
@@ -57,6 +59,44 @@ describe("Skill Workshop SQLite store", () => {
     ).toEqual({ name: "skill_workshop_proposal_events" });
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+  });
+
+  it("keeps arbitrary payload keys disjoint from durable evaluations", async () => {
+    const proposal = await proposeCreateSkill({
+      workspaceDir: testState.stateDir,
+      agentId: "main",
+      name: "Event Envelope",
+      description: "Exercise event payload encoding",
+      content: "# Event Envelope\n",
+    });
+    const evaluation = {
+      id: "evaluation-envelope",
+      proposedVersion: proposal.record.proposedVersion,
+      revisionHash: proposal.revisionHash,
+      trigger: "manual" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      completedAt: "2026-07-29T00:00:01.000Z",
+      outcomes: [],
+    };
+    await updateSkillProposalRecord({
+      record: proposal.record,
+      event: createSkillProposalEvent({
+        record: proposal.record,
+        type: "evaluation_completed",
+        payload: { evaluation: "manual", outcomeCount: 0 },
+        evaluation,
+      }),
+    });
+
+    expect(
+      listSkillProposalEvents({
+        workspaceDir: testState.stateDir,
+        proposalId: proposal.record.id,
+      }).events[1],
+    ).toMatchObject({
+      payload: { evaluation: "manual", outcomeCount: 0 },
+      evaluation: { id: evaluation.id },
     });
   });
 });

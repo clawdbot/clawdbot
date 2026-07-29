@@ -488,6 +488,15 @@ describe("skill proposal evaluation and event replay params", () => {
       actor: { type: "plugin", id: "quality-plugin" },
       correlationId: "correlation-1",
       payload: { trigger: "manual", outcomeCount: 1, blocking: false, note: null },
+      evaluation: {
+        id: "evaluation-11",
+        proposedVersion: "v2",
+        revisionHash: "d".repeat(64),
+        trigger: "manual",
+        startedAt: "2026-05-30T00:01:00.000Z",
+        completedAt: "2026-05-30T00:01:01.000Z",
+        outcomes: [],
+      },
     };
 
     expect(Value.Check(SkillProposalLifecycleEventSchema, event)).toBe(true);

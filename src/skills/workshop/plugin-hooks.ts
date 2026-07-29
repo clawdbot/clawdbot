@@ -35,6 +35,7 @@ export function createSkillProposalEvent(params: {
   correlationId?: string;
   occurredAt?: string;
   payload?: NewSkillProposalEvent["payload"];
+  evaluation?: NewSkillProposalEvent["evaluation"];
 }): NewSkillProposalEvent {
   const correlationId = normalizeSkillProposalCorrelationId(params.correlationId);
   return {
@@ -47,6 +48,7 @@ export function createSkillProposalEvent(params: {
     actor: params.actor ?? { type: "system" },
     ...(correlationId ? { correlationId } : {}),
     ...(params.payload ? { payload: params.payload } : {}),
+    ...(params.evaluation ? { evaluation: params.evaluation } : {}),
   };
 }
 
