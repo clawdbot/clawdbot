@@ -27,4 +27,24 @@ describe("generated extension asset lint planning", () => {
         .flatMap((command) => command.args),
     ).not.toContain(generatedAsset);
   });
+
+  it("keeps fallback extension lint for a manifest beside a generated browser asset", () => {
+    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
+    const manifest = "extensions/browser/openclaw.plugin.json";
+    const result = detectChangedLanes([generatedAsset, manifest]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(result.lanes.extensions).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint extensions",
+        args: ["lint:extensions"],
+      }),
+    );
+    expect(
+      plan.commands
+        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
+        .flatMap((command) => command.args),
+    ).not.toContain(generatedAsset);
+  });
 });

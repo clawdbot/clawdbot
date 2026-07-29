@@ -702,12 +702,12 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (lanes.extensions || lanes.extensionTests) {
     // Generated plugin outputs have their own asset-integrity gate and are
-    // intentionally ignored by oxlint; targeting them produces a false failure.
+    // intentionally ignored by oxlint; manifests still need full-lane fallback.
     if (
       !result.paths.some((changedPath) => generatedExtensionAssetPaths.has(changedPath)) ||
       result.paths.some(
         (changedPath) =>
-          LINTABLE_EXTENSION_PATH_RE.test(changedPath) &&
+          getChangedPathFacts(changedPath).surface === "extension" &&
           !generatedExtensionAssetPaths.has(changedPath),
       )
     ) {
