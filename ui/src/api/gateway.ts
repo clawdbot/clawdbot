@@ -307,6 +307,8 @@ export type GatewayBrowserClientOptions = {
   onRequestTiming?: (timing: GatewayRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
   operatorScopes?: readonly string[];
+  // Browser-side presentation preflight only; server and hosted gateways must
+  // still enforce authorization.
   requestPreflight?: (method: string) =>
     | { ok: true }
     | {
