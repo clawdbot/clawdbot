@@ -707,7 +707,7 @@ export function createChangedCheckPlan(result, options = {}) {
       !result.paths.some((changedPath) => generatedExtensionAssetPaths.has(changedPath)) ||
       result.paths.some(
         (changedPath) =>
-          getChangedPathFacts(changedPath).surface === "extension" &&
+          LINTABLE_EXTENSION_PATH_RE.test(changedPath) &&
           !generatedExtensionAssetPaths.has(changedPath),
       )
     ) {

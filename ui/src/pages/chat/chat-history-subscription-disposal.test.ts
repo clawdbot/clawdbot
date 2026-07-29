@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
@@ -10,8 +11,10 @@ import {
 const subscription = { key: "agent:main:main", agentId: null };
 
 function createSubscriptionState(
-  unsubscribeMessages: ReturnType<typeof vi.fn>,
-  subscribeMessages: ReturnType<typeof vi.fn> = vi.fn(),
+  unsubscribeMessages: ReturnType<typeof vi.fn<SessionCapability["unsubscribeMessages"]>>,
+  subscribeMessages: ReturnType<typeof vi.fn<SessionCapability["subscribeMessages"]>> = vi.fn<
+    SessionCapability["subscribeMessages"]
+  >(),
 ): ChatState {
   return {
     client: {} as GatewayBrowserClient,
@@ -39,7 +42,9 @@ describe("disposed chat message subscriptions", () => {
   afterEach(() => vi.useRealTimers());
 
   it("releases an active message subscription when its pane is disposed", () => {
-    const unsubscribeMessages = vi.fn().mockResolvedValue(undefined);
+    const unsubscribeMessages = vi
+      .fn<SessionCapability["unsubscribeMessages"]>()
+      .mockResolvedValue(undefined);
     const state = createSubscriptionState(unsubscribeMessages);
     state.chatSessionMessageSubscriptionRequestedKey = subscription.key;
     state.chatSessionMessageSubscription = subscription;
@@ -56,10 +61,12 @@ describe("disposed chat message subscriptions", () => {
     const pendingSubscription = new Promise<typeof subscription>((resolve) => {
       resolveSubscription = resolve;
     });
-    const unsubscribeMessages = vi.fn().mockResolvedValue(undefined);
+    const unsubscribeMessages = vi
+      .fn<SessionCapability["unsubscribeMessages"]>()
+      .mockResolvedValue(undefined);
     const state = createSubscriptionState(
       unsubscribeMessages,
-      vi.fn().mockReturnValue(pendingSubscription),
+      vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pendingSubscription),
     );
 
     const sync = syncSelectedSessionMessageSubscription(state as never);
@@ -75,7 +82,7 @@ describe("disposed chat message subscriptions", () => {
   it("retries a temporary release failure without another pane synchronization", async () => {
     vi.useFakeTimers();
     const unsubscribeMessages = vi
-      .fn()
+      .fn<SessionCapability["unsubscribeMessages"]>()
       .mockRejectedValueOnce(new Error("temporary observer release failure"))
       .mockResolvedValueOnce(undefined);
     const state = createSubscriptionState(unsubscribeMessages);
@@ -91,7 +98,9 @@ describe("disposed chat message subscriptions", () => {
 
   it("bounds permanently failing releases without leaking retry timers", async () => {
     vi.useFakeTimers();
-    const unsubscribeMessages = vi.fn().mockRejectedValue(new Error("observer unavailable"));
+    const unsubscribeMessages = vi
+      .fn<SessionCapability["unsubscribeMessages"]>()
+      .mockRejectedValue(new Error("observer unavailable"));
     const state = createSubscriptionState(unsubscribeMessages);
     state.chatSessionMessageSubscription = subscription;
 

@@ -532,11 +532,21 @@ export function schedulePairingQrExpiryRefresh(
   if (!onRequestUpdate) {
     return;
   }
+  const refreshAt = resolveNearestFuturePairingQrExpiresAtMs(message);
+  if (refreshAt === undefined) {
+    const subscriber = chatMediaSubscribers.get(onRequestUpdate);
+    const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
+    const resource = subscriber?.resources.get(resourceKey);
+    if (subscriber && resource) {
+      subscriber.resources.delete(resourceKey);
+      detachChatMediaResourceSubscriber(resource, onRequestUpdate);
+      pruneChatMediaSubscriber(onRequestUpdate, subscriber);
+    }
+    return;
+  }
   const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onRequestUpdate);
-  scheduleChatMediaResourceRefresh(
-    resource,
-    resolveNearestFuturePairingQrExpiresAtMs(message),
-    () => notifyChatMediaResourceSubscribers(resource),
+  scheduleChatMediaResourceRefresh(resource, refreshAt, () =>
+    notifyChatMediaResourceSubscribers(resource),
   );
 }
 
