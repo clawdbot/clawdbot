@@ -58,7 +58,6 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
   );
 }
 
-/** Converts undefined to null so optional record fields round-trip through sqlite columns. */
 function jsonStringify(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -304,7 +303,6 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
 
-/** Flattens a normalized subagent run into typed sqlite columns plus payload_json. */
 function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunSqliteInsert {
   const normalized = normalizeSubagentRunState(structuredClone(entry));
   if (!isCanonicalSubagentRunRecord(normalized)) {

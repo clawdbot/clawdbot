@@ -43,9 +43,7 @@ export function createCanonicalSubagentRunFixture(run: SubagentRunRecord): Subag
 export function canonicalSubagentRunFixtures(
   runs: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
-  return new Map(
-    [...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]),
-  );
+  return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
 }
 
 /** Reads test session entries through the active SQLite accessor. */
