@@ -52,6 +52,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | null = null;
   @state() private identityError: string | null = null;
+  @state() private failedHeroAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -317,8 +318,15 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
-    if (avatarUrl) {
-      return html`<img class="profile-hero__avatar-image" src=${avatarUrl} alt=${name} />`;
+    if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
+      return html`<img
+        class="profile-hero__avatar-image"
+        src=${avatarUrl}
+        alt=${name}
+        @error=${() => {
+          this.failedHeroAvatarUrl = avatarUrl;
+        }}
+      />`;
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
