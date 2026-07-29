@@ -9,6 +9,7 @@ import type {
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import {
+  canonicalizeBase64,
   detectMime,
   estimateBase64DecodedBytes,
   saveMediaBuffer,
@@ -315,7 +316,11 @@ async function fetchAttachment(params: {
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
   }
-  const buffer = Buffer.from(result.data, "base64");
+  const canonicalData = canonicalizeBase64(result.data);
+  if (!canonicalData) {
+    throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
+  }
+  const buffer = Buffer.from(canonicalData, "base64");
   const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
   const contentType =
     normalizeOptionalString(attachment.contentType ?? undefined) ??

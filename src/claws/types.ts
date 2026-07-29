@@ -217,7 +217,14 @@ export type ClawAddCapabilityChange = {
 
 export type ClawLocalPrerequisite =
   | { kind: "environment"; mcpServer: string; name: string }
-  | { kind: "oauth"; mcpServer: string };
+  | { kind: "oauth"; mcpServer: string }
+  | {
+      kind: "plugin-setup";
+      plugin: string;
+      provider: string;
+      envVars: string[];
+      authMethods: string[];
+    };
 
 export type ClawAddPlan = {
   schemaVersion: typeof CLAW_ADD_PLAN_SCHEMA_VERSION;

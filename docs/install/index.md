@@ -89,13 +89,12 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="pnpm">
     ```bash
-    pnpm add -g openclaw@latest
-    pnpm approve-builds -g
+    pnpm add -g --allow-build=openclaw openclaw@latest
     openclaw onboard --install-daemon
     ```
 
     <Note>
-    pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    pnpm requires explicit approval for packages with build scripts. `approve-builds -g` is not supported for global installs, so pass `--allow-build=openclaw` on the `pnpm add -g` command instead.
     </Note>
 
   </Tab>

@@ -2749,9 +2749,9 @@ export const en: TranslationMap = {
       useCurrentChatTooltip:
         "Send revision requests to the current chat thread instead of the proposal's workshop thread.",
       selfLearning: "Self-learning",
-      selfLearningAria: "Toggle self-learning skill proposals",
+      selfLearningAria: "Toggle autonomous self-learning",
       selfLearningTooltip:
-        "Capture corrections and review substantial completed work into pending skill proposals. Spends extra background tokens; drafts land on this board as pending proposals.",
+        "Capture corrections and review substantial completed work as reusable skills. The default automatic mode applies scanner-approved captures and shows them on this board.",
       view: "Workshop view",
       board: "Board",
       today: "Today",
@@ -2834,7 +2834,7 @@ export const en: TranslationMap = {
     selfLearning: {
       pitchTitle: "Turn on self-learning",
       pitchBody:
-        "OpenClaw reviews corrections and substantial completed runs, then drafts skill proposals for this board. It spends extra background tokens and drafts arrive as pending proposals.",
+        "OpenClaw reviews corrections and substantial completed runs, then applies scanner-approved skills and shows them on this board. Experience review spends extra background tokens.",
       enable: "Enable self-learning",
       enabling: "Enabling…",
       updateError: "Could not update the self-learning setting.",

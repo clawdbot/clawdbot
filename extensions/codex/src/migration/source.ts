@@ -11,7 +11,11 @@ import {
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
-import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
+import type {
+  CodexAppServerRequestResult,
+  CodexGetAccountResponse,
+  v2,
+} from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { exists, isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
 import {
@@ -359,7 +363,7 @@ async function refreshSourceAppInventory(
     appServer: { start: options.startOptions },
   });
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    await requestSourceCodexAppServerJson<v2.AppsListResponse>(options, {
+    await requestSourceCodexAppServerJson<CodexAppServerRequestResult<typeof method>>(options, {
       method,
       requestParams,
     });

@@ -126,6 +126,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--cwd <dir>", "Set both the agent workspace and tool working directory")
     .option("--state-dir <dir>", "Use an existing state directory without deleting it")
     .option("--model <provider/model>", "Use an explicit primary model for this run")
+    .option("--code-mode <mode>", "Tool mode: direct | auto | code")
+    .option("--local-model-lean", "Use the reduced local-model tool surface")
     .option(
       "--thinking <level>",
       "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
@@ -152,6 +154,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
           [
             'openclaw agent exec "Summarize this repo" --model openai/gpt-5.6-sol --fallback anthropic/claude-sonnet-4-6 --json',
             "Use an explicit fallback chain and JSON output.",
+          ],
+          [
+            'openclaw agent exec "Inspect this repo" --model ollama/qwen3.5:9b --code-mode code --local-model-lean --json',
+            "Force Code Mode with the lean local-model tool surface.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agent#agent-exec", "docs.openclaw.ai/cli/agent#agent-exec")}`,
     )

@@ -67,6 +67,16 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
   }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
+    );
+  }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],

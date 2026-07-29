@@ -13,6 +13,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -630,7 +631,13 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
-  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+  const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
+  // Commitment turns are explicit user notifications, not assistant source
+  // replies; keep their owner-marked delivery visible under tool-only policy.
+  const replyPayload =
+    hasDueCommitments && selectedReplyPayload
+      ? markReplyPayloadForSourceSuppressionDelivery(selectedReplyPayload)
+      : selectedReplyPayload;
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&
