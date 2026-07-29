@@ -14,6 +14,21 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 
 Install a current stable Rust toolchain with `rustup`.
 
+## Media codecs
+
+The companion uses the host's GStreamer plugins for audio and video playback.
+WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
+H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
+The `.deb` declares all three plugin packages as dependencies. For a source
+build or an AppImage, install them explicitly:
+
+```bash
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+```
+
+The AppImage does not bundle GStreamer, so its playback capabilities follow
+the host distribution's installed plugins.
+
 ## Develop and build
 
 The frontend is static HTML, CSS, and JavaScript. It has no package install or build step.

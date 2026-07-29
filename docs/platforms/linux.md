@@ -43,6 +43,21 @@ or mark the AppImage executable and run it directly. The AppImage runtime
 needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
 without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
+### Media codecs
+
+The companion uses the host's GStreamer plugins for audio and video playback.
+WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
+H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
+The `.deb` declares all three plugin packages as dependencies. For a source
+build or an AppImage, install them explicitly:
+
+```bash
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+```
+
+The AppImage does not bundle GStreamer, so its playback capabilities follow
+the host distribution's installed plugins.
+
 You can also build the same bundles from a source checkout:
 
 ```bash
