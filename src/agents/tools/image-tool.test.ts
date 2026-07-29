@@ -2072,7 +2072,7 @@ describe("image tool implicit imageModel config", () => {
           },
           model: { type: "string" },
           maxBytesMb: { type: "number", exclusiveMinimum: 0, maximum: 100 },
-          maxImages: { type: "integer", minimum: 1, maximum: 100 },
+          maxImages: { type: "integer", minimum: 1 },
         },
       });
     });
@@ -2774,14 +2774,14 @@ describe("image tool MiniMax VLM routing", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("clamps pathological maxImages across the 100-image threshold", async () => {
+  it("clamps pathological maxImages across the 20-image threshold", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
-    // 101 unique tiny PNGs cross the clamped threshold (100) so the
+    // 21 unique tiny PNGs cross the clamped threshold (20) so the
     // gate must fire. Without the clamp, maxImages=1_000_000_000 would
     // pass through and silently accept millions of image references.
     // Each image has a distinct red channel to bypass the URI dedup.
-    const tooMany = Array.from({ length: 101 }, (_, i) => {
+    const tooMany = Array.from({ length: 21 }, (_, i) => {
       const buf = Buffer.alloc(4, 255);
       buf[0] = i;
       return `data:image/png;base64,${encodePngRgba(buf, 1, 1).toString("base64")}`;
@@ -2792,17 +2792,17 @@ describe("image tool MiniMax VLM routing", () => {
       maxImages: 1_000_000_000,
     });
 
-    // The gate fires because 101 > 100 (clamped), not 101 > 1_000_000_000.
+    // The gate fires because 21 > 20 (clamped), not 21 > 1_000_000_000.
     expect(result.content).toEqual([
       {
         type: "text",
-        text: "Too many images: 101 provided, maximum is 100. Please reduce the number of images.",
+        text: "Too many images: 21 provided, maximum is 20. Please reduce the number of images.",
       },
     ]);
     expect(result.details).toMatchObject({
       error: "too_many_images",
-      count: 101,
-      max: 100,
+      count: 21,
+      max: 20,
     });
     // No fetch — the gate exits before any image processing.
     expect(fetch).not.toHaveBeenCalled();
@@ -2812,7 +2812,7 @@ describe("image tool MiniMax VLM routing", () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     // 3 images with pathological maxImages=1_000_000_000: clamp gives
-    // 100, and 3 < 100 so the gate passes normally.
+    // 20, and 3 < 20 so the gate passes normally.
     const many = await tool.execute("t1", {
       prompt: "Describe.",
       images: [

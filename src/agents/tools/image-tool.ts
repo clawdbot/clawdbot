@@ -90,7 +90,7 @@ import {
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
-const MAX_IMAGES_CAP = 100;
+const MAX_IMAGES_CAP = DEFAULT_MAX_IMAGES;
 const MAX_IMAGE_MB_CAP = 100;
 
 type ImageToolLoadWebMediaOptions = {
@@ -925,7 +925,7 @@ export function createImageTool(options?: {
       ),
       ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
       maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0, maximum: MAX_IMAGE_MB_CAP }),
-      maxImages: optionalPositiveIntegerSchema({ maximum: MAX_IMAGES_CAP }),
+      maxImages: optionalPositiveIntegerSchema(),
     }),
     execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
