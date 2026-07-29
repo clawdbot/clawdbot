@@ -782,7 +782,7 @@ enum ChatMarkdownBlockSegmenter {
         let protectedRanges: [Range<Int>]
     }
 
-    private struct SourceReplacement {
+    fileprivate struct SourceReplacement {
         let range: SourceRange
         let markdown: String
     }
