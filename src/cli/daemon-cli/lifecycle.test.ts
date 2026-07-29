@@ -129,6 +129,12 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
 }));
 
+vi.mock("../../config/paths.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
+
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
     findVerifiedGatewayListenerPidsOnPortSync(port),
