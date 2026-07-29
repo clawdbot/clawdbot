@@ -1,63 +1,27 @@
+import { html, nothing } from "lit";
+import { findInlineApproval } from "../../app/approval-presentation.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { t } from "../../i18n/index.ts";
+import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import {
-  activeChatRunStartupStatus,
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  cancelQuestionPrompt,
-  chatPullRequestId,
-  clearChatHistory,
-  configureToolTitleFetcher,
-  createBackgroundTasksProps,
-  createPullRequestBranch,
-  createSessionWorkspaceProps,
-  dismissChatError,
-  dismissRealtimeTalkError,
-  findInlineApproval,
-  hasAbortableSessionRun,
-  hasOperatorAdminAccess,
-  hasOperatorWriteAccess,
-  hasSessionPresenceViewers,
-  html,
-  isGatewayMethodAdvertised,
-  nothing,
-  openSessionWorkspaceFile,
-  parseCatalogSessionKey,
-  pickFreshestObserverDigest,
-  readPresenceEntries,
-  refreshChatCommands,
-  refreshPageChat,
-  renderBoardSessionSurface,
-  renderChat,
-  renderChatControls,
-  resolveActiveRunOutputTokens,
-  resolveAssistantAttachmentAuthToken,
-  resolveChatAgentId,
-  resolveChatAvatarUrl,
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
-  resolveCurrentSelfUser,
+} from "../../lib/chat/follow-up-mode.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  pickFreshestObserverDigest,
+  projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
-  revealSessionWorkspaceFile,
-  scopedAgentParamsForSession,
-  submitQuestionPrompt,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-  t,
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
-  closeSlot,
-  detachPanelToColumn,
-  isSidebarRegionCollapsed,
-  mergePanelIntoColumn,
-  sidebarPrimaryWidth,
-  workspaceResultConflictFromPlacement,
-  type BoardViewCallbacks,
-  type ChatProps,
-  type SessionObserverDigest,
-  type SidebarSide,
-  type SidebarSlotId,
-} from "./chat-pane-deps.ts";
-import { ChatPaneHeaderRender } from "./chat-pane-header-render.ts";
+} from "../../lib/observer-digest.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import { renderBoardSessionSurface } from "./board-session-surface.ts";
+import { clearChatHistory } from "./chat-history.ts";
+import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
   SESSION_RAIL_DOCK_MIN_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
@@ -69,27 +33,57 @@ import {
   resolveSidebarLayoutForBoard,
   restoreHiddenSidebarChat,
 } from "./chat-pane-sidebar-layout.ts";
+import {
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+  resolveChatArtifactDownload,
+} from "./chat-pane-state.ts";
+import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import {
+  resolveChatAgentId,
+  resolveChatAvatarUrl,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { renderChatControls } from "./components/chat-controls.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
+import {
+  createSessionWorkspaceProps,
+  openSessionWorkspaceFile,
+  revealSessionWorkspaceFile,
+} from "./components/chat-session-workspace.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  detachPanelToColumn,
+  isSidebarRegionCollapsed,
+  mergePanelIntoColumn,
+  sidebarPrimaryWidth,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
+import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPaneRender extends ChatPaneHeaderRender {
+export class ChatPane extends ChatPaneHeader {
   override render() {
     const state = this.state;
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    const selectedSession = state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    const selectedSession = selectedChatSessionRow(state);
+    const projectedObserverDigest = projectSessionObserverDigest(
+      selectedSession?.key ?? state.sessionKey,
+      selectedSession?.observerDigest,
     );
-    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
-      ? {
-          sessionKey: selectedSession.key,
-          runId: selectedSession.observerDigest.runId,
-          revision: selectedSession.observerDigest.revision,
-          updatedAt: selectedSession.observerDigest.updatedAt,
-          headline: selectedSession.observerDigest.headline,
-          health: selectedSession.observerDigest.health,
-        }
-      : null;
     const observerDigest = pickFreshestObserverDigest(
       state.observerDigest,
       projectedObserverDigest,
@@ -230,6 +224,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       usageByRun: state.chatRunUsageById,
     });
     const loadSidebarFullMessage = createSidebarFullMessageLoader(state, Boolean(catalogKey));
+    const projectionRunId = resolveChatProjectionRunId({
+      localRunId: state.chatRunId,
+      activeRunIds: selectedSession?.activeRunIds,
+      queue: state.chatQueue,
+    });
+    const attachmentReads = this.chatState.attachmentReads;
+    const attachmentReadSignal = attachmentReads.readSignal;
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -296,6 +297,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      runId: catalogKey ? null : projectionRunId,
       runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
@@ -462,6 +464,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,
+      pendingAttachmentReads: attachmentReads.pendingReads,
+      getPendingAttachmentReads: () => attachmentReads.pendingReads,
+      readSignal: attachmentReadSignal,
+      onPendingReadsChange: (delta) => attachmentReads.updatePending(attachmentReadSignal, delta),
       onAttachmentsChange: (next) => {
         state.chatAttachments = next;
         state.requestUpdate?.();
@@ -545,6 +551,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
+      resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
       gatewayUrl: state.settings.gatewayUrl,
     };
@@ -557,7 +564,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             observer: {
               activeRunId: observerRunId,
               digests: this.observerDigestHistory.get(
-                this.resolveBoardSessionKey(board.snapshot.sessionKey),
+                this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
               ),
               lastReadAt: selectedSession?.lastReadAt,
             },

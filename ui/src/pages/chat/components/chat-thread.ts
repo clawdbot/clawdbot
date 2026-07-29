@@ -64,12 +64,18 @@ import {
 import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import {
+  getChatSessionScrollPosition,
+  saveChatSessionScrollPosition,
+  type ChatSessionScrollPosition,
+} from "../scroll.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -113,6 +119,7 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runId?: string | null;
   runOutputTokens?: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -143,6 +150,7 @@ type ChatThreadProps = {
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
@@ -190,6 +198,15 @@ const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
 const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
 const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
+// Initial virtual rows can correct their estimates for several frames. Hold a
+// restored offset for ~200ms so those corrections cannot reapply the end anchor.
+const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
+// A committed short transcript can legitimately remain at maxOffset=0. Give
+// initial measurement one second before treating that zero range as final.
+const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
+// Keep the active transcript plus two recent sessions. Eviction always tears
+// down observers first; otherwise a discarded host would leak row observers.
+const CHAT_TRANSCRIPT_VIRTUALIZER_CACHE_LIMIT = 3;
 
 function initialTranscriptRect(host: ReactiveControllerHost) {
   const width = host instanceof HTMLElement ? host.clientWidth : 0;
@@ -218,6 +235,16 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private threadInnerElement: HTMLDivElement | null = null;
+  private connected = false;
+  private observedWidth: number | null = null;
+  private contentReady = false;
+  private pendingScrollOffset: {
+    offset: number;
+    stableFrames: number;
+    zeroMaxFrames: number;
+    onSettled?: (position: ChatSessionScrollPosition) => void;
+  } | null = null;
+  private pendingScrollFrame: number | null = null;
   // Lit calls refs before newly rendered nodes are connected. Resolve the
   // scroll parent lazily or a stable ref can permanently capture null.
   private get scrollElement(): HTMLDivElement | null {
@@ -267,21 +294,37 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private currentAnnouncementText = "";
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
-  constructor(private readonly host: ReactiveControllerHost) {
+  constructor(
+    private readonly host: ReactiveControllerHost,
+    initialOffset: number | null = null,
+    onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
+  ) {
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
       getScrollElement: () => this.scrollElement,
       estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
-      initialOffset: Number.MAX_SAFE_INTEGER,
+      initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       scrollMargin: initialTranscriptScrollMargin(host),
       anchorTo: "end",
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
         observeElementRect(instance, (rect) => {
+          const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
+          this.observedWidth = rect.width;
           this.syncScrollMargin(instance.scrollElement);
           callback(rect);
+          if (widthChanged) {
+            // Cached offscreen sizes belong to the old wrapping width. Reset
+            // them and synchronously seed connected rows to avoid stale overlap.
+            instance.measure();
+            for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(
+              ".chat-virtual-row",
+            ) ?? []) {
+              instance.measureElement(row);
+            }
+          }
         }),
       rangeExtractor: (range) => {
         const indexes = defaultRangeExtractor(range);
@@ -300,6 +343,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
+    if (initialOffset !== null) {
+      this.pendingScrollOffset = {
+        offset: initialOffset,
+        stableFrames: 0,
+        zeroMaxFrames: 0,
+        onSettled: onInitialOffsetSettled,
+      };
+    }
   }
 
   get updateComplete() {
@@ -323,8 +374,15 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   }
 
   connect(): void {
+    if (this.connected) {
+      return;
+    }
+    this.connected = true;
     for (const controller of this.controllers) {
       controller.hostConnected?.();
+    }
+    if (this.pendingScrollOffset) {
+      this.host.requestUpdate();
     }
   }
 
@@ -332,13 +390,32 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    this.applyPendingScrollOffset();
   }
 
   disconnect(): void {
+    if (this.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.pendingScrollFrame);
+      this.pendingScrollFrame = null;
+    }
+    if (!this.connected) {
+      this.threadInnerElement = null;
+      return;
+    }
+    this.connected = false;
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
     this.threadInnerElement = null;
+  }
+
+  dispose(): void {
+    this.disconnect();
+    this.measureRowRefs.clear();
+    this.rowKeys = [];
+    this.rowIndexesByKey.clear();
+    this.focusedRowKey = null;
+    this.pendingScrollOffset = null;
   }
 
   render(
@@ -406,6 +483,42 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
     this.virtualizerController.getVirtualizer().scrollToEnd(options);
+  }
+
+  scrollToOffset(offset: number): void {
+    if (this.scrollElement) {
+      this.scrollElement.scrollTop = offset;
+    }
+    this.virtualizerController.getVirtualizer().scrollToOffset(offset);
+  }
+
+  getScrollOffset(): number | null {
+    return this.scrollElement?.scrollTop ?? null;
+  }
+
+  getMaxScrollOffset(): number | null {
+    const scrollElement = this.scrollElement;
+    return scrollElement
+      ? Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight)
+      : null;
+  }
+
+  setContentReady(ready: boolean): void {
+    this.contentReady = ready;
+  }
+
+  restoreScrollOffset(
+    offset: number,
+    onSettled?: (position: ChatSessionScrollPosition) => void,
+  ): void {
+    this.pendingScrollOffset = { offset, stableFrames: 0, zeroMaxFrames: 0, onSettled };
+    if (this.connected) {
+      this.host.requestUpdate();
+    }
+  }
+
+  getPendingScrollOffset(): number | null {
+    return this.pendingScrollOffset?.offset ?? null;
   }
 
   handleFocusIn(event: FocusEvent): void {
@@ -479,26 +592,129 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       scrollMargin,
     });
   }
+
+  private applyPendingScrollOffset(): void {
+    const pending = this.pendingScrollOffset;
+    if (!pending || !this.connected) {
+      return;
+    }
+    const maxOffset = this.getMaxScrollOffset();
+    if (maxOffset === null) {
+      if (this.contentReady && this.rowKeys.length === 0) {
+        this.settlePendingScroll(0);
+      }
+      return;
+    }
+    if (maxOffset === 0 && pending.offset > 0) {
+      if (this.contentReady && this.rowKeys.length === 0) {
+        this.settlePendingScroll(0);
+      } else if (this.contentReady) {
+        if (pending.zeroMaxFrames >= CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES) {
+          this.settlePendingScroll(0);
+          return;
+        }
+        pending.zeroMaxFrames += 1;
+        this.schedulePendingScrollRetry();
+      }
+      return;
+    }
+    pending.zeroMaxFrames = 0;
+    const targetOffset = Math.min(pending.offset, maxOffset);
+    this.scrollToOffset(targetOffset);
+    const currentOffset = this.getScrollOffset();
+    if (currentOffset != null && Math.abs(currentOffset - targetOffset) <= 1) {
+      if (pending.stableFrames >= CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES) {
+        this.settlePendingScroll(currentOffset);
+      } else {
+        pending.stableFrames += 1;
+        this.schedulePendingScrollRetry();
+      }
+    } else {
+      pending.stableFrames = 0;
+      this.schedulePendingScrollRetry();
+    }
+  }
+
+  private schedulePendingScrollRetry(): void {
+    if (!this.connected || this.pendingScrollFrame !== null) {
+      return;
+    }
+    this.pendingScrollFrame = requestAnimationFrame(() => {
+      this.pendingScrollFrame = null;
+      if (this.connected && this.pendingScrollOffset) {
+        this.host.requestUpdate();
+      }
+    });
+  }
+
+  private settlePendingScroll(scrollTop: number): void {
+    const pending = this.pendingScrollOffset;
+    this.pendingScrollOffset = null;
+    if (!pending) {
+      return;
+    }
+    const maxScrollTop = this.getMaxScrollOffset();
+    pending.onSettled?.({
+      scrollTop,
+      anchorToEnd:
+        maxScrollTop === null
+          ? this.contentReady && this.rowKeys.length === 0
+          : maxScrollTop - scrollTop <= CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+    });
+  }
 }
 
 export class ChatTranscriptController implements ReactiveController {
-  private sessionKey: string | null = null;
+  private activeSessionKey: string | null = null;
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
+  private readonly sessionVirtualizers = new Map<string, ChatSessionVirtualizerHost>();
   private connected = false;
 
   constructor(private readonly host: ReactiveControllerHost) {
     host.addController(this);
   }
 
+  get renderedSessionKey(): string | null {
+    return this.activeSessionKey;
+  }
+
   render(props: ChatThreadProps): TemplateResult {
     if (
       !this.sessionVirtualizer ||
-      this.sessionKey === null ||
-      !areUiSessionKeysEquivalent(this.sessionKey, props.sessionKey)
+      this.activeSessionKey === null ||
+      !areUiSessionKeysEquivalent(this.activeSessionKey, props.sessionKey)
     ) {
       this.sessionVirtualizer?.disconnect();
-      this.sessionKey = props.sessionKey;
-      this.sessionVirtualizer = new ChatSessionVirtualizerHost(this.host);
+      let cachedKey: string | null = null;
+      let nextVirtualizer: ChatSessionVirtualizerHost | null = null;
+      for (const [sessionKey, virtualizer] of this.sessionVirtualizers) {
+        if (areUiSessionKeysEquivalent(sessionKey, props.sessionKey)) {
+          cachedKey = sessionKey;
+          nextVirtualizer = virtualizer;
+          break;
+        }
+      }
+      if (cachedKey !== null && nextVirtualizer) {
+        this.sessionVirtualizers.delete(cachedKey);
+      } else {
+        const savedPosition = getChatSessionScrollPosition(props.paneId, props.sessionKey);
+        const initialOffset = savedPosition?.anchorToEnd
+          ? null
+          : (savedPosition?.scrollTop ?? null);
+        nextVirtualizer = new ChatSessionVirtualizerHost(
+          this.host,
+          initialOffset,
+          initialOffset === null
+            ? undefined
+            : (position) => {
+                saveChatSessionScrollPosition(props.paneId, props.sessionKey, position);
+              },
+        );
+      }
+      this.activeSessionKey = props.sessionKey;
+      this.sessionVirtualizer = nextVirtualizer;
+      this.sessionVirtualizers.set(props.sessionKey, nextVirtualizer);
+      this.evictInactiveVirtualizers();
       if (this.connected) {
         this.sessionVirtualizer.connect();
       }
@@ -508,6 +724,17 @@ export class ChatTranscriptController implements ReactiveController {
 
   scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
     this.sessionVirtualizer?.scrollToEnd(options);
+  }
+
+  scrollToOffset(offset: number, onSettled?: (position: ChatSessionScrollPosition) => void): void {
+    this.sessionVirtualizer?.restoreScrollOffset(offset, onSettled);
+  }
+
+  pendingScrollOffsetFor(sessionKey: string): number | null {
+    return this.activeSessionKey !== null &&
+      areUiSessionKeysEquivalent(this.activeSessionKey, sessionKey)
+      ? (this.sessionVirtualizer?.getPendingScrollOffset() ?? null)
+      : null;
   }
 
   handleFocusIn(event: FocusEvent): void {
@@ -529,7 +756,23 @@ export class ChatTranscriptController implements ReactiveController {
 
   hostDisconnected(): void {
     this.connected = false;
-    this.sessionVirtualizer?.disconnect();
+    for (const virtualizer of this.sessionVirtualizers.values()) {
+      virtualizer.disconnect();
+    }
+  }
+
+  private evictInactiveVirtualizers(): void {
+    while (this.sessionVirtualizers.size > CHAT_TRANSCRIPT_VIRTUALIZER_CACHE_LIMIT) {
+      const oldest = this.sessionVirtualizers.entries().next().value as
+        | [string, ChatSessionVirtualizerHost]
+        | undefined;
+      if (!oldest) {
+        return;
+      }
+      const [sessionKey, virtualizer] = oldest;
+      this.sessionVirtualizers.delete(sessionKey);
+      virtualizer.dispose();
+    }
   }
 }
 
@@ -575,7 +818,7 @@ function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
 
-export function resetChatThreadPresentationState(paneId?: string, owner?: ParentNode) {
+function dismissChatThreadPortals(paneId?: string, owner?: ParentNode): void {
   removeReplyContextMenu(paneId);
   if (owner) {
     dismissConfirmedActionPopovers(owner);
@@ -583,6 +826,21 @@ export function resetChatThreadPresentationState(paneId?: string, owner?: Parent
   // The selection popup is body-portaled; pane teardown/route changes must
   // drop it so it cannot outlive the render that owns its callbacks.
   removeChatSelectionPopup();
+}
+
+export function resetChatThreadSessionPresentationState(paneId: string, owner?: ParentNode): void {
+  dismissChatThreadPortals(paneId, owner);
+  const state = threadStates.get(paneId);
+  if (state) {
+    // Search input belongs to the outgoing transcript. Other fields are pane
+    // preferences or dependency memos and invalidate themselves on new props.
+    state.searchOpen = false;
+    state.searchQuery = "";
+  }
+}
+
+export function resetChatThreadPresentationState(paneId?: string, owner?: ParentNode) {
+  dismissChatThreadPortals(paneId, owner);
   if (paneId) {
     threadStates.delete(paneId);
     resetChatThreadState(paneId);
@@ -867,7 +1125,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const menu = document.createElement("div");
   menu.className = "chat-reply-context-menu";
   menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", "Message actions");
+  menu.setAttribute("aria-label", t("chat.messages.actions"));
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
@@ -1130,19 +1388,16 @@ function trackTranscriptRenderDependencies(
 
 function guardChatRenderItems(
   state: ChatThreadState,
-  // Turn status ownership is decided by sibling rows, not by the owning row's
-  // own content: an unchanged reply that gains or loses the embedded working
-  // row / recap must re-render, or the stale copy stacks with the new owner.
-  statusOwnership: (item: ChatRenderItem) => string,
+  // Live run status is not derivable from a row's own item identity: ownership
+  // is decided by sibling rows, and the usage counter ticks on run patches that
+  // touch nothing else. Rows showing status must re-render on both, or the
+  // memoized copy stacks a second claw row or freezes the token count.
+  liveStatus: (item: ChatRenderItem) => string,
   render: (item: ChatRenderItem) => unknown,
 ) {
   return (item: ChatRenderItem) =>
     guard(
-      [
-        ...chatRenderItemGuardDependencies(item),
-        state.transcriptRenderContext,
-        statusOwnership(item),
-      ],
+      [...chatRenderItemGuardDependencies(item), state.transcriptRenderContext, liveStatus(item)],
       () => render(item),
     );
 }
@@ -1187,9 +1442,7 @@ function renderChatThreadContents(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId:
-      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
-        ?.activeRunIds?.[0] ?? null,
+    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -1200,7 +1453,6 @@ function renderChatThreadContents(
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
-    waitingApproval: Boolean(props.waitingApproval),
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,
@@ -1220,6 +1472,7 @@ function renderChatThreadContents(
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  transcript.setContentReady(!props.loading);
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
   // the sessions list is capped, so absent/unknown rows classify by key:
@@ -1293,6 +1546,7 @@ function renderChatThreadContents(
       basePath: props.basePath,
       localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+      resolveArtifactDownload: props.resolveArtifactDownload,
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode ?? "scripts",
       allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
@@ -1317,19 +1571,28 @@ function renderChatThreadContents(
       turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
-  const statusOwnershipSignature = (item: ChatRenderItem): string => {
+  // Only the working indicator shows live usage, so rows without one keep
+  // memoizing across usage patches.
+  const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
+  const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
     if (item.kind !== "group") {
       return "";
     }
     const continuation = activeContinuationByGroupKey.get(item.key);
     const recap = turnRecapByGroupKey.get(item.key);
-    // Part keys stand in for the continuation: its options mirror props that
-    // already invalidate every row through the shared render context.
-    return `${continuation?.parts.map((part) => part.key).join(" ") ?? ""}|${
-      recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
-    }`;
+    // Part keys stand in for the rest of the continuation: its remaining
+    // options mirror props that already invalidate every row through the
+    // shared render context.
+    const continuationKey = continuation
+      ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    return `${continuationKey}|${recapKey}`;
   };
-  const renderItem = guardChatRenderItems(state, statusOwnershipSignature, (item) => {
+  const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
     }
@@ -1470,6 +1733,7 @@ function renderChatThreadContents(
     props.gatewayUrl,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
+    props.boardProvider?.canPinMcpApps,
     props.boardProvider?.snapshot$.value.revision,
     props.fullMessageAgentId,
     showReasoning,

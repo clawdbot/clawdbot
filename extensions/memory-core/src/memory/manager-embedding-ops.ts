@@ -13,7 +13,9 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  extractProjectKeysFromCuratedEntry,
   hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -22,8 +24,11 @@ import {
   runWithConcurrency,
   type MemoryChunk,
   type MemorySource,
+  type MemoryEntryProvenance,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -60,6 +65,7 @@ import {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
+import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
@@ -91,12 +97,91 @@ function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
+type IndexedMemoryChunk = MemoryChunk & {
+  importance: number | null;
+  triggers: string | null;
+  projectKey: string | null;
+};
+
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
-  chunks: MemoryChunk[];
+  chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
 };
+
+function resolveChunkRecallMetadata(params: {
+  curatedRoot: boolean;
+  projectScopeEligible: boolean;
+  content?: string;
+  chunk: MemoryChunk;
+}): Pick<IndexedMemoryChunk, "importance" | "triggers" | "projectKey"> {
+  if ((!params.curatedRoot && !params.projectScopeEligible) || params.content === undefined) {
+    return { importance: null, triggers: null, projectKey: null };
+  }
+
+  const phrases = new Set<string>();
+  let importance: number | null = null;
+  const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
+  const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
+  const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
+  const annotationLines = lines.slice(annotationStartLine - 1, annotationEndLine);
+  const projectAnnotations = params.projectScopeEligible
+    ? extractProjectKeysFromCuratedEntry(annotationLines.join("\n"))
+    : { annotated: false, valid: true, keys: [] };
+  for (const line of annotationLines) {
+    const annotationSuffix = line.match(
+      /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
+    )?.[0];
+    if (!annotationSuffix) {
+      continue;
+    }
+    for (const match of annotationSuffix.matchAll(
+      /<!--\s*(trigger|importance|project)\s*:\s*([\s\S]*?)\s*-->/giu,
+    )) {
+      const kind = match[1]?.toLowerCase();
+      const value = match[2]?.trim() ?? "";
+      if (kind === "trigger") {
+        if (!params.curatedRoot) {
+          continue;
+        }
+        for (const phrase of value.split(/[,;]/u).map((entry) => entry.trim())) {
+          if (phrase) {
+            phrases.add(phrase);
+          }
+        }
+        continue;
+      }
+      if (kind === "project") {
+        continue;
+      }
+      if (!params.curatedRoot) {
+        continue;
+      }
+      if (/^\d+$/u.test(value)) {
+        const parsed = Number.parseInt(value, 10);
+        if (parsed >= 1 && parsed <= 10) {
+          importance = Math.max(importance ?? parsed, parsed);
+        }
+      }
+    }
+  }
+
+  // Missing annotations intentionally stay NULL: pre-annotation indexes keep
+  // neutral ranking and never become trigger candidates after a reindex.
+  return {
+    importance,
+    triggers: phrases.size > 0 ? [...phrases].join("; ") : null,
+    // Invalid annotations remain scoped but unsatisfiable; treating them as NULL
+    // would make malformed project memory global and leak it into every project.
+    projectKey:
+      projectAnnotations.annotated && !projectAnnotations.valid
+        ? INVALID_PROJECT_ANNOTATION_KEY
+        : projectAnnotations.keys.length > 0
+          ? projectAnnotations.keys.join("; ")
+          : null,
+  };
+}
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
 // they cannot override the counter or break accounting when they are immutable.
@@ -271,13 +356,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected override beginSyncProviderGeneration(): void {
+  protected override beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void {
     if (this.syncProviderGeneration) {
       this.syncProviderGenerationOwners += 1;
       return;
     }
-    const provider = this.provider;
-    const runtime = this.providerRuntime;
+    const provider = options?.forceFtsOnly ? null : this.provider;
+    const runtime = provider ? this.providerRuntime : undefined;
     const identities = resolveMemoryIndexProviderIdentities({
       provider,
       cacheKeyData: runtime?.cacheKeyData,
@@ -354,7 +439,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private async embedChunksInBatches(
-    chunks: MemoryChunk[],
+    chunks: IndexedMemoryChunk[],
     generation: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
     if (chunks.length === 0) {
@@ -433,7 +518,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private async embedChunksWithBatch(
-    chunks: MemoryChunk[],
+    chunks: IndexedMemoryChunk[],
     _entry: MemoryIndexEntry,
     source: string,
     generation: MemorySemanticProviderGeneration,
@@ -485,11 +570,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private collectCachedEmbeddings(
-    chunks: MemoryChunk[],
+    chunks: IndexedMemoryChunk[],
     generation: MemorySemanticProviderGeneration,
   ): {
     embeddings: number[][];
-    missing: Array<{ index: number; chunk: MemoryChunk }>;
+    missing: Array<{ index: number; chunk: IndexedMemoryChunk }>;
   } {
     return collectMemoryCachedEmbeddings({
       chunks,
@@ -632,16 +717,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const waitMs = resolveMemoryEmbeddingRetryDelay(
       delayMs,
       Math.random(),
       EMBEDDING_RETRY_MAX_DELAY_MS,
     );
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
-    await new Promise((resolve) => {
-      setTimeout(resolve, waitMs);
-    });
+    await sleepWithAbort(waitMs, signal);
   }
 
   private resolveEmbeddingTimeout(
@@ -688,7 +775,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             signal,
             isRetryable: isRetryableMemoryEmbeddingError,
             waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying query");
+              await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
             },
             maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
@@ -894,7 +981,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     entry: MemoryIndexEntry,
     source: MemorySource,
     model: string,
-    chunks: MemoryChunk[],
+    chunks: IndexedMemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
   ): void {
@@ -909,14 +996,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
         this.db
           .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                hash=excluded.hash,
                model=excluded.model,
                text=excluded.text,
                embedding=excluded.embedding,
-               updated_at=excluded.updated_at`,
+               updated_at=excluded.updated_at,
+               importance=excluded.importance,
+               triggers=excluded.triggers,
+               project_key=excluded.project_key`,
           )
           .run(
             id,
@@ -929,6 +1019,32 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             chunk.text,
             JSON.stringify(embedding),
             now,
+            chunk.importance,
+            chunk.triggers,
+            chunk.projectKey,
+          );
+        const provenance = chunk.provenance ?? {
+          originClass: "untrusted" as const,
+          sessionKind: "unknown" as const,
+          observedAt: now,
+        };
+        this.db
+          .prepare(
+            `INSERT INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
+               chunk_id, origin_class, session_kind, observed_at, supersedes_key
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(chunk_id) DO UPDATE SET
+               origin_class=excluded.origin_class,
+               session_kind=excluded.session_kind,
+               observed_at=excluded.observed_at,
+               supersedes_key=excluded.supersedes_key`,
+          )
+          .run(
+            id,
+            provenance.originClass,
+            provenance.sessionKind,
+            provenance.observedAt,
+            provenance.supersedesKey ?? null,
           );
         if (vectorReady && embedding.length > 0) {
           replaceMemoryVectorRow({
@@ -967,6 +1083,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     options: { source: MemorySource; content?: string },
     generation: MemorySyncProviderGeneration | null,
   ): Promise<PreparedMemoryIndexEntry | null> {
+    const pathClassification = await resolveMemoryPathClassification({
+      absolutePath: entry.absPath,
+      source: options.source,
+      workspaceDir: this.workspaceDir,
+    });
     if ("kind" in entry && entry.kind === "multimodal") {
       const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
       if (!multimodalChunk) {
@@ -974,10 +1095,22 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         this.deleteFileRecord(entry.path, options.source);
         return null;
       }
+      const chunk: IndexedMemoryChunk = {
+        ...multimodalChunk.chunk,
+        importance: null,
+        triggers: null,
+        projectKey: null,
+      };
+      chunk.provenance = this.resolveChunkProvenance(
+        entry,
+        options.source,
+        chunk,
+        pathClassification.originClass,
+      );
       return {
         entry,
         source: options.source,
-        chunks: [multimodalChunk.chunk],
+        chunks: [chunk],
         structuredInputBytes: multimodalChunk.structuredInputBytes,
       };
     }
@@ -989,19 +1122,84 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         () => fs.readFile(entry.absPath, "utf-8"),
         `read memory markdown for indexing ${entry.absPath}`,
       ));
-    const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
-    const chunks =
+    const normalizedEntryPath = entry.path.replaceAll("\\", "/");
+    const perEntry =
+      options.source === "memory" &&
+      (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
+    const baseChunks = filterNonEmptyMemoryChunks(
+      chunkMarkdown(content, {
+        ...this.settings.chunking,
+        perEntry,
+      }),
+    );
+    for (const chunk of baseChunks) {
+      chunk.provenance = this.resolveChunkProvenance(
+        entry,
+        options.source,
+        chunk,
+        pathClassification.originClass,
+      );
+    }
+    const chunks = (
       generation?.kind === "semantic"
         ? enforceEmbeddingMaxInputTokens(
             generation.provider,
             baseChunks,
             EMBEDDING_BATCH_MAX_TOKENS,
           )
-        : baseChunks;
+        : baseChunks
+    ).map(
+      (chunk): IndexedMemoryChunk =>
+        Object.assign(
+          chunk,
+          resolveChunkRecallMetadata({
+            curatedRoot: pathClassification.curatedRoot,
+            projectScopeEligible:
+              options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
+            content,
+            chunk,
+          }),
+        ),
+    );
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
     }
     return { entry, source: options.source, chunks };
+  }
+
+  private resolveChunkProvenance(
+    entry: MemoryIndexEntry,
+    source: MemorySource,
+    chunk: MemoryChunk,
+    pathOriginClass: MemoryEntryProvenance["originClass"],
+  ): MemoryEntryProvenance {
+    const lineProvenance = entry.lineProvenance?.slice(chunk.startLine - 1, chunk.endLine) ?? [];
+    if (source === "sessions" && lineProvenance.length > 0) {
+      const originPriority = ["owner", "agent", "system", "untrusted"] as const;
+      const originClass = originPriority.findLast((origin) =>
+        lineProvenance.some((item) => item.originClass === origin),
+      );
+      const sessionKinds = new Set(lineProvenance.map((item) => item.sessionKind));
+      const supersedesKeys = new Set(
+        lineProvenance.flatMap((item) => (item.supersedesKey ? [item.supersedesKey] : [])),
+      );
+      return {
+        originClass: originClass ?? "untrusted",
+        sessionKind:
+          sessionKinds.size === 1 ? (lineProvenance[0]?.sessionKind ?? "unknown") : "unknown",
+        observedAt: Math.max(...lineProvenance.map((item) => item.observedAt)),
+        ...(supersedesKeys.size === 1 ? { supersedesKey: [...supersedesKeys][0] } : {}),
+      };
+    }
+
+    // Workspace memory files are inside the operator trust boundary: any
+    // filesystem writer already owns the host. Defaulting them untrusted would
+    // silently make handwritten persona memory ineligible for dreaming.
+    return {
+      originClass: pathOriginClass,
+      sessionKind: "unknown",
+      observedAt: Math.max(0, Math.floor(entry.mtimeMs)),
+    };
   }
 
   protected override async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {

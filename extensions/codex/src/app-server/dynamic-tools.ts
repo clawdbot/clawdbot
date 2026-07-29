@@ -377,6 +377,9 @@ const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
 // still steer normal Codex subagents to native spawn_agent.
+// sessions_yield is normally routed by its catalogMode "direct-only" before
+// this set is consulted; the name entry stays as the metadata-independent
+// contract that control-path tools remain directly callable.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "agents_list",
   "sessions_spawn",
@@ -960,7 +963,13 @@ function createCodexDynamicToolSpecs(params: {
   const specs: CodexDynamicToolSpec[] = [];
   const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
-  for (const entry of params.entries) {
+  // Codex reuses its incremental websocket request only when the complete
+  // searchable surface is unchanged. Direct mode retains its compatibility order.
+  const entries =
+    params.loading === "direct"
+      ? params.entries
+      : params.entries.toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
     if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
       // OpenClaw is ring-zero and its whole turn surface. Keep its canonical

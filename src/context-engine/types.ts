@@ -208,7 +208,9 @@ export type TranscriptRewriteReplacement = {
   message: AgentMessage;
 };
 
-export type TranscriptRewriteRequest = {
+// Local-only: engines consume this shape structurally via rewriteTranscriptEntries;
+// the last named importer was the deleted destructive rewrite path (#115271).
+type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
   /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */

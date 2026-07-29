@@ -24,6 +24,7 @@ import {
   resolveMessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   renderStreamGroupParts,
   type StreamGroupOptions,
@@ -76,6 +77,7 @@ type RenderMessageGroupOptions = {
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
@@ -126,6 +128,7 @@ function buildGroupedMessageRenderOptions(
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
   };

@@ -1,35 +1,43 @@
+import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
-  applyChatAgentsList,
-  applySelectedSessionProjection,
-  areUiSessionKeysEquivalent,
+  refreshPendingQuestionsWithRetry,
+  setQuestionPromptClient,
+} from "../../app/question-prompt.ts";
+import { loadSettings } from "../../app/settings.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import {
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
-  clearChatMessagesFromCache,
-  hasOperatorAdminAccess,
-  isGatewayMethodAdvertised,
-  loadSettings,
-  markQueuedChatSendsWaitingForReconnect,
-  normalizeSidebarLayout,
   parseAgentSessionKey,
-  parseCatalogSessionKey,
-  readPresenceEntries,
-  reconcileStaleChatRunAfterSessionStatePublication,
-  reconcileWaitingApprovalsFromSnapshot,
-  replayPendingChatAbort,
-  refreshChatModelAuthStatus,
-  refreshPendingQuestionsWithRetry,
-  refreshPageChat,
-  resolveChatAgentId,
-  resolveSessionKey,
   resolveUiConfiguredMainKey,
-  retryReconnectableQueuedChatSends,
-  setQuestionPromptClient,
-  syncSelectedSessionMessageSubscription,
   uiSessionEventMatches,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "./chat-pane-deps.ts";
+} from "../../lib/sessions/session-key.ts";
+import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
+import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
+import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import {
+  invalidateChatMetadataCache,
+  refreshChatModelAuthStatus,
+  refreshPageChat,
+} from "./chat-state-refresh.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import {
+  reconcileStaleChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
+} from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { normalizeSidebarLayout } from "./sidebar-layout.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -56,7 +64,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     for (const row of stateValue.result?.sessions ?? []) {
-      const sessionKey = this.resolveBoardSessionKey(row.key);
+      const sessionKey = this.resolveObserverDigestHistoryKey(
+        row.key,
+        row.observerDigest?.agentId ?? stateValue.agentId ?? undefined,
+      );
       this.observerDigestHistory.sync(sessionKey, row.sessionId);
       if (row.observerDigest) {
         this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
@@ -64,9 +75,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     this.refreshSwarmRoster();
     this.refreshBuiltinBoardSnapshot();
-    const selectedSession = stateValue.result?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
@@ -133,6 +142,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     ) {
       return;
     }
+    if (rootsChanged) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
+    }
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
@@ -144,6 +156,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
+    const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
     const wasConnected = state.connected;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sourceChanged =
@@ -156,9 +169,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      invalidateChatAvatarCache(state);
+      invalidateAssistantIdentityCache(state.client);
+      state.assistantIdentityRequestVersion += 1;
+      invalidateChatMetadataCache(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
       this.builtinBoardSnapshot = null;
@@ -185,6 +203,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
+    }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
@@ -205,13 +226,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (state.connected && state.pendingAbort) {
       void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
     }
-    if (sourceChanged && snapshot.phase === "connected" && state.sessionKey) {
-      // Reconnects clear the probed states above; re-probe the active session
-      // so source-owned affordances reappear without a manual session switch.
-      void this.probeSessionDiscussion(state.sessionKey);
-      if (!clientChanged) {
-        void this.refreshSessionPullRequests();
-      }
+    if (sourceChanged && snapshot.phase === "connected" && state.sessionKey && !clientChanged) {
+      // A logical reconnect can retain the browser client and skip full startup.
+      // The existing transcript is already authoritative, so rehydrate after its next commit.
+      this.deferSessionHydrationUntilTranscript(state.sessionKey, Promise.resolve());
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
@@ -318,14 +336,19 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
-      void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
+      const historyRefresh = refreshPageChat(state, {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
+      this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
+      void historyRefresh.finally(() => {
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
       void this.refreshSessionSuggestions();
-      void this.refreshSessionPullRequests();
     }
     this.reconcileWaitingApprovalSnapshot();
     state.requestUpdate?.();

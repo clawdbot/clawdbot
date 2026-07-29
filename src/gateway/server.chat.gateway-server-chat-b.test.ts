@@ -718,6 +718,90 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.startup memoizes config projections and invalidates them on config change", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+    testState.agentConfig = {
+      model: { primary: "test-provider/memo-model" },
+      models: { "test-provider/memo-model": {} },
+    };
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true, name: "Before reload" }],
+    };
+    clearConfigCache();
+    try {
+      await writeSessionStore({
+        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+      });
+      let catalog = [{ id: "memo-model", name: "Memo Model", provider: "test-provider" }];
+      let runtimeConfig = getRuntimeConfig();
+      let catalogConfig = runtimeConfig;
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => runtimeConfig,
+        loadGatewayModelCatalogSnapshot: vi.fn(async () => {
+          return {
+            agentId: "main",
+            agentDir: "/tmp/chat-memo-agent",
+            workspaceDir: "/tmp/chat-memo-workspace",
+            config: catalogConfig,
+            entries: catalog,
+            routeVariants: catalog,
+          };
+        }),
+      });
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const requestStartup = async () => {
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await expectDefined(
+          chatHandlers["chat.startup"],
+          'chatHandlers["chat.startup"] test invariant',
+        )({
+          req: {
+            type: "req",
+            id: `startup-memo-${responses.length}`,
+            method: "chat.startup",
+            params: { sessionKey: "main" },
+          },
+          params: { sessionKey: "main" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+          context,
+        });
+        expect(responses[0]?.ok).toBe(true);
+        return responses[0]?.payload as {
+          agentsList?: { agents?: Array<{ id?: string; name?: string }> };
+          metadata?: { models?: Array<{ id?: string; name?: string }> };
+        };
+      };
+
+      const first = await requestStartup();
+      const second = await requestStartup();
+      expect(second.agentsList).toBe(first.agentsList);
+      expect(second.metadata).toBe(first.metadata);
+
+      runtimeConfig = { ...runtimeConfig, logging: { level: "debug" } };
+      const staleCatalog = await requestStartup();
+      expect(staleCatalog.metadata).toBeUndefined();
+
+      catalogConfig = runtimeConfig;
+      const afterReload = await requestStartup();
+      expect(afterReload.agentsList).not.toBe(first.agentsList);
+      expect(afterReload.agentsList).not.toBe(staleCatalog.agentsList);
+      expect(afterReload.metadata).not.toBe(first.metadata);
+
+      catalog = [{ id: "memo-model", name: "Refreshed Memo Model", provider: "test-provider" }];
+      const afterCatalogRefresh = await requestStartup();
+      expect(afterCatalogRefresh.agentsList).not.toBe(afterReload.agentsList);
+      expect(afterCatalogRefresh.metadata).not.toBe(afterReload.metadata);
+    } finally {
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+    }
+  });
+
   test("chat.startup omits model metadata from a fallback owner", async () => {
     const config = {
       agents: {
@@ -967,6 +1051,61 @@ describe("gateway server chat", () => {
       expect(payload?.sessionInfo?.sessionId).toBe("sess-main");
       expect(payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
       expect(payload?.metadata).toBeUndefined();
+    } finally {
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("chat.history degrades promptly when the optional model catalog is slow", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "slow-catalog-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const catalog =
+        createDeferred<
+          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
+        >();
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext({
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockReturnValue(catalog.promise),
+        getRuntimeConfig: () => ({}),
+      });
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await expectDefined(
+        chatHandlers["chat.history"],
+        'chatHandlers["chat.history"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "history-slow-catalog",
+          method: "chat.history",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      expect(
+        (responses[0]?.payload as { sessionInfo?: { sessionId?: string } })?.sessionInfo?.sessionId,
+      ).toBe("sess-main");
     } finally {
       testState.sessionStorePath = undefined;
     }
@@ -3480,11 +3619,14 @@ describe("gateway server chat", () => {
       caseName: "pending final delivery",
       runId: "idem-pending-final-delivery",
       entry: {
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "older reply",
-        pendingFinalDeliveryContext: {
-          channel: "whatsapp",
-          to: "+15551234567",
+        pendingFinalDelivery: {
+          kind: "replayable" as const,
+          text: "older reply",
+          createdAt: Date.now(),
+          context: {
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
         },
       },
     },
@@ -4444,7 +4586,7 @@ describe("gateway server chat", () => {
             message: {
               role: "user",
               content:
-                'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+                'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
             },
           }),
           JSON.stringify({

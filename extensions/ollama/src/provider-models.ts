@@ -1,7 +1,10 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  isCloudModelRef,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -37,6 +40,9 @@ export type OllamaModelWithContext = OllamaTagModel & {
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+const OLLAMA_SHOW_TIMEOUT_MS = 3000;
+const OLLAMA_TAGS_TIMEOUT_MS = 5000;
+const MAX_OLLAMA_DISCOVERY_PROBES = OLLAMA_CONTEXT_ENRICH_LIMIT * 4;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
@@ -129,7 +135,7 @@ function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
-  opts?: { apiKey?: string },
+  opts?: { apiKey?: string; timeoutMs?: number },
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
@@ -145,12 +151,13 @@ export async function queryOllamaModelShowInfo(
         body: JSON.stringify({ name: modelName }),
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
-      timeoutMs: 3000,
+      timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_SHOW_TIMEOUT_MS, OLLAMA_SHOW_TIMEOUT_MS),
       policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return {};
       }
       const data = await readProviderJsonResponse<{
@@ -197,11 +204,12 @@ export async function queryOllamaModelShowInfo(
 async function queryOllamaModelShowInfoCached(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
-  opts?: { apiKey?: string },
+  opts?: { apiKey?: string; timeoutMs?: number },
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model, opts?.apiKey);
-  if (!cacheKey) {
+  // Request-scoped deadlines must not shorten an unrelated shared catalog probe.
+  if (!cacheKey || opts?.timeoutMs !== undefined) {
     return await queryOllamaModelShowInfo(normalizedApiBase, model.name, opts);
   }
 
@@ -231,7 +239,7 @@ export async function queryOllamaContextWindow(
 export async function enrichOllamaModelsWithContext(
   apiBase: string,
   models: OllamaTagModel[],
-  opts?: { apiKey?: string; concurrency?: number },
+  opts?: { apiKey?: string; concurrency?: number; timeoutMs?: number },
 ): Promise<OllamaModelWithContext[]> {
   const concurrency = Math.max(1, Math.floor(opts?.concurrency ?? OLLAMA_SHOW_CONCURRENCY));
   const enriched: OllamaModelWithContext[] = [];
@@ -239,11 +247,7 @@ export async function enrichOllamaModelsWithContext(
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
       batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfoCached(
-          apiBase,
-          model,
-          opts?.apiKey ? { apiKey: opts.apiKey } : undefined,
-        );
+        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
         return Object.assign({}, model, {
           contextWindow: showInfo.contextWindow,
           capabilities: showInfo.capabilities,
@@ -255,35 +259,39 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
-type OllamaModelSource = "cloud" | "local";
-
-function parseOllamaModelSourceSuffix(
-  modelName: string,
-): { base: string; source: OllamaModelSource } | undefined {
-  const sourceSeparator = modelName.lastIndexOf(":");
-  if (sourceSeparator < 0) {
-    return undefined;
+export async function enrichOllamaCompletionModels(
+  apiBase: string,
+  models: OllamaTagModel[],
+  opts?: { apiKey?: string; requireCompletionCapability?: boolean },
+): Promise<OllamaModelWithContext[]> {
+  const completionModels: OllamaModelWithContext[] = [];
+  const probeLimit = Math.min(models.length, MAX_OLLAMA_DISCOVERY_PROBES);
+  for (
+    let index = 0;
+    index < probeLimit && completionModels.length < OLLAMA_CONTEXT_ENRICH_LIMIT;
+    index += OLLAMA_SHOW_CONCURRENCY
+  ) {
+    const batch = await enrichOllamaModelsWithContext(
+      apiBase,
+      models.slice(index, Math.min(index + OLLAMA_SHOW_CONCURRENCY, probeLimit)),
+      opts?.apiKey ? { apiKey: opts.apiKey } : undefined,
+    );
+    for (const model of batch) {
+      const canComplete = model.capabilities?.includes("completion");
+      if (!canComplete && (opts?.requireCompletionCapability || model.capabilities)) {
+        continue;
+      }
+      completionModels.push(model);
+      if (completionModels.length === OLLAMA_CONTEXT_ENRICH_LIMIT) {
+        break;
+      }
+    }
   }
-  const source = modelName.slice(sourceSeparator + 1);
-  if (source === "cloud" || source === "local") {
-    return { base: modelName.slice(0, sourceSeparator), source };
-  }
-  if (!source.includes("/") && source.endsWith("-cloud")) {
-    return {
-      base: modelName.slice(0, sourceSeparator + 1) + source.slice(0, -"-cloud".length),
-      source: "cloud",
-    };
-  }
-  return undefined;
+  return completionModels;
 }
 
 export function isOllamaCloudModel(modelName: string | undefined): boolean {
-  const normalized = modelName?.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const parsed = parseOllamaModelSourceSuffix(normalized);
-  return parsed?.source === "cloud" && parseOllamaModelSourceSuffix(parsed.base) === undefined;
+  return isCloudModelRef(modelName);
 }
 
 export function isReasoningModelHeuristic(modelId: string): boolean {
@@ -381,7 +389,7 @@ type OllamaModelsFetchDeps = {
 
 export async function fetchOllamaModels(
   baseUrl: string,
-  opts?: { apiKey?: string },
+  opts?: { apiKey?: string; timeoutMs?: number },
   deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
@@ -392,7 +400,7 @@ export async function fetchOllamaModels(
         headers: opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined,
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
-      timeoutMs: 5000,
+      timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_TAGS_TIMEOUT_MS, OLLAMA_TAGS_TIMEOUT_MS),
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: "ollama-provider-models.tags",
       ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
@@ -400,6 +408,7 @@ export async function fetchOllamaModels(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { reachable: true, models: [] };
       }
       const data = await readProviderJsonResponse<OllamaTagsResponse>(
@@ -426,11 +435,7 @@ export async function buildOllamaProvider(
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
   }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-    auth,
-  );
+  const discovered = await enrichOllamaCompletionModels(apiBase, models, auth);
   return {
     baseUrl: apiBase,
     api: "ollama",

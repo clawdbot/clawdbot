@@ -396,6 +396,24 @@ describe("exec approvals SQLite store", () => {
     expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
   });
 
+  it("scopes the doctor command to the blocked state directory", () => {
+    // A bare `openclaw doctor --fix` repairs the default root, leaving a scoped
+    // install blocked by the same file it was told to repair (#115008).
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("missing test state dir");
+    }
+    const error = new ExecApprovalsMigrationRequiredError(
+      path.join(stateDir, "exec-approvals.json"),
+    );
+
+    // Prose, not `VAR=value cmd`: no Windows shell accepts that form, and a path
+    // containing spaces would need shell-specific quoting to survive a paste.
+    expect(error.message).toContain(
+      `Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir}`,
+    );
+  });
+
   it.each([
     [true, false, false],
     [false, true, false],

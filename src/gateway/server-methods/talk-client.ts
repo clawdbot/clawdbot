@@ -7,7 +7,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateTalkClientCloseParams,
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
@@ -15,7 +14,10 @@ import {
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { normalizeTalkSection } from "../../config/talk.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { consultRealtimeVoiceAgent } from "../../talk/agent-consult-runtime.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -50,6 +52,7 @@ import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import {
@@ -65,6 +68,7 @@ import {
   resolveTalkRealtimeProviderInstructions,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const LEGACY_VOICE_BINDING_TTL_MS = 6 * 60 * 60_000;
 const REALTIME_VOICE_CONTEXT_MAX_ITEMS = 16;
@@ -127,15 +131,7 @@ function resolveTalkClientAgentId(
  */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": async ({ params, respond, context, client }) => {
-    if (!validateTalkClientCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.create params: ${formatValidationErrors(validateTalkClientCreateParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkClientCreateParams, "talk.client.create", respond)) {
       return;
     }
     const typedParams = params as {
@@ -211,11 +207,18 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const launchOptions = buildRealtimeVoiceLaunchOptions({
+        requested: typedParams,
+        defaults: realtimeConfig,
+      });
+      const requestedAgentId = resolveTalkSessionAgentId(runtimeConfig, typedParams.sessionKey);
       const resolution = resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
+        ...(launchOptions.model ? { providerConfigOverrides: { model: launchOptions.model } } : {}),
         cfg: runtimeConfig,
         cfgForResolve: runtimeConfig,
+        agentId: requestedAgentId,
         defaultModel: realtimeConfig.model,
         surface: "browser-session",
         noRegisteredProviderMessage: "No realtime voice provider registered",
@@ -224,6 +227,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        model: launchOptions.model,
         surface: "browser-session",
       });
       if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
@@ -237,10 +241,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const launchOptions = buildRealtimeVoiceLaunchOptions({
-        requested: typedParams,
-        defaults: realtimeConfig,
-      });
       const realtimeContext = await resolveTalkRealtimeProviderInstructions({
         config: runtimeConfig,
         configuredInstructions: realtimeConfig.instructions,
@@ -285,6 +285,66 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           providerCapabilities?.handlesAgentConsult === true
             ? normalizeOptionalString(realtimeContext.instructions)
             : buildRealtimeInstructions(realtimeContext.instructions);
+        let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+        let activeVoiceSessionId: string | undefined;
+        const ownerConnId = normalizeOptionalString(client?.connId);
+        const runAgentConsult: NonNullable<
+          InternalRealtimeVoiceBrowserSessionCreateRequest["runAgentConsult"]
+        > = async ({ prompt, signal }) => {
+          consultAgentRuntime ??= createPluginRuntime().agent;
+          const talkConfig = normalizeTalkSection(runtimeConfig.talk);
+          return await consultRealtimeVoiceAgent({
+            cfg: runtimeConfig,
+            agentRuntime: consultAgentRuntime,
+            logger: context.logGateway,
+            agentId,
+            sessionKey,
+            messageProvider: "webchat",
+            lane: "talk",
+            runIdPrefix: "talk-realtime-consult",
+            args: { question: prompt },
+            transcript: initialItems,
+            surface: "a browser Talk session",
+            userLabel: "User",
+            questionSourceLabel: "user",
+            thinkLevel: talkConfig?.consultThinkingLevel,
+            fastMode: talkConfig?.consultFastMode,
+            abortSignal: signal,
+            onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+              // The provider receives this closure before the durable voice id exists,
+              // but sideband delegations can start only after create returns it.
+              const voiceSessionId = activeVoiceSessionId;
+              if (!voiceSessionId) {
+                throw new Error("Realtime browser voice session is not ready for agent consult");
+              }
+              registerClientVoiceConsultRun({
+                agentId,
+                sessionKey,
+                voiceSessionId,
+                runId,
+                config: runtimeConfig,
+              });
+              if (!ownerConnId) {
+                return undefined;
+              }
+              const registration = registerChatAbortController({
+                chatAbortControllers: context.chatAbortControllers,
+                runId,
+                sessionId,
+                sessionKey,
+                agentId,
+                timeoutMs,
+                ownerConnId,
+                controlUiVisible: false,
+                kind: "chat-send",
+              });
+              return {
+                abortSignal: registration.controller.signal,
+                cleanup: registration.cleanup,
+              };
+            },
+          });
+        };
         const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {
           cfg: runtimeConfig,
           agentId,
@@ -292,6 +352,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           providerConfig: resolution.providerConfig,
           instructions,
           initialItems,
+          runAgentConsult,
           ...(tools.length > 0 ? { tools } : {}),
           ...launchOptions,
         };
@@ -357,7 +418,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             transcriptCapable: typedParams.capabilities?.includes("voice-transcript") === true,
             voiceSessionId: normalizeOptionalString(typedParams.voiceSessionId),
           });
-          const connId = normalizeOptionalString(client?.connId);
+          activeVoiceSessionId = voiceSessionId;
+          const connId = ownerConnId;
           if (connId) {
             const now = Date.now();
             pruneLegacyVoiceBindings(now);
@@ -406,15 +468,9 @@ export const talkClientHandlers: GatewayRequestHandlers = {
   },
   "talk.client.toolCall": async (request) => {
     const { params, respond } = request;
-    if (!validateTalkClientToolCallParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.toolCall params: ${formatValidationErrors(validateTalkClientToolCallParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateTalkClientToolCallParams, "talk.client.toolCall", respond)
+    ) {
       return;
     }
     if (params.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -540,15 +596,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     );
   },
   "talk.client.transcript": async ({ params, respond, context }) => {
-    if (!validateTalkClientTranscriptParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.transcript params: ${formatValidationErrors(validateTalkClientTranscriptParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTalkClientTranscriptParams,
+        "talk.client.transcript",
+        respond,
+      )
+    ) {
       return;
     }
     try {
@@ -569,15 +624,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
   },
   "talk.client.close": async ({ params, respond, context, client }) => {
-    if (!validateTalkClientCloseParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.close params: ${formatValidationErrors(validateTalkClientCloseParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkClientCloseParams, "talk.client.close", respond)) {
       return;
     }
     try {
@@ -589,7 +636,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         voiceSessionId: params.voiceSessionId,
       });
       if (origin === "relay") {
-        throw new Error("relay-owned voice sessions close through talk.session.stop");
+        throw new Error("relay-owned voice sessions close through talk.session.close");
       }
       await closeClientVoiceSession({
         agentId,
@@ -610,15 +657,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
   },
   "talk.client.steer": async ({ params, respond, client, context }) => {
-    if (!validateTalkClientSteerParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.steer params: ${formatValidationErrors(validateTalkClientSteerParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkClientSteerParams, "talk.client.steer", respond)) {
       return;
     }
     if (

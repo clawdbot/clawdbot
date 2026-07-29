@@ -112,6 +112,7 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "./tui-backend.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalRunState = {
   sessionKey: string;
@@ -203,7 +204,7 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
     });
     return { status: "warmed" };
   } catch (err) {
-    return { status: "failed", error: String(err) };
+    return { status: "failed", error: formatTuiErrorMessage(err) };
   }
 }
 
@@ -603,7 +604,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
       opts.sessionKey,
-      loadOptions,
+      { ...loadOptions, includeStoreChildEntries: true },
     );
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({
@@ -698,6 +699,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
+      projection: "list",
     });
     return (await listSessionsFromStoreAsync({
       cfg,
@@ -760,7 +762,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ok: true as const,
       path: target.storePath,
       key: target.canonicalKey ?? opts.key,
-      entry: applied.entry,
+      entry: applied.entry as unknown as Record<string, unknown>,
       resolved: {
         modelProvider: resolved.provider,
         model: resolved.model,
@@ -1527,9 +1529,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
 
       if (!run.finalSent) {
-        const normalizedText = payloadText(result?.payloads);
-        if (normalizedText && !run.buffer) {
-          run.buffer = normalizedText;
+        const finalText = payloadText(result?.payloads);
+        // A completed response is authoritative; keep the stream only when it has no final text.
+        if (finalText) {
+          run.buffer = finalText;
         }
         const stopReason =
           run.lifecycleStopReason ??

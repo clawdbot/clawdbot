@@ -87,6 +87,54 @@ private func historyPayload(
         inFlightRun: inFlightRun)
 }
 
+private func usageEvent(runId: String, outputTokens: Int, seq: Int) -> OpenClawAgentEventPayload {
+    OpenClawAgentEventPayload(
+        runId: runId,
+        seq: seq,
+        stream: "usage",
+        ts: seq,
+        data: ["outputTokens": AnyCodable(outputTokens)])
+}
+
+private func lifecycleSessionEntry(
+    key: String,
+    updatedAt: Double,
+    status: String,
+    hasActiveRun: Bool,
+    activeRunIds: [String],
+    startedAt: Double? = nil,
+    endedAt: Double? = nil,
+    runtimeMs: Double? = nil,
+    outputTokens: Int? = nil) -> OpenClawChatSessionEntry
+{
+    OpenClawChatSessionEntry(
+        key: key,
+        kind: nil,
+        displayName: nil,
+        surface: nil,
+        subject: nil,
+        room: nil,
+        space: nil,
+        updatedAt: updatedAt,
+        sessionId: nil,
+        systemSent: nil,
+        abortedLastRun: nil,
+        thinkingLevel: nil,
+        verboseLevel: nil,
+        inputTokens: nil,
+        outputTokens: outputTokens,
+        totalTokens: nil,
+        modelProvider: nil,
+        model: nil,
+        contextTokens: nil,
+        status: status,
+        hasActiveRun: hasActiveRun,
+        activeRunIds: activeRunIds,
+        startedAt: startedAt,
+        endedAt: endedAt,
+        runtimeMs: runtimeMs)
+}
+
 private func sessionEntry(
     key: String,
     updatedAt: Double,
@@ -1470,6 +1518,35 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test @MainActor func `global Swarm activity follows the selected agent owner`() async {
+        let (_, viewModel) = await makeViewModel(
+            sessionKey: "global",
+            activeAgentId: "work",
+            historyResponses: [])
+        viewModel.swarmEnabled = true
+        let initial = viewModel.swarmActivityState
+        let foreign = OpenClawChatSessionsChangedEvent(
+            sessionKey: "global",
+            agentId: "main",
+            reason: "swarm-note",
+            swarmGroupId: "swarm:global:turn-1",
+            kind: "phase",
+            text: "Foreign phase")
+
+        viewModel.handleTransportEvent(.sessionsChanged(foreign))
+        #expect(viewModel.swarmActivityState == initial)
+
+        let selected = OpenClawChatSessionsChangedEvent(
+            sessionKey: "global",
+            agentId: "work",
+            reason: "swarm-note",
+            swarmGroupId: "swarm:global:turn-1",
+            kind: "phase",
+            text: "Selected phase")
+        viewModel.handleTransportEvent(.sessionsChanged(selected))
+        #expect(viewModel.swarmActivityState != initial)
+    }
+
     @Test @MainActor func `locally expired question remains in transcript`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -1901,6 +1978,270 @@ struct ChatViewModelTests {
         #expect(fraction(total: 25, fresh: nil, context: 100) == 0.25)
     }
 
+    @Test @MainActor func `live usage is ordered monotonic and telemetry-only for advertised runs`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var session = sessionEntry(key: "main", updatedAt: 1)
+        session.hasActiveRun = true
+        session.activeRunIds = ["remote-z", "remote-a"]
+        viewModel.sessions = [session]
+        viewModel.pendingRuns.insert("local-run")
+
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "remote-a",
+            outputTokens: 0,
+            seq: 1)))
+        #expect(viewModel.liveRunStateByRunID["remote-a"] == nil)
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "remote-z",
+            outputTokens: 12,
+            seq: 1)))
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "local-run",
+            outputTokens: 4,
+            seq: 1)))
+        #expect(viewModel.liveUsageRunID == "local-run")
+        #expect(viewModel.liveRunOutputTokens == 4)
+
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "local-run",
+            outputTokens: 3,
+            seq: 2)))
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "local-run",
+            outputTokens: 9,
+            seq: 1)))
+        #expect(viewModel.liveRunOutputTokens == 4)
+
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "remote-z",
+            seq: 2,
+            stream: "assistant",
+            ts: 2,
+            data: ["text": AnyCodable("must stay remote")])))
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "remote-z",
+            seq: 3,
+            stream: "tool",
+            ts: 3,
+            data: [
+                "phase": AnyCodable("start"),
+                "name": AnyCodable("demo"),
+                "toolCallId": AnyCodable("remote-tool"),
+            ])))
+        #expect(viewModel.streamingAssistantText == nil)
+        #expect(viewModel.pendingToolCalls.isEmpty)
+    }
+
+    @Test @MainActor func `sequence gap invalidates incomplete advertised usage`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["remote-run"]
+        viewModel.sessions = [running]
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "remote-run",
+            outputTokens: 12,
+            seq: 1)))
+        #expect(viewModel.liveRunOutputTokens == 12)
+
+        viewModel.handleTransportEvent(.seqGap)
+
+        #expect(viewModel.liveRunStateByRunID["remote-run"]?.sequence == 1)
+        #expect(viewModel.liveRunOutputTokens == nil)
+    }
+
+    @Test @MainActor func `session switch clears advertised runs when the row is missing`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["remote-run"]
+        viewModel.sessions = [running]
+        #expect(viewModel.activeSessionRunIDs == ["remote-run"])
+
+        viewModel.switchSession(to: "missing")
+
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+        #expect(!viewModel.hasAdvertisedLiveRun)
+    }
+
+    @Test @MainActor func `remote lifecycle merges terminal recap metadata`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.status = "running"
+        running.lastRunError = "previous failure"
+        running.hasActiveRun = true
+        running.activeRunIds = ["remote-run"]
+        viewModel.sessions = [running]
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "remote-run",
+            outputTokens: 8,
+            seq: 1)))
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            phase: "end",
+            runId: "remote-run",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 2,
+                status: "done",
+                hasActiveRun: false,
+                activeRunIds: [],
+                endedAt: 2000,
+                runtimeMs: 1000,
+                outputTokens: 42))))
+
+        let merged = viewModel.currentSessionEntry()
+        #expect(merged?.status == "done")
+        #expect(merged?.lastRunError == nil)
+        #expect(merged?.endedAt == 2000)
+        #expect(merged?.runtimeMs == 1000)
+        #expect(merged?.outputTokens == 42)
+        #expect(merged?.activeRunIds == [])
+        #expect(viewModel.liveRunOutputTokens == nil)
+        #expect(!viewModel.hasBlockingRunActivity)
+    }
+
+    @Test @MainActor func `terminal lifecycle retires matching pending run despite stale snapshot`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 20)
+        running.status = "running"
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-a", "run-b"]
+        viewModel.sessions = [running]
+        viewModel.pendingRuns = ["run-a", "run-b"]
+        viewModel.handleTransportEvent(.agent(usageEvent(
+            runId: "run-a",
+            outputTokens: 5,
+            seq: 1)))
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            phase: "end",
+            runId: "run-a",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 10,
+                status: "done",
+                hasActiveRun: false,
+                activeRunIds: [],
+                endedAt: 10,
+                runtimeMs: 5,
+                outputTokens: 5))))
+
+        #expect(viewModel.pendingRuns == ["run-b"])
+        #expect(viewModel.liveRunStateByRunID["run-a"]?.terminal == true)
+        #expect(viewModel.currentSessionEntry()?.updatedAt == 20)
+        #expect(viewModel.activeSessionRunIDs == ["run-a", "run-b"])
+        #expect(viewModel.liveUsageRunID == "run-b")
+    }
+
+    @Test @MainActor func `unsequenced lifecycle terminal retires a pending run`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.pendingRuns.insert("legacy-run")
+
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "legacy-run",
+            seq: nil,
+            stream: "lifecycle",
+            ts: 1,
+            data: ["phase": AnyCodable("end")])))
+
+        #expect(viewModel.pendingRuns.isEmpty)
+        #expect(viewModel.liveRunStateByRunID["legacy-run"]?.terminal == true)
+    }
+
+    @Test @MainActor func `unsequenced lifecycle terminal retires a nonselected advertised run`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["remote-a", "remote-b"]
+        viewModel.sessions = [running]
+        #expect(viewModel.liveUsageRunID == "remote-a")
+
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "remote-b",
+            seq: nil,
+            stream: "lifecycle",
+            ts: 1,
+            data: ["phase": AnyCodable("end")])))
+
+        #expect(viewModel.liveRunStateByRunID["remote-b"]?.terminal == true)
+        #expect(viewModel.liveUsageRunID == "remote-a")
+    }
+
+    @Test @MainActor func `advertised terminal chat retires the run without clearing local work`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["remote-run"]
+        viewModel.sessions = [running]
+
+        viewModel.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: "remote-run",
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))
+
+        #expect(viewModel.liveRunStateByRunID["remote-run"]?.terminal == true)
+        #expect(!viewModel.hasBlockingRunActivity)
+    }
+
+    @Test @MainActor func `idless terminal chat clears boolean-only current activity`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.updateActiveSessionRunWithoutChatSnapshot(true)
+        #expect(viewModel.hasBlockingRunActivity)
+
+        viewModel.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: nil,
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))
+
+        #expect(!viewModel.hasBlockingRunActivity)
+    }
+
+    @Test @MainActor func `terminal chat without run ID requires one current local owner`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.pendingRuns = ["run-a", "run-b"]
+        let terminal = OpenClawChatEventPayload(
+            runId: nil,
+            sessionKey: nil,
+            state: "final",
+            message: nil,
+            errorMessage: nil)
+
+        viewModel.handleTransportEvent(.chat(terminal))
+        #expect(viewModel.pendingRuns == ["run-a", "run-b"])
+
+        viewModel.clearPendingRun("run-b")
+        viewModel.handleTransportEvent(.chat(terminal))
+        #expect(viewModel.pendingRuns.isEmpty)
+        #expect(viewModel.liveRunStateByRunID["run-a"]?.terminal == true)
+    }
+
     @Test @MainActor func `event listener does not retain discarded view model`() async throws {
         let transport = TestChatTransport(historyResponses: [historyPayload()])
         var viewModel: OpenClawChatViewModel? = OpenClawChatViewModel(
@@ -1914,7 +2255,9 @@ struct ChatViewModelTests {
         let discardedViewModel = try weakReference(to: viewModel)
 
         viewModel = nil
-        await Task.yield()
+        for _ in 0..<100 where discardedViewModel.value != nil {
+            await Task.yield()
+        }
 
         #expect(discardedViewModel.value == nil)
     }
@@ -2664,6 +3007,63 @@ struct ChatViewModelTests {
         try await waitUntil("late global agent identity adopts run") {
             await MainActor.run { lateVM.pendingRunCount == 1 }
         }
+    }
+
+    @Test @MainActor func `global session changes reconcile nested digest ownership`() async {
+        let (_, vm) = await makeViewModel(
+            sessionKey: "global",
+            activeAgentId: "work",
+            historyResponses: [])
+        var selected = sessionEntry(key: "global", updatedAt: 100)
+        selected.status = "running"
+        selected.hasActiveRun = true
+        selected.activeRunIds = ["run-work"]
+        selected.observerDigest = OpenClawChatSessionObserverDigest(
+            agentId: "work",
+            runId: "run-work",
+            revision: 2,
+            updatedAt: 200,
+            headline: "Selected owner",
+            health: "on-track")
+        vm.sessions = [selected]
+
+        vm.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "global",
+            agentId: "work",
+            updatedAt: 900,
+            observerDigest: OpenClawChatSessionObserverDigest(
+                agentId: "main",
+                runId: "run-work",
+                revision: 9,
+                updatedAt: 900,
+                headline: "Foreign owner",
+                health: "stuck"),
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])))
+
+        #expect(vm.sessions[0].observerDigest?.agentId == "work")
+        #expect(vm.sessions[0].observerDigest?.headline == "Selected owner")
+        #expect(vm.sessions[0].activeRunIds == ["run-work"])
+        #expect(vm.sessions[0].updatedAt == 900)
+
+        vm.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "global",
+            agentId: "work",
+            updatedAt: 1000,
+            observerDigest: OpenClawChatSessionObserverDigest(
+                runId: "run-work",
+                revision: 10,
+                updatedAt: 1000,
+                headline: "Legacy selected owner",
+                health: "on-track"),
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])))
+
+        #expect(vm.sessions[0].observerDigest?.agentId == "work")
+        #expect(vm.sessions[0].observerDigest?.headline == "Legacy selected owner")
+        #expect(vm.sessions[0].updatedAt == 1000)
     }
 
     @Test func `global agent switch clears previous run ownership`() async throws {
@@ -11242,7 +11642,7 @@ struct ChatViewModelTests {
                 AnyCodable([
                     "role": "user",
                     "content": [["type": "text", "text": """
-                    Conversation info (untrusted metadata):
+                    Conversation info: \u{27E6}openclaw:ctx\u{27E7}
                     ```json
                     { \"sender\": \"openclaw-ios\" }
                     ```

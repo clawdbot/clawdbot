@@ -20,6 +20,9 @@ import type { ChannelMessageActionName } from "./runtime-api.js";
 
 type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 
+const QA_GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
+
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
@@ -295,12 +298,43 @@ describe("qa-channel plugin", () => {
         expect(receiptPart?.replyToId).toBe("parent-1");
         expect(receiptPart?.threadId).toBe("thread-1");
       };
+      const proveMedia = async (kind: "media" | "payload" = "media") => {
+        const mediaPath = path.join(process.cwd(), "qa-channel-generated-capability.png");
+        const context = {
+          cfg: createQaChannelConfig({ baseUrl: harness.baseUrl, allowFrom: ["*"] }),
+          to: "thread:qa-room/thread-1",
+          text: "generated image",
+          mediaUrl: mediaPath,
+          mediaLocalRoots: [process.cwd()],
+          mediaReadFile: async (filePath: string) => {
+            expect(filePath).toBe(mediaPath);
+            return Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64");
+          },
+          accountId: "default",
+          replyToId: "parent-1",
+          threadId: "thread-1",
+        };
+        const result =
+          kind === "payload"
+            ? await adapter.send!.payload!({
+                ...context,
+                payload: { text: context.text, mediaUrl: mediaPath, mediaUrls: [mediaPath] },
+              })
+            : await adapter.send!.media!(context);
+        expect(result.receipt.parts[0]).toMatchObject({
+          kind: "media",
+          replyToId: "parent-1",
+          threadId: "thread-1",
+        });
+      };
 
       await verifyChannelMessageAdapterCapabilityProofs({
         adapterName: "qaChannelMessageAdapter",
         adapter,
         proofs: {
           text: proveText,
+          media: proveMedia,
+          payload: () => proveMedia("payload"),
           replyTo: proveText,
           thread: proveText,
           messageSendingHooks: () => {
@@ -310,6 +344,52 @@ describe("qa-channel plugin", () => {
       });
     } finally {
       await harness.stop();
+    }
+  });
+
+  it("delivers a generated image and caption in exactly one physical QA message", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    try {
+      const mediaPath = path.join(process.cwd(), "qa-channel-generated-image.png");
+      const result = await requireQaMessageAdapter().send!.payload!({
+        cfg: createQaChannelConfig({ baseUrl: bus.baseUrl }),
+        to: "thread:qa-room/thread-1",
+        text: "Here is your generated image.",
+        mediaUrl: mediaPath,
+        mediaLocalRoots: [process.cwd()],
+        mediaReadFile: async () => Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+        accountId: "default",
+        replyToId: "parent-1",
+        threadId: "thread-1",
+        payload: {
+          text: "Here is your generated image.",
+          mediaUrl: mediaPath,
+          mediaUrls: [mediaPath],
+        },
+      });
+      const outbound = state
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound");
+      expect(qaChannelPlugin.capabilities.media).toBe(true);
+      expect(outbound).toHaveLength(1);
+      expect(outbound[0]).toMatchObject({
+        id: result.messageId,
+        text: "Here is your generated image.",
+        threadId: "thread-1",
+        replyToId: "parent-1",
+        attachments: [
+          {
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "qa-channel-generated-image.png",
+            contentBase64: QA_GENERATED_IMAGE_BASE64,
+          },
+        ],
+      });
+      expect(result.receipt.parts[0]?.kind).toBe("media");
+    } finally {
+      await bus.stop();
     }
   });
 

@@ -229,6 +229,11 @@ const DEFAULT_TARGET = {
   channel: "forum" as const,
   to: "room:default",
 };
+const malformedAccountIdCases = [
+  { description: "numeric", accountId: 123 },
+  { description: "boolean", accountId: false },
+  { description: "object", accountId: {} },
+] as const;
 
 type SessionStore = Record<
   string,
@@ -383,6 +388,96 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.accountId).toBe("account-b");
   });
+
+  it.each([
+    {
+      description: "trims an explicit account",
+      explicitAccountId: "  explicit-account  ",
+      expectedAccountId: "explicit-account",
+    },
+    {
+      description: "falls back to the session for a whitespace-only account",
+      explicitAccountId: "   ",
+      expectedAccountId: "session-account",
+    },
+    {
+      description: "falls back to the session for an empty account",
+      explicitAccountId: "",
+      expectedAccountId: "session-account",
+    },
+  ])("$description", async ({ explicitAccountId, expectedAccountId }) => {
+    setLastSessionEntry({
+      sessionId: "sess-account-normalization",
+      lastChannel: "forum",
+      lastTo: "room:ops",
+      lastAccountId: "session-account",
+    });
+
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: explicitAccountId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe(expectedAccountId);
+  });
+
+  it.each([
+    { description: "whitespace-only", explicitAccountId: "   " },
+    { description: "empty", explicitAccountId: "" },
+  ])(
+    "falls back to the bound account for a $description account",
+    async ({ explicitAccountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: explicitAccountId,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the session for a malformed $description account",
+    async ({ accountId }) => {
+      setLastSessionEntry({
+        sessionId: "sess-malformed-account",
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        lastAccountId: "session-account",
+      });
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("session-account");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the bound account for a malformed $description account",
+    async ({ accountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
 
   it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
     setMainSessionEntry(undefined);

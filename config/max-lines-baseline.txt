@@ -188,7 +188,6 @@ extensions/oc-path/src/oc-path/find.ts
 extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
-extensions/ollama/src/setup.ts
 extensions/ollama/src/stream-runtime.test.ts
 extensions/ollama/src/stream.ts
 extensions/openai/image-generation-provider.test.ts
@@ -200,7 +199,6 @@ extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
-extensions/phone-control/index.test.ts
 extensions/policy/src/cli.test.ts
 extensions/policy/src/doctor/register.base.test-utils.ts
 extensions/policy/src/doctor/register.gateway-data-and-approvals.test-utils.ts
@@ -327,13 +325,11 @@ packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
-packages/ai/src/providers/openai-responses-shared.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
-packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts
@@ -385,8 +381,6 @@ src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
-src/agents/code-mode-namespaces.ts
-src/agents/code-mode.test.ts
 src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
@@ -416,7 +410,6 @@ src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
-src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
@@ -432,7 +425,6 @@ src/agents/embedded-agent-runner/tool-result-context-guard.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-runner/transcript-file-state.test.ts
-src/agents/embedded-agent-runner/transcript-file-state.ts
 src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
 src/agents/embedded-agent-subscribe.handlers.messages.test.ts
 src/agents/embedded-agent-subscribe.handlers.messages.ts
@@ -471,8 +463,6 @@ src/agents/provider-transport-fetch.test.ts
 src/agents/provider-transport-fetch.ts
 src/agents/runtime-plan/prepare-auth.test.ts
 src/agents/sandbox/ssh.ts
-src/agents/session-file-repair.test.ts
-src/agents/session-file-repair.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/session-write-lock.test.ts
@@ -482,7 +472,6 @@ src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
-src/agents/sessions/session-manager.test.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagent-announce-delivery.test.ts
 src/agents/subagent-announce-delivery.ts
@@ -501,7 +490,6 @@ src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
 src/agents/tools/computer-tool.ts
 src/agents/tools/cron-tool.test.ts
-src/agents/tools/cron-tool.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-generate-tool.ts
 src/agents/tools/image-tool.test.ts
@@ -549,8 +537,6 @@ src/auto-reply/reply/dispatch-from-config.progress.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts
-src/auto-reply/reply/followup-runner.test.ts
-src/auto-reply/reply/followup-runner.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
@@ -603,7 +589,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/plugins-install-command.ts
 src/cli/program/register.status-health-sessions.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
@@ -654,7 +639,6 @@ src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.list-command.forward-compat.test.ts
 src/commands/models/list.probe.ts
-src/commands/models/list.rows.ts
 src/commands/models/list.status-command.ts
 src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
@@ -688,14 +672,11 @@ src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/delivery-dispatch.ts
 src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/cron/isolated-agent/run.ts
 src/cron/service.jobs.test.ts
-src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts
@@ -988,7 +969,6 @@ src/tui/embedded-backend.ts
 src/tui/tui-command-handlers.test.ts
 src/tui/tui-command-handlers.ts
 src/tui/tui-event-handlers.test.ts
-src/tui/tui-event-handlers.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
@@ -1002,9 +982,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/e2e/chat-flow.e2e.test.ts
-ui/src/e2e/new-session-page.e2e.test.ts
-ui/src/e2e/session-management.e2e.test.ts
 ui/src/lib/config/index.test.ts
 ui/src/lib/config/index.ts
 ui/src/lib/cron/index.test.ts

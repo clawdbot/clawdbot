@@ -7,7 +7,7 @@ read_when:
 title: "Session management deep dive"
 ---
 
-A single **Gateway process** owns session state end-to-end. UIs (macOS app, web Control UI, TUI) query the Gateway for session lists and token counts. In remote mode, session files live on the remote host, so checking your local Mac's files will not reflect what the Gateway is using.
+A single **Gateway process** owns session state end-to-end. UIs (macOS app, web Control UI, TUI) query the Gateway for session lists and token counts. In remote mode, the per-agent SQLite database lives on the remote host, so checking your local Mac's state will not reflect what the Gateway is using.
 
 Overview docs first: [Session management](/concepts/session), [Compaction](/concepts/compaction), [Memory overview](/concepts/memory), [Memory search](/concepts/memory-search), [Session pruning](/concepts/session-pruning), [Transcript hygiene](/reference/transcript-hygiene), full config reference at [Agent config](/gateway/config-agents).
 
@@ -217,7 +217,7 @@ Two triggers in the embedded OpenClaw agent:
 
 Two additional guards run outside these two triggers:
 
-- **Preflight local compaction**: set `agents.defaults.compaction.maxActiveTranscriptBytes` (bytes or a string like `"20mb"`) to trigger local compaction before opening the next run once the active transcript reaches that size. This is a size guard for local reopen cost, not raw archival - normal semantic compaction still runs, and it requires `truncateAfterCompaction` so the compacted summary becomes a new successor transcript.
+- **Preflight local compaction**: set `agents.defaults.compaction.maxActiveTranscriptBytes` to a positive byte threshold (bytes or a string like `"20mb"`) to trigger local compaction before opening the next run once the active transcript reaches that size. Normal semantic compaction still runs. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Unset or `0` disables the guard.
 - **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add a tool-loop guard. After a tool result is appended and before the next model call, OpenClaw estimates prompt pressure using the same preflight budget logic used at turn start. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
 
 ## Compaction settings
@@ -237,9 +237,11 @@ Two additional guards run outside these two triggers:
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
 
-Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens` and keeps the runtime's recent-tail cut point. Without an explicit keep budget, manual compaction is a hard checkpoint and rebuilt context starts from the new summary.
+Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
-When `truncateAfterCompaction` is enabled, OpenClaw rotates the active transcript to a compacted successor after compaction. Branch/restore checkpoint actions use that compacted successor; legacy pre-compaction checkpoint files remain readable while referenced.
+Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
+
+OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Branch/restore checkpoint actions use a returned successor when present; legacy pre-compaction checkpoint files remain readable while referenced.
 
 ## Pluggable compaction providers
 
@@ -276,12 +278,12 @@ Before auto-compaction happens, OpenClaw can run a silent agentic turn that writ
 
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agentsdefaultscompaction):
 
-| Key                         | Default          | Notes                                                                                                                                  |
-| --------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                   | `true`           |                                                                                                                                        |
-| `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                   |
-| `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                               |
-| `forceFlushTranscriptBytes` | unset (disabled) | force a flush once the transcript file reaches this byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
+| Key                         | Default          | Notes                                                                                                                                                  |
+| --------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`                   | `true`           |                                                                                                                                                        |
+| `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
+| `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                                               |
+| `forceFlushTranscriptBytes` | unset (disabled) | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
 
 Notes:
 

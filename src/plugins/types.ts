@@ -238,8 +238,9 @@ export type {
   VideoGenerationProviderPlugin,
 } from "./capability-provider.types.js";
 export type {
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteAuth,

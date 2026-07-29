@@ -1,4 +1,4 @@
-import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -22,8 +22,10 @@ import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isOllamaCloudModel,
   resolveOllamaApiBase,
 } from "./provider-models.js";
 
@@ -35,12 +37,10 @@ const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMA
 const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 512;
 const DISCOVERY_TRANSPORT_TIMEOUT_MS = 90_000;
-const INFERENCE_TRANSPORT_GRACE_MS = 10_000;
 const MAX_INFERENCE_TIMEOUT_MS = 10 * 60_000;
 const MAX_TOKENS = 8192;
 const MAX_PROMPT_CHARS = 128_000;
 const MAX_SYSTEM_PROMPT_CHARS = 32_000;
-const MAX_DISCOVERED_MODELS = 200;
 const MAX_ERROR_BODY_BYTES = 500;
 
 type NodeModel = {
@@ -184,17 +184,20 @@ async function discoverOllamaNodeModels(
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
-  const localModels = discovered.models
-    .filter((model) => !model.remote_host?.trim())
-    .slice(0, MAX_DISCOVERED_MODELS);
-  const [models, loadedNames] = await Promise.all([
-    enrichOllamaModelsWithContext(apiBase, localModels),
-    fetchLoadedModelNames(apiBase),
-  ]);
+  const localModels = discovered.models.filter(
+    (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
+  );
+  const loadedNames = await fetchLoadedModelNames(apiBase);
+  // Probe loaded models before the bounded catalog can hide already-runnable node models.
+  const prioritizedModels = localModels.toSorted(
+    (left, right) => Number(loadedNames.has(right.name)) - Number(loadedNames.has(left.name)),
+  );
+  // Paired nodes must positively confirm completion; unlike provider catalogs,
+  // failed or legacy show probes must never expose unrunnable remote commands.
+  const models = await enrichOllamaCompletionModels(apiBase, prioritizedModels, {
+    requireCompletionCapability: true,
+  });
   const rows = models
-    // Nodes advertise only models Ollama positively identifies as chat-capable.
-    // Failed /api/show probes must not turn embedding models into runnable choices.
-    .filter((model) => model.capabilities?.includes("completion") === true)
     .map((model): NodeModel => {
       const details = model.details;
       const row: NodeModel = {
@@ -245,12 +248,26 @@ async function runOllamaNodeChat(params: {
   timeoutMs: number;
 }): Promise<OllamaChatPayload> {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
-  const discovered = await fetchOllamaModels(apiBase);
+  const deadlineMs = performance.now() + params.timeoutMs;
+  const remainingTimeoutMs = (): number => {
+    const remainingMs = Math.ceil(deadlineMs - performance.now());
+    if (remainingMs <= 0) {
+      throw new Error(`Ollama node inference timed out after ${params.timeoutMs}ms`);
+    }
+    return remainingMs;
+  };
+  const discovered = await fetchOllamaModels(apiBase, { timeoutMs: remainingTimeoutMs() });
   const localModel = discovered.models.find(
-    (model) => model.name === params.model && !model.remote_host?.trim(),
+    (model) =>
+      model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
   );
-  const [model] = localModel ? await enrichOllamaModelsWithContext(apiBase, [localModel]) : [];
+  const [model] = localModel
+    ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
+        timeoutMs: remainingTimeoutMs(),
+      })
+    : [];
   if (!discovered.reachable || model?.capabilities?.includes("completion") !== true) {
+    remainingTimeoutMs();
     throw new Error(
       `Ollama model ${JSON.stringify(params.model)} is not a local chat model; discover models first`,
     );
@@ -270,7 +287,7 @@ async function runOllamaNodeChat(params: {
   }>({
     baseUrl: params.baseUrl,
     path: "/api/chat",
-    timeoutMs: params.timeoutMs,
+    timeoutMs: remainingTimeoutMs(),
     init: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -424,7 +441,7 @@ const ollamaNodeInferenceToolDefinition = {
     "Discover and run chat-capable Ollama models installed on paired desktop/server nodes. Use action=discover first, then action=run with a node and model from that result. Inference stays on the selected node.",
   parameters: Type.Object(
     {
-      action: Type.Union([Type.Literal("discover"), Type.Literal("run")]),
+      action: stringEnum(["discover", "run"] as const),
       node: Type.Optional(
         Type.String({ description: "Connected node id or display name. Required when ambiguous." }),
       ),
@@ -450,7 +467,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       const nodeQuery = readStringParam(params, "node");
       const listed = await api.runtime.nodes.list({ connected: true });
       const modelNodes = listed.nodes.filter((node) =>
-        node.commands?.includes(OLLAMA_MODELS_COMMAND),
+        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_MODELS_COMMAND),
       );
 
       if (action === "discover") {
@@ -494,7 +511,9 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       if (action !== "run") {
         throw new Error("action must be discover or run");
       }
-      const chatNodes = modelNodes.filter((node) => node.commands?.includes(OLLAMA_CHAT_COMMAND));
+      const chatNodes = modelNodes.filter((node) =>
+        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_CHAT_COMMAND),
+      );
       const node = nodeQuery
         ? findNode(chatNodes, nodeQuery)
         : chatNodes.length === 1
@@ -533,9 +552,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
         node.nodeId,
         OLLAMA_CHAT_COMMAND,
         commandParams,
-        // The command validates the selected model before starting its chat timeout.
-        // Keep that bounded preflight outside the inference budget seen by users.
-        timeoutMs + INFERENCE_TRANSPORT_GRACE_MS,
+        timeoutMs,
       );
       return jsonResult({
         nodeId: node.nodeId,

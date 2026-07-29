@@ -1,6 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import "./menu-surface.ts";
@@ -88,12 +89,17 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       }
     },
   );
+  private readonly agentIdentitySubscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.agentIdentity,
+    (agentIdentity, notify) => agentIdentity.subscribe(notify),
+  );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   constructor() {
     super();
     void this.narrationSubscriptions;
+    void this.agentIdentitySubscriptions;
     void new BoardAvailabilityController(
       this,
       () => {
@@ -145,6 +151,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    const chip = this.activeChipAgent();
+    // An open switcher tracks roster/reconnect updates; otherwise only hydrate
+    // the active card and avoid background RPCs for every configured agent.
+    const identityIds =
+      this.sidebarMenus.agentMenuPosition === null
+        ? [chip.activeId]
+        : chip.agents.map((agent) => agent.id);
+    this.ensureAgentIdentities(identityIds);
     // A fresh draft must be visible where it will live: genuinely expand a
     // collapsed Threads section (persisted) instead of overriding at render
     // time, so the header toggle keeps matching the visible state.
@@ -154,6 +168,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.collapsedSessionSections.has("ungrouped")
     ) {
       this.sessionOrganizer.toggleSection("ungrouped");
+    }
+  }
+
+  ensureAgentIdentities(agentIds: readonly string[]): void {
+    if (this.connected) {
+      void this.context?.agentIdentity.ensure(agentIds);
     }
   }
 
@@ -191,7 +211,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
       rows: this.visibleNarrationRowsInOrder(),
-      openSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
     };
   }
@@ -300,6 +320,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
+  loadMoreSidebarSessions(): Promise<void> {
+    return this.sessionData.loadMoreSidebarSessions();
+  }
+
   dismissSessionMutationError(): void {
     this.sessionData.dismissSessionMutationError();
   }
@@ -352,6 +376,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       host: this,
       empty: visibleSessions.length === 0,
       sections,
+      nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
       catalogRenderer: this.catalogRenderer,
       showDraft:
         Boolean(this.draftSessionAgentId) &&
@@ -360,8 +385,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         catalogs: this.sessionData.sessionCatalogs,
         refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
-        routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+        routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
+        mainKey: this.sessionMainKey(),
         loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,

@@ -19,6 +19,7 @@ function completedRun(
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     modelMetadata?: boolean;
+    modelIterations?: number;
   } = {},
 ): SkillExperienceReviewParams {
   const iterations = options.iterations ?? 10;
@@ -53,6 +54,9 @@ function completedRun(
             authProfileId: "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
+      ...(options.modelIterations === undefined
+        ? {}
+        : { modelIterations: options.modelIterations }),
       compacted: options.compacted,
       trigger: "user",
     },
@@ -89,6 +93,36 @@ describe("skill experience review scheduler", () => {
       ctx: { authProfileId: "openai:work" },
     });
     expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("event");
+    scheduler.clear();
+  });
+
+  it("uses exact harness iterations for a Codex-style projected trajectory", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 1, modelIterations: 10 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    scheduler.clear();
+  });
+
+  it("does not infer iterations when a harness explicitly reports none", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 10, modelIterations: 0 }));
+    await vi.runAllTimersAsync();
+
+    expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
 

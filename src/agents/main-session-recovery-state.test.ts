@@ -419,8 +419,7 @@ describe("main session recovery state", () => {
 
   it("moves a reservation into the lifecycle fence during Gateway admission", () => {
     const entry = interruptedEntry({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: " captured reply ",
+      pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
       mainRestartRecovery: recoveryState({
@@ -455,8 +454,7 @@ describe("main session recovery state", () => {
     ).toEqual({ kind: "admitted_recovery" });
     expect(entry).toMatchObject({
       abortedLastRun: false,
-      pendingFinalDeliveryAttemptCount: 1,
-      pendingFinalDeliveryLastAttemptAt: 300,
+      pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
       mainRestartRecovery: {
         revision: 3,

@@ -25,6 +25,7 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
@@ -32,7 +33,7 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-readers.js";
+import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
@@ -55,11 +56,7 @@ import {
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
-import {
-  classifySessionKey,
-  isGroupOrChannelDisplaySession,
-  parseGroupKey,
-} from "./session-utils-store.js";
+import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 /** Adds the current human profile label without persisting rename-prone display data. */
@@ -117,6 +114,10 @@ export function buildGatewaySessionRow(params: {
       : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
+  const sessionKind = classifySessionKind(key, entry);
+  // The older Gateway wire kind folds cron/spawn-child into direct.
+  const gatewayKind =
+    sessionKind === "cron" || sessionKind === "spawn-child" ? "direct" : sessionKind;
   const deliveryFields = projectSessionDeliveryFields(entry?.delivery);
   const channel = deliveryFields.channel ?? parsed?.channel;
   const subject = entry?.subject;
@@ -357,7 +358,7 @@ export function buildGatewaySessionRow(params: {
       storePath,
     });
     if (params.includeDerivedTitles) {
-      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
     }
     if (params.includeLastMessage && fields.lastMessagePreview) {
       lastMessagePreview = fields.lastMessagePreview;
@@ -413,9 +414,10 @@ export function buildGatewaySessionRow(params: {
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
-    kind: classifySessionKey(key, entry),
+    kind: gatewayKind,
     label: entry?.label,
     category: entry?.category,
+    boardFace: entry?.boardFace,
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -437,6 +439,7 @@ export function buildGatewaySessionRow(params: {
     agentStatus,
     observerDigest: observerDigest
       ? {
+          ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
           runId: observerDigest.runId,
           headline: observerDigest.headline,
           health: observerDigest.health,

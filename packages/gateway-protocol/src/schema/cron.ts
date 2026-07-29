@@ -569,6 +569,7 @@ export const CronListParamsSchema = closedObject({
   sortDir: Type.Optional(CronSortDirSchema),
   agentId: Type.Optional(NonEmptyString),
   compact: Type.Optional(Type.Boolean()),
+  includeDeliveryPreviews: Type.Optional(Type.Boolean()),
 });
 
 /** Empty request payload for scheduler status. */

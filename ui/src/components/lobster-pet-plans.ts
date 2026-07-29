@@ -10,6 +10,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import {
   LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
   lobsterPetName,
   mulberry32,
   SPOT_ZONES,
@@ -260,8 +261,8 @@ export type LobsterLoadIdentity = {
 };
 
 // Rare per-load identities, resolved on top of the seeded look: the Elder
-// outranks an old-friend return, and retro looks (grail or anniversary dress
-// code) are never repainted. Lobsterdex completion is snapshotted here too,
+// outranks an old-friend return, and retro-geometry looks (grail or anniversary
+// dress code) are never repainted. Lobsterdex completion is snapshotted here too,
 // so the golden ledge trim appears between loads, never mid-visit.
 export function resolveLobsterLoadIdentity(
   seed: number,
@@ -291,7 +292,7 @@ export function resolveLobsterLoadIdentity(
       },
     };
   }
-  if (look.palette.id === "retro") {
+  if (look.palette.id === "retro" || look.palette.id === "goldenretro") {
     return base;
   }
   const known = [...seen]
@@ -308,7 +309,11 @@ export function resolveLobsterLoadIdentity(
     ...base,
     oldFriend: true,
     friendName: getLobsterdexEntries().get(palette.id)?.name ?? null,
-    look: { ...look, palette },
+    look: {
+      ...look,
+      palette,
+      chimeraParts: palette.id === "chimera" ? canonicalLobsterLook(palette).chimeraParts : null,
+    },
   };
 }
 
@@ -330,7 +335,7 @@ export const LOBSTER_BOTTLE_FORTUNES = [
   "somewhere, a test is green because of you",
   "swim sideways when forward fails",
   "the reef remembers kind commits",
-  "even the abyss keeps a night light",
+  "even the deep keeps a night light",
   "barnacles are only patient passengers",
   "no current lasts forever",
   "bury your treasure in version control",

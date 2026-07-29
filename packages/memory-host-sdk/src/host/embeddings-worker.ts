@@ -117,6 +117,14 @@ function createWorkerExitError(code: number | null, signal: NodeJS.Signals | nul
   });
 }
 
+function createWorkerShutdownError(): Error {
+  return createLocalEmbeddingWorkerFailureError({
+    message: "Local embedding worker exited unexpectedly (shutdown)",
+    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    reason: "exit",
+  });
+}
+
 /** Convert worker response errors into Error objects while preserving worker error codes. */
 function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: false }): Error {
   if (typeof error.error === "object" && error.error) {
@@ -230,6 +238,7 @@ class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
   private closed = false;
   private shutdownPromise: Promise<void> | null = null;
+  private requestTail: Promise<void> = Promise.resolve();
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
   private lastRuntimeFacts: LocalEmbeddingRuntimeFacts | undefined;
@@ -247,7 +256,7 @@ class LocalEmbeddingWorkerClient {
     text: string,
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[]> {
-    const result = await this.send({ type: "embedQuery", options, text }, callOptions);
+    const result = await this.enqueueRequest({ type: "embedQuery", options, text }, callOptions);
     return Array.isArray(result) ? (result as number[]) : [];
   }
 
@@ -257,7 +266,7 @@ class LocalEmbeddingWorkerClient {
     texts: string[],
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> {
-    const result = await this.send({ type: "embedBatch", options, texts }, callOptions);
+    const result = await this.enqueueRequest({ type: "embedBatch", options, texts }, callOptions);
     return Array.isArray(result) ? (result as number[][]) : [];
   }
 
@@ -363,6 +372,58 @@ class LocalEmbeddingWorkerClient {
     });
     this.child = child;
     return child;
+  }
+
+  /** Serialize native work without letting a queued cancellation kill the active child. */
+  private async enqueueRequest(
+    request: LocalEmbeddingWorkerRequestPayload,
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<number[] | number[][] | undefined> {
+    const signal = options?.signal;
+    signal?.throwIfAborted();
+    const queuedDuringShutdown = this.shutdownPromise !== null;
+
+    // The child also serializes native work, so queued requests must remain in
+    // the parent until they own the worker and can safely terminate it on abort.
+    const operation = this.requestTail.then(async () => {
+      signal?.throwIfAborted();
+      // Work submitted after active cancellation must join its shutdown before
+      // observing close; work already queued when close begins gets worker exit.
+      if (this.closed && !queuedDuringShutdown) {
+        throw createWorkerShutdownError();
+      }
+      return await this.send(request, options);
+    });
+    this.requestTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    if (!signal) {
+      return await operation;
+    }
+
+    return await new Promise((resolve, reject) => {
+      const abort = () => {
+        reject(
+          toErrorObject(
+            signal.reason ?? new Error("Local embedding request aborted"),
+            "Non-Error rejection",
+          ),
+        );
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      void operation.then(
+        (value) => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(toErrorObject(error, "Local embedding request failed"));
+        },
+      );
+    });
   }
 
   /** Send one request over IPC and bind its abort signal to child shutdown. */
@@ -475,13 +536,7 @@ class LocalEmbeddingWorkerClient {
   }
 
   private async stopChild(child: ChildProcess): Promise<void> {
-    this.rejectPending(
-      createLocalEmbeddingWorkerFailureError({
-        message: "Local embedding worker exited unexpectedly (shutdown)",
-        code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
-        reason: "exit",
-      }),
-    );
+    this.rejectPending(createWorkerShutdownError());
     if (child.connected) {
       child.disconnect();
     }

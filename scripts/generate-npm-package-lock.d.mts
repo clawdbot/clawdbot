@@ -46,7 +46,15 @@ export function resolvePackageDirs(args: string[]): {
   jobs: number;
   packageDirs: unknown[];
 };
-export function generateNpmPackageLock(packageDir: string): string;
+export function createNpmPackageLockInstallStrategyArgs(options?: {
+  installStrategy?: "hoisted" | "nested" | "shallow" | "linked" | "" | null;
+}): string[];
+export function generateNpmPackageLock(
+  packageDir: string,
+  options?: {
+    installStrategy?: "hoisted" | "nested" | "shallow" | "linked" | "" | null;
+  },
+): string;
 export function resolveNpmLockJobs(
   rawValue: unknown,
   env?: NodeJS.ProcessEnv,
@@ -102,6 +110,11 @@ export function packageJsonForNpmLock(
   [key: string]: unknown;
 };
 export function pnpmLockOverrideVersionForVersions(versions: unknown): unknown;
+export function resolvePnpmLockOverridePlan(lockfile: unknown): {
+  conflictingPackageNames: string[];
+  scopedVersionOverrides: Record<string, unknown>;
+  versionOverrides: Record<string, string>;
+};
 export function parsePnpmPackageKey(packageKey: unknown): {
   name: string;
   version: string;

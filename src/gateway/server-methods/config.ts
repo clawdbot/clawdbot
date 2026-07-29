@@ -26,9 +26,13 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
-import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
+import { projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
+import {
+  applyMergePatch,
+  createMergePatch,
+  isMergePatchObjectKeyAllowed,
+} from "../../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
@@ -79,6 +83,10 @@ import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 const CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS = 5_000;
+// ui.prefs is the cross-device Control UI preference surface documented in docs/web/control-ui.md.
+// Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
+// every other path keeps strict document CAS.
+const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
 
 let configSchemaResponseCache: {
   expiresAtMs: number;
@@ -230,6 +238,72 @@ function isConfigPatchObjectWithStringId(
   value: unknown,
 ): value is Record<string, unknown> & { id: string } {
   return isPlainObject(value) && typeof value.id === "string" && value.id.length > 0;
+}
+
+function assertNoDuplicateConfigPatchIds(params: {
+  patch: unknown;
+  current: unknown;
+  replacePaths: ReadonlySet<string>;
+  path?: string;
+}): void {
+  const path = params.path ?? "";
+  if (Array.isArray(params.patch)) {
+    if (
+      !Array.isArray(params.current) ||
+      params.replacePaths.has(path) ||
+      !isConfigPatchIdKeyedArray(params.current)
+    ) {
+      return;
+    }
+    // ID-keyed merge is sequential and would silently let the last duplicate win.
+    // Reject only arrays using that merge contract; explicit replacements may contain duplicates.
+    const currentIds = new Set<string>();
+    for (const entry of params.current) {
+      if (currentIds.has(entry.id)) {
+        throw new Error(
+          `Cannot ID-merge array at ${path || "<root>"}: current config contains duplicate ID ${entry.id}; use replacePaths for an explicit replacement.`,
+        );
+      }
+      currentIds.add(entry.id);
+    }
+    const ids = new Set<string>();
+    for (const entry of params.patch) {
+      if (!isConfigPatchObjectWithStringId(entry)) {
+        continue;
+      }
+      if (ids.has(entry.id)) {
+        throw new Error(`Ambiguous duplicate ID ${entry.id} in array at ${path || "<root>"}.`);
+      }
+      ids.add(entry.id);
+    }
+    const currentById = new Map(params.current.map((entry) => [entry.id, entry] as const));
+    for (const entry of params.patch) {
+      if (!isConfigPatchObjectWithStringId(entry)) {
+        continue;
+      }
+      const currentEntry = currentById.get(entry.id);
+      if (currentEntry) {
+        assertNoDuplicateConfigPatchIds({
+          patch: entry,
+          current: currentEntry,
+          replacePaths: params.replacePaths,
+          path: `${path}[]`,
+        });
+      }
+    }
+    return;
+  }
+  if (!isRecord(params.patch) || !isRecord(params.current)) {
+    return;
+  }
+  for (const [key, child] of Object.entries(params.patch)) {
+    assertNoDuplicateConfigPatchIds({
+      patch: child,
+      current: params.current[key],
+      replacePaths: params.replacePaths,
+      path: formatConfigPatchPath(path, key),
+    });
+  }
 }
 
 function isConfigPatchIdKeyedArray(
@@ -637,6 +711,7 @@ async function respondWithConfigRestartWrite(params: {
 
 function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
   prevConfig: OpenClawConfig;
+  prevSourceConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): boolean {
@@ -644,6 +719,7 @@ function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
     didSharedGatewayAuthChange(params.prevConfig, params.nextConfig) ||
     didActiveSharedGatewayAuthChange({
       fallbackPrev: params.prevConfig,
+      fallbackSource: params.prevSourceConfig,
       next: params.preparedSecretsSnapshot.config,
     })
   );
@@ -718,6 +794,48 @@ async function commitGatewayConfigWriteOrRespond(
     );
     return null;
   }
+}
+
+function isHashlessPatchLwwPath(path: string): boolean {
+  return HASHLESS_PATCH_LWW_PATH_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+  );
+}
+
+// Hash-free LWW is a per-leaf protocol. Container replacement or deletion requires document CAS
+// so a stale client cannot wipe preference keys added by a concurrent writer.
+function hasHashlessPatchLwwStructure(patch: unknown): boolean {
+  return HASHLESS_PATCH_LWW_PATH_PREFIXES.every((prefix) => {
+    let node = patch;
+    for (const segment of prefix.split(".")) {
+      if (!isPlainObject(node)) {
+        return false;
+      }
+      if (!Object.hasOwn(node, segment)) {
+        return true;
+      }
+      node = node[segment];
+      if (!isPlainObject(node)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function diffConfigLeafPaths(prev: unknown, next: unknown, prefix = ""): string[] {
+  if (isPlainObject(prev) || isPlainObject(next)) {
+    const prevRecord = isPlainObject(prev) ? prev : {};
+    const nextRecord = isPlainObject(next) ? next : {};
+    const keys = [...new Set([...Object.keys(prevRecord), ...Object.keys(nextRecord)])];
+    if (keys.length === 0) {
+      return isDeepStrictEqual(prev, next) ? [] : [prefix || "<root>"];
+    }
+    return keys.flatMap((key) =>
+      diffConfigLeafPaths(prevRecord[key], nextRecord[key], prefix ? `${prefix}.${key}` : key),
+    );
+  }
+  return diffConfigPaths(prev, next, prefix);
 }
 
 export const configHandlers: GatewayRequestHandlers = {
@@ -827,7 +945,13 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    const hashlessPatch = resolveBaseHashParam(params) === null;
+    // Hash-free writes do not retry: only the client can replay fresh intent after a lost race;
+    // server re-merge would replay frozen stale intent over the winner. A paused handler can still
+    // commit stale state, an accepted residual instead of adding connection-liveness plumbing.
+    const writeSnapshot = hashlessPatch
+      ? await readConfigFileSnapshotForWrite()
+      : await readConfigWriteSnapshotOrRespond(params, respond);
     if (!writeSnapshot) {
       return;
     }
@@ -869,7 +993,28 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (hashlessPatch && !hasHashlessPatchLwwStructure(parsedRes.parsed)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "config base hash required; re-run config.get and retry",
+        ),
+      );
+      return;
+    }
     const replacePaths = readConfigPatchReplacePaths(params);
+    try {
+      assertNoDuplicateConfigPatchIds({
+        patch: parsedRes.parsed,
+        current: snapshot.config,
+        replacePaths,
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+      return;
+    }
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
       // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
@@ -899,7 +1044,18 @@ export const configHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const restoredChangedPaths = diffConfigPaths(snapshot.config, restoredMerge.result);
+    const restoredChangedPaths = diffConfigLeafPaths(snapshot.config, restoredMerge.result);
+    if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "config base hash required; re-run config.get and retry",
+        ),
+      );
+      return;
+    }
     const actor = resolveControlPlaneActor(client);
     if (restoredChangedPaths.length === 0) {
       respondConfigPatchNoop({
@@ -975,6 +1131,7 @@ export const configHandlers: GatewayRequestHandlers = {
     // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
       prevConfig: snapshot.config,
+      prevSourceConfig: snapshot.sourceConfig,
       nextConfig: validated.config,
       preparedSecretsSnapshot,
     });
@@ -1031,6 +1188,7 @@ export const configHandlers: GatewayRequestHandlers = {
     // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
       prevConfig: snapshot.config,
+      prevSourceConfig: snapshot.sourceConfig,
       nextConfig: parsed.config,
       preparedSecretsSnapshot,
     });

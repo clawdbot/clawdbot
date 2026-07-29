@@ -4,6 +4,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -53,6 +55,7 @@ function sessionsListResponse() {
 }
 
 function observerDigest(params: {
+  agentId?: string;
   sessionKey: string;
   health: "on-track" | "stuck";
   revision: number;
@@ -69,6 +72,89 @@ async function waitForToastUpdate(page: Page): Promise<void> {
   await page.locator("openclaw-toast-host").evaluate(async (element) => {
     await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
   });
+}
+
+async function emitObserverAndReadToast(
+  page: Page,
+  payload: ReturnType<typeof observerDigest>,
+  action?: "open" | "dismiss",
+): Promise<{ actionable: boolean | null; message: string; visible: boolean }> {
+  // Toasts auto-dismiss after 6000ms. Keep emit, read, and any action in one browser
+  // step, including the shell's lazy runtime load and the toast host's Lit update.
+  return await page.locator("openclaw-toast-host").evaluate(
+    async (element, params) => {
+      const host = element as HTMLElement & { updateComplete: Promise<unknown> };
+      const app = document.querySelector("openclaw-app-shell") as
+        | (HTMLElement & {
+            criticalNoticeRuntime?: Promise<unknown> | null;
+          })
+        | null;
+      const gateway = (
+        window as Window & {
+          openclawControlUiE2eGateway?: {
+            emit: (event: string, payload?: unknown) => void;
+          };
+        }
+      ).openclawControlUiE2eGateway;
+      if (!app || !gateway) {
+        throw new Error("Critical observer notice owner is unavailable");
+      }
+
+      gateway.emit("session.observer", params.payload);
+      const runtime = app.criticalNoticeRuntime;
+      if (!runtime) {
+        throw new Error("Critical observer notice runtime did not start");
+      }
+      await runtime;
+      await host.updateComplete;
+
+      const toast = host.querySelector<HTMLElement>(".app-toast");
+      const isVisible = (target: HTMLElement | null): target is HTMLElement => {
+        if (!target?.isConnected) {
+          return false;
+        }
+        const style = getComputedStyle(target);
+        const bounds = target.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          bounds.width > 0 &&
+          bounds.height > 0
+        );
+      };
+      const visible = isVisible(toast);
+      let actionable: boolean | null = null;
+      const result = () => ({
+        actionable,
+        message: toast?.querySelector(".app-toast__message")?.textContent ?? "",
+        visible,
+      });
+      if (params.action) {
+        const selector = params.action === "open" ? ".app-toast__action" : ".app-toast__dismiss";
+        const button = toast?.querySelector<HTMLButtonElement>(selector);
+        if (!button) {
+          throw new Error(`Toast ${params.action} action is unavailable`);
+        }
+        const bounds = button.getBoundingClientRect();
+        const hitTarget = document.elementFromPoint(
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2,
+        );
+        actionable =
+          visible &&
+          isVisible(button) &&
+          !button.disabled &&
+          Boolean(hitTarget && (hitTarget === button || button.contains(hitTarget)));
+        if (!actionable) {
+          return result();
+        }
+        button.click();
+        await host.updateComplete;
+      }
+      return result();
+    },
+    { action, payload },
+  );
 }
 
 describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", () => {
@@ -117,12 +203,10 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
         sessionKey: selectedSessionKey,
       });
 
-      const response = await page.goto(
-        `${server.baseUrl}chat?session=${encodeURIComponent(selectedSessionKey)}`,
-      );
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, selectedSessionKey));
       expect(response?.status()).toBe(200);
       await page.getByText("Selected session A is ready.").waitFor({ state: "visible" });
-      expect(new URL(page.url()).searchParams.get("session")).toBe(selectedSessionKey);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedSessionKey));
 
       const toast = page.locator(".app-toast");
       await gateway.emitGatewayEvent(
@@ -150,26 +234,27 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
       expect(await toast.count()).toBe(0);
 
       const firstHeadline = "Background verification is stuck";
-      await gateway.emitGatewayEvent(
-        "session.observer",
+      const firstToast = await emitObserverAndReadToast(
+        page,
         observerDigest({
           sessionKey: backgroundSessionKey,
           health: "stuck",
           headline: firstHeadline,
           revision: 2,
         }),
+        "open",
       );
-      await toast.waitFor({ state: "visible" });
-      expect(await toast.locator(".app-toast__message").textContent()).toContain(firstHeadline);
+      expect(firstToast.visible).toBe(true);
+      expect(firstToast.actionable).toBe(true);
+      expect(firstToast.message).toContain(firstHeadline);
       await page.screenshot({
         fullPage: true,
         path: path.join(artifactDir, "01-critical-background-session.png"),
       });
 
-      await toast.locator(".app-toast__action").click();
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe(backgroundSessionKey);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(backgroundSessionKey));
       expect(await toast.count()).toBe(0);
       await page.screenshot({
         fullPage: true,
@@ -178,8 +263,8 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
 
       await page.locator("a.nav-item--home").click();
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe(selectedSessionKey);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(selectedSessionKey));
 
       await gateway.emitGatewayEvent(
         "session.observer",
@@ -193,17 +278,18 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
       await waitForToastUpdate(page);
       expect(await toast.count()).toBe(0);
 
-      await gateway.emitGatewayEvent(
-        "session.observer",
+      const dismissToast = await emitObserverAndReadToast(
+        page,
         observerDigest({
           sessionKey: backgroundSessionKey,
           health: "stuck",
           headline: "Background verification is stuck again",
           revision: 4,
         }),
+        "dismiss",
       );
-      await toast.waitFor({ state: "visible" });
-      await toast.locator(".app-toast__dismiss").click();
+      expect(dismissToast.visible).toBe(true);
+      expect(dismissToast.actionable).toBe(true);
       expect(await toast.count()).toBe(0);
 
       await gateway.emitGatewayEvent(
@@ -225,21 +311,25 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
   it.each([
     {
       name: "suppresses the configured selected-agent foreground alias",
+      agentId: "work",
       sessionKey: "agent:work:primary",
       visible: false,
     },
     {
       name: "suppresses the canonical selected-agent global foreground",
+      agentId: "work",
       sessionKey: "global",
       visible: false,
     },
     {
       name: "announces a genuine selected-agent background session",
+      agentId: "work",
       sessionKey: "agent:work:investigation",
       visible: true,
     },
     {
       name: "announces a genuine other-agent configured-main session",
+      agentId: "other",
       sessionKey: "agent:other:primary",
       visible: true,
     },
@@ -317,28 +407,29 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
         sessionKey: "global",
       });
 
-      const response = await page.goto(`${server.baseUrl}chat?session=global`);
+      const globalRouteKey = "agent:work:global";
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, globalRouteKey));
       expect(response?.status()).toBe(200);
       await page.getByText("Configured global foreground is ready.").waitFor({ state: "visible" });
-      expect(new URL(page.url()).searchParams.get("session")).toBe("global");
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(globalRouteKey));
       expect(await gateway.getRequests("connect")).toHaveLength(1);
 
       const headline = `Configured-global observer notice for ${testCase.sessionKey}`;
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: testCase.sessionKey,
-          health: "stuck",
-          headline,
-          revision: 1,
-        }),
-      );
+      const digest = observerDigest({
+        agentId: testCase.agentId,
+        sessionKey: testCase.sessionKey,
+        health: "stuck",
+        headline,
+        revision: 1,
+      });
 
       const toast = page.locator(".app-toast");
       if (testCase.visible) {
-        await toast.waitFor({ state: "visible" });
-        expect(await toast.locator(".app-toast__message").textContent()).toContain(headline);
+        const toastState = await emitObserverAndReadToast(page, digest);
+        expect(toastState.visible).toBe(true);
+        expect(toastState.message).toContain(headline);
       } else {
+        await gateway.emitGatewayEvent("session.observer", digest);
         await waitForToastUpdate(page);
         expect(await toast.count()).toBe(0);
       }

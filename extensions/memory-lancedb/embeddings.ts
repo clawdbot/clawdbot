@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
@@ -439,7 +440,11 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
   }
 
   if (typeof value === "string") {
-    const bytes = Buffer.from(value, "base64");
+    const canonicalEmbedding = canonicalizeBase64(value);
+    if (!canonicalEmbedding) {
+      throw new Error("Base64 embedding response is malformed");
+    }
+    const bytes = Buffer.from(canonicalEmbedding, "base64");
     if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
       throw new Error("Base64 embedding response has invalid byte length");
     }

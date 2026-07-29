@@ -61,7 +61,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     resetPluginTtsAndThreadMocks();
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
     mocks.routeReply.mockReset();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     mocks.tryFastAbortFromMessage.mockReset();
     setNoAbort();
     diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();

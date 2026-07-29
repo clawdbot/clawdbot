@@ -16,16 +16,16 @@ import { hasMeaningfulConversationContent } from "../compaction-real-conversatio
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithModelFallback,
-} from "../model-fallback.js";
+import { isFallbackSummaryError } from "../model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { resolveProjectKey } from "../project-memory-scope.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -46,7 +46,6 @@ import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
-import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -131,10 +130,11 @@ export async function compactEmbeddedAgentSessionDirect(
   const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
-    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
-    sessionFile: runSessionTarget.sessionFile,
+    sessionKey: runSessionTarget.sessionKey,
+    sessionTarget: runSessionTarget,
+    sessionFile: runSessionTarget.sessionKey,
   };
   const requestedAgentIds = resolveSessionAgentIds({
     sessionKey: requestedParams.sessionKey,
@@ -157,7 +157,21 @@ export async function compactEmbeddedAgentSessionDirect(
     preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
   });
   try {
-    const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
+    const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+    const preparedWorkspaceDir =
+      preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
+    const repoRoot =
+      resolveSystemPromptRepoRoot({
+        config: preparedModelRuntimeOwnerSnapshot.config,
+        workspaceDir: preparedWorkspaceDir,
+        cwd: requestedParams.cwd,
+      }) ?? null;
+    const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
+    const preparedModelRuntime = Object.freeze({
+      ...preparedModelRuntimeOwnerSnapshot,
+      repoRoot,
+      projectKey,
+    });
     // Fallback policy and every attempt consume the same generation as model/auth discovery.
     // A reload may have committed while session targeting was resolved above.
     const params: PreparedCompactEmbeddedAgentSessionParams = {
@@ -165,7 +179,7 @@ export async function compactEmbeddedAgentSessionDirect(
       config: preparedModelRuntime.config,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
-      workspaceDir: preparedModelRuntime.workspaceDir ?? requestedWorkspaceDir,
+      workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
     };
     if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
@@ -188,6 +202,7 @@ export async function compactEmbeddedAgentSessionDirect(
       cfg: params.config,
       provider: primaryProvider,
       model: primaryModel,
+      requestedRouteResolution: "resolved",
       fallbacksOverride,
     })[0];
     const fallbackAgentId = resolveSessionAgentIds({
@@ -200,6 +215,7 @@ export async function compactEmbeddedAgentSessionDirect(
       cfg: params.config,
       provider: primaryProvider,
       model: primaryModel,
+      requestedRouteResolution: "resolved",
       runId: params.runId ?? params.sessionId,
       agentDir: params.agentDir,
       agentId: fallbackAgentId,
@@ -256,7 +272,6 @@ export const testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
-  hardenManualCompactionBoundary,
   resolveCompactionProviderStream,
   prepareCompactionSessionAgent,
   runBeforeCompactionHooks,

@@ -137,6 +137,15 @@ describe("parallels npm update smoke", () => {
     ).toThrow("--registry-package-tarball requires --target-tarball");
   });
 
+  it("passes an explicit macOS snapshot hint through fresh lanes", () => {
+    expect(
+      parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
+    ).toMatchObject({
+      macosSnapshotHint: "macOS 26.5 Node 24",
+      platforms: new Set(["macos"]),
+    });
+  });
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {
@@ -243,6 +252,88 @@ exit 1
     expect(log).toContain("/bin/chmod 755 /tmp/openclaw-parallels-npm-update-linux-");
     expect(log).toContain("/bin/rm -f /tmp/openclaw-parallels-npm-update-linux-");
     expect(log.match(/^cleanup$/gm)).toHaveLength(1);
+  });
+
+  it("uses one macOS guest identity to write and execute update scripts", async () => {
+    const root = makeTempDir();
+    const logPath = path.join(root, "prlctl.log");
+    const prlctlPath = path.join(root, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(logPath)}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+if [[ "$args" == *" --current-user whoami "* ]]; then
+  printf 'desktop-user\\n'
+  exit 0
+fi
+if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$args" == *" /bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+if [[ "$args" == *" /usr/sbin/chown desktop-user /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    await withEnvAsync(
+      {
+        OPENAI_API_KEY: "test-key",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      async () => {
+        const smoke = new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["macos"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        });
+        const stream = vi.fn().mockResolvedValue(0);
+        Reflect.set(smoke, "runStreamingToJobLog", stream);
+        const guestMacos = Reflect.get(smoke, "guestMacos") as (
+          script: string,
+          timeoutMs: number,
+          ctx: { append: (chunk: string) => void },
+        ) => Promise<void>;
+        const ctx = { append: vi.fn() };
+
+        await guestMacos.call(smoke, "echo update", 30_000, ctx);
+
+        const call = stream.mock.calls.at(0);
+        expect(call?.[0]).toBe("prlctl");
+        expect(call?.[1]).toEqual([
+          "exec",
+          "macOS Tahoe",
+          "--current-user",
+          "/usr/bin/env",
+          expect.stringMatching(/^PATH=/),
+          "/bin/bash",
+          expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
+        ]);
+      },
+    );
+
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("--current-user whoami");
+    expect(log).toContain("--current-user /usr/bin/env PATH=");
+    expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
+    expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
+    expect(log).toContain("/usr/sbin/chown desktop-user");
   });
 
   it("has a one-command beta validation mode with fresh target coverage", () => {
@@ -832,8 +923,9 @@ exit 1
   it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain('macosExecArgs.indexOf("-u")');
-    expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
+    expect(script).toContain('"/usr/sbin/chown"');
+    expect(script).toContain("macosUpdateExec.ownerUser");
+    expect(script).toContain("ownerUser: fallbackUser");
   });
 
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
@@ -926,6 +1018,16 @@ exit 7
         );
       },
     );
+  });
+
+  it("writes macOS update scripts through the desktop user transport", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("const macosUpdateExec = this.resolveMacosUpdateExec(ctx)");
+    expect(script).toContain('{ execArgs: macosUpdateExec.execArgs, mode: "700" }');
+    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
+    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath]');
+    expect(script).toContain("ownerUser: user");
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {

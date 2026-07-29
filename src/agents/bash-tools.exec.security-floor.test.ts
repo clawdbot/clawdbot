@@ -12,7 +12,7 @@ import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createExecTool as createExecToolImpl } from "./bash-tools.exec.js";
+import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const createExecTool = (

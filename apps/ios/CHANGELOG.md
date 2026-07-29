@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prevented stale Watch reconnect recovery from disconnecting a newly selected Gateway, kept delivered Watch messages from reappearing after a crash, and preserved attachments when retrying uncertain offline sends.
+
 ## 2026.7.21
 
 - Fixed background Gateway sessions restarting while waiting for pairing or authentication attention.

@@ -117,10 +117,16 @@ message-tool-only turn without reconstructable channel authority is failed
 closed and receives the one-time resend notice.
 
 Before resuming, the gateway checks that the transcript tail is safe to
-continue from. If it is not (for example, the turn ended on a stale pending
-approval), the session is not blindly re-run; the agent instead posts a short
-notice asking the user to resend the last request. For WebChat, that notice is
-written directly to the session history so it remains visible after reconnect.
+continue from. An aborted turn is the interruption itself, so it resumes on a
+best-effort basis whatever abort detail the provider or worker recorded with it:
+partial streamed text stays in the transcript and the continuation picks up from
+the message beneath it, while a tool call left dangling is dropped from the next
+provider payload and restricted to restart-safe tools unless it is audited
+replay-safe. If the tail is genuinely unsafe (for example a provider failure, or
+a turn that ended on a stale pending approval), the session is not blindly
+re-run; the agent instead posts a short notice asking the user to resend the
+last request. For WebChat, that notice is written directly to the session
+history so it remains visible after reconnect.
 
 OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
@@ -180,7 +186,8 @@ restart handling continues.
   resumes on a later boot after the unclean-boot window drains. Gateway logs
   look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
-start for <channel>… Use channels.start to override.`
+start for <channel>… Start a channel manually with: openclaw gateway call
+channels.start --params '{"channel":"<id>"}'`
 
   Operator recovery SOP:
 

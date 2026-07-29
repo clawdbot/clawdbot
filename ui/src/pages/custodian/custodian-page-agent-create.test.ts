@@ -9,11 +9,13 @@ import type {
 } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
   newAgentIntent: boolean;
+  store: CustodianSessionStore;
   updateComplete: Promise<boolean>;
 };
 
@@ -35,7 +37,9 @@ function createContext(request: ReturnType<typeof vi.fn>) {
     lastError: null,
     lastErrorCode: null,
   };
-  const setSessionKey = vi.fn();
+  const calls: string[] = [];
+  const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
+  const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
   const gateway = {
     snapshot,
     connection: {
@@ -56,16 +60,21 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   });
   const context = {
     gateway,
-    agents: { refreshList },
+    agents: {
+      state: { agentsList: { mainKey: "main" } },
+      refreshList,
+    },
+    agentSelection: { state: { selectedId: "main" }, set: setAgent },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
-  return { context, refreshList, setSessionKey };
+  return { calls, context, refreshList, setAgent, setSessionKey };
 }
 
 async function mountPage(context: ApplicationContext): Promise<TestCustodianPage> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.store = new CustodianSessionStore();
   page.onboarding = false;
   page.newAgentIntent = true;
   provider.append(page);
@@ -105,14 +114,17 @@ describe("custodian new-agent flow", () => {
       agentDraft: "hatch",
       agentId: "researcher",
     });
-    const { context, refreshList, setSessionKey } = createContext(request);
+    const { calls, context, refreshList, setAgent, setSessionKey } = createContext(request);
     await mountPage(context);
 
     await waitForFast(() => expect(context.navigate).toHaveBeenCalledOnce());
     expect(refreshList).toHaveBeenCalledOnce();
+    expect(setAgent).toHaveBeenCalledWith("researcher");
     expect(setSessionKey).toHaveBeenCalledWith("agent:researcher:main");
+    expect(calls).toEqual(["agent:researcher", "session:agent:researcher:main"]);
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Aresearcher%3Amain&draft=Wake%20up%2C%20my%20friend!",
+      pathname: "/chat/researcher",
+      search: "?draft=Wake%20up%2C%20my%20friend!",
     });
   });
 });

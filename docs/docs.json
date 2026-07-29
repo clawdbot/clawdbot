@@ -1248,6 +1248,9 @@
                     "group": "Memory",
                     "pages": [
                       "concepts/memory",
+                      "concepts/memory-architecture",
+                      "concepts/user-model",
+                      "concepts/standing-intents",
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
@@ -1264,6 +1267,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/agent-bindings",
                   "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
@@ -1316,6 +1320,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+                  "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
                   "plugins/onepassword",
@@ -1382,6 +1387,7 @@
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/media-overview",
+                  "tools/mcp",
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
@@ -1762,6 +1768,8 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/notifications",
+                  "web/urls",
                   "web/dashboard",
                   "web/dashboards",
                   "web/dashboard-architecture",
@@ -1945,7 +1953,6 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
-                  "reference/templates/TOOLS",
                   "reference/templates/USER"
                 ]
               },

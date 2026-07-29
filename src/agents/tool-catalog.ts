@@ -160,7 +160,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions",
     label: "sessions",
-    description: "Session settings and groups",
+    description: "Session settings: label, pin, archive, groups",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,

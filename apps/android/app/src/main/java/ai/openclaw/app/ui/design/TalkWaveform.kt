@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui.design
 
-import android.provider.Settings
+import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
@@ -19,7 +19,6 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.abs
@@ -95,13 +94,9 @@ internal fun TalkWaveform(
   modifier: Modifier = Modifier,
   palette: TalkWaveformPalette = TalkWaveformPalette.standard,
 ) {
-  val context = LocalContext.current
   // Compose frame clocks ignore the system animator scale; honor the OS
-  // "remove animations" setting explicitly (same pattern as OpenClawMascot).
-  val animationsEnabled =
-    remember(context) {
-      Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
-    }
+  // "remove animations" setting explicitly and reactively.
+  val animationsEnabled = rememberSystemAnimationsEnabled()
   val idle = phase == TalkWaveformPhase.Idle
   val frozen = !animationsEnabled || idle
   var timeSeconds by remember { mutableDoubleStateOf(0.0) }

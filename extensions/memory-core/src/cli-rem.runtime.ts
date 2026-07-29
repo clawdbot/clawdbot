@@ -16,11 +16,103 @@ import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
+import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
   recordGroundedShortTermCandidates,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 const { heading, muted, warn } = theme;
+
+export async function runMemorySessionBackfill(
+  opts: MemorySessionBackfillOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory session-backfill");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentId = resolveAgent(cfg, opts.agent);
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
+    withLease: hostOptions?.withLease,
+    run: async (manager) => {
+      const workspaceDir = manager.status().workspaceDir?.trim();
+      if (!workspaceDir) {
+        defaultRuntime.error("Memory session-backfill requires a resolvable workspace directory.");
+        process.exitCode = 1;
+        return;
+      }
+      if (
+        opts.rollback &&
+        (opts.apply || opts.rem || opts.from || opts.to || opts.archiveFiles?.length)
+      ) {
+        defaultRuntime.error(
+          "Memory session-backfill --rollback cannot be combined with input, range, --rem, or --apply options.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const remConfig = resolveMemoryRemDreamingConfig({
+        pluginConfig: resolveMemoryPluginConfig(cfg),
+        cfg,
+      });
+      let result;
+      try {
+        result = await runSessionBackfill({
+          agentId,
+          workspaceDir,
+          ...(opts.from !== undefined ? { from: opts.from } : {}),
+          ...(opts.to !== undefined ? { to: opts.to } : {}),
+          ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
+          ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
+          ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
+          ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
+          ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
+          ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
+        });
+      } catch (error) {
+        defaultRuntime.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+      if (opts.json) {
+        defaultRuntime.writeJson(result);
+        return;
+      }
+      if (result.rollback) {
+        defaultRuntime.log(
+          [
+            `${heading("Session Backfill")} ${muted("(rollback)")}`,
+            muted(`workspace=${shortenHomePath(workspaceDir)}`),
+            muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
+            muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
+          ].join("\n"),
+        );
+        return;
+      }
+      const lines = [
+        `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
+        muted(`workspace=${shortenHomePath(workspaceDir)}`),
+        muted(
+          `days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+        ),
+      ];
+      for (const day of result.days) {
+        lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
+        lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
+      }
+      if (result.days.length === 0) {
+        lines.push("", "No new hash-untracked trusted session candidates.");
+      }
+      if (!result.applied && !result.rem) {
+        lines.push("", muted("Dry run; use --apply to stage candidates."));
+      }
+      defaultRuntime.log(lines.join("\n"));
+    },
+  });
+}
+
 export async function runMemoryRemHarness(
   opts: MemoryRemHarnessOptions,
   hostOptions?: MemoryCoreRuntimeHost,

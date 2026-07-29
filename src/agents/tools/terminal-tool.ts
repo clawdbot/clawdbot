@@ -146,7 +146,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
     label: "Terminal",
     name: "terminal",
     description:
-      "Own terminal on gateway host. open/read/input/close. User sees it in web UI, can type too. read = buffer snapshot.",
+      "Own terminal on gateway host. open/read/input/resize/close/list. User sees it in web UI, can type too. read = buffer snapshot.",
     parameters: TerminalToolSchema,
     outputSchema: TerminalToolOutputSchema,
     execute: async (_toolCallId, rawArgs, signal) => {

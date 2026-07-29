@@ -53,7 +53,7 @@ import {
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
-import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
+import { buildSandboxContainerName, resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
@@ -235,10 +235,14 @@ export async function ensureSandboxBrowser(params: {
   if (!isToolAllowed(params.cfg.tools, "browser")) {
     return null;
   }
+  if (normalizeOptionalLowercaseString(params.cfg.browser.network) === "none") {
+    throw new Error(
+      'Sandbox browser network mode "none" is unsupported because browser control requires a host-reachable published CDP port. Use "bridge", a custom bridge network, or disable the sandbox browser.',
+    );
+  }
 
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
-  const name = `${params.cfg.browser.containerPrefix}${slug}`;
-  const containerName = name.slice(0, 63);
+  const containerName = buildSandboxContainerName(params.cfg.browser.containerPrefix, slug);
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const stopExistingForContainer = async () => {
     await stopCachedBrowserBridgesForContainer(containerName);

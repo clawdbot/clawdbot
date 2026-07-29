@@ -225,6 +225,7 @@ export async function executePluginCommand(params: {
   agentId?: string;
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
+  sessionTarget?: PluginCommandContext["sessionTarget"];
   sessionFile?: PluginCommandContext["sessionFile"];
   authProfileId?: string;
   commandBody: string;
@@ -336,6 +337,7 @@ export async function executePluginCommand(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    sessionTarget: params.sessionTarget,
     sessionFile: params.sessionFile,
     args: sanitizedArgs,
     commandBody,

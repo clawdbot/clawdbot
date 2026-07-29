@@ -51,6 +51,10 @@ export type AgentExecEnvelope = {
   final: string;
   payloads: AgentExecPayload[];
   usage?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["usage"]>;
+  costUsd?: number;
+  codeModeEngaged?: boolean;
+  assistantTurns?: number;
+  bridgeCalls?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["bridgeCalls"]>;
   model: string | null;
   provider: string | null;
   sessionId: string;
@@ -227,6 +231,14 @@ export function classifyAgentExecResult(
     final: finalTextFromResult(result, payloads, !hasErrorPayload),
     payloads,
     ...(agentMeta?.usage ? { usage: agentMeta.usage } : {}),
+    ...(agentMeta?.costUsd !== undefined ? { costUsd: agentMeta.costUsd } : {}),
+    ...(agentMeta?.codeModeEngaged !== undefined
+      ? { codeModeEngaged: agentMeta.codeModeEngaged }
+      : {}),
+    ...(agentMeta?.assistantTurns !== undefined
+      ? { assistantTurns: agentMeta.assistantTurns }
+      : {}),
+    ...(agentMeta?.bridgeCalls ? { bridgeCalls: agentMeta.bridgeCalls } : {}),
     model: agentMeta?.model ?? null,
     provider: agentMeta?.provider ?? null,
     sessionId: agentMeta?.sessionId ?? "",

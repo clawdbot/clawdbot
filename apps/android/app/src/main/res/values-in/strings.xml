@@ -114,6 +114,7 @@
     <string name="native_1039e92fa05c1279" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Status Gateway, kesiapan node ponsel, dan aliran log terbaru."</string>
     <string name="native_106808530413298b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buka detail otomatisasi"</string>
     <string name="native_1093115897879aa3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Runtime"</string>
+    <string name="native_10d2f9ed07a13f84" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 worker lagi"</string>
     <string name="native_1102bd820f68901b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agen %1$s"</string>
     <string name="native_11252dd2410324bc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Get Goal"</string>
     <string name="native_114c9789813fd2b0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw %1$s (%2$s)"</string>
@@ -174,6 +175,7 @@
     <string name="native_199e261f8ee0e97f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terhubung (operator offline)"</string>
     <string name="native_19fc7a47df16fb1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kapabilitas belum disetujui"</string>
     <string name="native_1a00f329f4ad8941" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tindakan ini akan menghapus otomatisasi dan jadwalnya secara permanen dari Gateway."</string>
+    <string name="native_1a0c3289c8bd184b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memuat gambar…"</string>
     <string name="native_1a2303ede07493ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hubungkan"</string>
     <string name="native_1a3421ff23362bbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Setujui akses node"</string>
     <string name="native_1a6b66544dcfe305" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tambahkan Gateway"</string>
@@ -211,6 +213,7 @@
     <string name="native_2065cc867eba1b39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak dapat memuat konfigurasi model penyedia."</string>
     <string name="native_207ccb22d618db05" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s aplikasi diizinkan untuk meneruskan."</string>
     <string name="native_209b9e597963e7e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Penyiapan suara"</string>
+    <string name="native_20d4f92989f4fd3e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gambar tambahan disembunyikan: %1$s"</string>
     <string name="native_211988ba9dd0570a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tolak permintaan pemasangan?"</string>
     <string name="native_2132066dc9475cb7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."</string>
     <string name="native_21378545892f1fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Penerbit"</string>
@@ -490,6 +493,7 @@
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill ini memerlukan %1$s item penyiapan. Android menampilkan apa yang sudah terinstal; perubahan penyiapan/konfigurasi tetap dilakukan melalui desktop atau CLI."</string>
     <string name="native_4c8346f441fa1651" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s terbaru"</string>
     <string name="native_4c8906cf76f5740a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saluran"</string>
+    <string name="native_4c9bba30fb790a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Unphased"</string>
     <string name="native_4cb394d648628e4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktif di ponsel ini"</string>
     <string name="native_4cdd7410d10bc106" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memeriksa akses node"</string>
     <string name="native_4ceca1d52cede44d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zona waktu"</string>
@@ -524,6 +528,7 @@
     <string name="native_52aadec039d80320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ponsel Anda mengirim informasi ini ke Gateway Anda, bukan ke server yang dijalankan oleh OpenClaw. Gateway Anda mungkin menyertakannya dalam permintaan ke penyedia AI yang Anda pilih."</string>
     <string name="native_52bfe584a5fc4505" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pengiriman"</string>
     <string name="native_52d200a2d9f278ad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bisukan speaker"</string>
+    <string name="native_52d9f53cde594ded" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s Berjalan · %2$s Selesai · %3$s Gagal"</string>
     <string name="native_52dd413279b26d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Membuka koneksi Gateway"</string>
     <string name="native_52fbec07af8ae846" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memantau · %1$s utas"</string>
     <string name="native_5309fee1f35f049b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Proses automasi selesai."</string>
@@ -894,6 +899,7 @@
     <string name="native_8ba5517fc10b3db5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Izinkan kontrol aplikasi lain?"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Menginspeksi"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pindai atau tempel kode penyiapan untuk menambahkan gateway lain."</string>
+    <string name="native_8c13f73ba145c626" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Swarm"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Waktu TLS habis"</string>
     <string name="native_8c55387fb6c584c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Perangkat yang dipasangkan telah dihapus."</string>
     <string name="native_8c93c68056cde54d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway telah dipasangkan. Memeriksa persetujuan kapabilitas node."</string>
@@ -901,6 +907,7 @@
     <string name="native_8cac4b77b9c54695" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tindakan cron gagal."</string>
     <string name="native_8cb2bab2ce6a17b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Di komputer Gateway, jalankan:"</string>
     <string name="native_8d0839802b4d6aca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segarkan Log"</string>
+    <string name="native_8d0ee7798129f41c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gambar tidak tersedia · Ketuk untuk mencoba lagi"</string>
     <string name="native_8d20273207a2fe99" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw nodes approve %1$s"</string>
     <string name="native_8d57374bc09c8756" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Catatan suara · %1$s"</string>
     <string name="native_8d59829c1e15afe1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Penggunaan"</string>
@@ -1311,6 +1318,7 @@
     <string name="native_ce8bdd01ba43136f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Menyiapkan audio…"</string>
     <string name="native_ceb6931ea57cc999" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Adaptif"</string>
     <string name="native_cf0ee3547a4e51a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segera"</string>
+    <string name="native_d0329dd25d4401f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s worker lagi"</string>
     <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Search"</string>
     <string name="native_d053ba98d8bbcec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Coba Chat, Suara, Utas, Penyedia, atau Pengaturan."</string>
     <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw Aktif"</string>

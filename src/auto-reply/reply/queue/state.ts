@@ -1,5 +1,6 @@
 // Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import {
@@ -185,6 +186,7 @@ export function refreshQueuedFollowupSession(params: {
   nextSessionFile?: string;
   nextProvider?: string;
   nextModel?: string;
+  nextRouteResolution?: ModelFallbackRouteResolution;
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
@@ -206,10 +208,10 @@ export function refreshQueuedFollowupSession(params: {
     Boolean(params.previousSessionId) &&
     Boolean(params.nextSessionId) &&
     params.previousSessionId !== params.nextSessionId;
+  const hasNextModelRoute =
+    typeof params.nextProvider === "string" || typeof params.nextModel === "string";
   const shouldRewriteModelSelection =
-    typeof params.nextProvider === "string" ||
-    typeof params.nextModel === "string" ||
-    Object.hasOwn(params, "nextModelOverrideSource");
+    hasNextModelRoute || Object.hasOwn(params, "nextModelOverrideSource");
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
@@ -236,6 +238,9 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (typeof params.nextModel === "string") {
         run.model = params.nextModel;
+      }
+      if (hasNextModelRoute) {
+        run.requestedRouteResolution = params.nextRouteResolution ?? "raw";
       }
       if (shouldRewriteModelSelection) {
         delete run.hasAutoFallbackProvenance;

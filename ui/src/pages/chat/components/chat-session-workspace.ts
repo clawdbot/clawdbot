@@ -16,6 +16,7 @@ import {
 import { icons } from "../../../components/icons.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
@@ -60,6 +61,7 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
+  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
   onOpenDiff?: () => void;
   diffNotGit?: boolean;
@@ -111,9 +113,8 @@ export type SessionWorkspaceHost = {
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. Shared by the workspace and background-tasks rails
- * so both scope their gateway queries the same way. */
-export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
+ * assistant/default agent. */
+function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -720,6 +721,10 @@ export function createSessionWorkspaceProps(
           window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
+    onToggleCustodian:
+      state.connected && isGatewayMethodAdvertised(state, "openclaw.chat") === true
+        ? () => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))
+        : undefined,
     diffNotGit: workspace.list?.gitCheckout === false,
     onOpenDiff:
       isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
@@ -878,6 +883,20 @@ export function renderSessionWorkspaceRail(
             @click=${sessionWorkspace.onToggleBrowser}
           >
             ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const custodianButton = sessionWorkspace.onToggleCustodian
+    ? html`
+        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("custodian.panel.toggle")}
+            @click=${sessionWorkspace.onToggleCustodian}
+          >
+            ${icons.lobster}
           </button>
         </openclaw-tooltip>
       `
@@ -1190,7 +1209,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${diffButton} ${terminalButton} ${browserButton}
+          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`

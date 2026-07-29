@@ -18,6 +18,71 @@ beforeEach(() => {
   forkMock.mockReset();
 });
 
+it("keeps an active worker alive when a queued embedding request is aborted", async () => {
+  let completeActiveRequest: (() => void) | undefined;
+  const child = Object.assign(new EventEmitter(), {
+    connected: true,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    disconnect: vi.fn(function (this: { connected: boolean }) {
+      this.connected = false;
+    }),
+    kill: vi.fn(function (
+      this: EventEmitter & { signalCode: NodeJS.Signals | null },
+      signal: NodeJS.Signals,
+    ) {
+      this.signalCode = signal;
+      queueMicrotask(() => this.emit("close", null, signal));
+      return true;
+    }),
+    send: vi.fn(function (
+      this: EventEmitter,
+      message: { id: number; type: string; text?: string },
+      callback: (err?: Error | null) => void,
+    ) {
+      callback();
+      if (message.type === "embedQuery" && message.text === "active") {
+        completeActiveRequest = () => {
+          this.emit("message", { id: message.id, ok: true, value: [1, 0] });
+        };
+      } else {
+        queueMicrotask(() => {
+          this.emit("message", {
+            id: message.id,
+            ok: true,
+            ...(message.type === "embedQuery" ? { value: [0, 1] } : {}),
+          });
+        });
+      }
+      return true;
+    }),
+  });
+  forkMock.mockReturnValue(child);
+  const provider = await createLocalEmbeddingWorkerProvider(
+    { config: {} as never, provider: "local", model: "", fallback: "none" },
+    { workerScriptPath: "/mock/worker.cjs" },
+  );
+  const activeRequest = provider.embedQuery("active");
+  await vi.waitFor(() => expect(completeActiveRequest).toBeDefined());
+
+  const controller = new AbortController();
+  const queuedRequest = provider.embedQuery("queued", { signal: controller.signal });
+  controller.abort(new Error("queued embedding cancelled"));
+
+  await expect(queuedRequest).rejects.toThrow("queued embedding cancelled");
+  expect(child.send).toHaveBeenCalledTimes(2);
+  expect(child.kill).not.toHaveBeenCalled();
+
+  completeActiveRequest?.();
+  await expect(activeRequest).resolves.toEqual([1, 0]);
+  await expect(provider.embedQuery("after cancellation")).resolves.toEqual([0, 1]);
+
+  expect(forkMock).toHaveBeenCalledTimes(1);
+  expect(child.send).toHaveBeenCalledTimes(3);
+  expect(child.kill).not.toHaveBeenCalled();
+  await expect(provider.close?.()).resolves.toBeUndefined();
+});
+
 it("terminates a disconnected live worker without forking a replacement", async () => {
   const child = Object.assign(new EventEmitter(), {
     connected: true,

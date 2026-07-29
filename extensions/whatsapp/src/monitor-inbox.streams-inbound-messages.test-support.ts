@@ -371,7 +371,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("keeps the first delivery's prepared entry when a duplicate arrives", async () => {
+  it("keeps the first durable delivery when a duplicate arrives", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("dup-prepared");
@@ -384,8 +384,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    // Duplicate delivery of the same message id: its pending verdict must not
-    // delete the first delivery's kept preparation.
+    // Duplicate delivery of the same message id stays pending behind the first claim.
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
     await settleInboundWork();
@@ -2036,6 +2035,47 @@ describe("web monitor inbox", () => {
 
   it("captures reply context from quoted messages", async () => {
     await expectQuotedReplyContext({ conversation: "original" });
+  });
+
+  it("preserves native reply context when WhatsApp omits the quoted message", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("quoted-unavailable"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "yes",
+              contextInfo: {
+                stanzaId: "original-message",
+                participant: "111@s.whatsapp.net",
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("yes");
+    expect(inbound.quote).toMatchObject({
+      id: "original-message",
+      body: "[quoted message unavailable]",
+      sender: { displayName: "+111", jid: "111@s.whatsapp.net", e164: "+111" },
+    });
+
+    await listener.close();
   });
 
   it("captures reply context from wrapped quoted messages", async () => {

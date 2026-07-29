@@ -492,7 +492,8 @@ public struct OpenClawChatView: View {
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity)
+                runIdentity: self.viewModel.workingIndicatorIdentity,
+                outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
         }
 
@@ -544,6 +545,13 @@ public struct OpenClawChatView: View {
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            },
+            imageArtifactResolverReady: self.viewModel.healthOK,
+            loadImageArtifact: { [weak viewModel] artifactId in
+                guard let viewModel else { return nil }
+                return try await viewModel.transport.loadImageArtifact(
+                    sessionKey: viewModel.sessionKey,
+                    artifactId: artifactId)
             })
             .frame(
                 maxWidth: .infinity,
@@ -780,7 +788,8 @@ public struct OpenClawChatView: View {
     }
 
     private var showsWorkingIndicator: Bool {
-        self.viewModel.hasBlockingRunActivity && !self.hasVisibleStreamingAssistantText
+        self.viewModel.hasBlockingRunActivity &&
+            (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
     }
 
     private var turnRecapObservation: ChatTurnRecapObservation {

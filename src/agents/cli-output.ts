@@ -46,6 +46,8 @@ export type CliOutput = {
   text: string;
   rawText?: string;
   sessionId?: string;
+  /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
+  resumeCheckpointId?: string;
   usage?: CliUsage;
   /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
   diagnosticUsage?: CliUsage;
@@ -279,8 +281,14 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const totalInput = pick("input_tokens") ?? pick("inputTokens");
-  const output = pick("output_tokens") ?? pick("outputTokens");
+  // Chat Completions calls these prompt/completion tokens; preserve existing CLI-field precedence.
+  const totalInput =
+    pick("input_tokens") ?? pick("inputTokens") ?? pick("prompt_tokens") ?? pick("promptTokens");
+  const output =
+    pick("output_tokens") ??
+    pick("outputTokens") ??
+    pick("completion_tokens") ??
+    pick("completionTokens");
   const nestedCached =
     readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
   const cacheRead =
@@ -497,6 +505,22 @@ function pickCliSessionId(
     }
   }
   return undefined;
+}
+
+function pickCliResumeCheckpointId(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+}): string | undefined {
+  if (
+    !isClaudeStreamJsonDialect(params) ||
+    params.parsed.type !== "assistant" ||
+    params.parsed.parent_tool_use_id != null
+  ) {
+    return undefined;
+  }
+  const checkpointId = typeof params.parsed.uuid === "string" ? params.parsed.uuid.trim() : "";
+  return checkpointId || undefined;
 }
 
 function shouldUnwrapNestedCliResultText(params: {
@@ -1191,6 +1215,7 @@ export function createCliJsonlStreamingParser(params: {
   let assistantText = "";
   let pendingClaudeText = "";
   let sessionId: string | undefined;
+  let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
@@ -1265,6 +1290,7 @@ export function createCliJsonlStreamingParser(params: {
       usage = nextUsage ?? usage;
     }
     if (parsed.type === "assistant" && isRecord(parsed.message)) {
+      resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
     }
     const geminiErrorText = isGeminiStreamJsonDialect(params)
@@ -1316,6 +1342,7 @@ export function createCliJsonlStreamingParser(params: {
       output = {
         ...result,
         text,
+        ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
       return;
@@ -1517,10 +1544,17 @@ export function createCliJsonlStreamingParser(params: {
         return output;
       }
       if (isStreamJsonDialect(params) && assistantText.trim()) {
-        return { text: assistantText.trim(), sessionId, usage };
+        return {
+          text: assistantText.trim(),
+          sessionId,
+          usage,
+          ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        };
       }
       const text = texts.join("\n").trim();
-      return text ? { text, sessionId, usage } : null;
+      return text
+        ? { text, sessionId, usage, ...(resumeCheckpointId ? { resumeCheckpointId } : {}) }
+        : null;
     },
   };
 }
@@ -1537,6 +1571,7 @@ function parseCliJsonl(
     return null;
   }
   let sessionId: string | undefined;
+  let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   const texts: string[] = [];
   let streamJsonText = "";
@@ -1549,6 +1584,8 @@ function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
+      resumeCheckpointId =
+        pickCliResumeCheckpointId({ backend, providerId, parsed }) ?? resumeCheckpointId;
       const nextUsage = readCliUsage(parsed);
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
@@ -1589,11 +1626,18 @@ function parseCliJsonl(
       });
       if (claudeResult) {
         if (claudeResult.text || claudeResult.errorText) {
-          return claudeResult;
+          return {
+            ...claudeResult,
+            ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          };
         }
         // Live sessions reparse the completed JSONL transcript, so preserve
         // streamed text here as well as in the incremental parser above.
-        return { ...claudeResult, text: streamJsonText.trim() || texts.join("\n").trim() };
+        return {
+          ...claudeResult,
+          text: streamJsonText.trim() || texts.join("\n").trim(),
+          ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        };
       }
 
       const claudeDelta = parseClaudeCliStreamingDelta({
@@ -1622,7 +1666,12 @@ function parseCliJsonl(
     return { text: "", sessionId, usage, errorText: geminiErrorText };
   }
   if (streamJsonDialect && (streamJsonText.trim() || sawGeminiStructuredOutput)) {
-    return { text: streamJsonText.trim(), sessionId, usage };
+    return {
+      text: streamJsonText.trim(),
+      sessionId,
+      usage,
+      ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+    };
   }
   if (streamJsonDialect) {
     return { text: "", sessionId, usage, errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR };

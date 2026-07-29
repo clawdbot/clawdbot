@@ -546,8 +546,8 @@ export async function getReplyFromConfig(
     storePath,
   });
 
-  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+  if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
 
     // Heartbeats may safely clear ack-only pending state, but must not replay
     // user-facing pending finals through a different delivery target.
@@ -846,6 +846,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
+    requestedRouteResolution,
     modelState,
     contextTokens,
     inlineStatusRequested,
@@ -870,6 +871,7 @@ export async function getReplyFromConfig(
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
+      agentId,
       ctx,
       cfg,
       command,
@@ -877,6 +879,7 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
   };
@@ -1073,6 +1076,9 @@ export async function getReplyFromConfig(
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
+      requestedRouteResolution: runAutoFallbackPrimaryProbe
+        ? runModelState.requestedRouteResolution
+        : requestedRouteResolution,
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,

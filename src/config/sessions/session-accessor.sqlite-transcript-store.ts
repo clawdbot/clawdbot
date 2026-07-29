@@ -19,15 +19,18 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  advanceTranscriptMutationAtInTransaction,
   deleteSqliteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
   readTranscriptGenerationInTransaction,
+  readTranscriptMutationStateInTransaction,
   readNextTranscriptSeq,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  deleteSessionTranscriptIndexInTransaction,
   indexAppendedTranscriptEventInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
@@ -319,19 +322,28 @@ export function replaceSqliteTranscriptEventsInTransaction(
   events: readonly TranscriptEvent[],
   options: {
     createdAtByIndex?: readonly number[];
-    preserveSessionWindowTimestamps?: boolean;
+    /** Keep maintenance rewrites at their existing recency while invalidating stale projections. */
+    preserveSessionWindowRecency?: boolean;
   } = {},
 ): void {
+  const preservedTranscriptUpdatedAt =
+    options.preserveSessionWindowRecency === true
+      ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
+      : undefined;
   const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
   const deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
     if (deleted || previousGeneration) {
       rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
-      touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      recordTranscriptReplacementMutation(
+        database,
+        resolved.sessionId,
+        preservedTranscriptUpdatedAt,
+      );
     }
     return;
   }
-  if (!deleted || options.preserveSessionWindowTimestamps !== true) {
+  if (!deleted || options.preserveSessionWindowRecency !== true) {
     ensureTranscriptSessionRoot(database, resolved, readEventTimestamp(events[0]) ?? Date.now());
   }
   if (deleted || previousGeneration) {
@@ -360,9 +372,25 @@ export function replaceSqliteTranscriptEventsInTransaction(
     }
   }
   if (deleted || seq > 0) {
-    touchTranscriptMutationInTransaction(database, resolved.sessionId);
+    recordTranscriptReplacementMutation(database, resolved.sessionId, preservedTranscriptUpdatedAt);
     reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
   }
+}
+
+function recordTranscriptReplacementMutation(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  preservedUpdatedAt: number | null | undefined,
+): void {
+  if (preservedUpdatedAt === undefined || preservedUpdatedAt === null) {
+    touchTranscriptMutationInTransaction(database, sessionId);
+    return;
+  }
+  // Maintenance rewrites must invalidate in-flight projections without making an old session
+  // look newly active. A one-tick advance preserves ordering while changing the snapshot key.
+  advanceTranscriptMutationAtInTransaction(database, sessionId, preservedUpdatedAt, {
+    strictly: true,
+  });
 }
 
 /** Rewrite existing transcript rows exactly, without append-time deduplication. */
@@ -399,6 +427,48 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
   reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+}
+
+// Text-only transcript repair: rewrites event_json for specific rows in place.
+// Preserves seq, created_at, session_key, and session activity recency; rotates the transcript
+// generation and rebuilds the index so readers/search pick up the new text.
+export function updateSqliteTranscriptEventJsonInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  updates: ReadonlyArray<{ seq: number; eventJson: string }>,
+): void {
+  if (updates.length === 0) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  for (const { seq, eventJson } of updates) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("transcript_events")
+        .set({ event_json: eventJson })
+        .where("session_id", "=", sessionId)
+        .where("seq", "=", seq),
+    );
+  }
+  rotateTranscriptGenerationInTransaction(database, sessionId);
+  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
+  reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  // Minimally advance transcript_updated_at (prev+1), NOT to now. This is a one-time maintenance
+  // rewrite: bumping to now would reorder legacy sessions to the top of every recency view
+  // (sqlite-history.ts orders by transcript_updated_at). But the watermark must still change,
+  // because it is the in-flight projection-rebuild worker's stale-snapshot key
+  // (session-transcript-projection-rebuild.ts sourceSnapshotMatches) and seq is unchanged here;
+  // leaving it identical would let a concurrent worker apply a stale pre-rewrite index. A null
+  // watermark (session absent from recency views) has no recency to preserve, so touch to now.
+  const currentUpdatedAt = readTranscriptMutationStateInTransaction(database, sessionId).updatedAt;
+  if (currentUpdatedAt === null) {
+    touchTranscriptMutationInTransaction(database, sessionId);
+  } else {
+    advanceTranscriptMutationAtInTransaction(database, sessionId, currentUpdatedAt, {
+      strictly: true,
+    });
+  }
 }
 
 export function readTranscriptIdentityByEventId(

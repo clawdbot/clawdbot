@@ -22,6 +22,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
 
+  it("advertises skill invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("skills.changed");
+  });
+
   it("advertises session observer digests", () => {
     expect(GATEWAY_EVENTS).toContain("session.observer");
   });
@@ -62,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-24)).toEqual([
+    expect(listGatewayMethods().slice(-25)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -87,6 +91,7 @@ describe("listGatewayMethods", () => {
       "sessions.companion.ask",
       "sessions.companion.state",
       "sessions.companion.reset",
+      "memory.search",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -147,7 +152,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-31)).toEqual([
+    expect(coreMethods.slice(-32)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -179,6 +184,7 @@ describe("listGatewayMethods", () => {
       "sessions.companion.ask",
       "sessions.companion.state",
       "sessions.companion.reset",
+      "memory.search",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

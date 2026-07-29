@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
@@ -42,7 +43,9 @@ export type ShortTermRecallEntry = {
   recallDays: string[];
   conceptTags: string[];
   claimHash?: string;
+  projectKey?: string;
   promotedAt?: string;
+  provenance?: MemoryEntryProvenance;
 };
 
 export type ShortTermRecallStore = {
@@ -99,6 +102,7 @@ export type PromotionCandidate = {
   maxScore: number;
   uniqueQueries: number;
   claimHash?: string;
+  projectKey?: string;
   promotedAt?: string;
   firstRecalledAt: string;
   lastRecalledAt: string;
@@ -107,6 +111,7 @@ export type PromotionCandidate = {
   recallDays: string[];
   conceptTags: string[];
   components: PromotionComponents;
+  provenance?: MemoryEntryProvenance;
 };
 
 export type ShortTermAuditIssue = {
@@ -115,6 +120,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-store-dangling"
     | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
@@ -136,6 +142,7 @@ export type ShortTermAuditSummary = {
   conceptTaggedEntryCount: number;
   conceptTagScripts?: ConceptTagScriptCoverage;
   invalidEntryCount: number;
+  danglingEntryCount?: number;
   issues: ShortTermAuditIssue[];
   qmd?:
     | {
@@ -149,6 +156,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedDanglingEntries?: number;
   removedOverflowEntries: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
@@ -193,6 +201,15 @@ export type ApplyShortTermPromotionsOptions = {
    * metadata.
    */
   maxPromotedSnippetTokens?: number;
+  maxPriorEntryLossFraction?: number;
+  consolidation?: {
+    subagent?: import("./dreaming-narrative.js").SubagentSurface;
+    model?: string;
+    logger: {
+      info: (message: string) => void;
+      warn: (message: string) => void;
+    };
+  };
 };
 
 export type ApplyShortTermPromotionsResult = {

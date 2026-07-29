@@ -30,6 +30,8 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   cfg?: OpenClawConfig;
   /** Alternate config object used by generic provider selection internals. */
   cfgForResolve?: OpenClawConfig;
+  /** Agent whose browser-session auth store should be inspected. */
+  agentId?: string;
   /** Test/runtime override for the provider list. */
   providers?: RealtimeVoiceProviderPlugin[];
   /** Model injected before provider-specific resolveConfig runs. */
@@ -43,6 +45,8 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   cfg?: OpenClawConfig;
+  /** Effective per-session model after request overrides. */
+  model?: string;
   surface?: "browser-session" | "bridge";
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   if (params.surface === "browser-session") {
@@ -58,6 +62,7 @@ export function isRealtimeVoiceProviderConfigured(params: {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
   surface?: "browser-session" | "bridge";
 }): boolean {
   if (
@@ -111,6 +116,7 @@ export function resolveConfiguredRealtimeVoiceProvider(
         provider,
         cfg,
         providerConfig,
+        agentId: params.agentId,
         surface: params.surface,
       }),
   });

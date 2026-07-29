@@ -8,7 +8,7 @@ import {
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { discussionCredentialFingerprint } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { assertManagedChannelListContract } from "./service-open.js";
+import { assertChannelPatch, assertManagedChannelListContract } from "./service-open.js";
 import {
   TEST_DESTINATION_IDENTITY,
   createHarness,
@@ -112,6 +112,62 @@ describe("ClickClack discussion service contracts", () => {
       state: "open",
     });
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a legacy create response that omits display_title", async () => {
+    const harness = createHarness({ label: "Legacy title response" });
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => {
+      const channel = {
+        id: "chn_legacy_title",
+        route_id: "legacy-title-route",
+        workspace_id: "wsp_team",
+        ...input,
+        kind: "public",
+        created_at: "2026-07-19T00:00:00.000Z",
+      };
+      Reflect.deleteProperty(channel, "display_title");
+      return channel;
+    });
+
+    await expect(harness.service.open("agent:main:legacy-title")).resolves.toMatchObject({
+      state: "open",
+    });
+  });
+
+  it("rejects a create response with the wrong display_title", async () => {
+    const harness = createHarness({ label: "Expected title" });
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
+      id: "chn_wrong_title",
+      route_id: "wrong-title-route",
+      workspace_id: "wsp_team",
+      ...input,
+      display_title: "Wrong title",
+      kind: "public",
+      created_at: "2026-07-19T00:00:00.000Z",
+    }));
+
+    await expect(harness.service.open("agent:main:wrong-title")).rejects.toThrow(
+      "managed discussion channel contract",
+    );
+  });
+
+  it("checks display_title patches only when the response advertises the field", () => {
+    const channel = {
+      id: "chn_patch_title",
+      route_id: "patch-title-route",
+      workspace_id: "wsp_team",
+      name: "expected-title",
+      kind: "public",
+      created_at: "2026-07-19T00:00:00.000Z",
+    };
+
+    expect(() => assertChannelPatch(channel, { display_title: "Expected title" })).not.toThrow();
+    expect(() =>
+      assertChannelPatch(
+        { ...channel, display_title: "Wrong title" },
+        { display_title: "Expected title" },
+      ),
+    ).toThrow("did not apply display_title");
   });
 
   it("accepts a managed channel whose absent external URL is omitted", async () => {
@@ -595,7 +651,7 @@ describe("ClickClack discussion service contracts", () => {
       "https://new-control.example";
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      external_url: `https://new-control.example/chat?session=${encodeURIComponent(sessionKey)}`,
+      external_url: "https://new-control.example/chat/main/control-link",
     });
   });
 
@@ -612,7 +668,7 @@ describe("ClickClack discussion service contracts", () => {
       kind: "public",
       external_managed: true,
       external_ref: testExternalRef(sessionKey),
-      external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+      external_url: "https://control.example/control/chat/main/support-12345678",
       sidebar_section: "Projects",
       archived: false,
       created_at: "2026-07-19T00:00:00.000Z",

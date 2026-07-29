@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEventRowsAfterSeqSync,
   readTranscriptEventAtSeqSync,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -84,7 +84,7 @@ export type UsageCostStoredRollup = {
   valueJson: string;
 };
 
-export type UsageCostRefreshResult = "refreshed" | "busy";
+type UsageCostRefreshResult = "refreshed" | "busy";
 
 export function resolveUsageCostCacheDatabasePath(agentId: string): string {
   return resolveOpenClawAgentSqlitePath({ agentId: normalizeAgentId(agentId) });
@@ -130,9 +130,10 @@ export function readUsageCostRollups(
   agentId: string,
   pricingFingerprint: string,
   databasePath?: string,
+  rows = readSessionCostUsageRollupRows(agentId, databasePath),
 ): Map<string, UsageCostStoredRollup> {
   const result = new Map<string, UsageCostStoredRollup>();
-  for (const row of readSessionCostUsageRollupRows(agentId, databasePath)) {
+  for (const row of rows) {
     try {
       const entry = normalizeUsageCostRollup(JSON.parse(row.valueJson), pricingFingerprint);
       if (entry) {
@@ -595,7 +596,7 @@ export async function refreshCostUsageCacheForAgent(params: {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
-    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
+    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
     const discoveredFiles = await listUsageCountedTranscriptFiles(
       params.agentId,
       params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
@@ -616,6 +617,7 @@ export async function refreshCostUsageCacheForAgent(params: {
       agentId: params.agentId,
       databasePath,
       liveKeys: new Set(files.map((file) => file.filePath)),
+      rows,
     });
 
     const requestedPaths = new Set<string>();

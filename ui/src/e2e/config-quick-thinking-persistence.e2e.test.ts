@@ -1,4 +1,4 @@
-// Control UI tests cover Quick Config persistence through the mocked Gateway.
+// Control UI tests cover shared model-behavior persistence through the mocked Gateway.
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,8 +18,20 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function configResponse(thinkingDefault: "low" | "high", hash: string) {
-  const config = { agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault } } };
+function configResponse(
+  thinkingDefault: "low" | "high",
+  hash: string,
+  fastModeDefault?: boolean | "auto",
+) {
+  const config = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault,
+        ...(fastModeDefault === undefined ? {} : { fastModeDefault }),
+      },
+    },
+  };
   return {
     config,
     hash,
@@ -37,7 +49,7 @@ function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
 
-describeControlUiE2e("Control UI General settings thinking persistence mocked Gateway E2E", () => {
+describeControlUiE2e("Control UI Models settings behavior persistence mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(
@@ -53,64 +65,23 @@ describeControlUiE2e("Control UI General settings thinking persistence mocked Ga
     await server?.close();
   });
 
-  it.each([
-    {
-      name: "a string model",
-      model: "openai/gpt-5.4",
-      expected: "openai/gpt-5.4",
-    },
-    {
-      name: "an object model with fallbacks",
-      model: {
-        primary: "openai/gpt-5.4",
-        fallbacks: ["anthropic/claude-sonnet-4-6"],
-      },
-      expected: "openai/gpt-5.4",
-    },
-    {
-      name: "an object model without fallbacks",
-      model: { primary: "anthropic/claude-sonnet-4-6" },
-      expected: "anthropic/claude-sonnet-4-6",
-    },
-    {
-      name: "a fallbacks-only model",
-      model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
-      expected: "default",
-    },
-    {
-      name: "a model without a valid primary",
-      model: { primary: 42, fallbacks: ["anthropic/claude-sonnet-4-6"] },
-      expected: "default",
-    },
-  ])("displays the configured primary for $name", async ({ model, expected }) => {
+  it("links General to the Models page", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const config = { agents: { defaults: { model, thinkingDefault: "low" } } };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": {
-          config,
-          hash: "general-model-primary-hash",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        },
-      },
-    });
+    const gateway = await installMockGateway(page);
 
     try {
       const response = await page.goto(`${server.baseUrl}settings/general`);
       expect(response?.status()).toBe(200);
 
-      const modelValue = page
-        .locator("#settings-general-model .settings-row")
-        .filter({ hasText: "Model" })
-        .locator(".settings-row__value");
-      await expect.poll(async () => modelValue.textContent()).toBe(expected);
+      const modelsRow = page.getByRole("button", { name: /Models/ });
+      await modelsRow.waitFor();
+      await modelsRow.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
     } finally {
       await context.close();
@@ -134,10 +105,10 @@ describeControlUiE2e("Control UI General settings thinking persistence mocked Ga
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}config`);
+      const response = await page.goto(`${server.baseUrl}settings/model-providers`);
       expect(response?.status()).toBe(200);
 
-      const modelCard = page.locator("#settings-general-model");
+      const modelCard = page.locator("#settings-model-behavior");
       const lowButton = modelCard.getByRole("radio", { name: "Low", exact: true });
       await lowButton.waitFor();
       expect(await lowButton.getAttribute("aria-checked")).toBe("true");
@@ -155,9 +126,9 @@ describeControlUiE2e("Control UI General settings thinking persistence mocked Ga
       await installMockGateway(freshPage, {
         methodResponses: { "config.get": savedConfig },
       });
-      await freshPage.goto(`${server.baseUrl}config`);
+      await freshPage.goto(`${server.baseUrl}settings/model-providers`);
       const highButton = freshPage
-        .locator("#settings-general-model")
+        .locator("#settings-model-behavior")
         .getByRole("radio", { name: "High", exact: true });
       await highButton.waitFor();
       expect(await highButton.getAttribute("aria-checked")).toBe("true");
@@ -165,4 +136,56 @@ describeControlUiE2e("Control UI General settings thinking persistence mocked Ga
       await context.close();
     }
   });
+
+  it.each([
+    { initial: false, initialLabel: "Standard", next: true, nextLabel: "Fast" },
+    { initial: true, initialLabel: "Fast", next: "auto" as const, nextLabel: "Auto" },
+    { initial: "auto" as const, initialLabel: "Auto", next: false, nextLabel: "Standard" },
+  ])(
+    "persists agents.defaults.fastModeDefault from $initialLabel to $nextLabel",
+    async ({ initial, initialLabel, next, nextLabel }) => {
+      const context = await browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const initialConfig = configResponse("low", "hash-1", initial);
+      const gateway = await installMockGateway(page, {
+        methodResponses: { "config.get": initialConfig },
+      });
+
+      try {
+        const response = await page.goto(`${server.baseUrl}settings/model-providers`);
+        expect(response?.status()).toBe(200);
+
+        const modelCard = page.locator("#settings-model-behavior");
+        const initialButton = modelCard.getByRole("radio", { name: initialLabel, exact: true });
+        await initialButton.waitFor();
+        expect(await initialButton.getAttribute("aria-checked")).toBe("true");
+
+        await modelCard.getByRole("radio", { name: nextLabel, exact: true }).click();
+
+        const raw = requestRaw(await gateway.waitForRequest("config.set"));
+        expect(raw).toEqual({
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              thinkingDefault: "low",
+              fastModeDefault: next,
+            },
+          },
+        });
+        expect(raw.agents).not.toHaveProperty("defaults.fastMode");
+
+        const reloadResponse = await page.reload();
+        expect(reloadResponse?.status()).toBe(200);
+        const persistedButton = modelCard.getByRole("radio", { name: nextLabel, exact: true });
+        await persistedButton.waitFor();
+        expect(await persistedButton.getAttribute("aria-checked")).toBe("true");
+      } finally {
+        await context.close();
+      }
+    },
+  );
 });

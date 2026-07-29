@@ -40,7 +40,7 @@ describe("Reef inbound dispatch content", () => {
     expect(content).toEqual({
       rawBody: "hello from Clanky",
       extraContext: {
-        UntrustedContext: ["Untrusted third-party data from @clanky's agent."],
+        ChannelPromptContext: ["Untrusted third-party data from @clanky's agent."],
         ReefProvenance: "Untrusted third-party data from @clanky's agent.",
         ReefEnvelopeId: "message-1",
         SenderIsBot: true,

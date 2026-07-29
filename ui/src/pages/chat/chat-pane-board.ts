@@ -1,44 +1,51 @@
 import {
   GATEWAY_SERVER_CAPS,
+  type SessionObserverDigest,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
+import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
   boardProviderForSession,
-  buildAgentMainSessionKey,
-  hasOperatorApprovalsAccess,
-  hasOperatorWriteAccess,
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-  isWorkboardEnabledInConfigSnapshot,
-  loadSettings,
-  normalizeSessionKeyForUiComparison,
-  patchSettings,
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
-  detachPanelToColumn,
-  fitSidebarLayout,
-  openSlot,
-  resizeColumn,
-  renderChatResizableDivider,
-  resolveAgentIdFromSessionKey,
-  resolveSessionKey,
-  t,
-  updateBoardSessionView,
   type BoardCommandEvent,
   type BoardProvider,
-  type BoardSessionView,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type SessionObserverDigest,
-  type SidebarLayout,
-  type SidebarSide,
-  type WorkboardCardChipProps,
-} from "./chat-pane-deps.ts";
+} from "../../lib/board/provider.ts";
+import { updateBoardSessionView, type BoardSessionView } from "../../lib/board/settings.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
+  resolveAgentIdFromSessionKey,
+  resolveUiGlobalAliasAgentId,
+} from "../../lib/sessions/session-key.ts";
+import type { WorkboardCardChipProps } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import {
   boardChatDockLayout,
   type ResolvedBoardView,
   type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
+import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  detachPanelToColumn,
+  fitSidebarLayout,
+  openSlot,
+  resizeColumn,
+  type SidebarLayout,
+  type SidebarSide,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected commitSidebarLayout(layout: SidebarLayout): void {
@@ -187,30 +194,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           sessionKey: key,
         };
       } else {
-        boardProviderForSession(
-          key,
-          client,
-          true,
-          gateway.phase === "connected",
+        this.boardProviderLease.update(client, gateway.phase === "connected", {
           canPinWidgets,
           canPinMcpApps,
           canMutate,
           canGrant,
-        );
+        });
       }
       return this.boardProviderLease.provider;
     }
     this.releaseBoardProviderLease();
-    return boardProviderForSession(
-      sessionKey,
-      client,
-      available,
-      gateway?.phase === "connected",
-      canPinWidgets,
-      canPinMcpApps,
-      canMutate,
-      canGrant,
-    );
+    return boardProviderForSession(sessionKey, available);
   }
 
   protected releaseBoardProviderLease(): void {
@@ -250,6 +244,27 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     );
     const normalized = normalizeSessionKeyForUiComparison(resolved);
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+  }
+
+  protected resolveObserverDigestHistoryKey(snapshotSessionKey = "", agentId?: string): string {
+    const sessionKey = this.resolveBoardSessionKey(snapshotSessionKey);
+    const globalAliasAgentId = resolveUiGlobalAliasAgentId(
+      {
+        agentsList: this.context?.agents?.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      },
+      sessionKey,
+    );
+    if (sessionKey !== "global" && !globalAliasAgentId) {
+      return sessionKey;
+    }
+    const owner = normalizeAgentId(
+      agentId ??
+        globalAliasAgentId ??
+        this.context?.agentSelection?.state.selectedId ??
+        this.state?.assistantAgentId,
+    );
+    return `agent:${owner}:global`;
   }
 
   protected refreshSwarmRoster(): void {
@@ -311,7 +326,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         return;
       }
       const base = this.resolveBoardProvider().snapshot$.value;
-      const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
+      const sessionKey = this.resolveObserverDigestHistoryKey(base.sessionKey);
       this.builtinBoardSnapshotBase = base;
       this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
         base,
@@ -322,7 +337,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected recordObserverDigest(digest: SessionObserverDigest): void {
-    const sessionKey = this.resolveBoardSessionKey(digest.sessionKey);
+    if (
+      normalizeSessionKeyForUiComparison(digest.sessionKey) === "global" &&
+      !digest.agentId?.trim()
+    ) {
+      return;
+    }
+    const sessionKey = this.resolveObserverDigestHistoryKey(digest.sessionKey, digest.agentId);
     if (this.observerDigestHistory.record({ ...digest, sessionKey })) {
       this.refreshBuiltinBoardSnapshot();
     }
@@ -362,7 +383,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       provider,
       snapshot,
       hasBoard,
-      face: hasBoard ? (saved?.face ?? "chat") : "chat",
+      face: hasBoard ? this.routeFace : "chat",
       activeTabId,
       activeTabReadOnly,
       dock,
@@ -371,7 +392,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     };
   }
 
-  protected persistBoardSessionView(patch: Partial<BoardSessionView>): void {
+  protected persistBoardSessionView(
+    patch: Partial<BoardSessionView> & { face?: "chat" | "dashboard" },
+  ): void {
+    if (patch.face) {
+      this.onFaceChange?.(patch.face);
+    }
+    const persistedPatch = { ...patch };
+    delete persistedPatch.face;
+    if (Object.keys(persistedPatch).length === 0) {
+      return;
+    }
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!sessionKey) {
@@ -384,7 +415,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ...persistedSettings.boardSessionViews,
     };
     const next = patchSettings({
-      boardSessionViews: updateBoardSessionView(boardSessionViews, sessionKey, patch),
+      boardSessionViews: updateBoardSessionView(boardSessionViews, sessionKey, persistedPatch),
     });
     if (this.state) {
       this.state.settings = next;
