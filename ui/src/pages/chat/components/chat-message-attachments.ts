@@ -18,6 +18,7 @@ import {
   managedAttachmentRefreshDelayMs,
   resolveManagedOutgoingMediaSessionKey,
   scheduleAssistantAttachmentRefresh,
+  selectLaterExpiringManagedAttachment,
   setAssistantAttachmentAvailability,
   type AssistantAttachmentAvailability,
   type ManagedAttachmentAvailability,
@@ -439,9 +440,11 @@ function resolveManagedAttachmentAvailability(
           url,
           expiresAt,
         };
-        const retained =
-          retainManagedAttachmentUntilExpiry(resource, current, refreshAttempts) ??
-          retainManagedAttachmentUntilExpiry(resource, incoming, refreshAttempts);
+        const retained = retainManagedAttachmentUntilExpiry(
+          resource,
+          selectLaterExpiringManagedAttachment(current, incoming),
+          refreshAttempts,
+        );
         if (retained) {
           return retained;
         }

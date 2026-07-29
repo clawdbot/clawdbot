@@ -114,6 +114,15 @@ export function managedAttachmentRefreshDelayMs(refreshAttempts: number): number
   return ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS * 2 ** Math.max(0, refreshAttempts - 1);
 }
 
+export function selectLaterExpiringManagedAttachment(
+  current: Extract<ManagedAttachmentAvailability, { status: "available" }> | null,
+  incoming: Extract<ManagedAttachmentAvailability, { status: "available" }>,
+): Extract<ManagedAttachmentAvailability, { status: "available" }> {
+  return current?.expiresAt !== undefined && current.expiresAt >= (incoming.expiresAt ?? 0)
+    ? current
+    : incoming;
+}
+
 export function isManagedOutgoingMediaSource(source: string): boolean {
   try {
     const parsed = new URL(source, window.location.origin);

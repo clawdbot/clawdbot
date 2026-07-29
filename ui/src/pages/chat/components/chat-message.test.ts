@@ -3404,6 +3404,61 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
   });
 
+  it("retains a longer-lived incoming managed ticket after refresh exhaustion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
+    const initialExpiry = Date.now() + 20_000;
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
+    const resolveArtifactDownload = vi.fn(async () => ({
+      url: `${source}?mediaTicket=short-${resolveArtifactDownload.mock.calls.length}`,
+      expiresAt: new Date(
+        resolveArtifactDownload.mock.calls.length === 3 ? Date.now() + 20_000 : initialExpiry,
+      ).toISOString(),
+    }));
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-managed-later-ticket",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              artifactId,
+              url: source,
+              fileName: "voice.mp3",
+              mimeType: "audio/mpeg",
+              playback: "native",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: rerender, resolveArtifactDownload },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    expect(
+      container.querySelector("openclaw-chat-audio-player audio")?.getAttribute("src"),
+    ).toContain("mediaTicket=short-3");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+  });
+
   it("refreshes a managed attachment that arrives with an initial ticket", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
