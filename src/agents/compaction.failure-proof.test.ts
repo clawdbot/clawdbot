@@ -2,6 +2,7 @@
 // report the actual provider failure, and leave the transcript unrotated.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as agentSessions from "./sessions/index.js";
 
@@ -38,9 +39,9 @@ describe("compaction failure real-behavior proof", () => {
     );
 
     const messages: AgentMessage[] = [
-      { role: "user", content: "first user request", timestamp: 1 },
-      { role: "assistant", content: "assistant response", timestamp: 2 },
-      { role: "user", content: "second user request", timestamp: 3 },
+      { role: "user", content: "first user request", timestamp: 1 } satisfies UserMessage,
+      { role: "user", content: "second user request", timestamp: 2 } satisfies UserMessage,
+      { role: "user", content: "third user request", timestamp: 3 } satisfies UserMessage,
     ];
 
     await expect(
@@ -61,7 +62,7 @@ describe("compaction failure real-behavior proof", () => {
     // No compaction placeholder is returned, so messages are not rotated away.
     expect(messages).toHaveLength(3);
     expect(messages[0].content).toBe("first user request");
-    expect(messages[1].content).toBe("assistant response");
-    expect(messages[2].content).toBe("second user request");
+    expect(messages[1].content).toBe("second user request");
+    expect(messages[2].content).toBe("third user request");
   });
 });
