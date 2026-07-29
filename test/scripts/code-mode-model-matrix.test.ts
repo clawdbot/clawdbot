@@ -345,6 +345,42 @@ describe("Code Mode model matrix classification", () => {
 });
 
 describe("Code Mode model matrix artifacts", () => {
+  it("rejects output inside Git metadata", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-git-test-"));
+    try {
+      await fs.mkdir(path.join(repoRoot, ".git"));
+      await expect(
+        runCodeModeModelMatrix(
+          {
+            allowFailures: false,
+            dryRun: true,
+            keepState: false,
+            models: ["ollama/qwen3.5:9b"],
+            modes: ["code"],
+            outputDir: path.join(".git", "refs", "evidence"),
+            repetitions: 1,
+            repoRoot,
+            tasks: ["read"],
+            thinking: "off",
+            timeoutSeconds: 10,
+          },
+          {
+            readSourceIdentity: async () => ({
+              gitSha: "abc123",
+              sourceDirty: false,
+              sourcePatchSha256: null,
+            }),
+          },
+        ),
+      ).rejects.toThrow("must not overlap Git metadata");
+      await expect(fs.access(path.join(repoRoot, ".git", "refs"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await fs.rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   it("rejects case aliases of missing runtime artifacts", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-case-test-"));
     try {

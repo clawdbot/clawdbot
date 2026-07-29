@@ -439,6 +439,35 @@ async function assertOutputOutsideRuntimeArtifacts(
   }
 }
 
+async function assertOutputOutsideGitMetadata(repoRoot: string, outputDir: string): Promise<void> {
+  const gitDirectories = [path.join(repoRoot, ".git")];
+  const discovered = await execFileAsync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+    },
+  ).catch(() => null);
+  if (discovered) {
+    gitDirectories.push(
+      ...discovered.stdout
+        .split(/\r?\n/u)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+  }
+
+  const caseInsensitive = await filesystemUsesCaseInsensitivePaths(repoRoot);
+  const canonicalOutput = await canonicalizeExistingPathPrefix(outputDir);
+  for (const gitDirectory of new Set(gitDirectories)) {
+    const canonicalGitDirectory = await canonicalizeExistingPathPrefix(gitDirectory);
+    if (pathsOverlap(canonicalOutput, canonicalGitDirectory, caseInsensitive)) {
+      throw new Error("--output-dir must not overlap Git metadata");
+    }
+  }
+}
+
 export async function reserveCodeModeMatrixOutputDir(
   repoRoot: string,
   outputDir: string,
@@ -1260,6 +1289,7 @@ export async function runCodeModeModelMatrix(
         }
       : await readSourceIdentity(options.repoRoot);
   const cells = buildCells(options);
+  await assertOutputOutsideGitMetadata(options.repoRoot, outputDir);
   if (!options.dryRun) {
     await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
   }
