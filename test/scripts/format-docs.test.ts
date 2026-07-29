@@ -1,4 +1,5 @@
 // Format Docs tests cover the docs formatter helper process spawning.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -95,6 +96,32 @@ describe("format-docs", () => {
     ).toThrow(
       /oxfmt failed:[\s\S]*command:[\s\S]*exit status: 1[\s\S]*formatter stderr[\s\S]*formatter stdout/u,
     );
+  });
+
+  it("keeps real formatter failure tails UTF-8 safe", () => {
+    const root = createTempDir("openclaw-format-docs-utf8-tail-");
+    let message = "";
+
+    try {
+      runOxfmt(
+        ["README.md"],
+        { repoRoot: root },
+        {
+          existsSync: () => false,
+          spawnSync: () =>
+            spawnSync(
+              process.execPath,
+              ["-e", 'process.stderr.write("你好" + "x".repeat(16_380)); process.exitCode = 1'],
+              { encoding: "utf8", maxBuffer: 1024 * 1024, shell: false, timeout: 5_000 },
+            ),
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/oxfmt failed:[\s\S]*exit status: 1[\s\S]*stderr tail:\n好x/u);
+    expect(message).not.toContain("�");
   });
 
   it("uses repository paths in write mode and temporary paths in check mode", () => {
