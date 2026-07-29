@@ -11,7 +11,6 @@ import {
   reserveCodeModeMatrixOutputDir,
   resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
-  validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.ts";
 import type { AgentExecEnvelope } from "../../src/commands/agent-exec.ts";
