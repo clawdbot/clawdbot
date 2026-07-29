@@ -569,19 +569,6 @@ describe("handleLoginCommand", () => {
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
 
-  it("normalizes Codex login aliases to the OpenAI provider", async () => {
-    mockSuccessfulLoginFlow();
-
-    await handleLoginCommand(
-      buildLoginParams("/login openai-codex", { opts: blockReplyOpts() }),
-      true,
-    );
-
-    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-    );
-  });
-
   it("returns a friendly error for unsupported providers", async () => {
     const result = await handleLoginCommand(buildLoginParams("/login anthropic"), true);
 
