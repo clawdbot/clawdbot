@@ -155,6 +155,7 @@ export function renderSettingsToggle(props: {
  * row is clickable and the checkbox gets its accessible name from the title. */
 export function renderSettingsToggleRow(props: {
   title: unknown;
+  ariaLabel?: unknown;
   description?: unknown;
   checked: boolean;
   onChange: (checked: boolean) => void;
@@ -206,7 +207,7 @@ export function renderSettingsToggleRow(props: {
             props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
           }}
         >
-          <span class="settings-control__sr-label">${props.title}</span>
+          <span class="settings-control__sr-label">${props.ariaLabel ?? props.title}</span>
         </wa-switch>
       </div>
     </div>

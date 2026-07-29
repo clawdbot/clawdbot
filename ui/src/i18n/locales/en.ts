@@ -2307,6 +2307,8 @@ export const en: TranslationMap = {
       memoryWiki: {
         title: "Memory wiki",
       },
+      toggleAriaLabel: "Enable or disable {plugin}",
+      changeFailed: "Could not update {plugin}",
       stateUnknown: "Unknown",
       manage: "Enable or disable add-ons",
       manageLink: "Open Plugins",

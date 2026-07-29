@@ -1,16 +1,21 @@
 /* @vitest-environment jsdom */
 
 import { ContextProvider } from "@lit/context";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "../../app/context.ts";
-import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import "./memory-page.ts";
+
+vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/plugins/index.ts")>();
+  return { ...actual, setPluginEnabled: vi.fn() };
+});
 
 type MemoryPageElement = HTMLElement & {
   configObject: Record<string, unknown>;
@@ -38,12 +43,19 @@ function engine(id: string, enabled: boolean): PluginCatalogItem {
     name: id,
     installed: true,
     enabled,
+    state: enabled ? "enabled" : "disabled",
     kind: ["memory"],
   } as unknown as PluginCatalogItem;
 }
 
 function addon(id: string, enabled: boolean): PluginCatalogItem {
-  return { id, name: id, installed: true, enabled } as unknown as PluginCatalogItem;
+  return {
+    id,
+    name: id,
+    installed: true,
+    enabled,
+    state: enabled ? "enabled" : "disabled",
+  } as unknown as PluginCatalogItem;
 }
 
 function createPage(params: {
@@ -52,7 +64,8 @@ function createPage(params: {
   listCatalog?: (call: number) => Promise<{ plugins: readonly PluginCatalogItem[] }>;
   catalog?: readonly PluginCatalogItem[];
   patchForm?: (path: Array<string | number>, value: unknown) => void;
-  setEnabled?: () => Promise<unknown>;
+  setEnabled?: (pluginId: string, enabled: boolean) => Promise<unknown>;
+  refresh?: () => Promise<void>;
   navigate?: (routeId: string, options?: ApplicationNavigationOptions) => void;
   replace?: (routeId: string, options?: ApplicationNavigationOptions) => void;
   routeData?: ConfigRouteData;
@@ -79,8 +92,14 @@ function createPage(params: {
             embedding: { ok: false, checked: false },
           });
     }
-    return params.setEnabled ? params.setEnabled() : Promise.resolve({});
+    return Promise.resolve({});
   });
+  vi.mocked(setPluginEnabled).mockImplementation(
+    (_client, pluginId, enabled) =>
+      (params.setEnabled
+        ? params.setEnabled(pluginId, enabled)
+        : Promise.resolve({})) as ReturnType<typeof setPluginEnabled>,
+  );
   const gatewayListeners = new Set<() => void>();
   const runtimeListeners = new Set<() => void>();
   const gateway = {
@@ -113,7 +132,7 @@ function createPage(params: {
     ),
     patchForm: params.patchForm ?? vi.fn(),
     removeFormValue: vi.fn(),
-    refresh: () => Promise.resolve(),
+    refresh: vi.fn(params.refresh ?? (() => Promise.resolve())),
     ensureLoaded: () => Promise.resolve(),
   };
   const context = {
@@ -150,7 +169,13 @@ function createPage(params: {
       notify();
     }
   };
-  return { element, request, setPhase, lookupSchemaPath: runtimeConfig.lookupSchemaPath };
+  return {
+    element,
+    request,
+    setPhase,
+    refresh: runtimeConfig.refresh,
+    lookupSchemaPath: runtimeConfig.lookupSchemaPath,
+  };
 }
 
 function deferred<T>() {
@@ -166,6 +191,22 @@ function addonStatus(element: HTMLElement, label: string): string | null {
     entry.textContent?.includes(label),
   );
   return row?.querySelector(".settings-status")?.textContent?.trim() ?? null;
+}
+
+function addonSwitch(element: HTMLElement, label: string) {
+  const row = [...element.querySelectorAll(".settings-row--toggle")].find((entry) =>
+    entry.textContent?.includes(label),
+  );
+  return row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch") ?? null;
+}
+
+function toggleAddon(element: HTMLElement, label: string, checked: boolean) {
+  const control = addonSwitch(element, label);
+  if (!control) {
+    throw new Error(`Missing add-on toggle: ${label}`);
+  }
+  control.checked = checked;
+  control.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
@@ -318,6 +359,10 @@ describe("MemorySettingsPage engine slot", () => {
 });
 
 describe("MemorySettingsPage catalog state", () => {
+  beforeEach(() => {
+    vi.mocked(setPluginEnabled).mockReset();
+  });
+
   it("does not claim an add-on is disabled before the catalog is read", async () => {
     const pending = deferred<{ plugins: readonly PluginCatalogItem[] }>();
     const { element } = createPage({
@@ -332,9 +377,10 @@ describe("MemorySettingsPage catalog state", () => {
       expect(addonStatus(element, "Active memory")).toBe("Loading…");
 
       pending.resolve({ plugins: [addon("active-memory", true)] });
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
-      // A read that succeeded but has no entry really does mean not enabled.
-      expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      // Missing catalog entries are not installed, so the page must not offer a toggle.
+      expect(addonStatus(element, "Memory wiki")).toBe("Unknown");
+      expect(addonSwitch(element, "Memory wiki")).toBeNull();
     } finally {
       element.remove();
     }
@@ -371,12 +417,12 @@ describe("MemorySettingsPage catalog state", () => {
       await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Loading…"));
 
       second.resolve({ plugins: [addon("active-memory", true)] });
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
 
       first.resolve({ plugins: [addon("active-memory", false)] });
       await first.promise;
       await element.updateComplete;
-      expect(addonStatus(element, "Active memory")).toBe("Enabled");
+      expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
     } finally {
       element.remove();
     }
@@ -389,10 +435,122 @@ describe("MemorySettingsPage catalog state", () => {
     });
     document.body.append(element);
     try {
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       setPhase("disconnected");
       await element.updateComplete;
       expect(addonStatus(element, "Active memory")).toBe("Unknown");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("keeps a catalogued but not-installed add-on muted and non-interactive", async () => {
+    const { element } = createPage({
+      configObject: {},
+      catalog: [
+        {
+          id: "active-memory",
+          name: "active-memory",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        } as PluginCatalogItem,
+      ],
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
+      expect(addonSwitch(element, "Active memory")).toBeNull();
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("toggles the requested add-on and refreshes config plus catalog on success", async () => {
+    const refresh = vi.fn(() => Promise.resolve());
+    const { element, request } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      refresh,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      toggleAddon(element, "Active memory", false);
+
+      await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
+      expect(setPluginEnabled).toHaveBeenCalledWith(expect.anything(), "active-memory", false);
+      expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2);
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("reconciles the catalog without reporting a rejected toggle when config refresh fails", async () => {
+    const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
+    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+    const updated = [addon("active-memory", false), addon("memory-wiki", false)];
+    const { element } = createPage({
+      configObject: {},
+      listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
+      refresh,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      toggleAddon(element, "Active memory", false);
+
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(element.textContent).not.toContain("config refresh failed");
+      expect(element.textContent).not.toContain("Could not update Active memory");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("disables only the add-on whose mutation is in flight", async () => {
+    const pending = deferred<unknown>();
+    const { element } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      setEnabled: () => pending.promise,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+
+      await waitForFast(() =>
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true),
+      );
+      expect(addonSwitch(element, "Memory wiki")?.hasAttribute("disabled")).toBe(false);
+      pending.resolve({});
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("renders and clears mutation errors on only the affected add-on", async () => {
+    const retry = deferred<unknown>();
+    let attempts = 0;
+    const { element } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      setEnabled: () =>
+        attempts++ === 0 ? Promise.reject(new Error("enablement rejected")) : retry.promise,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(element.textContent).toContain("enablement rejected"));
+      expect(element.textContent).toContain("Could not update Active memory");
+      expect(element.textContent).not.toContain("Could not update Memory wiki");
+
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(element.textContent).not.toContain("enablement rejected"));
+      retry.resolve({});
     } finally {
       element.remove();
     }

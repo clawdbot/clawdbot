@@ -36,9 +36,19 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
         label: "Active memory",
         description: "Recent context",
         state: "enabled",
+        busy: false,
+        error: null,
       },
-      { id: "memory-wiki", label: "Memory wiki", description: "Wiki pages", state: "disabled" },
+      {
+        id: "memory-wiki",
+        label: "Memory wiki",
+        description: "Wiki pages",
+        state: "disabled",
+        busy: false,
+        error: null,
+      },
     ],
+    onAddonChange: vi.fn(),
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
     overview: html`<div class="test-overview"></div>`,
@@ -107,26 +117,71 @@ describe("renderMemory", () => {
     );
   });
 
-  it("renders add-on layering with per-plugin state and a Plugins link", () => {
+  it("renders enabled and disabled add-ons as accessible toggles", () => {
     const container = renderInto(createProps());
 
-    expect(container.textContent).toContain("Active memory");
-    expect(container.textContent).toContain("Memory wiki");
-    expect(container.textContent).toContain("Enabled");
-    expect(container.textContent).toContain("Disabled");
+    const switches = [
+      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
+    ];
+    expect(switches).toHaveLength(2);
+    expect(switches[0]?.checked).toBe(true);
+    expect(switches[1]?.checked).toBe(false);
+    expect(switches[0]?.textContent).toContain("Enable or disable Active memory");
+    expect(switches[1]?.textContent).toContain("Enable or disable Memory wiki");
     const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
     expect(link?.getAttribute("href")).toBe("/settings/plugins");
+  });
+
+  it("keeps mutation busy and errors scoped to one add-on row", () => {
+    const container = renderInto(
+      createProps({
+        addons: [
+          {
+            id: "active-memory",
+            label: "Active memory",
+            description: "Recent context",
+            state: "enabled",
+            busy: true,
+            error: "gateway rejected the change",
+          },
+          {
+            id: "memory-wiki",
+            label: "Memory wiki",
+            description: "Wiki pages",
+            state: "disabled",
+            busy: false,
+            error: null,
+          },
+        ],
+      }),
+    );
+    const switches = [...container.querySelectorAll<HTMLElement>("wa-switch")];
+    expect(switches[0]?.hasAttribute("disabled")).toBe(true);
+    expect(switches[1]?.hasAttribute("disabled")).toBe(false);
+    expect(container.textContent).toContain("Could not update Active memory");
+    expect(container.textContent).toContain("gateway rejected the change");
+    expect(container.textContent).not.toContain("Could not update Memory wiki");
   });
 
   it("never states an add-on is off while the catalog is unread", () => {
     for (const state of ["loading", "unknown"] as const) {
       const container = renderInto(
         createProps({
-          addons: [{ id: "active-memory", label: "Active memory", description: "x", state }],
+          addons: [
+            {
+              id: "active-memory",
+              label: "Active memory",
+              description: "x",
+              state,
+              busy: false,
+              error: null,
+            },
+          ],
         }),
       );
       expect(container.textContent).not.toContain("Disabled");
       expect(container.textContent).not.toContain("Enabled");
+      expect(container.querySelector("wa-switch")).toBeNull();
     }
   });
 

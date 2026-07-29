@@ -91,7 +91,10 @@ function pluginState(
     case "unavailable":
       return "unknown";
     default:
-      return entry?.enabled === true ? "enabled" : "disabled";
+      if (!entry?.installed || entry.state === "not-installed" || entry.state === "error") {
+        return "unknown";
+      }
+      return entry.enabled ? "enabled" : "disabled";
   }
 }
 
@@ -112,6 +115,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private catalog: MemoryCatalog = { kind: "unavailable" };
   @state() private engineBusy = false;
   @state() private engineError: string | null = null;
+  @state() private addonBusy = new Set<string>();
+  @state() private addonErrors = new Map<string, string>();
   @state() private selectedAgentId: string | null = null;
   @state() private overviewStatus: MemoryOverviewStatus = { kind: "idle" };
   @state() private support: DreamingConfigPathSupport = "unknown";
@@ -359,8 +364,47 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         label: t(addon.labelKey),
         description: entry?.description ?? addon.id,
         state: pluginState(catalog, entry),
+        busy: this.addonBusy.has(addon.id),
+        error: this.addonErrors.get(addon.id) ?? null,
       };
     });
+  }
+
+  private async changeAddon(pluginId: string, enabled: boolean) {
+    if (this.addonBusy.has(pluginId)) {
+      return;
+    }
+    const catalog = this.catalog;
+    const entry =
+      catalog.kind === "ready"
+        ? catalog.plugins.find((plugin) => plugin.id === pluginId)
+        : undefined;
+    const addonState = pluginState(catalog, entry);
+    const connection = this.connection;
+    const client = connection?.connected ? connection.client : null;
+    if (!connection || !client || (addonState !== "enabled" && addonState !== "disabled")) {
+      return;
+    }
+    this.addonBusy = new Set(this.addonBusy).add(pluginId);
+    const errors = new Map(this.addonErrors);
+    errors.delete(pluginId);
+    this.addonErrors = errors;
+    try {
+      try {
+        await setPluginEnabled(client, pluginId, enabled);
+      } catch (error) {
+        this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));
+        return;
+      }
+      await Promise.allSettled([
+        this.context.runtimeConfig.refresh(),
+        this.loadCatalog(client, connection),
+      ]);
+    } finally {
+      const busy = new Set(this.addonBusy);
+      busy.delete(pluginId);
+      this.addonBusy = busy;
+    }
   }
 
   private async changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
@@ -491,6 +535,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       backendBusy: runtimeConfig.state.configSaving || runtimeConfig.state.configApplying,
       onBackendChange: (next) => runtimeConfig.patchForm(["memory", "backend"], next),
       addons: this.addonRows(),
+      onAddonChange: (pluginId, enabled) => void this.changeAddon(pluginId, enabled),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
       overview: renderMemoryOverview({
