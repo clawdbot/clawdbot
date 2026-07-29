@@ -312,7 +312,12 @@ export function detectLegacyWorkspaceState(params: {
     addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 
-  for (const workspaceDir of listSandboxWorkspaceDirs({ cfg: params.cfg, env, homedir })) {
+  for (const workspaceDir of listSandboxWorkspaceDirs({
+    cfg: params.cfg,
+    env,
+    homedir,
+    stateDir: params.stateDir,
+  })) {
     addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 

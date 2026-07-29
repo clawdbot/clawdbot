@@ -4,16 +4,23 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readRegisteredSandboxSessionKeys } from "../agents/sandbox/registry-session-keys.js";
-import { updateBrowserRegistry, updateRegistry } from "../agents/sandbox/registry.js";
+import { removeRegistryEntry, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import {
   readWorkspaceStateSnapshot,
   resolveWorkspaceStateIdentity,
 } from "../agents/workspace-state-store.js";
+import {
+  listSessionEntryKeysReadOnly,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   detectLegacyWorkspaceState,
@@ -24,6 +31,7 @@ describe("sandbox workspace Doctor migration", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       envSnapshot?.restore();
       envSnapshot = undefined;
@@ -48,6 +56,15 @@ describe("sandbox workspace Doctor migration", () => {
   }
 
   async function registerSandboxSession(sessionKey: string) {
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "main";
+    const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
+    await upsertSessionEntry(
+      { agentId, env: process.env, sessionKey },
+      { sessionId: `workspace-migration-proof-${sessionHash}`, updatedAt: 1 },
+    );
+  }
+
+  async function registerSandboxRuntimeScope(sessionKey: string) {
     const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
     await updateRegistry({
       containerName: `workspace-migration-proof-${sessionHash}`,
@@ -58,37 +75,24 @@ describe("sandbox workspace Doctor migration", () => {
     });
   }
 
-  it("does not create a state database when no sandbox sessions are registered", () => {
+  it("does not create an agent database when no sandbox sessions are persisted", () => {
     const context = setup();
 
-    expect(readRegisteredSandboxSessionKeys(context.env)).toEqual([]);
-    expect(fs.existsSync(resolveOpenClawStateSqlitePath(context.env))).toBe(false);
+    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toEqual([]);
+    expect(
+      fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env: context.env })),
+    ).toBe(false);
   });
 
-  it("reads only unique container-backed canonical session and global keys", async () => {
+  it("reads durable agent-owned session keys without trusting runtime scope rows", async () => {
     const context = setup();
     const sessionKey = "agent:main:telegram:direct:doctor-proof";
     await registerSandboxSession(sessionKey);
-    await updateRegistry({
-      containerName: "workspace-migration-proof-duplicate",
-      sessionKey,
-      createdAtMs: 1,
-      lastUsedAtMs: 1,
-      image: "openclaw-sandbox:test",
-    });
-    for (const scopeKey of ["global", "agent:main", "shared", "agent:main:"]) {
-      await registerSandboxSession(scopeKey);
-    }
-    await updateBrowserRegistry({
-      containerName: "workspace-migration-browser-proof",
-      sessionKey: "agent:browser:telegram:direct:doctor-proof",
-      createdAtMs: 1,
-      lastUsedAtMs: 1,
-      image: "openclaw-browser:test",
-      cdpPort: 9222,
-    });
+    await registerSandboxSession("global");
+    await registerSandboxRuntimeScope("agent:main");
+    await registerSandboxRuntimeScope("shared");
 
-    expect(readRegisteredSandboxSessionKeys(context.env).toSorted()).toEqual(
+    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: context.env }).toSorted()).toEqual(
       [sessionKey, "global"].toSorted(),
     );
   });
@@ -233,6 +237,69 @@ describe("sandbox workspace Doctor migration", () => {
     },
   );
 
+  it.each(["main", "session-doctor-proof", "agent:main:telegram:direct:doctor-proof"])(
+    "repairs durable session %s after its sandbox runtime has been pruned",
+    async (sessionKey) => {
+      const context = setup();
+      const sandboxRoot = path.join(context.homeDir, "sandboxes");
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: context.workspaceDir,
+            sandbox: {
+              mode: "all",
+              scope: "session",
+              workspaceAccess: "ro",
+              workspaceRoot: "~/sandboxes",
+            },
+          },
+          entries: { main: { default: true } },
+        },
+      } satisfies OpenClawConfig;
+      const layout = resolveSandboxWorkspaceLayoutPaths({
+        cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
+        rawSessionKey: sessionKey,
+        workspaceDir: context.workspaceDir,
+      });
+      const setupPath = path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
+      await fsp.mkdir(layout.sandboxWorkspaceDir, { recursive: true });
+      await fsp.writeFile(
+        setupPath,
+        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
+        "utf8",
+      );
+      await registerSandboxSession(sessionKey);
+      await registerSandboxRuntimeScope(sessionKey);
+      const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
+      await removeRegistryEntry(`workspace-migration-proof-${sessionHash}`);
+
+      const detected = detectLegacyWorkspaceState({
+        cfg,
+        stateDir: context.stateDir,
+        env: context.env,
+        homedir: () => context.homeDir,
+        doctorOnlyStateMigrations: true,
+      });
+
+      expect(detected.sources).toContainEqual(
+        expect.objectContaining({ kind: "setup", sourcePath: setupPath }),
+      );
+
+      const result = await migrateLegacyWorkspaceState({
+        detected,
+        env: context.env,
+        stateDir: context.stateDir,
+      });
+
+      expect(result.warnings).toEqual([]);
+      expect(fs.existsSync(setupPath)).toBe(false);
+      expect(readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
+        setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
+        setupExists: true,
+      });
+    },
+  );
+
   it.each([
     { label: "disabled sandbox", mode: "off", workspaceAccess: "ro" },
     { label: "read-write agent workspace", mode: "all", workspaceAccess: "rw" },
@@ -350,8 +417,8 @@ describe("sandbox workspace Doctor migration", () => {
     await registerSandboxSession("agent:main:telegram:direct:doctor-proof");
     await registerSandboxSession("agent:main-foo:telegram:direct:doctor-proof");
     await registerSandboxSession("agent:writer:telegram:direct:doctor-proof");
-    await registerSandboxSession("agent:main");
-    await registerSandboxSession("shared");
+    await registerSandboxRuntimeScope("agent:main");
+    await registerSandboxRuntimeScope("shared");
 
     const detected = detectLegacyWorkspaceState({
       cfg,
@@ -447,7 +514,74 @@ describe("sandbox workspace Doctor migration", () => {
     expect(fs.existsSync(activePath)).toBe(false);
   });
 
-  it("reads registered session ownership from the requested state profile", async () => {
+  it("derives the default sandbox root from the requested state profile", async () => {
+    const context = setup();
+    const requestedStateDir = path.join(context.homeDir, "requested-profile");
+    const requestedEnv = { ...context.env, OPENCLAW_STATE_DIR: requestedStateDir };
+    const sessionKey = "agent:main:telegram:direct:requested-default-root";
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: context.workspaceDir,
+          sandbox: { mode: "all", scope: "session", workspaceAccess: "ro" },
+        },
+        entries: { main: { default: true } },
+      },
+    } satisfies OpenClawConfig;
+    const workspaceFor = (stateDir: string) =>
+      resolveSandboxWorkspaceLayoutPaths({
+        cfg: {
+          scope: "session",
+          workspaceAccess: "ro",
+          workspaceRoot: path.join(stateDir, "sandboxes"),
+        },
+        rawSessionKey: sessionKey,
+        workspaceDir: context.workspaceDir,
+      }).sandboxWorkspaceDir;
+    const requestedPath = path.join(
+      workspaceFor(requestedStateDir),
+      "openclaw-workspace-state.json",
+    );
+    const ambientPath = path.join(workspaceFor(context.stateDir), "openclaw-workspace-state.json");
+    for (const setupPath of [requestedPath, ambientPath]) {
+      await fsp.mkdir(path.dirname(setupPath), { recursive: true });
+      await fsp.writeFile(
+        setupPath,
+        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
+        "utf8",
+      );
+    }
+    setTestEnvValue("OPENCLAW_STATE_DIR", requestedStateDir);
+    await registerSandboxSession(sessionKey);
+    setTestEnvValue("OPENCLAW_STATE_DIR", context.stateDir);
+
+    const detected = detectLegacyWorkspaceState({
+      cfg,
+      stateDir: requestedStateDir,
+      env: requestedEnv,
+      homedir: () => context.homeDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected.sources).toContainEqual(
+      expect.objectContaining({ kind: "setup", sourcePath: requestedPath }),
+    );
+    expect(detected.sources).not.toContainEqual(
+      expect.objectContaining({ kind: "setup", sourcePath: ambientPath }),
+    );
+
+    const result = await migrateLegacyWorkspaceState({
+      detected,
+      env: requestedEnv,
+      stateDir: requestedStateDir,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(requestedPath)).toBe(false);
+    expect(fs.existsSync(ambientPath)).toBe(true);
+  });
+
+  it("reads persisted session ownership from the requested state profile", async () => {
     const context = setup();
     const requestedStateDir = path.join(context.homeDir, "requested-profile");
     const requestedEnv = { ...context.env, OPENCLAW_STATE_DIR: requestedStateDir };
@@ -489,8 +623,12 @@ describe("sandbox workspace Doctor migration", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", context.stateDir);
     await registerSandboxSession(ambientSession);
 
-    expect(readRegisteredSandboxSessionKeys(requestedEnv)).toEqual([requestedSession]);
-    expect(readRegisteredSandboxSessionKeys(context.env)).toEqual([ambientSession]);
+    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: requestedEnv })).toEqual([
+      requestedSession,
+    ]);
+    expect(listSessionEntryKeysReadOnly({ agentId: "main", env: context.env })).toEqual([
+      ambientSession,
+    ]);
 
     const detected = detectLegacyWorkspaceState({
       cfg,
