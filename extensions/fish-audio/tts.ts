@@ -12,7 +12,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export const FISH_AUDIO_BASE_URL = "https://api.fish.audio";
+const FISH_AUDIO_BASE_URL = "https://api.fish.audio";
 const FISH_AUDIO_VOICES_MAX_BYTES = 2 * 1024 * 1024;
 const FISH_AUDIO_VOICE_PAGE_SIZE = 100;
 const FISH_AUDIO_MAX_OWN_VOICE_PAGES = 20;
