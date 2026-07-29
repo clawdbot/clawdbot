@@ -127,6 +127,18 @@ describe("application update reconciliation races", () => {
     const overlays = createApplicationOverlays(harness.gateway);
 
     try {
+      harness.update({
+        hello: {
+          server: { version: "1.0.0" },
+          snapshot: {
+            updateAvailable: {
+              currentVersion: "1.0.0",
+              latestVersion: "2.0.0",
+              channel: "stable",
+            },
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
       const running = overlays.runUpdate();
       await flushMicrotasks();
       harness.update({ phase: "stopped" });
@@ -154,9 +166,16 @@ describe("application update reconciliation races", () => {
   it("releases ambiguous reconciliation when update status access is revoked", async () => {
     installUpdateTranslations();
     const updateRun = deferred();
-    const request = vi.fn<RequestFn>((method) =>
-      method === "update.run" ? updateRun.promise : Promise.resolve([]),
-    );
+    const updateStatus = deferred();
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "update.run") {
+        return updateRun.promise;
+      }
+      if (method === "update.status") {
+        return updateStatus.promise;
+      }
+      return Promise.resolve([]);
+    });
     const harness = createGatewayHarness(client(request));
     harness.update({
       hello: {
@@ -169,6 +188,11 @@ describe("application update reconciliation races", () => {
       const running = overlays.runUpdate();
       await flushMicrotasks();
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledWith("update.status", {});
 
       harness.update({
         hello: {
@@ -183,10 +207,24 @@ describe("application update reconciliation races", () => {
         text: UNKNOWN_OUTCOME_TEXT,
       });
 
+      updateStatus.resolve({
+        sentinel: {
+          kind: "update",
+          status: "error",
+          stats: { reason: "stale-result" },
+        },
+      });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: UNKNOWN_OUTCOME_TEXT,
+      });
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+
       updateRun.resolve({});
       await running;
-      expect(request).not.toHaveBeenCalledWith("update.status", {});
     } finally {
+      updateStatus.resolve({});
       updateRun.resolve({});
       overlays.dispose();
     }

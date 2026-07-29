@@ -342,12 +342,12 @@ export function createApplicationOverlays(
     const currentVersion = gateway.snapshot.hello?.server?.version?.trim() || null;
     pendingUpdate = null;
     publishUpdateBanner(
-      expectedVersion && currentVersion !== expectedVersion
-        ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
-        : reconciliation.kind === "handoff"
-          ? resolvePendingUpdateHandoffTimeoutBanner()
-          : reconciliation.kind === "ambiguous"
-            ? unknownUpdateBanner()
+      reconciliation.kind === "ambiguous"
+        ? unknownUpdateBanner()
+        : expectedVersion && currentVersion !== expectedVersion
+          ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
+          : reconciliation.kind === "handoff"
+            ? resolvePendingUpdateHandoffTimeoutBanner()
             : null,
     );
   };
@@ -378,6 +378,7 @@ export function createApplicationOverlays(
       pairingPendingCount.invalidate({ clear: true });
       if (accessTransition.adminRevoked) {
         updateRunGeneration += 1;
+        cancelUpdateVerification();
         const updateStatusBanner = pendingUpdate
           ? unknownUpdateBanner()
           : snapshot.updateStatusBanner;
