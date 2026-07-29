@@ -158,4 +158,27 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     const withoutFlag = projectSafeChannelAccountSnapshotFields({ connected: false });
     expect(withoutFlag).not.toHaveProperty("terminalDisconnect");
   });
+
+  it("preserves false, zero, and nullable fields without exposing invalid credential metadata", () => {
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      running: false,
+      connected: false,
+      reconnectAttempts: 0,
+      lastConnectedAt: null,
+      lastOutboundAt: null,
+      ingressUnavailable: false,
+      activeRuns: 0,
+      token: "must-not-leak",
+      tokenStatus: "unexpected-status",
+    });
+
+    expect(snapshot).toStrictEqual({
+      running: false,
+      connected: false,
+      reconnectAttempts: 0,
+      lastConnectedAt: null,
+      lastOutboundAt: null,
+      activeRuns: 0,
+    });
+  });
 });

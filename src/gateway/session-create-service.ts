@@ -1144,7 +1144,6 @@ export async function createGatewaySession(params: {
           storePath: parentSessionTarget.storePath,
           sessionFile: canonicalParentSessionKey,
           agentId: parentSessionTarget.agentId,
-          workspaceDir: parentEntry?.spawnedWorkspaceDir,
           reason: "new",
           nextSessionId: created.entry.sessionId,
           nextSessionKey: target.canonicalKey,

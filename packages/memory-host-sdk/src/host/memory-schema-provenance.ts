@@ -15,34 +15,13 @@ export const MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL = `
   ) STRICT;
 `;
 
-export const MEMORY_INDEX_CHUNK_PROVENANCE_TRIGGER_DEFINITIONS = [
-  {
-    name: "memory_index_chunk_provenance_after_insert",
-    sql: `CREATE TRIGGER IF NOT EXISTS memory_index_chunk_provenance_after_insert
-    AFTER INSERT ON memory_index_chunks
-    BEGIN
-      -- Default by source: workspace memory files (MEMORY.md, USER.md,
-      -- memory/*.md) are owner-controlled and default to 'agent' so they are
-      -- eligible for dreaming promotion; session-transcript chunks default to
-      -- 'untrusted' until the ingestion path classifies each message by sender.
-      INSERT OR IGNORE INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
-        chunk_id, origin_class, session_kind, observed_at
-      ) VALUES (
-        NEW.id,
-        CASE WHEN NEW.source = 'memory' THEN 'agent' ELSE 'untrusted' END,
-        'unknown',
-        NEW.updated_at
-      );
-    END;`,
-  },
-] as const;
-
 export function ensureMemoryChunkProvenance(db: DatabaseSync): void {
   const ensure = () => {
-    // Keep the lazy table, trigger, invalidation, and backfill atomic so an
-    // interrupted first use cannot leave a schema that the next open rejects.
+    // The former chunk trigger made the additive table visible to older schema
+    // validators. Writers upsert provenance explicitly; this backfill covers
+    // legacy/imported rows without changing the canonical chunk table.
+    db.exec("DROP TRIGGER IF EXISTS memory_index_chunk_provenance_after_insert");
     db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
-    db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_TRIGGER_DEFINITIONS[0].sql);
     db.exec(`
       UPDATE memory_index_sources
       SET hash = ''

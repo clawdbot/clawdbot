@@ -29,6 +29,7 @@ function recorderParams() {
     prompt: "recall prompt",
     provider: "claude-cli",
     model: "claude-opus-4-8",
+    senderIsOwner: true,
   };
 }
 
@@ -52,6 +53,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
     expect(records[0]?.message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "recall prompt" }],
+      __openclaw: { senderIsOwner: true },
     });
   });
 
@@ -97,6 +99,28 @@ describe("createCliDispatchTranscriptRecorder", () => {
       role: "assistant",
       content: [{ type: "text", text: "Lemon pepper." }],
       stopReason: "stop",
+    });
+  });
+
+  it("persists network-result taint on the result and subsequent assistant", async () => {
+    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
+    recorder.noteToolEvent({
+      phase: "result",
+      toolName: "fake_web_tool",
+      result: { content: [{ type: "text", text: "untrusted page" }] },
+      isError: false,
+      resultContentSource: "network",
+    });
+    await recorder.finalize("summary");
+
+    const messages = appendedRecords().map((record) => record.message);
+    expect(messages[1]).toMatchObject({
+      role: "toolResult",
+      __openclaw: { resultContentSource: "network" },
+    });
+    expect(messages[2]).toMatchObject({
+      role: "assistant",
+      __openclaw: { turnTainted: true },
     });
   });
 

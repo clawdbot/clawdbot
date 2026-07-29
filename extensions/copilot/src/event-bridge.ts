@@ -72,6 +72,7 @@ interface EventBridgeOptions {
     journal: AttemptTranscriptJournalProjection;
     modelRef: { api?: string; id: string; provider: string };
     now: () => number;
+    resultContentSourceByToolName?: ReadonlyMap<string, "network">;
   };
 }
 
@@ -370,17 +371,21 @@ export function attachEventBridge(
       const replayIncomplete = Boolean(
         event.data.result?.binaryResultsForLlm?.length || event.data.result?.citableSources?.length,
       );
+      const resolvedToolName =
+        toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown";
+      const resultContentSource = projection.resultContentSourceByToolName?.get(resolvedToolName);
       projection.journal.recordToolResult({
         eventId: event.id,
         replayIncomplete,
         message: {
           role: "toolResult",
           toolCallId: event.data.toolCallId,
-          toolName: toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown",
+          toolName: resolvedToolName,
           content: [{ type: "text", text: sanitizeToolDetailText(resultText) }],
           ...(hasOwnKeys(details) ? { details } : {}),
           isError: !event.data.success,
           timestamp: resolveEventTimestamp(event.timestamp, projection.now),
+          ...(resultContentSource ? { __openclaw: { resultContentSource } } : {}),
         },
       });
     }

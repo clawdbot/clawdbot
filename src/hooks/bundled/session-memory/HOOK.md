@@ -1,13 +1,13 @@
 ---
 name: session-memory
-description: "Save session context to memory when a session rolls over"
+description: "Save session context to memory when /new or /reset command is issued"
 homepage: https://docs.openclaw.ai/automation/hooks#session-memory
 metadata:
   {
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["session:end"],
+        "events": ["command:new", "command:reset"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -16,16 +16,16 @@ metadata:
 
 # Session Memory Hook
 
-Automatically saves session context to workspace memory when a session rolls over.
+Automatically saves session context to your workspace memory when you issue `/new` or `/reset`.
 
 ## What It Does
 
-When a session rolls over because of `/new`, `/reset`, the daily boundary, or idle expiry:
+When you run `/new` or `/reset` to start a fresh session:
 
-1. **Finds the ended session** - Uses the typed `session_end` lifecycle payload to locate the correct transcript
+1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Chooses filename slug** - Uses a local timestamp by default, or an LLM-generated description when `llmSlug` is enabled
-4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` in the background
+4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default without delaying the `/new` or `/reset` reply
 
 ## Output Format
 
@@ -36,12 +36,12 @@ Memory files are created with the following format:
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
-- **Reason**: daily
+- **Source**: telegram
 ```
 
 ## Filename Examples
 
-Timestamp slugs are the default so session rollover stays fast:
+Timestamp slugs are the default so `/new` and `/reset` stay fast on message channels:
 
 - `2026-01-16-1430.md` - Default local timestamp slug
 
@@ -89,8 +89,8 @@ Example configuration:
 The hook automatically:
 
 - Uses your workspace directory (`~/.openclaw/workspace` by default)
-- Uses timestamp slugs by default so rollover stays fast
-- Runs memory capture in the background so session startup is not delayed
+- Uses timestamp slugs by default so `/new` and `/reset` stay fast on message channels
+- Runs memory capture in the background so reset acknowledgements can return immediately
 - Uses your configured LLM for slug generation only when `llmSlug` is `true`
 - Resolves configured aliases such as `sonnet`; bare model IDs use the agent's default provider, while `provider/model` selects another provider
 - Falls back to timestamp slugs if LLM slug generation is unavailable

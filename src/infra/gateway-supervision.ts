@@ -1,6 +1,10 @@
 // Defines gateway lifecycle ownership shared by service, restart, and update paths.
+import { isDefaultInstallIdentity } from "../config/paths.js";
+
 const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-update-required";
+export const NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON =
+  "service management skipped: non-default state dir or config path";
 
 type GatewaySupervisorMode = "auto" | "external";
 
@@ -34,5 +38,10 @@ export function assertGatewayServiceMutationAllowed(
 ): void {
   if (isGatewayExternallySupervised(env)) {
     throw new Error(formatExternalSupervisorActionRequired(action));
+  }
+  if (!isDefaultInstallIdentity(env)) {
+    throw new Error(
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home and without OPENCLAW_HOME, OPENCLAW_STATE_DIR, or OPENCLAW_CONFIG_PATH overrides to ${action}.`,
+    );
   }
 }

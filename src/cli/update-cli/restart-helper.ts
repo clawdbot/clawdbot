@@ -61,6 +61,71 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
+function resolveLinuxFilesystemBusUid(busAddress: string | undefined): string | undefined {
+  // Classify a single filesystem transport before decoding so custom abstract
+  // buses and semicolon-separated fallback addresses are never rewritten.
+  const singleUnixAddress = busAddress?.match(/^unix:([^;]+)$/u)?.[1];
+  const encodedBusPath = singleUnixAddress
+    ?.split(",")
+    .find((parameter) => parameter.startsWith("path="))
+    ?.slice("path=".length);
+  if (encodedBusPath === undefined) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(encodedBusPath).match(/^\/run\/user\/(\d+)\/bus$/u)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string> {
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : 0;
+  if (uid <= 0) {
+    return "";
+  }
+
+  const expectedRuntimeDir = `/run/user/${uid}`;
+  const expectedBusAddress = `unix:path=${expectedRuntimeDir}/bus`;
+  const runtimeDir = normalizeOptionalString(env.XDG_RUNTIME_DIR);
+  const busAddress = normalizeOptionalString(env.DBUS_SESSION_BUS_ADDRESS);
+  const normalizedRuntimeDir = runtimeDir ? path.posix.normalize(runtimeDir) : undefined;
+  const runtimeUid = normalizedRuntimeDir?.match(/^\/run\/user\/(\d+)\/?$/)?.[1];
+  const busUid = resolveLinuxFilesystemBusUid(busAddress);
+  const repairRuntimeDir = !runtimeDir || (runtimeUid !== undefined && runtimeUid !== String(uid));
+  // A custom runtime owns implicit bus discovery; inventing a standard bus
+  // would silently redirect an isolated session to the host user manager.
+  const preserveCustomRuntimeDir = Boolean(runtimeDir) && runtimeUid === undefined;
+  const repairBusAddress =
+    !preserveCustomRuntimeDir && (!busAddress || (busUid !== undefined && busUid !== String(uid)));
+  const clearEmptyCustomBusAddress =
+    preserveCustomRuntimeDir && env.DBUS_SESSION_BUS_ADDRESS !== undefined && !busAddress;
+  if (!repairRuntimeDir && !repairBusAddress && !clearEmptyCustomBusAddress) {
+    return "";
+  }
+
+  try {
+    const socketRuntimeDir =
+      clearEmptyCustomBusAddress && runtimeDir ? runtimeDir : expectedRuntimeDir;
+    const stat = await fs.stat(path.join(socketRuntimeDir, "bus"));
+    if (!stat.isSocket()) {
+      return "";
+    }
+  } catch {
+    return "";
+  }
+
+  const exports = [
+    repairRuntimeDir ? `export XDG_RUNTIME_DIR='${shellEscape(expectedRuntimeDir)}'` : "",
+    repairBusAddress ? `export DBUS_SESSION_BUS_ADDRESS='${shellEscape(expectedBusAddress)}'` : "",
+    clearEmptyCustomBusAddress ? "unset DBUS_SESSION_BUS_ADDRESS" : "",
+  ].filter(Boolean);
+  return `# Repair missing or cross-user D-Bus values inherited by the updater.
+${exports.join("\n")}
+`;
+}
+
 /**
  * Prepares a standalone script to restart the gateway service.
  * This script is written to a temporary directory and does not depend on
@@ -83,6 +148,7 @@ export async function prepareRestartScript(
       const unitName = resolveSystemdUnit(env);
       const escaped = shellEscape(unitName);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
+      const userBusRepair = await renderLinuxUserBusRepair({ ...process.env, ...env });
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
@@ -90,6 +156,7 @@ export async function prepareRestartScript(
 sleep 1
 exec 3>&2
 ${logSetup}
+${userBusRepair}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
 if systemctl --user is-active --quiet '${escaped}' || systemctl --user is-enabled --quiet '${escaped}'; then
   if systemctl --user restart '${escaped}'; then

@@ -56,14 +56,6 @@ export function resolveCronNextRunWithLowerBound(params: {
   return Math.max(params.naturalNext, params.lowerBoundMs);
 }
 
-function resolveRetryConfig() {
-  return {
-    maxAttempts: DEFAULT_MAX_TRANSIENT_RETRIES,
-    backoffMs: DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, 3),
-    retryOn: undefined,
-  };
-}
-
 export function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
@@ -72,7 +64,6 @@ export function resolveTransientCronRetryDecision(params: {
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
-  const retryConfig = resolveRetryConfig();
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,
@@ -82,7 +73,7 @@ export function resolveTransientCronRetryDecision(params: {
   }
   const retryHint = resolveCronExecutionRetryHint({
     error: params.error,
-    retryOn: retryConfig.retryOn,
+    retryOn: undefined,
     classifiedReason:
       params.errorClassification?.kind === "reason"
         ? params.errorClassification.reason
@@ -98,7 +89,7 @@ export function resolveTransientCronRetryDecision(params: {
       reason: "permanent error",
     };
   }
-  if (consecutiveErrors > retryConfig.maxAttempts) {
+  if (consecutiveErrors > DEFAULT_MAX_TRANSIENT_RETRIES) {
     return {
       retryable: false,
       consecutiveErrors,
@@ -110,7 +101,10 @@ export function resolveTransientCronRetryDecision(params: {
     retryable: true,
     consecutiveErrors,
     retryCategory: retryHint.category,
-    backoffMs: errorBackoffMs(consecutiveErrors, retryConfig.backoffMs),
+    backoffMs: errorBackoffMs(
+      consecutiveErrors,
+      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
+    ),
     reason: "transient retry",
   };
 }
@@ -119,9 +113,8 @@ export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
   cronConfig?: CronConfig;
   consecutiveSkipped: number | undefined;
 }): DisabledHeartbeatOneShotRetryDecision {
-  const retryConfig = resolveRetryConfig();
   const consecutiveSkipped = params.consecutiveSkipped ?? 0;
-  if (consecutiveSkipped > retryConfig.maxAttempts) {
+  if (consecutiveSkipped > DEFAULT_MAX_TRANSIENT_RETRIES) {
     return {
       retryable: false,
       consecutiveSkipped,
@@ -131,7 +124,10 @@ export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
   return {
     retryable: true,
     consecutiveSkipped,
-    backoffMs: errorBackoffMs(consecutiveSkipped, retryConfig.backoffMs),
+    backoffMs: errorBackoffMs(
+      consecutiveSkipped,
+      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
+    ),
     reason: "disabled heartbeat retry",
   };
 }

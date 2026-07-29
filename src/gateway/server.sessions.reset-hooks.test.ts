@@ -170,7 +170,6 @@ async function writeMainTranscriptSession(params: {
   sessionId: string;
   content: string;
   messageId?: string;
-  spawnedWorkspaceDir?: string;
 }) {
   const storePath = expectStringValue(testState.sessionStorePath, "testState.sessionStorePath");
   await writeSessionStore({
@@ -178,7 +177,6 @@ async function writeMainTranscriptSession(params: {
       main: {
         sessionId: params.sessionId,
         updatedAt: Date.now(),
-        spawnedWorkspaceDir: params.spawnedWorkspaceDir,
       },
     },
   });
@@ -541,11 +539,9 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
   await createSessionStoreDir();
-  const spawnedWorkspaceDir = "/tmp/openclaw-ended-workspace";
   await writeMainTranscriptSession({
     sessionId: "sess-main",
     content: "hello from transcript",
-    spawnedWorkspaceDir,
   });
 
   await resetMainSession();
@@ -565,14 +561,6 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expect(endEvent.nextSessionId).toBe("sess-main");
   expectMainHookContext(endContext, "sess-main");
-  const endCall = sessionLifecycleHookMocks.runSessionEnd.mock.calls[0] as unknown as [
-    unknown,
-    unknown,
-    { workspaceDir?: string },
-  ];
-  expect(endCall[2]).toMatchObject({
-    workspaceDir: spawnedWorkspaceDir,
-  });
   expect(startEvent.sessionKey).toBe("agent:main:main");
   expect(startEvent.sessionId).toBe("sess-main");
   expect(startEvent.resumedFrom).toBe("sess-main");

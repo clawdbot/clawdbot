@@ -3,6 +3,7 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
@@ -413,13 +414,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     typeof m.tool_use_id === "string";
 
   const contentRaw = m.content;
-  const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
+  const contentItems = Array.isArray(contentRaw) ? contentRaw.filter(isRecord) : null;
   const hasToolContent =
-    Array.isArray(contentItems) &&
-    contentItems.some((item) => {
-      const x = item as Record<string, unknown>;
-      return isToolResultContentType(x.type) || isToolCallContentType(x.type);
-    });
+    contentItems?.some(
+      (item) => isToolResultContentType(item.type) || isToolCallContentType(item.type),
+    ) ?? false;
 
   const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
 
@@ -442,8 +441,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     } else {
       content = [{ type: "text", text: m.content }];
     }
-  } else if (Array.isArray(m.content)) {
-    content = m.content.flatMap((item: Record<string, unknown>) => {
+  } else if (contentItems) {
+    content = contentItems.flatMap((item) => {
       if (isAssistantMessage) {
         const audioAttachment = coerceAudioContentBlock(item);
         if (audioAttachment) {
@@ -464,6 +463,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           label?: unknown;
           mimeType?: unknown;
           isVoiceNote?: unknown;
+          width?: unknown;
+          height?: unknown;
         };
         if (
           typeof attachment.url !== "string" ||
@@ -484,6 +485,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               label: attachment.label,
               ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
+              ...(typeof attachment.width === "number" && attachment.width > 0
+                ? { width: attachment.width }
+                : {}),
+              ...(typeof attachment.height === "number" && attachment.height > 0
+                ? { height: attachment.height }
+                : {}),
             },
           },
         ];

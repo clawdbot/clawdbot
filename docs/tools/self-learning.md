@@ -42,13 +42,19 @@ write bounded and recoverable.
 
 ### Experience review
 
-After substantial successful work, OpenClaw can run one isolated background
-review to find a reusable recovery technique or a stable procedure that would
-remove at least two future model or tool round trips.
+After substantial work, OpenClaw can run one isolated background review to find
+a reusable recovery technique or a stable procedure that would remove at least
+two future model or tool round trips. Deep turns the user interrupted qualify
+too: the wrong path and its correction are exactly the evidence worth keeping.
+The reviewer is told when a turn was interrupted and captures only procedures
+that visibly worked before the stop. Turns that ended in a provider or prompt
+error never schedule a review; that failure is transient environment noise, and
+a review on the same model would likely hit it again.
 
 Experience review starts only when all of these conditions hold:
 
-- the foreground turn completed successfully;
+- the foreground turn completed or was interrupted, but did not end in a
+  provider or prompt error;
 - the current turn used at least 10 model iterations;
 - the run was an eligible foreground conversation, not cron, heartbeat, memory,
   overflow, hook, subagent, or review work;
@@ -171,7 +177,7 @@ applying them.
 
 Deterministic correction capture does not make an extra model call. Experience
 review adds one bounded model run on the configured provider only after a
-substantial successful turn, not after every message. The review can make more
+substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
 The reviewer receives only the current turn beginning with its most recent user
@@ -256,8 +262,8 @@ Check the following:
 
 1. `skills.workshop.autonomous.mode` is `propose` or `auto` in the active Gateway
    config.
-2. The correction uses durable language, or the successful turn reached at least
-   10 model iterations.
+2. The correction uses durable language, or the turn reached at least 10 model
+   iterations without ending in a provider or prompt error.
 3. The conversation is eligible foreground work.
 4. The runtime reported the resolved model and actual `skill_workshop`
    availability.

@@ -269,7 +269,11 @@ describe("createTeamsReplyStreamController", () => {
     const ctrl = makeController({ stream });
     ctrl.onPartialReply({ text: "streamed" });
     expect(ctrl.preparePayload({ text: "streamed" })).toBeUndefined();
-    await expect(ctrl.finalize()).resolves.toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-final",
+      content: "streamed",
+    });
     expect(stream.close).toHaveBeenCalled();
   });
 
@@ -281,7 +285,11 @@ describe("createTeamsReplyStreamController", () => {
     ctrl.onPartialReply({ text: "streamed" });
     expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
 
-    await expect(ctrl.finalize()).resolves.toEqual({ text: "streamed final" });
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "streamed final",
+      fallbackPayload: { text: "streamed final" },
+    });
   });
 
   it("returns text-only fallback when stream close no-ops after media already queued", async () => {
@@ -296,9 +304,13 @@ describe("createTeamsReplyStreamController", () => {
     });
 
     await expect(ctrl.finalize()).resolves.toEqual({
-      text: "streamed final",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
+      visibleReplySent: true,
+      content: "streamed final",
+      fallbackPayload: {
+        text: "streamed final",
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      },
     });
   });
 
@@ -310,7 +322,11 @@ describe("createTeamsReplyStreamController", () => {
     ctrl.onPartialReply({ text: "streamed" });
     expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
 
-    await expect(ctrl.finalize()).resolves.toEqual({ text: "streamed final" });
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "streamed final",
+      fallbackPayload: { text: "streamed final" },
+    });
   });
 
   it("does not close the stream in finalize when no tokens were emitted", async () => {
@@ -512,7 +528,10 @@ describe("createTeamsReplyStreamController", () => {
       });
       // Must not throw — finalize's pre-check on stream.canceled may miss
       // the cancellation that happens between check and emit.
-      await expect(ctrl.finalize()).resolves.toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: "partial",
+      });
     });
 
     it("latches streamFailed (and does not throw) on non-cancel errors from stream.emit", () => {
@@ -660,7 +679,11 @@ describe("createTeamsReplyStreamController", () => {
       expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
       stream.close.mockRejectedValueOnce(new Error("close failed"));
 
-      await expect(ctrl.finalize()).resolves.toEqual({ text: " world" });
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: "hello world",
+        fallbackPayload: { text: " world" },
+      });
       expect(stream.events.off).toHaveBeenCalledWith(0);
     });
 
@@ -673,7 +696,10 @@ describe("createTeamsReplyStreamController", () => {
       expect(ctrl.preparePayload({ text: "hello" })).toBeUndefined();
       stream.close.mockResolvedValueOnce(undefined);
 
-      await expect(ctrl.finalize()).resolves.toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: "hello",
+      });
       expect(stream.events.off).toHaveBeenCalledWith(0);
     });
 
@@ -686,7 +712,10 @@ describe("createTeamsReplyStreamController", () => {
       stream.canceled = true;
 
       expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
-      await expect(ctrl.finalize()).resolves.toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: "hello",
+      });
       expect(stream.events.off).toHaveBeenCalledWith(0);
     });
 
@@ -709,7 +738,11 @@ describe("createTeamsReplyStreamController", () => {
       });
       // Finalize must not propagate; it returns the retained payload so the
       // dispatcher can fall back to normal Teams delivery.
-      await expect(ctrl.finalize()).resolves.toEqual({ text: "partial final" });
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: "partial final",
+        fallbackPayload: { text: "partial final" },
+      });
     });
 
     it("treats post-cancel stream as inactive without further emit attempts", () => {

@@ -19,11 +19,19 @@ function normalizeOptionalText(value: string | null | undefined): string | undef
   return normalized ? normalized : undefined;
 }
 
+function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function normalizeStructuredMediaKind(value: string | null | undefined): MediaFactInput["kind"] {
   const kind = normalizeOptionalText(value);
   return kind && STRUCTURED_MEDIA_KINDS.has(kind as NonNullable<MediaFactInput["kind"]>)
     ? (kind as NonNullable<MediaFactInput["kind"]>)
     : undefined;
+}
+
+function normalizePositiveInteger(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 export function resolveTranscriptMediaPath(
@@ -51,11 +59,21 @@ export function normalizeStructuredMediaEntryForTranscript(
     normalizeOptionalText(media.contentType) ??
     (kind || !legacyKind || !MIME_TYPE_PATTERN.test(legacyKind) ? undefined : legacyKind) ??
     mimeTypeFromFilePath(mediaPath ?? mediaUrl);
+  const durationMs = normalizePositiveInteger(media.durationMs);
+  const width = normalizePositiveInteger(media.width);
+  const height = normalizePositiveInteger(media.height);
+  const fileName = normalizeOptionalText(media.fileName);
+  const sizeBytes = normalizeNonNegativeNumber(media.sizeBytes);
   return {
     ...(mediaPath ? { path: mediaPath } : {}),
     ...(mediaUrl ? { url: mediaUrl } : {}),
     ...(contentType ? { contentType } : {}),
     ...(kind ? { kind } : {}),
+    ...(fileName ? { fileName } : {}),
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(durationMs ? { durationMs } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
     ...(media.transcribed === true ? { transcribed: true } : {}),
     ...(messageId ? { messageId } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),

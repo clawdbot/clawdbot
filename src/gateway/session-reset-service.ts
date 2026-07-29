@@ -130,7 +130,6 @@ export function emitGatewaySessionEndPluginHook(params: {
   storePath: string;
   sessionFile?: string;
   agentId?: string;
-  workspaceDir?: string;
   reason:
     | "new"
     | "reset"
@@ -167,9 +166,6 @@ export function emitGatewaySessionEndPluginHook(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cfg: params.cfg,
-    agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    storePath: params.storePath,
     reason: params.reason,
     sessionFile: transcript.sessionFile,
     transcriptArchived: transcript.transcriptArchived,
@@ -177,7 +173,7 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionKey: params.nextSessionKey,
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
-    await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
+    await hookRunner.runSessionEnd(payload.event, payload.context);
   }).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
@@ -283,13 +279,11 @@ export async function drainActiveSessionsForShutdown(params: {
           sessionId: entry.sessionId,
           sessionKey: entry.sessionKey,
           cfg: entry.cfg,
-          agentId: entry.agentId,
-          storePath: entry.storePath,
           reason: params.reason,
           sessionFile: transcript.sessionFile,
           transcriptArchived: transcript.transcriptArchived,
         });
-        await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
+        await hookRunner.runSessionEnd(payload.event, payload.context);
       } catch (err) {
         logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
       } finally {
@@ -360,9 +354,10 @@ async function ensureSessionRuntimeCleanup(params: {
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
   // commands such as status must not load the embedded-agent barrel.
-  const [embeddedAgent, mcpTools] = await Promise.all([
+  const [embeddedAgent, mcpTools, { clearFinishedSessionsForScopes }] = await Promise.all([
     import("../agents/embedded-agent.js"),
     import("../agents/agent-bundle-mcp-tools.js"),
+    import("../agents/bash-process-registry.js"),
   ]);
   params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
@@ -387,6 +382,12 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
+  // Process scopes may use the requested alias, canonical key, or session id.
+  // Clear only completed records so reset/delete cannot erase another scope's
+  // output or hide a background process whose owner has not confirmed exit.
+  const processScopeKeys = new Set(queueKeys);
+  processScopeKeys.add(params.key);
+  clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
   });
@@ -1287,7 +1288,6 @@ export async function performGatewaySessionReset(params: {
           storePath,
           sessionFile: target.canonicalKey,
           agentId: target.agentId,
-          workspaceDir: entry.spawnedWorkspaceDir,
           reason: params.reason,
           archivedTranscripts: [],
         });
@@ -1316,7 +1316,6 @@ export async function performGatewaySessionReset(params: {
       }
       let resetBoundaryAppended = false;
       let resetSkipped = false;
-      let previousWorkspaceDir: string | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
@@ -1377,6 +1376,7 @@ export async function performGatewaySessionReset(params: {
             abortedLastRun: false,
             thinkingLevel: currentEntry?.thinkingLevel,
             fastMode: currentEntry?.fastMode,
+            toolOverrides: currentEntry?.toolOverrides,
             verboseLevel: currentEntry?.verboseLevel,
             traceLevel: currentEntry?.traceLevel,
             reasoningLevel: currentEntry?.reasoningLevel,
@@ -1471,7 +1471,6 @@ export async function performGatewaySessionReset(params: {
           if (resetSkipped) {
             return;
           }
-          previousWorkspaceDir = mutation.previousEntry?.spawnedWorkspaceDir;
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,
             sessionKey: target.canonicalKey ?? params.key,
@@ -1565,7 +1564,6 @@ export async function performGatewaySessionReset(params: {
           storePath,
           sessionFile: oldSessionFile,
           agentId: target.agentId,
-          workspaceDir: previousWorkspaceDir,
           reason: params.reason,
           archivedTranscripts,
           nextSessionId: next.sessionId,

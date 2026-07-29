@@ -116,9 +116,6 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
       cfg: params.cfg,
-      agentId,
-      workspaceDir: params.previousEntry.spawnedWorkspaceDir,
-      storePath,
       reason: "compaction",
       sessionFile:
         transcript.sessionFile ??
@@ -133,7 +130,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       nextSessionId: params.nextEntry.sessionId,
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
-      await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
+      await hookRunner.runSessionEnd(payload.event, payload.context);
     }).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });
@@ -174,6 +171,7 @@ export async function ensureSkillSnapshot(params: {
   execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -200,6 +198,7 @@ export async function ensureSkillSnapshot(params: {
     workspaceDir,
     cfg,
     skillFilter,
+    skillOverrides,
   } = params;
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
@@ -222,6 +221,7 @@ export async function ensureSkillSnapshot(params: {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
+      skillOverrides,
       eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
       existingSnapshot: snapshot,
     });
