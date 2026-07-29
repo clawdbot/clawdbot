@@ -47,11 +47,11 @@ function directText(element: Element | null | undefined): string | undefined {
     .trim();
 }
 
-function expectAgentTab(container: Element, text: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-    (candidate) => directText(candidate) === text,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
+function expectAgentTab(container: Element, text: string): HTMLElement & { disabled: boolean } {
+  const button = Array.from(
+    container.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-tab.hub-tab"),
+  ).find((candidate) => directText(candidate) === text);
+  if (!(button instanceof HTMLElement)) {
     throw new Error(`Expected agent tab "${text}"`);
   }
   return button;
@@ -165,13 +165,25 @@ describe("renderAgents", () => {
     render(renderAgents(createProps({ onOpenAgentDefaults })), container);
 
     const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
-    const tabs = container.querySelector(".agent-tabs");
+    const tabs = container.querySelector(".agents-hub-tabs");
     expect(defaultsRow?.textContent).toContain("Agent defaults");
     expect(defaultsRow?.textContent).toContain("Defaults every agent inherits unless overridden.");
     expect(defaultsRow?.compareDocumentPosition(tabs!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
     defaultsRow?.click();
     expect(onOpenAgentDefaults).toHaveBeenCalledOnce();
+  });
+
+  it("renders the active agent tab and selects a different panel", () => {
+    const container = document.createElement("div");
+    const onSelectPanel = vi.fn();
+    render(renderAgents(createProps({ activePanel: "files", onSelectPanel })), container);
+
+    expect(container.querySelector("#agents-tab-files")?.hasAttribute("active")).toBe(true);
+    expectAgentTab(container, "Tools").dispatchEvent(
+      new MouseEvent("click", { detail: 1, bubbles: true }),
+    );
+    expect(onSelectPanel).toHaveBeenCalledWith("tools");
   });
 
   it("prefills the identity editor from the fetched agent identity", () => {
@@ -196,7 +208,9 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
     render(renderAgents(createProps({ activePanel: "memory" })), container);
 
-    const tabs = [...container.querySelectorAll(".agent-tab")].map((tab) => directText(tab));
+    const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
+      directText(tab),
+    );
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
     const panel = container.querySelector<HTMLElement & { agentId: string }>(
       "openclaw-agent-memory-panel",
@@ -535,7 +549,7 @@ describe("renderAgents", () => {
     skillsTab = expectAgentTab(container, "Skills");
 
     expect(directText(skillsTab)).toBe("Skills");
-    expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
+    expect(skillsTab.querySelector(".hub-tab__badge--count")?.textContent).toBe("1");
   });
 
   it("localizes agent tabs and the channel refresh never state", async () => {
@@ -560,9 +574,9 @@ describe("renderAgents", () => {
       );
       await Promise.resolve();
 
-      const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
-        (button) => button.textContent?.trim(),
-      );
+      const tabLabels = Array.from(
+        container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"),
+      ).map((button) => button.textContent?.trim());
 
       expect(tabLabels).toEqual([
         "概览",
@@ -670,11 +684,13 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
-      (tab) => directText(tab),
-    );
+    const tabLabels = Array.from(
+      container.querySelectorAll<HTMLElement>(".agent-files-hub-tabs .hub-tab"),
+    ).map((tab) => directText(tab));
     expect(tabLabels).toStrictEqual(["AGENTS"]);
-    expect(container.querySelectorAll(".agent-tab--missing")).toHaveLength(1);
+    expect(container.querySelector(".agent-files-hub-tabs .hub-tab__badge")?.textContent).toBe(
+      "missing",
+    );
 
     const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
     expect(picker).not.toBeNull();
@@ -697,6 +713,7 @@ describe("renderAgentFiles", () => {
 
   it("shows the picked file as a tab with a create hint", () => {
     const container = document.createElement("div");
+    const onSelectFile = vi.fn();
 
     render(
       renderAgentFiles({
@@ -721,7 +738,7 @@ describe("renderAgentFiles", () => {
         agentFileDrafts: { "SOUL.md": "" },
         agentFileSaving: false,
         onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
+        onSelectFile,
         onFileDraftChange: () => undefined,
         onFileReset: () => undefined,
         onFileSave: () => undefined,
@@ -729,12 +746,19 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
-      (tab) => directText(tab),
-    );
+    const tabLabels = Array.from(
+      container.querySelectorAll<HTMLElement>(".agent-files-hub-tabs .hub-tab"),
+    ).map((tab) => directText(tab));
     expect(tabLabels).toStrictEqual(["AGENTS", "SOUL"]);
     expect(container.querySelector(".agent-tab-add")).toBeNull();
-    expect(container.querySelectorAll(".agent-tab--missing")).toHaveLength(0);
+    expect(container.querySelectorAll(".agent-files-hub-tabs .hub-tab__badge")).toHaveLength(0);
+    expect(container.querySelector('[id="agent-files-tab-SOUL.md"]')?.hasAttribute("active")).toBe(
+      true,
+    );
+    container
+      .querySelector('[id="agent-files-tab-AGENTS.md"]')
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    expect(onSelectFile).toHaveBeenCalledWith("AGENTS.md");
     expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
       "This file does not exist yet. Saving will create it in the agent workspace.",
     );
