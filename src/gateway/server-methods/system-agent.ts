@@ -21,6 +21,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shouldAlwaysApproveDelegatedSystemAgentOperations } from "../../system-agent/approval-policy.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import {
@@ -30,7 +31,6 @@ import {
   resolveSystemAgentGreeting,
 } from "../../system-agent/greeting.js";
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
-import { shouldAlwaysApproveDelegatedSystemAgentOperations } from "../../system-agent/approval-policy.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
