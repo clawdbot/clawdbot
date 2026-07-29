@@ -561,6 +561,44 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
+  test("resets event sequence state on restart without admitting retired socket frames", () => {
+    const onEvent = vi.fn();
+    const onGap = vi.fn();
+    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
+    client.start();
+    const firstConnection = connections[0];
+    if (!firstConnection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+    firstConnection.handlers.message(
+      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
+    );
+
+    client.stop();
+    client.start();
+    const replacementConnection = connections[1];
+    if (!replacementConnection) {
+      throw new Error("synthetic replacement connection missing");
+    }
+    firstConnection.handlers.message(
+      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 10 }),
+    );
+    replacementConnection.handlers.message(
+      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 3 }),
+    );
+
+    expect(onGap).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledTimes(2);
+
+    replacementConnection.handlers.message(
+      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 5 }),
+    );
+
+    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 4, received: 5 });
+    expect(onEvent).toHaveBeenCalledTimes(3);
+    client.stop();
+  });
+
   test("allows manual restart after a terminal socket close", () => {
     vi.useFakeTimers();
     const { client, connections } = createSyntheticGatewayProtocol({ retryOnClose: false });
