@@ -320,8 +320,16 @@ describe("skill lifecycle hooks", () => {
       });
     });
     const registry = createMockPluginRegistry([
-      { hookName: "skill_proposal_changed", pluginId: "first", handler: first },
-      { hookName: "skill_proposal_changed", pluginId: "second", handler: second },
+      {
+        hookName: "skill_proposal_changed",
+        pluginId: "first",
+        handler: (...args: unknown[]) => first(args[0] as PluginHookSkillProposalChangedEvent),
+      },
+      {
+        hookName: "skill_proposal_changed",
+        pluginId: "second",
+        handler: (...args: unknown[]) => second(args[0] as PluginHookSkillProposalChangedEvent),
+      },
     ]);
 
     await createHookRunner(registry).runSkillProposalChanged(event, ctx);
