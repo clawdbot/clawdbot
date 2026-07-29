@@ -113,30 +113,49 @@ function normalizeManifestSetupProviderAuthEvidence(
   }
   const normalized: PluginManifestSetupProviderAuthEvidence[] = [];
   for (const entry of value) {
-    if (!isRecord(entry) || entry.type !== "local-file-with-env") {
+    if (!isRecord(entry)) {
       continue;
     }
     const credentialMarker = normalizeOptionalString(entry.credentialMarker);
     if (!credentialMarker) {
       continue;
     }
-    const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
-    const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
-    if (!fileEnvVar && fallbackPaths.length === 0) {
-      continue;
+    if (entry.type === "local-file-with-env") {
+      const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
+      const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
+      if (!fileEnvVar && fallbackPaths.length === 0) {
+        continue;
+      }
+      const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
+      const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
+      const source = normalizeOptionalString(entry.source);
+      normalized.push({
+        type: "local-file-with-env",
+        ...(fileEnvVar ? { fileEnvVar } : {}),
+        ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
+        ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
+        ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+        credentialMarker,
+        ...(source ? { source } : {}),
+      });
+    } else if (entry.type === "env-vars-with-marker") {
+      const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
+      const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
+      // Ambient evidence must gate on at least one env var; without any
+      // requirement it would report the provider authenticated for an empty
+      // environment.
+      if (requiresAnyEnv.length === 0 && requiresAllEnv.length === 0) {
+        continue;
+      }
+      const source = normalizeOptionalString(entry.source);
+      normalized.push({
+        type: "env-vars-with-marker",
+        ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
+        ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+        credentialMarker,
+        ...(source ? { source } : {}),
+      });
     }
-    const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
-    const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
-    const source = normalizeOptionalString(entry.source);
-    normalized.push({
-      type: "local-file-with-env",
-      ...(fileEnvVar ? { fileEnvVar } : {}),
-      ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
-      ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
-      ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
-      credentialMarker,
-      ...(source ? { source } : {}),
-    });
   }
   return normalized.length > 0 ? normalized : undefined;
 }

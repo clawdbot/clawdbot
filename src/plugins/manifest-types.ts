@@ -194,22 +194,35 @@ export type PluginManifestSetupProvider = {
   authEvidence?: PluginManifestSetupProviderAuthEvidence[];
 };
 
-export type PluginManifestSetupProviderAuthEvidence = {
-  /** Generic local file evidence gated by required environment metadata. */
-  type: "local-file-with-env";
-  /** Optional env var containing an explicit credential file path. */
-  fileEnvVar?: string;
-  /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
-  fallbackPaths?: string[];
-  /** At least one of these env vars must be non-empty when provided. */
-  requiresAnyEnv?: string[];
-  /** Every env var listed here must be non-empty when provided. */
-  requiresAllEnv?: string[];
-  /** Non-secret marker returned when this evidence is present. */
-  credentialMarker: string;
-  /** Human-readable auth source label. */
-  source?: string;
-};
+export type PluginManifestSetupProviderAuthEvidence =
+  | {
+      /** Generic local file evidence gated by required environment metadata. */
+      type: "local-file-with-env";
+      /** Optional env var containing an explicit credential file path. */
+      fileEnvVar?: string;
+      /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
+      fallbackPaths?: string[];
+      /** At least one of these env vars must be non-empty when provided. */
+      requiresAnyEnv?: string[];
+      /** Every env var listed here must be non-empty when provided. */
+      requiresAllEnv?: string[];
+      /** Non-secret marker returned when this evidence is present. */
+      credentialMarker: string;
+      /** Human-readable auth source label. */
+      source?: string;
+    }
+  | {
+      /** Env-var-only evidence for ambient credential sources (metadata server, workload identity). */
+      type: "env-vars-with-marker";
+      /** At least one of these env vars must be non-empty when provided. */
+      requiresAnyEnv?: string[];
+      /** Every env var listed here must be non-empty when provided. */
+      requiresAllEnv?: string[];
+      /** Non-secret marker returned when this evidence is present. */
+      credentialMarker: string;
+      /** Human-readable auth source label. */
+      source?: string;
+    };
 
 export type PluginManifestSetup = {
   /** Cheap provider setup metadata exposed before runtime loads. */

@@ -1454,6 +1454,43 @@ describe("google transport stream", () => {
     },
   );
 
+  it("resolves Vertex project/location from candidate config without process.env", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-"));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    // Deliberately leave the Vertex env vars unset: project/location must come from
+    // the candidate config passed into the stream fn, not the global process.env.
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "");
+    vi.stubEnv("GCLOUD_PROJECT", "");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+    const streamFn = createGoogleVertexTransportStreamFn({
+      env: {
+        vars: { GOOGLE_CLOUD_PROJECT: "config-project", GOOGLE_CLOUD_LOCATION: "us-central1" },
+      },
+    } as Parameters<typeof createGoogleVertexTransportStreamFn>[0]);
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
+          typeof streamFn
+        >[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: vi.fn(),
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(String(url)).toBe(
+      "https://us-central1-aiplatform.googleapis.com/v1/projects/config-project/locations/us-central1/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+    );
+  });
+
   it("resolves non-file Vertex ADC through google-auth-library without OAuth refresh fetch", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-"));
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");

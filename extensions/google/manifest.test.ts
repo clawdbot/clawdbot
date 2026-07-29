@@ -102,12 +102,19 @@ describe("google manifest model catalog", () => {
 
     expect(vertex?.authEvidence).toEqual([
       expect.objectContaining({
+        type: "local-file-with-env",
         fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
         fallbackPaths: [
           "${CLOUDSDK_CONFIG}/application_default_credentials.json",
           "${HOME}/.config/gcloud/application_default_credentials.json",
           "${APPDATA}/gcloud/application_default_credentials.json",
         ],
+        credentialMarker: "gcp-vertex-credentials",
+      }),
+      expect.objectContaining({
+        type: "env-vars-with-marker",
+        requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+        credentialMarker: "gcp-vertex-credentials",
       }),
     ]);
   });
@@ -122,6 +129,11 @@ describe("google manifest model catalog", () => {
         choiceLabel: "Google AI Studio API key",
         choiceHint: "Supported API-key access from aistudio.google.com/apikey",
         groupHint: "Supported API-key setup",
+      }),
+      expect.objectContaining({
+        provider: "google-vertex",
+        method: "adc",
+        choiceLabel: "Google Vertex AI",
       }),
     ]);
     expect(choices.some((choice) => choice.provider === "google-gemini-cli")).toBe(false);

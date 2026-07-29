@@ -1807,6 +1807,10 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  // The env-vars-with-marker evidence entry added for metadata-server ADC does
+  // not affect this test: resolveEnvApiKey uses precomputed authEvidenceMap from
+  // plugin manifests, and the test harness does not load the google plugin
+  // manifest, so only the local-file-with-env entry is evaluated.
   it("resolveEnvApiKey('google-vertex') rejects missing explicit ADC path before fallback paths", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
     const fallbackDir = path.join(homeDir, ".config", "gcloud");

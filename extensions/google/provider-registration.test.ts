@@ -66,3 +66,38 @@ describe("buildGoogleProvider createStreamFn", () => {
     expect(streamFns.createGenerativeAi).not.toHaveBeenCalled();
   });
 });
+
+describe("buildGoogleProvider normalizeTransport", () => {
+  it("defaults bare google-vertex config to the native transport", () => {
+    expect(
+      buildGoogleProvider().normalizeTransport?.({
+        provider: "google-vertex",
+        api: undefined,
+        baseUrl: undefined,
+      } as never),
+    ).toEqual({ api: "google-vertex", baseUrl: undefined });
+  });
+
+  it("routes native Vertex hosts to the native transport", () => {
+    expect(
+      buildGoogleProvider().normalizeTransport?.({
+        provider: "google-vertex",
+        api: undefined,
+        baseUrl: "https://us-central1-aiplatform.googleapis.com",
+      } as never),
+    ).toEqual({
+      api: "google-vertex",
+      baseUrl: "https://us-central1-aiplatform.googleapis.com",
+    });
+  });
+
+  it("preserves a custom proxy baseUrl instead of forcing native Vertex", () => {
+    const result = buildGoogleProvider().normalizeTransport?.({
+      provider: "google-vertex",
+      api: undefined,
+      baseUrl: "https://proxy.example.com/vertex",
+    } as never);
+    expect(result?.api).not.toBe("google-vertex");
+    expect(result?.baseUrl).toBe("https://proxy.example.com/vertex");
+  });
+});

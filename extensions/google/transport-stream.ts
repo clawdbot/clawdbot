@@ -18,6 +18,7 @@ import {
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -351,29 +352,35 @@ function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string 
   return `${baseUrl}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`;
 }
 
-function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined): string {
+function resolveGoogleVertexProject(
+  options: GoogleTransportOptions | undefined,
+  config?: OpenClawConfig,
+): string {
   const project =
     normalizeOptionalString((options as { project?: unknown } | undefined)?.project) ||
+    normalizeOptionalString(config?.env?.vars?.GOOGLE_CLOUD_PROJECT) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_PROJECT) ||
     normalizeOptionalString(process.env.GCLOUD_PROJECT);
   if (!project) {
     throw new Error(
-      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
+      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT in your environment " +
+        'or add "GOOGLE_CLOUD_PROJECT" to the "env" section of openclaw.json. ' +
+        "On GCE/GKE, the project can be detected during onboarding with `openclaw onboard`.",
     );
   }
   return project;
 }
 
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
-  const location =
+function resolveGoogleVertexLocation(
+  options: GoogleTransportOptions | undefined,
+  config?: OpenClawConfig,
+): string {
+  return (
     normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
-    normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
-  if (!location) {
-    throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
-    );
-  }
-  return location;
+    normalizeOptionalString(config?.env?.vars?.GOOGLE_CLOUD_LOCATION) ||
+    normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION) ||
+    "global"
+  );
 }
 
 function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
@@ -404,9 +411,10 @@ function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: st
 function buildGoogleVertexRequestUrl(
   model: GoogleTransportModel,
   options: GoogleTransportOptions | undefined,
+  config?: OpenClawConfig,
 ): string {
-  const project = encodeURIComponent(resolveGoogleVertexProject(options));
-  const location = encodeURIComponent(resolveGoogleVertexLocation(options));
+  const project = encodeURIComponent(resolveGoogleVertexProject(options, config));
+  const location = encodeURIComponent(resolveGoogleVertexLocation(options, config));
   // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
   // provider-qualified id does not become an invalid models/google%2F... path.
   const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
@@ -872,9 +880,10 @@ function buildGoogleTransportRequestUrl(
   kind: CanonicalGoogleTransportApi,
   model: GoogleTransportModel,
   options: GoogleTransportOptions | undefined,
+  config?: OpenClawConfig,
 ): string {
   return kind === "google-vertex"
-    ? buildGoogleVertexRequestUrl(model, options)
+    ? buildGoogleVertexRequestUrl(model, options, config)
     : buildGoogleGenerativeAiRequestUrl(model);
 }
 
@@ -1306,7 +1315,10 @@ function pushTextBlockEnd(
   }
 }
 
-function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): StreamFn {
+function createGoogleTransportStreamFn(
+  kind: CanonicalGoogleTransportApi,
+  config?: OpenClawConfig,
+): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as GoogleTransportModel;
     const options = rawOptions as GoogleTransportOptions | undefined;
@@ -1330,7 +1342,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         if (nextParams !== undefined) {
           params = nextParams as GoogleGenerateContentRequest;
         }
-        const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
+        const requestUrl = buildGoogleTransportRequestUrl(kind, model, options, config);
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
           const requestHeaders = await buildGoogleTransportHeaders({
@@ -1567,7 +1579,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
   return createGoogleTransportStreamFn("google-generative-ai");
 }
 
-export function createGoogleVertexTransportStreamFn(): StreamFn {
-  return createGoogleTransportStreamFn("google-vertex");
+export function createGoogleVertexTransportStreamFn(config?: OpenClawConfig): StreamFn {
+  return createGoogleTransportStreamFn("google-vertex", config);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

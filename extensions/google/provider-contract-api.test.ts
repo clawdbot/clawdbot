@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { createGoogleGeminiCliProvider, createGoogleProvider } from "./provider-contract-api.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createGoogleGeminiCliProvider,
+  createGoogleProvider,
+  createGoogleVertexProvider,
+} from "./provider-contract-api.js";
+
+vi.mock("google-auth-library", () => ({
+  GoogleAuth: class {
+    async getProjectId() {
+      return "auto-detected-project";
+    }
+  },
+}));
 
 describe("google provider contract", () => {
   it("exposes Google AI Studio API-key setup", () => {
@@ -25,5 +37,20 @@ describe("google provider contract", () => {
     expect(provider.auth).toEqual([]);
     expect(provider.envVars).toEqual([]);
     expect(provider.wizard).toBeUndefined();
+  });
+
+  it("preserves existing Vertex project/location on onboarding rerun", async () => {
+    const adc = createGoogleVertexProvider().auth?.find((method) => method.id === "adc");
+    const result = await adc?.run?.({
+      config: {
+        env: {
+          vars: { GOOGLE_CLOUD_PROJECT: "existing-project", GOOGLE_CLOUD_LOCATION: "us-central1" },
+        },
+      },
+      prompter: { text: vi.fn(async () => ""), note: vi.fn(async () => {}) },
+    } as never);
+    const patch = result?.configPatch as { env?: { vars?: Record<string, string> } } | undefined;
+    expect(patch?.env?.vars?.GOOGLE_CLOUD_PROJECT).toBe("existing-project");
+    expect(patch?.env?.vars?.GOOGLE_CLOUD_LOCATION).toBe("us-central1");
   });
 });

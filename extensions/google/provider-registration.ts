@@ -66,8 +66,16 @@ export function buildGoogleProvider(): ProviderPlugin {
         },
       }),
     ],
-    normalizeTransport: ({ provider, api, baseUrl }) =>
-      resolveGoogleGenerativeAiTransport({ provider, api, baseUrl }),
+    normalizeTransport: ({ provider, api, baseUrl }) => {
+      // Bare google-vertex (no api, no baseUrl) has no URL to normalize, so the
+      // provider name implies the native transport. With a baseUrl, defer to the
+      // shared resolver so vertex hosts map to native and proxy endpoints keep
+      // their generic routing.
+      if (provider === "google-vertex" && !api && !baseUrl) {
+        return { api: "google-vertex" as const, baseUrl };
+      }
+      return resolveGoogleGenerativeAiTransport({ provider, api, baseUrl });
+    },
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeGoogleProviderConfig(provider, providerConfig),
     resolveConfigApiKey: ({ provider, env }) =>
@@ -105,13 +113,13 @@ export function buildGoogleProvider(): ProviderPlugin {
         providerId: ctx.provider,
         ctx,
       }),
-    createStreamFn: ({ model }) => {
+    createStreamFn: ({ model, config }) => {
       if (
         model.api === "google-vertex" ||
         (model.api === "google-generative-ai" &&
           (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
       ) {
-        return createGoogleVertexTransportStreamFn();
+        return createGoogleVertexTransportStreamFn(config);
       }
       if (model.api === "google-generative-ai") {
         return createGoogleGenerativeAiTransportStreamFn();

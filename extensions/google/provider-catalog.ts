@@ -3,15 +3,16 @@ import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./provider-models.js";
 
 const GOOGLE_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_BASE_URL}/models?pageSize=1000`;
-const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
 const GOOGLE_GEMINI_MODELS_CACHE_TTL_MS = 60_000;
 const GOOGLE_GEMINI_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = [
@@ -237,10 +238,25 @@ export async function buildGoogleLiveCatalogProvider(params: {
   }
 }
 
+const VERTEX_MANIFEST_CATALOG = manifest.modelCatalog.providers["google-vertex"];
+// codeMode tiers stay in source (google is a source-catalog plugin per
+// shared-upstream-model.contract); the manifest catalog is codeMode-free so it
+// never conflicts with sibling plugins shipping the same gemini ids.
+const GEMINI_CODE_MODE_PREFERRED = new Set(
+  GOOGLE_GEMINI_TEXT_MODELS.filter((model) => model.compat?.codeMode === "preferred").map(
+    (model) => model.id,
+  ),
+);
+
 export function buildGoogleVertexStaticCatalogProvider(): ModelProviderConfig {
-  return {
-    baseUrl: GOOGLE_VERTEX_BASE_URL,
-    api: "google-vertex",
-    models: GOOGLE_GEMINI_TEXT_MODELS,
-  };
+  const provider = buildManifestModelProviderConfig({
+    providerId: "google-vertex",
+    catalog: VERTEX_MANIFEST_CATALOG,
+  });
+  for (const model of provider.models) {
+    if (GEMINI_CODE_MODE_PREFERRED.has(model.id)) {
+      model.compat = { codeMode: "preferred" };
+    }
+  }
+  return provider;
 }

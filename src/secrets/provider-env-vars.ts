@@ -42,15 +42,23 @@ export type ProviderEnvVarLookupParams = {
 };
 
 /** Manifest-provided evidence that a provider auth credential exists outside config. */
-export type ProviderAuthEvidence = {
-  type: "local-file-with-env";
-  fileEnvVar?: string;
-  fallbackPaths?: readonly string[];
-  requiresAnyEnv?: readonly string[];
-  requiresAllEnv?: readonly string[];
-  credentialMarker: string;
-  source?: string;
-};
+export type ProviderAuthEvidence =
+  | {
+      type: "local-file-with-env";
+      fileEnvVar?: string;
+      fallbackPaths?: readonly string[];
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    }
+  | {
+      type: "env-vars-with-marker";
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    };
 
 /** Provider auth lookup maps resolved from plugin metadata and core fallback rules. */
 export type ProviderAuthLookupMaps = {
@@ -103,12 +111,21 @@ function appendUniqueAuthEvidence(
   evidence: readonly ProviderAuthEvidence[],
 ) {
   const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || evidence.length === 0) {
+  // Ambient (env-vars-with-marker) evidence must gate on at least one env var;
+  // without any requirement it would report the provider authenticated for an
+  // empty environment. Drop such entries before they enter the lookup map.
+  const usable = evidence.filter(
+    (entry) =>
+      entry.type !== "env-vars-with-marker" ||
+      Boolean(entry.requiresAnyEnv?.length) ||
+      Boolean(entry.requiresAllEnv?.length),
+  );
+  if (!normalizedProviderId || usable.length === 0) {
     return;
   }
   const bucket = (target[normalizedProviderId] ??= []);
   const seen = new Set(bucket.map((entry) => JSON.stringify(entry)));
-  for (const entry of evidence) {
+  for (const entry of usable) {
     const key = JSON.stringify(entry);
     if (seen.has(key)) {
       continue;

@@ -5690,6 +5690,108 @@ describe("verifySetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
+  it("passes candidate config env to the probe without mutating global process.env", async () => {
+    // google-vertex reads its project/location from the candidate config passed into
+    // the probe transport, not from process.env. The probe must never mutate the
+    // gateway's global process.env, or a concurrent gateway request could observe the
+    // candidate's provider settings during the awaited probe.
+    const priorProject = process.env.GOOGLE_CLOUD_PROJECT;
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    const profiles = {
+      "openai:default": { type: "api_key" as const, provider: "openai", key: "key-1" },
+    };
+    let configDuringProbe: OpenClawConfig | undefined;
+    let envDuringProbe: string | undefined;
+    const runEmbeddedAgent = vi.fn(async (params: { config?: OpenClawConfig }) => {
+      configDuringProbe = params.config;
+      envDuringProbe = process.env.GOOGLE_CLOUD_PROJECT;
+      return successfulRun("openai", "gpt-5.5");
+    });
+
+    try {
+      const result = await verifySetupInferenceConfig({
+        config: {
+          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+          auth: { profiles: { "openai:default": { provider: "openai", mode: "api_key" } } },
+          env: { vars: { GOOGLE_CLOUD_PROJECT: "probe-project" } },
+        } satisfies OpenClawConfig,
+        runtime,
+        deps: {
+          loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      // Candidate project reaches the probe via the config, not global env.
+      expect(configDuringProbe?.env?.vars?.GOOGLE_CLOUD_PROJECT).toBe("probe-project");
+      // process.env is never mutated, during or after the probe.
+      expect(envDuringProbe).toBeUndefined();
+      expect(process.env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    } finally {
+      if (priorProject === undefined) {
+        delete process.env.GOOGLE_CLOUD_PROJECT;
+      } else {
+        process.env.GOOGLE_CLOUD_PROJECT = priorProject;
+      }
+    }
+  });
+
+  it("keeps overlapping probes isolated and never mutates global process.env", async () => {
+    // Two setup probes running concurrently must each see only their own candidate
+    // project and must never leak candidate values into the shared process.env.
+    const priorProject = process.env.GOOGLE_CLOUD_PROJECT;
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    const profiles = {
+      "openai:default": { type: "api_key" as const, provider: "openai", key: "key-1" },
+    };
+    const seenProjects: Array<string | undefined> = [];
+    let observedGlobalDuringProbe: string | undefined;
+    const makeRunner = () =>
+      vi.fn(async (params: { config?: OpenClawConfig }) => {
+        // Yield so the two probes interleave on the event loop.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+        seenProjects.push(params.config?.env?.vars?.GOOGLE_CLOUD_PROJECT);
+        observedGlobalDuringProbe ??= process.env.GOOGLE_CLOUD_PROJECT;
+        return successfulRun("openai", "gpt-5.5");
+      });
+    const runProbe = (project: string) =>
+      verifySetupInferenceConfig({
+        config: {
+          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+          auth: { profiles: { "openai:default": { provider: "openai", mode: "api_key" } } },
+          env: { vars: { GOOGLE_CLOUD_PROJECT: project } },
+        } satisfies OpenClawConfig,
+        runtime,
+        deps: {
+          loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+          runEmbeddedAgent: makeRunner() as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+    try {
+      const [a, b] = await Promise.all([runProbe("project-a"), runProbe("project-b")]);
+      expect(a).toMatchObject({ ok: true });
+      expect(b).toMatchObject({ ok: true });
+      // Each probe saw only its own candidate project; global env untouched throughout.
+      expect(
+        seenProjects.toSorted((left, right) => String(left).localeCompare(String(right))),
+      ).toEqual(["project-a", "project-b"]);
+      expect(observedGlobalDuringProbe).toBeUndefined();
+      expect(process.env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    } finally {
+      if (priorProject === undefined) {
+        delete process.env.GOOGLE_CLOUD_PROJECT;
+      } else {
+        process.env.GOOGLE_CLOUD_PROJECT = priorProject;
+      }
+    }
+  });
+
   it("returns a refreshed staged profile without changing the configured agent store", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "configured-agent");

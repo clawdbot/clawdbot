@@ -1,18 +1,10 @@
 // NEVER convert to top-level imports - breaks browser/Vite builds
-let existsSync: typeof import("node:fs").existsSync | null = null;
-let homedir: typeof import("node:os").homedir | null = null;
-let join: typeof import("node:path").join | null = null;
-
-type DynamicImport = (specifier: string) => Promise<unknown>;
 type NodeBuiltinModule =
   | typeof import("node:fs")
   | typeof import("node:os")
   | typeof import("node:path");
 
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
 const NODE_FS_SPECIFIER = "node:fs";
-const NODE_OS_SPECIFIER = "node:os";
-const NODE_PATH_SPECIFIER = "node:path";
 
 function loadNodeBuiltinModule(specifier: string): NodeBuiltinModule | null {
   const getBuiltinModule = (typeof process !== "undefined" ? process : undefined) as
@@ -25,40 +17,6 @@ function loadNodeBuiltinModule(specifier: string): NodeBuiltinModule | null {
     return require(specifier) as NodeBuiltinModule;
   }
   return null;
-}
-
-function loadNodeHelpersSync(): boolean {
-  try {
-    const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
-    const osModule = loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os") | null;
-    const pathModule = loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as
-      | typeof import("node:path")
-      | null;
-    existsSync ??= fsModule?.existsSync ?? null;
-    homedir ??= osModule?.homedir ?? null;
-    join ??= pathModule?.join ?? null;
-    if (!existsSync || !homedir || !join) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Eagerly load in Node.js/Bun environment only
-if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-  if (!loadNodeHelpersSync()) {
-    void dynamicImport(NODE_FS_SPECIFIER).then((m) => {
-      existsSync = (m as typeof import("node:fs")).existsSync;
-    });
-    void dynamicImport(NODE_OS_SPECIFIER).then((m) => {
-      homedir = (m as typeof import("node:os")).homedir;
-    });
-    void dynamicImport(NODE_PATH_SPECIFIER).then((m) => {
-      join = (m as typeof import("node:path")).join;
-    });
-  }
 }
 
 let procEnvCache: Map<string, string> | null = null;
@@ -110,40 +68,6 @@ function getProcEnv(key: string): string | undefined {
 
 function getEnvValue(key: string): string | undefined {
   return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
-}
-
-let cachedVertexAdcCredentialsExists: true | null = null;
-
-function hasVertexAdcCredentials(): boolean {
-  if (cachedVertexAdcCredentialsExists === null) {
-    if (!existsSync || !homedir || !join) {
-      const isNode =
-        typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
-      if (!isNode || !loadNodeHelpersSync()) {
-        return false;
-      }
-    }
-    const nodeExistsSync = existsSync;
-    const nodeHomedir = homedir;
-    const nodeJoin = join;
-    if (!nodeExistsSync || !nodeHomedir || !nodeJoin) {
-      return false;
-    }
-
-    // Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
-    const gacPath = getEnvValue("GOOGLE_APPLICATION_CREDENTIALS");
-    if (gacPath) {
-      cachedVertexAdcCredentialsExists = nodeExistsSync(gacPath) ? true : null;
-    } else {
-      // Fall back to default ADC path (lazy evaluation)
-      cachedVertexAdcCredentialsExists = nodeExistsSync(
-        nodeJoin(nodeHomedir(), ".config", "gcloud", "application_default_credentials.json"),
-      )
-        ? true
-        : null;
-    }
-  }
-  return cachedVertexAdcCredentialsExists === true;
 }
 
 function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
@@ -227,16 +151,17 @@ export function getEnvApiKey(provider: string): string | undefined {
     return getEnvValue(envKeys[0]);
   }
 
-  // Vertex AI supports either an explicit API key or Application Default Credentials.
-  // Auth is configured via `gcloud auth application-default login`.
+  // Vertex AI requires a GCP project. A non-blank project is the gate signal;
+  // actual credentials (GCE/GKE/Cloud Run metadata server, gcloud application
+  // default login, service account key files, or Workload Identity Federation)
+  // are resolved at request time by the downstream transport. Blank markers are
+  // treated as absent (getEnvValue trims), and a credentials file alone without
+  // a configured project does not authenticate.
   if (provider === "google-vertex") {
-    const hasCredentials = hasVertexAdcCredentials();
     const hasProject = Boolean(
       getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
     );
-    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
-
-    if (hasCredentials && hasProject && hasLocation) {
+    if (hasProject) {
       return "<authenticated>";
     }
   }

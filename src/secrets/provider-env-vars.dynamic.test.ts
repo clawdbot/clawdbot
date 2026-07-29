@@ -25,15 +25,24 @@ type MockManifestPlugin = {
     providers?: Array<{
       id: string;
       envVars?: string[];
-      authEvidence?: Array<{
-        type: "local-file-with-env";
-        fileEnvVar?: string;
-        fallbackPaths?: string[];
-        requiresAnyEnv?: string[];
-        requiresAllEnv?: string[];
-        credentialMarker: string;
-        source?: string;
-      }>;
+      authEvidence?: Array<
+        | {
+            type: "local-file-with-env";
+            fileEnvVar?: string;
+            fallbackPaths?: string[];
+            requiresAnyEnv?: string[];
+            requiresAllEnv?: string[];
+            credentialMarker: string;
+            source?: string;
+          }
+        | {
+            type: "env-vars-with-marker";
+            requiresAnyEnv?: string[];
+            requiresAllEnv?: string[];
+            credentialMarker: string;
+            source?: string;
+          }
+      >;
     }>;
   };
 };
@@ -287,6 +296,34 @@ describe("provider env vars dynamic manifest metadata", () => {
     ]);
     const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
     expect(snapshotOptions.preferPersisted).toBe(false);
+  });
+
+  it("drops ambient auth evidence that declares no environment requirements", () => {
+    useRegistrySetupPlugin("external-cloud", "global", {
+      id: "external-cloud",
+      authEvidence: [
+        {
+          type: "env-vars-with-marker",
+          credentialMarker: "external-cloud-ambient-credentials",
+          source: "external cloud ambient",
+        },
+      ],
+    });
+
+    // The normalizer must reject an ambient marker with no env conditions,
+    // otherwise it would report the provider authenticated for an empty env.
+    expect(resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"]).toBeUndefined();
+  });
+
+  it("never authenticates an ambient marker that has no environment requirements", () => {
+    // Defensive boundary guard: even if such an entry reached the resolver, it
+    // must not return the marker for an empty environment.
+    expect(
+      resolveLocalProviderAuthEvidence(
+        [{ type: "env-vars-with-marker", credentialMarker: "external-cloud-ambient-credentials" }],
+        {},
+      ),
+    ).toBeNull();
   });
 
   it("expands provider-owned directory variables in manifest credential evidence", () => {
