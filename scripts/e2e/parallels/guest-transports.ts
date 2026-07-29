@@ -122,12 +122,12 @@ export async function runPosixBackgroundShell(options: PosixBackgroundShellOptio
   const runDir = `/tmp/openclaw-parallels/${nonce}`;
   const scriptPath = `${runDir}/run.sh`;
   const runnerPath = `${runDir}/runner.sh`;
+  const launcherPath = `${runDir}/launcher.sh`;
+  const cleanupPath = `${runDir}/cleanup.sh`;
   const logPath = `${runDir}/run.log`;
   const donePath = `${runDir}/done`;
   const exitPath = `${runDir}/exit`;
   const pidPath = `${runDir}/pid`;
-  const backgroundExitPrefix = `__OPENCLAW_BACKGROUND_EXIT__:${nonce}:`;
-  const backgroundDoneMarker = `__OPENCLAW_BACKGROUND_DONE__:${nonce}`;
   const deadline = Date.now() + options.timeoutMs;
   const transport = (args: string[]) => options.transportArgs(args);
   const runGuest = (args: string[], timeoutMs: number, input?: string): CommandResult => {
@@ -160,97 +160,12 @@ printf 'done\n' >"$done_path.tmp"
 /bin/mv -f "$done_path.tmp" "$done_path"
 exit 0
 `;
-
-  let doneSeen = false;
-  try {
-    const setup = runGuest(["/bin/mkdir", "-p", runDir], 30_000);
-    if (setup.status !== 0) {
-      throw new Error(`${options.label} background directory setup failed`);
-    }
-    for (const [path, contents] of [
-      [scriptPath, `umask 077\n${options.script}`],
-      [runnerPath, runner],
-    ] as const) {
-      const write = runGuest(
-        ["/bin/bash", "-c", `umask 077; /bin/dd of=${posixSingleQuote(path)} bs=1048576`],
-        120_000,
-        contents,
-      );
-      if (write.status !== 0) {
-        throw new Error(`${options.label} background script write failed`);
-      }
-    }
-
-    const launchScript = `/usr/bin/nohup /bin/bash ${posixSingleQuote(runnerPath)} </dev/null >/dev/null 2>&1 &
-printf 'started\n'`;
-    const launch = runGuest(["/bin/bash", "-c", launchScript], 8_000);
-    let launched = launch.status === 0 && launch.stdout.includes("started");
-    if (!launched && (launch.status === 0 || launch.status === 124)) {
-      const materializeDeadline = Math.min(Date.now() + 45_000, deadline);
-      while (Date.now() < materializeDeadline) {
-        const materialized = runGuest(
-          [
-            "/bin/bash",
-            "-c",
-            `{ [ -f ${posixSingleQuote(pidPath)} ] || [ -f ${posixSingleQuote(
-              donePath,
-            )} ]; } && printf 'materialized\\n'`,
-          ],
-          15_000,
-        );
-        if (materialized.stdout.includes("materialized")) {
-          launched = true;
-          break;
-        }
-        await sleep(Math.min(pollIntervalMs, Math.max(1, materializeDeadline - Date.now())));
-      }
-    }
-    if (!launched) {
-      throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
-    }
-
-    while (Date.now() < deadline) {
-      const done = runGuest(
-        [
-          "/bin/bash",
-          "-c",
-          `[ -f ${posixSingleQuote(donePath)} ] && printf 'done\\n' || printf 'wait\\n'`,
-        ],
-        5_000,
-      );
-      if (!done.stdout.split(/\r?\n/u).some((line) => line.trim() === "done")) {
-        await sleep(pollIntervalMs);
-        continue;
-      }
-
-      const drain = runGuest(
-        [
-          "/bin/bash",
-          "-c",
-          `if [ -f ${posixSingleQuote(donePath)} ]; then
-  /usr/bin/tail -c ${POSIX_BACKGROUND_LOG_MAX_BYTES} ${posixSingleQuote(logPath)} 2>/dev/null || true
-  printf '\\n${backgroundExitPrefix}'
-  /bin/cat ${posixSingleQuote(exitPath)}
-  printf '${backgroundDoneMarker}\\n'
-fi`,
-        ],
-        30_000,
-      );
-      if (hasControlLine(drain.stdout, backgroundDoneMarker)) {
-        doneSeen = true;
-        const backgroundExit = findControlValue(drain.stdout, backgroundExitPrefix) ?? "0";
-        if (backgroundExit !== "0" || (drain.status !== 0 && drain.status !== 124)) {
-          throw new Error(`${options.label} failed`);
-        }
-        return;
-      }
-      await sleep(Math.min(pollIntervalMs, 100));
-    }
-    throw new Error(`${options.label} timed out`);
-  } finally {
-    const stopProcessTree = doneSeen
-      ? ""
-      : `if [ -f ${posixSingleQuote(pidPath)} ]; then
+  const launcher = `#!/bin/bash
+/usr/bin/nohup /bin/bash ${posixSingleQuote(runnerPath)} </dev/null >/dev/null 2>&1 &
+printf 'started\n'
+`;
+  const cleanup = `#!/bin/bash
+if [ ! -f ${posixSingleQuote(donePath)} ] && [ -f ${posixSingleQuote(pidPath)} ]; then
   background_pid=$(/bin/cat ${posixSingleQuote(pidPath)} 2>/dev/null || true)
   case "$background_pid" in
     ''|*[!0-9]*) ;;
@@ -273,19 +188,111 @@ fi`,
       ;;
   esac
 fi
-`;
-    const cleanupScript = `${stopProcessTree}
 if [ -f ${posixSingleQuote(logPath)} ] && [ ! -f ${posixSingleQuote(donePath)} ]; then
   /usr/bin/tail -c ${POSIX_BACKGROUND_LOG_MAX_BYTES} ${posixSingleQuote(logPath)} 2>/dev/null || true
 fi
-/bin/rm -rf ${posixSingleQuote(runDir)}`;
+`;
+
+  let launched: boolean;
+  let launchAttempted = false;
+  let doneSeen = false;
+  try {
+    const setup = runGuest(["/bin/mkdir", "-m", "700", "-p", runDir], 30_000);
+    if (setup.status !== 0) {
+      throw new Error(`${options.label} background directory setup failed`);
+    }
+    const secureRunDir = runGuest(["/bin/chmod", "700", runDir], 30_000);
+    if (secureRunDir.status !== 0) {
+      throw new Error(`${options.label} background directory permission setup failed`);
+    }
+    for (const [path, contents] of [
+      [scriptPath, `umask 077\n${options.script}`],
+      [runnerPath, runner],
+      [launcherPath, launcher],
+      [cleanupPath, cleanup],
+    ] as const) {
+      const write = runGuest(["/bin/dd", `of=${path}`, "bs=1048576"], 120_000, contents);
+      if (write.status !== 0) {
+        throw new Error(`${options.label} background script write failed`);
+      }
+      const chmod = runGuest(["/bin/chmod", "700", path], 30_000);
+      if (chmod.status !== 0) {
+        throw new Error(`${options.label} background script permission setup failed`);
+      }
+    }
+
+    launchAttempted = true;
+    const launch = runGuest(["/bin/bash", launcherPath], 8_000);
+    launched = launch.status === 0 && launch.stdout.includes("started");
+    if (!launched && (launch.status === 0 || launch.status === 124)) {
+      const materializeDeadline = Math.min(Date.now() + 45_000, deadline);
+      while (Date.now() < materializeDeadline) {
+        const materialized = runGuest(["/bin/test", "-f", pidPath], 15_000);
+        if (materialized.status === 0) {
+          launched = true;
+          break;
+        }
+        await sleep(Math.min(pollIntervalMs, Math.max(1, materializeDeadline - Date.now())));
+      }
+    }
+    if (!launched) {
+      throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
+    }
+
+    while (Date.now() < deadline) {
+      const done = runGuest(["/bin/test", "-f", donePath], 5_000);
+      if (done.status !== 0) {
+        await sleep(pollIntervalMs);
+        continue;
+      }
+
+      const log = runGuest(
+        ["/usr/bin/tail", "-c", String(POSIX_BACKGROUND_LOG_MAX_BYTES), logPath],
+        30_000,
+      );
+      if (log.status !== 0 && log.status !== 124) {
+        throw new Error(`${options.label} background log read failed`);
+      }
+      let exitReadAttempted = false;
+      while (!exitReadAttempted || Date.now() < deadline) {
+        exitReadAttempted = true;
+        const exit = runGuest(["/bin/cat", exitPath], 30_000);
+        const backgroundExit = exit.stdout.trim();
+        if (/^\d+$/u.test(backgroundExit)) {
+          doneSeen = true;
+          if (backgroundExit !== "0") {
+            throw new Error(`${options.label} failed`);
+          }
+          return;
+        }
+        if (exit.status !== 0 && exit.status !== 124) {
+          throw new Error(`${options.label} background exit read failed`);
+        }
+        await sleep(Math.min(pollIntervalMs, 100));
+      }
+      throw new Error(`${options.label} completed but exit read timed out`);
+    }
+    throw new Error(`${options.label} timed out`);
+  } finally {
+    let cleanupSucceeded = doneSeen || !launchAttempted;
     try {
-      const cleanup = runCommand("prlctl", transport(["/bin/bash", "-c", cleanupScript]), {
-        check: false,
-        quiet: true,
-        timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
-      });
-      appendOutput(append, cleanup);
+      if (!doneSeen && launchAttempted) {
+        const result = runCommand("prlctl", transport(["/bin/bash", cleanupPath]), {
+          check: false,
+          quiet: true,
+          timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
+        });
+        appendOutput(append, result);
+        cleanupSucceeded = result.status === 0;
+      }
+      if (cleanupSucceeded) {
+        const remove = runCommand("prlctl", transport(["/bin/rm", "-rf", runDir]), {
+          check: false,
+          quiet: true,
+          timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
+        });
+        appendOutput(append, remove);
+      }
     } catch {
       // Cleanup must not hide the background failure or timeout.
     }

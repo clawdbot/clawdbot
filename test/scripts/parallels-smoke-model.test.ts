@@ -1652,37 +1652,37 @@ exit 0
 
     expect(script).toContain('this.guest.shBackground(\n      "macos-update-dev"');
     expect(transports).toContain("/usr/bin/nohup /bin/bash");
-    expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
     expect(transports).toContain("POSIX_BACKGROUND_LOG_MAX_BYTES");
+    expect(transports).toContain('runGuest(["/bin/test", "-f", donePath]');
+    expect(transports).toContain('runGuest(["/bin/cat", exitPath]');
+    expect(transports).toContain('["/bin/mkdir", "-m", "700", "-p", runDir]');
     expect(transports).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
     expect(transports).toContain("*${posixSingleQuote(runnerPath)}*)");
+    expect(transports).not.toContain('transport(["/bin/bash", "-c"');
   });
 
   it("accepts an ambiguous POSIX background launch after its run materializes", async () => {
     const output: string[] = [];
-    let calls = 0;
+    let exitReads = 0;
     const runCommand = vi.fn((_command: string, args: string[]) => {
-      calls++;
-      if (calls === 4) {
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
         return { status: 124, stderr: "", stdout: "" };
       }
-      if (calls === 5) {
-        return { status: 0, stderr: "", stdout: "materialized\n" };
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
+        return { status: 0, stderr: "", stdout: "" };
       }
-      if (calls === 6) {
-        return { status: 0, stderr: "", stdout: "done\n" };
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 0, stderr: "", stdout: "" };
       }
-      if (calls === 7) {
-        const drainScript = args.at(-1) ?? "";
-        const exitPrefix = drainScript.match(
-          /(__OPENCLAW_BACKGROUND_EXIT__:[A-Za-z0-9_-]+:)/u,
-        )?.[1];
-        const doneMarker = drainScript.match(/(__OPENCLAW_BACKGROUND_DONE__:[A-Za-z0-9_-]+)/u)?.[1];
-        return {
-          status: 0,
-          stderr: "",
-          stdout: `update complete\n${exitPrefix}0\n${doneMarker}\n`,
-        };
+      if (args[0] === "/usr/bin/tail") {
+        return { status: 0, stderr: "", stdout: "update complete\n" };
+      }
+      if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
+        exitReads++;
+        if (exitReads === 1) {
+          return { status: 124, stderr: "", stdout: "" };
+        }
+        return { status: 0, stderr: "", stdout: "0\n" };
       }
       return { status: 0, stderr: "", stdout: "" };
     });
@@ -1698,30 +1698,21 @@ exit 0
     });
 
     expect(output.join("")).toContain("update complete");
-    expect(calls).toBe(8);
   });
 
   it("propagates a detached POSIX background exit failure", async () => {
-    let calls = 0;
     const runCommand = vi.fn((_command: string, args: string[]) => {
-      calls++;
-      if (calls === 4) {
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
-      if (calls === 5) {
-        return { status: 0, stderr: "", stdout: "done\n" };
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 0, stderr: "", stdout: "" };
       }
-      if (calls === 6) {
-        const drainScript = args.at(-1) ?? "";
-        const exitPrefix = drainScript.match(
-          /(__OPENCLAW_BACKGROUND_EXIT__:[A-Za-z0-9_-]+:)/u,
-        )?.[1];
-        const doneMarker = drainScript.match(/(__OPENCLAW_BACKGROUND_DONE__:[A-Za-z0-9_-]+)/u)?.[1];
-        return {
-          status: 0,
-          stderr: "",
-          stdout: `update failed\n${exitPrefix}7\n${doneMarker}\n`,
-        };
+      if (args[0] === "/usr/bin/tail") {
+        return { status: 0, stderr: "", stdout: "update failed\n" };
+      }
+      if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
+        return { status: 0, stderr: "", stdout: "7\n" };
       }
       return { status: 0, stderr: "", stdout: "" };
     });
@@ -1736,20 +1727,85 @@ exit 0
         transportArgs: (args) => args,
       }),
     ).rejects.toThrow("macos update failed");
+  });
 
-    expect(calls).toBe(7);
+  it("reads the POSIX background exit after log drain consumes the deadline", async () => {
+    let exitRead = false;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/usr/bin/tail") {
+        const until = Date.now() + 30;
+        while (Date.now() < until) {
+          // Simulate a completed log drain that exhausts the phase deadline.
+        }
+        return { status: 0, stderr: "", stdout: "update complete\n" };
+      }
+      if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
+        exitRead = true;
+        return { status: 0, stderr: "", stdout: "0\n" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await runPosixBackgroundShell({
+      label: "macos update",
+      pollIntervalMs: 1,
+      runCommand: runCommand as unknown as typeof run,
+      script: "echo update",
+      timeoutMs: 25,
+      transportArgs: (args) => args,
+    });
+
+    expect(exitRead).toBe(true);
+  });
+
+  it("cleans up an ambiguous POSIX launch when PID materialization is missed", async () => {
+    let cleanupRun = false;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+        return { status: 124, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
+        return { status: 1, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/cleanup.sh")) {
+        cleanupRun = true;
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      runPosixBackgroundShell({
+        label: "macos update",
+        pollIntervalMs: 1,
+        runCommand: runCommand as unknown as typeof run,
+        script: "sleep 60",
+        timeoutMs: 25,
+        transportArgs: (args) => args,
+      }),
+    ).rejects.toThrow("macos update background launch failed");
+
+    expect(cleanupRun).toBe(true);
   });
 
   it("force-stops the verified POSIX background process tree on timeout", async () => {
-    const scripts: string[] = [];
-    let calls = 0;
-    const runCommand = vi.fn((_command: string, args: string[]) => {
-      calls++;
-      scripts.push(args.at(-1) ?? "");
-      if (calls === 4) {
+    let cleanupPayload = "";
+    const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
+      if (args[0] === "/bin/dd" && args[1]?.includes("/cleanup.sh")) {
+        cleanupPayload = options?.input ?? "";
+      }
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
-      return { status: 0, stderr: "", stdout: calls >= 5 ? "wait\n" : "" };
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 1, stderr: "", stdout: "" };
+      }
+      return { status: 0, stderr: "", stdout: "started\n" };
     });
 
     await expect(
@@ -1763,11 +1819,10 @@ exit 0
       }),
     ).rejects.toThrow("macos update timed out");
 
-    const cleanup = scripts.at(-1) ?? "";
-    expect(cleanup).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
-    expect(cleanup).toContain('for child in $(/usr/bin/pgrep -P "$1"');
-    expect(cleanup).toContain('/bin/kill -TERM "$1"');
-    expect(cleanup).toContain('/bin/kill -KILL "$1"');
+    expect(cleanupPayload).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
+    expect(cleanupPayload).toContain('for child in $(/usr/bin/pgrep -P "$1"');
+    expect(cleanupPayload).toContain('/bin/kill -TERM "$1"');
+    expect(cleanupPayload).toContain('/bin/kill -KILL "$1"');
   });
 
   it("paces ambiguous Windows background launch materialization probes", async () => {
