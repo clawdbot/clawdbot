@@ -51,7 +51,6 @@ export type CodeModeConfig = {
 };
 
 export type {
-  CodeModeFailurePhase,
   CodeModeSettlementMode,
   PendingBridgeRequest,
   SettledBridgeRequest,

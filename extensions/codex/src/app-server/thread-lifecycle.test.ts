@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
-import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
+} from "./protocol.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
@@ -559,6 +562,41 @@ describe("Codex app-server native code mode config", () => {
     expect(withWrongNamespace).not.toContain("native `wait_agent`");
   });
 
+  it.each([
+    { namespace: "openclaw_direct", exposesNativeYield: true },
+    { namespace: "openclaw", exposesNativeYield: false },
+  ])(
+    "materializes the $namespace native-yield namespace exactly once",
+    ({ namespace, exposesNativeYield }) => {
+      let namespaceReads = 0;
+      const yieldTool = {
+        type: "function" as const,
+        name: "sessions_yield",
+        description: "End the current turn",
+        inputSchema: { type: "object" },
+      };
+
+      const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+        dynamicTools: [
+          yieldTool,
+          {
+            type: "namespace",
+            name: namespace,
+            description: "",
+            get tools() {
+              namespaceReads += 1;
+              return [yieldTool];
+            },
+          },
+        ],
+      });
+
+      expect(namespaceReads).toBe(1);
+      expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(exposesNativeYield);
+      expect(instructions.includes("native `wait_agent`")).toBe(exposesNativeYield);
+    },
+  );
+
   it("summarizes deferred dynamic tool names in developer instructions", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
@@ -597,6 +635,64 @@ describe("Codex app-server native code mode config", () => {
     );
     expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
     expect(instructions).not.toContain("message,");
+  });
+
+  it("materializes namespaced prompt tools once while preserving all guidance", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    let namespaceReads = 0;
+    const tools: CodexDynamicToolFunctionSpec[] = [
+      {
+        type: "function" as const,
+        name: "zeta_tool",
+        description: "Deferred Zeta tool",
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      },
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a source reply",
+        inputSchema: { type: "object" },
+      },
+      {
+        type: "function" as const,
+        name: "skill_workshop",
+        description: "Manage skill proposals",
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      },
+      {
+        type: "function" as const,
+        name: "alpha_tool",
+        description: "Deferred Alpha tool",
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      },
+    ];
+
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          get tools() {
+            namespaceReads += 1;
+            return tools;
+          },
+        },
+      ],
+    });
+
+    expect(namespaceReads).toBe(1);
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
+    );
+    expect(instructions).toContain("## Skill Workshop");
+    expect(instructions).toContain("Visible source replies are not automatically delivered");
+    expect(instructions).toContain("Use `message(action=send)`");
+    expect(instructions).not.toContain("`openclaw_direct.sessions_yield`");
   });
 
   it("uses the shared Skill Workshop guidance when skill_workshop is available", () => {

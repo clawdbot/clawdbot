@@ -6061,6 +6061,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Hook catalog
+  - H3: Skill lifecycle and evaluation
   - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
@@ -10526,6 +10527,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Chat
   - H3: Learn from recent work
   - H2: CLI
+  - H2: Plugin evaluation and lifecycle hooks
   - H2: Proposal content
   - H2: Support files
   - H2: Agent tool

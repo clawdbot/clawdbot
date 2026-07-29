@@ -884,6 +884,7 @@ describe("core gateway method classification", () => {
   it("exposes skill proposal methods through the core gateway registry", () => {
     for (const method of [
       "skills.proposals.list",
+      "skills.proposals.events.list",
       "skills.proposals.inspect",
       "skills.proposals.historyStatus",
     ]) {
@@ -899,6 +900,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.evaluate",
       "skills.proposals.historyScan",
       "skills.proposals.apply",
       "skills.proposals.reject",

@@ -32,8 +32,10 @@ type MemoryOverviewProps = {
   engineSelection: MemoryEngineSelection;
   engineDisabled: boolean;
   status: MemoryOverviewStatus;
+  probingEmbeddings: boolean;
   onAgentChange: (agentId: string | null) => void;
   onRefresh: () => void;
+  onProbeEmbeddings: () => void;
   onNavigate: (tab: "memories" | "dreams" | "settings") => void;
 };
 
@@ -143,30 +145,45 @@ function phaseScheduleDescription(
 function renderSchedule(dreaming: DreamingStatus) {
   const phases = [
     ["light", dreaming.phases.light],
-    ["deep", dreaming.phases.deep],
     ["rem", dreaming.phases.rem],
+    ["deep", dreaming.phases.deep],
   ] as const;
   return renderSettingsSection(
     { title: t("memoryPage.overview.schedule.title") },
-    phases.map(([name, phase]) =>
-      renderSettingsRow({
-        title: t(`memoryPage.dreaming.phases.${name}.title`),
-        description: phaseScheduleDescription(
-          phase,
-          dreaming.timezone,
-          dreaming.enabled && phase.enabled && phase.managedCronPresent,
-        ),
-        control: renderSettingsStatus({
-          kind: dreaming.enabled && phase.enabled && phase.managedCronPresent ? "ok" : "muted",
-          label:
-            !dreaming.enabled || !phase.enabled
-              ? t("common.disabled")
-              : phase.managedCronPresent
-                ? t("common.enabled")
-                : t("memoryPage.overview.schedule.notScheduled"),
+    html`
+      ${phases.map(([name, phase]) =>
+        renderSettingsRow({
+          title: t(`memoryPage.dreaming.phases.${name}.title`),
+          description: html`
+            ${t(`memoryPage.overview.schedule.${name}Description`)}<br />
+            ${phaseScheduleDescription(
+              phase,
+              dreaming.timezone,
+              dreaming.enabled && phase.enabled && phase.managedCronPresent,
+            )}
+          `,
+          control: renderSettingsStatus({
+            kind: dreaming.enabled && phase.enabled && phase.managedCronPresent ? "ok" : "muted",
+            label:
+              !dreaming.enabled || !phase.enabled
+                ? t("common.disabled")
+                : phase.managedCronPresent
+                  ? t("common.enabled")
+                  : t("memoryPage.overview.schedule.notScheduled"),
+          }),
         }),
-      }),
-    ),
+      )}
+      ${renderSettingsRow({
+        title: t("memoryPage.overview.schedule.learnMore"),
+        control: html`<a
+          class="memory-page__link"
+          href="https://docs.openclaw.ai/concepts/dreaming"
+          target="_blank"
+          rel="noreferrer noopener"
+          >${t("memoryPage.overview.schedule.openDocs")}</a
+        >`,
+      })}
+    `,
   );
 }
 
@@ -190,17 +207,16 @@ function renderActivity(dreaming: DreamingStatus) {
   );
 }
 
-function renderEngineHealth(payload: DoctorMemoryStatusPayload) {
-  const embeddingKind = payload.embedding.ok
-    ? "ok"
-    : payload.embedding.checked === false
-      ? "muted"
-      : "danger";
-  const embeddingLabel = payload.embedding.ok
-    ? t("memoryPage.overview.health.healthy")
-    : payload.embedding.checked === false
-      ? t("memoryPage.overview.health.notChecked")
-      : t("memoryPage.overview.health.unavailable");
+function renderEngineHealth(payload: DoctorMemoryStatusPayload, props: MemoryOverviewProps) {
+  const notChecked = payload.embedding.checked === false;
+  const embeddingKind = payload.embedding.ok ? "ok" : notChecked ? "muted" : "danger";
+  const embeddingLabel = props.probingEmbeddings
+    ? t("memoryPage.overview.health.checking")
+    : payload.embedding.ok
+      ? t("memoryPage.overview.health.healthy")
+      : notChecked
+        ? t("memoryPage.overview.health.notChecked")
+        : t("memoryPage.overview.health.unavailable");
   return renderSettingsSection(
     { title: t("memoryPage.overview.health.title") },
     html`
@@ -210,8 +226,26 @@ function renderEngineHealth(payload: DoctorMemoryStatusPayload) {
       })}
       ${renderSettingsRow({
         title: t("memoryPage.overview.health.embeddings"),
-        description: payload.embedding.ok ? nothing : payload.embedding.error,
-        control: renderSettingsStatus({ kind: embeddingKind, label: embeddingLabel }),
+        description: payload.embedding.ok
+          ? nothing
+          : notChecked
+            ? t("memoryPage.overview.health.notCheckedDescription")
+            : payload.embedding.error,
+        control: html`
+          ${renderSettingsStatus({ kind: embeddingKind, label: embeddingLabel })}
+          ${notChecked
+            ? html`<button
+                type="button"
+                class="btn btn--sm"
+                ?disabled=${props.probingEmbeddings}
+                @click=${props.onProbeEmbeddings}
+              >
+                ${props.probingEmbeddings
+                  ? t("memoryPage.overview.health.testing")
+                  : t("memoryPage.overview.health.test")}
+              </button>`
+            : nothing}
+        `,
       })}
       ${payload.embeddingRuntime
         ? renderSettingsRow({
@@ -232,14 +266,14 @@ function renderEngineHealth(payload: DoctorMemoryStatusPayload) {
   );
 }
 
-function renderStatusCards(status: MemoryOverviewStatus) {
-  if (status.kind !== "ready") {
+function renderStatusCards(props: MemoryOverviewProps) {
+  if (props.status.kind !== "ready") {
     return nothing;
   }
   return html`
-    ${status.payload.dreaming ? renderSchedule(status.payload.dreaming) : nothing}
-    ${status.payload.dreaming ? renderActivity(status.payload.dreaming) : nothing}
-    ${renderEngineHealth(status.payload)}
+    ${props.status.payload.dreaming ? renderSchedule(props.status.payload.dreaming) : nothing}
+    ${props.status.payload.dreaming ? renderActivity(props.status.payload.dreaming) : nothing}
+    ${renderEngineHealth(props.status.payload, props)}
   `;
 }
 
@@ -273,7 +307,7 @@ export function renderMemoryOverview(props: MemoryOverviewProps) {
         agents: props.agents,
         onAgentChange: props.onAgentChange,
       })}
-      ${active ? renderStatusCards(props.status) : nothing} ${renderShortcuts(props)}
+      ${active ? renderStatusCards(props) : nothing} ${renderShortcuts(props)}
     </div>
   `;
 }
