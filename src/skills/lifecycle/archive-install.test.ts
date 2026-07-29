@@ -71,6 +71,19 @@ function skillFileContent(name: string): string {
   return ["---", `name: ${name}`, "description: Test skill", "---", "", "# Test", ""].join("\n");
 }
 
+function versionedSkillFileContent(name: string, version: string): string {
+  return [
+    "---",
+    `name: ${name}`,
+    "description: Lifecycle test skill",
+    `version: ${version}`,
+    "---",
+    "",
+    "# Test",
+    "",
+  ].join("\n");
+}
+
 afterEach(async () => {
   resetGlobalHookRunner();
   await tempDirs.cleanup();
@@ -234,5 +247,150 @@ describe("skill archive install", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = handler.mock.calls[0]?.[0] as { request?: { mode?: string } } | undefined;
     expect(payload?.request?.mode).toBe("install");
+  });
+
+  it.each([
+    {
+      label: "ClawHub",
+      origin: { type: "clawhub", slug: "hook-clawhub", version: "1.2.3" },
+      expectedSource: "clawhub",
+      expectedSourceVersion: "1.2.3",
+    },
+    {
+      label: "upload",
+      origin: { type: "upload", uploadId: "upload-123", sha256: "0".repeat(64) },
+      expectedSource: "upload",
+      expectedSourceVersion: undefined,
+    },
+    {
+      label: "path",
+      origin: { type: "path", spec: "./skill" },
+      expectedSource: "source-install",
+      expectedSourceVersion: undefined,
+    },
+  ] as const)("attributes committed $label archive installs", async (testCase) => {
+    const root = await tempDirs.make("openclaw-skill-change-create-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      versionedSkillFileContent("Hook Create", "4.5.6"),
+    );
+    await fs.writeFile(path.join(extractedRoot, "binary.bin"), Buffer.from([0, 255, 1, 254]));
+    const handler = vi.fn();
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-create",
+      extractedRoot,
+      mode: "install",
+      policy: {
+        origin: testCase.origin,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      action: "created",
+      source: testCase.expectedSource,
+      after: {
+        name: "Hook Create",
+        skillKey: "hook-create",
+        description: "Lifecycle test skill",
+        source: testCase.expectedSource,
+        revision: {
+          declaredVersion: "4.5.6",
+          contentSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          treeSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          ...(testCase.expectedSourceVersion
+            ? { sourceVersion: testCase.expectedSourceVersion }
+            : {}),
+        },
+      },
+    });
+  });
+
+  it("emits before and after artifacts for committed updates", async () => {
+    const root = await tempDirs.make("openclaw-skill-change-update-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      versionedSkillFileContent("Before Update", "1.0.0"),
+    );
+    const handler = vi.fn();
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
+    await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-update",
+      extractedRoot,
+      mode: "install",
+      policy: { origin: { type: "path", spec: "./skill" } },
+    });
+    handler.mockClear();
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      versionedSkillFileContent("After Update", "2.0.0"),
+    );
+    await fs.writeFile(path.join(extractedRoot, "payload.bin"), Buffer.from([0, 128, 255]));
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-update",
+      extractedRoot,
+      mode: "update",
+      policy: {
+        origin: { type: "git", spec: "git:https://example.test/skill.git", commit: "abc123" },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    const event = handler.mock.calls[0]?.[0] as {
+      action: string;
+      source: string;
+      before: { name: string; revision: { contentSha256: string; treeSha256: string } };
+      after: {
+        name: string;
+        revision: { contentSha256: string; treeSha256: string; sourceVersion?: string };
+      };
+    };
+    expect(event).toMatchObject({
+      action: "updated",
+      source: "source-install",
+      before: { name: "Before Update" },
+      after: {
+        name: "After Update",
+        revision: { sourceVersion: "abc123" },
+      },
+    });
+    expect(event.before.revision.contentSha256).not.toBe(event.after.revision.contentSha256);
+    expect(event.before.revision.treeSha256).not.toBe(event.after.revision.treeSha256);
+  });
+
+  it("does not emit when an archive mutation fails", async () => {
+    const root = await tempDirs.make("openclaw-skill-change-failure-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Failure"));
+    await fs.mkdir(path.join(workspaceDir, "skills", "hook-failure"), { recursive: true });
+    const handler = vi.fn();
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-failure",
+      extractedRoot,
+      mode: "install",
+      policy: { origin: { type: "upload" } },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

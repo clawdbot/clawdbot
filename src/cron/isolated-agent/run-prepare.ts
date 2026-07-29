@@ -248,10 +248,10 @@ export async function prepareCronRunContext(params: {
   }
   const runSessionId = cronSession.sessionEntry.sessionId;
   const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
-  const runSessionKey =
-    usesDetachedRunSession || baseSessionKey.startsWith("cron:")
-      ? `${agentSessionKey}:run:${runSessionId}`
-      : agentSessionKey;
+  const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
+  const runSessionKey = usesExactRunSession
+    ? `${agentSessionKey}:run:${runSessionId}`
+    : agentSessionKey;
   const persistCronSessionRow = async ({
     storePath,
     sessionKey,
@@ -663,7 +663,7 @@ export async function prepareCronRunContext(params: {
         ? cronSession.sessionEntry.authProfileOverrideSource
         : undefined,
     };
-    const runContinuationSession = baseSessionKey.startsWith("cron:")
+    const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
           cronSession,
           runSessionKey,

@@ -1,5 +1,6 @@
 // Nextcloud Talk plugin module owns webhook ingress identity and legacy-state migration.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 export const NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION = 1;
 
@@ -24,10 +25,6 @@ export class NextcloudTalkWebhookPayloadError extends Error {
     super(message, options);
     this.name = "NextcloudTalkWebhookPayloadError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function parseRawObject(rawEvent: string): Record<string, unknown> {

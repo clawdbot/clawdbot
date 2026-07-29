@@ -746,6 +746,25 @@ export async function runGatewayLoop(params: {
           );
         }
 
+        if (!isRestart) {
+          // Keep reset-started finalizers alive without spending the shutdown
+          // reserve that server teardown and the supervisor watchdog need.
+          try {
+            const rootDrain = await eagerLifecycleRuntime.waitForActiveGatewayRootWork(
+              Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS),
+            );
+            if (!rootDrain.drained) {
+              gatewayLog.warn(
+                `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with shutdown`,
+              );
+            }
+          } catch (err) {
+            gatewayLog.warn(
+              `gateway root transaction drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+
         armCloseForceExitTimerForIndefiniteRestart();
         const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         await server?.close({
@@ -831,9 +850,9 @@ export async function runGatewayLoop(params: {
       return;
     }
     const isRestart = action === "restart";
-    if (isRestart) {
-      markRestartDraining();
-    }
+    // Fence new roots synchronously for stops as well as restarts so admitted
+    // detached finalizers can drain before the signal tears down the gateway.
+    markRestartDraining();
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {

@@ -40,6 +40,7 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  flushDeadlineMs: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -127,6 +128,7 @@ function createInboundDebounceFlush(params: {
 }
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
+const MAX_DEBOUNCE_WINDOW_MULTIPLIER = 5;
 
 /** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
@@ -330,9 +332,15 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
+    // Keep the first item's monotonic deadline fixed so continuous arrivals
+    // and wall-clock changes cannot hold a reserved ingress lane indefinitely.
+    const delayMs = Math.min(
+      buffer.debounceMs,
+      Math.max(0, buffer.flushDeadlineMs - performance.now()),
+    );
     buffer.timeout = setTimeout(() => {
       void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    }, delayMs);
     buffer.timeout.unref?.();
   };
 
@@ -416,6 +424,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      flushDeadlineMs: performance.now() + debounceMs * MAX_DEBOUNCE_WINDOW_MULTIPLIER,
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,

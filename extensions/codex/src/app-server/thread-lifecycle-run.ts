@@ -567,6 +567,7 @@ export async function startOrResumeThread(
           dynamicToolsFingerprint,
           hostSystemAgentActive,
           lifecycleTiming,
+          nativeSkillIsolation,
           releaseConsumedThread: (threadId, cause) =>
             releaseCodexConsumedLiveThread({
               client: params.client,

@@ -1,5 +1,8 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
-import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
+import {
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+} from "@openclaw/gateway-client/browser";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -51,7 +54,11 @@ import {
 } from "./chat-history-retry.ts";
 import type { ChatRunStartupPhase, ChatRunStartupState } from "./chat-run-startup.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
@@ -333,6 +340,127 @@ export type ChatHistoryResult = {
     };
   };
 };
+
+function resolveInFlightAssistantTail(
+  messages: unknown[],
+  bufferedText: unknown,
+  runId: string,
+): string | null {
+  if (
+    typeof bufferedText !== "string" ||
+    !bufferedText ||
+    isHiddenAssistantStreamText(bufferedText)
+  ) {
+    return null;
+  }
+
+  // A steered user turn can follow an assistant from the still-active run.
+  // Persisted run identity, not the latest user boundary, owns that prefix.
+  const ownedPrefixIndex = messages.findIndex((message) => {
+    const identity = readSessionMessageIdentity(message);
+    const persistedText = identity?.runId === runId ? extractText(message) : null;
+    return (
+      identity?.role === "assistant" &&
+      Boolean(
+        persistedText &&
+        (bufferedText.startsWith(persistedText) || persistedText.startsWith(bufferedText)),
+      )
+    );
+  });
+  let turnStart = ownedPrefixIndex === -1 ? 0 : ownedPrefixIndex;
+  if (ownedPrefixIndex === -1) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (
+        message &&
+        typeof message === "object" &&
+        normalizeLowercaseStringOrEmpty((message as Record<string, unknown>).role) === "user"
+      ) {
+        turnStart = index + 1;
+        break;
+      }
+    }
+  }
+
+  let persistedPrefixLength = 0;
+  for (let index = turnStart; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const identity = readSessionMessageIdentity(message);
+    if (identity?.role !== "assistant" || (identity.runId && identity.runId !== runId)) {
+      continue;
+    }
+
+    const persistedText = extractText(message);
+    if (!persistedText) {
+      continue;
+    }
+    // One tool-using turn may persist several assistant segments; the Gateway
+    // buffer includes them all, so matching only its newest row duplicates text.
+    const remainingText = bufferedText.slice(persistedPrefixLength);
+    if (remainingText.startsWith(persistedText)) {
+      persistedPrefixLength += persistedText.length;
+      continue;
+    }
+    // History can persist past a live delta while its request is pending.
+    // That older cumulative buffer is already rendered by the persisted row.
+    if (persistedText.startsWith(remainingText)) {
+      return null;
+    }
+    const whitespace = /^\s+/u.exec(remainingText)?.[0];
+    if (persistedPrefixLength > 0 && whitespace) {
+      const remainingAfterWhitespace = remainingText.slice(whitespace.length);
+      if (remainingAfterWhitespace.startsWith(persistedText)) {
+        persistedPrefixLength += whitespace.length + persistedText.length;
+        continue;
+      }
+      if (persistedText.startsWith(remainingAfterWhitespace)) {
+        return null;
+      }
+    }
+    if (persistedPrefixLength > 0) {
+      break;
+    }
+  }
+
+  const tail = bufferedText.slice(persistedPrefixLength);
+  return tail && !isHiddenAssistantStreamText(tail) ? tail : null;
+}
+
+function onlyInFlightRunProjectionChanged(
+  previous: ReturnType<typeof getChatSessionProjection>["runs"],
+  current: ReturnType<typeof getChatSessionProjection>["runs"],
+  runId: string,
+): boolean {
+  for (const [previousRunId, run] of Object.entries(previous)) {
+    if (previousRunId !== runId && current[previousRunId] !== run) {
+      return false;
+    }
+  }
+  for (const [currentRunId, run] of Object.entries(current)) {
+    if (currentRunId !== runId && previous[currentRunId] !== run) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergeInFlightAssistantTails(
+  snapshotTail: string | null,
+  cumulativeLiveTail: string | null,
+): string | null {
+  if (!snapshotTail) {
+    return cumulativeLiveTail;
+  }
+  if (!cumulativeLiveTail || snapshotTail.startsWith(cumulativeLiveTail)) {
+    return snapshotTail;
+  }
+  // Every Gateway delta carries its full assistant message. Comparing complete
+  // projections preserves repeated tokens without guessing delta overlap.
+  return cumulativeLiveTail;
+}
 
 function reconcileHistoryPlanStatus(params: {
   canAdoptRunSnapshot: boolean;
@@ -1273,6 +1401,14 @@ async function loadChatHistoryUncached(
   );
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
+  const previousRunProjections = getChatSessionProjection(
+    state,
+    previousMessages,
+    readChatSessionProjectionScope(state, {
+      sessionKey,
+      ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    }),
+  ).runs;
   const previousPagination = state.chatHistoryPagination;
   const previousSessionId = state.currentSessionId ?? null;
   const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
@@ -1345,7 +1481,7 @@ async function loadChatHistoryUncached(
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
     // session or leaf starts empty.
-    reduceChatSessionProjection(
+    const historyProjection = reduceChatSessionProjection(
       state,
       {
         type: "snapshotLoaded",
@@ -1456,6 +1592,50 @@ async function loadChatHistoryUncached(
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }
     }
+
+    const inFlightRunId = res.inFlightRun?.runId?.trim();
+    const activeRunIds = res.sessionInfo?.activeRunIds;
+    const projectedInFlightRun = inFlightRunId ? historyProjection.runs[inFlightRunId] : undefined;
+    const sameRunContinued = Boolean(
+      inFlightRunId &&
+      state.chatRunId === inFlightRunId &&
+      projectedInFlightRun?.status === "streaming" &&
+      onlyInFlightRunProjectionChanged(
+        previousRunProjections,
+        historyProjection.runs,
+        inFlightRunId,
+      ),
+    );
+    if (
+      inFlightRunId &&
+      isSessionRunActive(res.sessionInfo ?? {}) &&
+      (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
+      (!projectedInFlightRun || projectedInFlightRun.status === "streaming") &&
+      ((resetStream && !state.chatRunId && historyProjection.runs === previousRunProjections) ||
+        sameRunContinued)
+    ) {
+      // Canonical run projections change on every live delta or terminal.
+      // Their identity fences ABA races where a run starts and finishes while
+      // history is pending; deltas from this same live run must still merge.
+      const snapshotTail = resolveInFlightAssistantTail(
+        state.chatMessages,
+        res.inFlightRun?.text,
+        inFlightRunId,
+      );
+      const liveTail = sameRunContinued
+        ? resolveInFlightAssistantTail(
+            state.chatMessages,
+            extractText(projectedInFlightRun?.message),
+            inFlightRunId,
+          )
+        : null;
+      const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
+      state.chatRunId = inFlightRunId;
+      state.chatStream = tail;
+      state.chatStreamStartedAt = tail ? (state.chatStreamStartedAt ?? Date.now()) : null;
+      state.chatRunStartup = { state: "activity", runId: inFlightRunId };
+    }
+
     // Plan reconciliation shares stream adoption: rejected history cannot clobber newer live state.
     // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
     state.planStatus = reconcileHistoryPlanStatus({

@@ -11,7 +11,13 @@ import {
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
   ModelsProbeResultSchema,
+  SkillProposalEvaluationSchema,
+  SkillProposalLifecycleEventSchema,
   SkillsDetailResultSchema,
+  SkillsProposalEvaluateParamsSchema,
+  SkillsProposalEvaluateResultSchema,
+  SkillsProposalEventsListParamsSchema,
+  SkillsProposalEventsListResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
@@ -255,7 +261,7 @@ describe("ToolsInvokeParamsSchema", () => {
 });
 
 describe("SkillsProposalInspectResultSchema", () => {
-  it("accepts update proposal support file target metadata", () => {
+  it("accepts support metadata and the latest bounded evaluation", () => {
     const result = {
       record: {
         id: "proposal-1",
@@ -285,6 +291,32 @@ describe("SkillsProposalInspectResultSchema", () => {
           info: 0,
           findings: [],
         },
+        evaluation: {
+          id: "evaluation-1",
+          proposedVersion: "v1",
+          revisionHash: "a".repeat(64),
+          trigger: "manual",
+          startedAt: "2026-05-30T00:01:00.000Z",
+          completedAt: "2026-05-30T00:01:01.000Z",
+          correlationId: "correlation-1",
+          outcomes: [
+            {
+              pluginId: "quality-plugin",
+              pluginVersion: "1.2.3",
+              evaluatorId: "quality",
+              status: "completed",
+              result: {
+                summary: "Ready to apply.",
+                findings: [],
+                metrics: { score: 0.98, deterministic: true, profile: "strict" },
+                evaluatorVersion: "rules-v2",
+                mode: "static",
+                decision: "pass",
+                decisionReason: "No blocking findings.",
+              },
+            },
+          ],
+        },
         supportFiles: [
           {
             path: "references/weather.md",
@@ -295,6 +327,7 @@ describe("SkillsProposalInspectResultSchema", () => {
           },
         ],
       },
+      revisionHash: "a".repeat(64),
       content: "# Weather Helper\n",
       supportFiles: [
         {
@@ -305,6 +338,201 @@ describe("SkillsProposalInspectResultSchema", () => {
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SkillsProposalInspectResultSchema, {
+        record: result.record,
+        content: result.content,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("SkillProposalEvaluationSchema", () => {
+  const evaluation = {
+    id: "evaluation-1",
+    proposedVersion: "v2",
+    revisionHash: "b".repeat(64),
+    trigger: "apply",
+    startedAt: "2026-05-30T00:01:00.000Z",
+    completedAt: "2026-05-30T00:01:01.000Z",
+    targetTreeSha256: "c".repeat(64),
+    outcomes: [
+      {
+        pluginId: "quality-plugin",
+        evaluatorId: "quality",
+        status: "completed",
+        result: {
+          findings: [
+            {
+              ruleId: "skill.structure",
+              severity: "warn",
+              message: "Add a troubleshooting section.",
+              file: "SKILL.md",
+              line: 12,
+            },
+          ],
+          decision: "revise",
+        },
+      },
+    ],
+  };
+
+  it("accepts bounded evaluator outcomes", () => {
+    expect(Value.Check(SkillProposalEvaluationSchema, evaluation)).toBe(true);
+  });
+
+  it("accepts the service result wrapper", () => {
+    const record = {
+      id: "proposal-1",
+      kind: "create",
+      status: "pending",
+      title: "weather-helper",
+      description: "Improve weather checks",
+      schema: "openclaw.skill-workshop.proposal.v1",
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+      createdBy: "gateway",
+      proposedVersion: "v2",
+      draftFile: "PROPOSAL.md",
+      draftHash: "b".repeat(64),
+      target: {
+        skillName: "weather-helper",
+        skillDir: "/tmp/workspace/skills/weather-helper",
+        skillFile: "/tmp/workspace/skills/weather-helper/SKILL.md",
+        skillKey: "weather-helper",
+      },
+      scan: {
+        state: "clean",
+        scannedAt: "2026-05-30T00:00:00.000Z",
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      },
+      evaluation,
+    };
+
+    expect(Value.Check(SkillsProposalEvaluateResultSchema, { record, evaluation })).toBe(true);
+  });
+
+  it("rejects non-primitive metrics and unknown decisions", () => {
+    expect(
+      Value.Check(SkillProposalEvaluationSchema, {
+        ...evaluation,
+        outcomes: [
+          {
+            ...evaluation.outcomes[0],
+            result: {
+              findings: [],
+              metrics: { nested: { score: 1 } },
+              decision: "approve",
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["", "x".repeat(129)])("rejects invalid metric key %j", (key) => {
+    expect(
+      Value.Check(SkillProposalEvaluationSchema, {
+        ...evaluation,
+        outcomes: [
+          {
+            ...evaluation.outcomes[0],
+            result: { findings: [], metrics: { [key]: true } },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("enforces status-specific result and error fields", () => {
+    expect(
+      Value.Check(SkillProposalEvaluationSchema, {
+        ...evaluation,
+        outcomes: [{ pluginId: "quality-plugin", evaluatorId: "quality", status: "completed" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SkillProposalEvaluationSchema, {
+        ...evaluation,
+        outcomes: [{ pluginId: "quality-plugin", evaluatorId: "quality", status: "error" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("skill proposal evaluation and event replay params", () => {
+  it("validates optimistic evaluation and bounded event cursors", () => {
+    expect(
+      Value.Check(SkillsProposalEvaluateParamsSchema, {
+        agentId: "main",
+        proposalId: "proposal-1",
+        expectedRevisionHash: "c".repeat(64),
+        correlationId: "correlation-1",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SkillsProposalEventsListParamsSchema, {
+        proposalId: "proposal-1",
+        afterSequence: 10,
+        limit: 200,
+      }),
+    ).toBe(true);
+    expect(Value.Check(SkillsProposalEventsListParamsSchema, { limit: 201 })).toBe(false);
+  });
+
+  it("accepts sequence-ordered lifecycle replay pages", () => {
+    const event = {
+      sequence: 11,
+      eventId: "event-11",
+      proposalId: "proposal-1",
+      proposedVersion: "v2",
+      revisionHash: "d".repeat(64),
+      type: "evaluation_completed",
+      occurredAt: "2026-05-30T00:01:01.000Z",
+      actor: { type: "plugin", id: "quality-plugin" },
+      correlationId: "correlation-1",
+      payload: { trigger: "manual", outcomeCount: 1, blocking: false, note: null },
+      evaluation: {
+        id: "evaluation-11",
+        proposedVersion: "v2",
+        revisionHash: "d".repeat(64),
+        trigger: "manual",
+        startedAt: "2026-05-30T00:01:00.000Z",
+        completedAt: "2026-05-30T00:01:01.000Z",
+        outcomes: [],
+      },
+    };
+
+    expect(Value.Check(SkillProposalLifecycleEventSchema, event)).toBe(true);
+    expect(
+      Value.Check(SkillsProposalEventsListResultSchema, {
+        events: [event],
+        nextSequence: 11,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SkillProposalLifecycleEventSchema, {
+        ...event,
+        actor: { type: "operator" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SkillProposalLifecycleEventSchema, {
+        ...event,
+        payload: { note: "x".repeat(4_001) },
+      }),
+    ).toBe(false);
+    for (const key of ["", "x".repeat(81)]) {
+      expect(
+        Value.Check(SkillProposalLifecycleEventSchema, {
+          ...event,
+          payload: { [key]: true },
+        }),
+      ).toBe(false);
+    }
   });
 });
 

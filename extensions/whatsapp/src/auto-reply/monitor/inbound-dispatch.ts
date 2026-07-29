@@ -5,7 +5,7 @@ import {
   isChannelPartialDeliveryError,
   type CommandFacts,
   type ChannelInboundTurnPlan,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -389,7 +389,7 @@ export async function buildWhatsAppInboundContext(params: {
         })
       : undefined;
 
-  const media = toInboundMediaFacts(
+  const media = await toInboundMediaFactsWithMetadata(
     params.msg.payload.media
       ? [
           {

@@ -26,7 +26,7 @@ import {
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   toHistoryMediaEntries,
   type ChannelInboundMediaInput,
   type ChannelInboundTurnPlan,
@@ -258,7 +258,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToMode,
       entry.isBatched === true,
     );
-    const media = toInboundMediaFacts(entry.media);
+    const media = await toInboundMediaFactsWithMetadata(entry.media);
     const ctxPayload = buildChannelInboundEventContext({
       channel: "signal",
       supplemental: {

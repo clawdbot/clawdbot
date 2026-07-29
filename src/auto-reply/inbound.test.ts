@@ -449,6 +449,109 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("flushes sustained same-key messages in complete, ordered batches", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: Array<string[]> = [];
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 50,
+        buildKey: (item) => item.key,
+        onFlush: (items) =>
+          flushOnCompletion(() => {
+            calls.push(items.map((entry) => entry.id));
+          }),
+      });
+
+      for (let index = 0; index < 12; index += 1) {
+        await debouncer.enqueue({ key: "a", id: String(index) });
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(calls).toStrictEqual([]);
+
+      await debouncer.enqueue({ key: "a", id: "12" });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(calls).toEqual([Array.from({ length: 13 }, (_, index) => String(index))]);
+
+      for (let index = 13; index < 25; index += 1) {
+        await debouncer.enqueue({ key: "a", id: String(index) });
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(calls).toEqual([
+        Array.from({ length: 13 }, (_, index) => String(index)),
+        Array.from({ length: 12 }, (_, index) => String(index + 13)),
+      ]);
+      await debouncer.drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("anchors sustained-message deadlines to the first item's debounce window", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: Array<string[]> = [];
+      const debouncer = createInboundDebouncer<{
+        key: string;
+        id: string;
+        windowMs: number;
+      }>({
+        debounceMs: 0,
+        buildKey: (item) => item.key,
+        resolveDebounceMs: (item) => item.windowMs,
+        onFlush: (items) =>
+          flushOnCompletion(() => {
+            calls.push(items.map((entry) => entry.id));
+          }),
+      });
+
+      await debouncer.enqueue({ key: "a", id: "first", windowMs: 50 });
+      await vi.advanceTimersByTimeAsync(40);
+      await debouncer.enqueue({ key: "a", id: "later", windowMs: 1_000 });
+      await vi.advanceTimersByTimeAsync(209);
+      expect(calls).toStrictEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toEqual([["first", "later"]]);
+      await debouncer.drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes sustained messages even when the system clock moves backward", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: Array<string[]> = [];
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 50,
+        buildKey: (item) => item.key,
+        onFlush: (items) =>
+          flushOnCompletion(() => {
+            calls.push(items.map((entry) => entry.id));
+          }),
+      });
+
+      await debouncer.enqueue({ key: "a", id: "0" });
+      for (let index = 1; index < 13; index += 1) {
+        await vi.advanceTimersByTimeAsync(20);
+        if (index === 6) {
+          vi.setSystemTime(Date.now() - 60_000);
+        }
+        await debouncer.enqueue({ key: "a", id: String(index) });
+      }
+      expect(calls).toStrictEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(calls).toEqual([Array.from({ length: 13 }, (_, index) => String(index))]);
+      await debouncer.drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports buffered items when cancelling a key", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

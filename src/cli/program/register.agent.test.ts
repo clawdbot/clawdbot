@@ -102,6 +102,20 @@ describe("agent command registration", () => {
     return call;
   }
 
+  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+    const program = new Command();
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    const agent = program.commands.find((command) => command.name() === "agent");
+    const exec = agent?.commands.find((command) => command.name() === "exec");
+
+    expect(agent?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+    expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+  });
+
   it("runs agent command with verbose enabled for --verbose on", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
 

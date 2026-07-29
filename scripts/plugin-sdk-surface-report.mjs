@@ -197,7 +197,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +5: pinned secret create/read functions and their options contract.
       // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
-      4757,
+      // +11: attributed skill proposal evaluation and committed skill lifecycle contracts.
+      // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
+      4769,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -232,7 +234,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: pinned secret create and synchronous/asynchronous reads.
       // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
-      2878,
+      // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
+      2879,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -60,13 +60,13 @@ beforeEach(() => {
 });
 
 describe("buildMattermostInboundMediaPayload", () => {
-  it("keeps a failed attachment kind aligned with a successful path", () => {
-    expect(
+  it("keeps a failed attachment kind aligned with a successful path", async () => {
+    await expect(
       buildMattermostInboundMediaPayload([
         { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
         { kind: "audio" },
       ]),
-    ).toEqual({
+    ).resolves.toEqual({
       MediaPath: "/tmp/image.png",
       MediaUrl: "/tmp/image.png",
       MediaType: "image/png",
@@ -74,16 +74,34 @@ describe("buildMattermostInboundMediaPayload", () => {
       MediaUrls: ["/tmp/image.png", ""],
       MediaTypes: ["image/png", "audio"],
       MediaTranscribedIndexes: undefined,
+      media: [
+        {
+          path: "/tmp/image.png",
+          url: undefined,
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+          messageId: undefined,
+        },
+        {
+          path: undefined,
+          url: undefined,
+          contentType: undefined,
+          kind: "audio",
+          transcribed: false,
+          messageId: undefined,
+        },
+      ],
     });
   });
 
-  it("keeps total failures as type-only media facts", () => {
-    expect(
+  it("keeps total failures as type-only media facts", async () => {
+    await expect(
       buildMattermostInboundMediaPayload([
         { kind: "video" },
         { contentType: "application/pdf", kind: "document" },
       ]),
-    ).toEqual({
+    ).resolves.toEqual({
       MediaPath: undefined,
       MediaUrl: undefined,
       MediaType: "video",
@@ -91,6 +109,24 @@ describe("buildMattermostInboundMediaPayload", () => {
       MediaUrls: undefined,
       MediaTypes: ["video", "application/pdf"],
       MediaTranscribedIndexes: undefined,
+      media: [
+        {
+          path: undefined,
+          url: undefined,
+          contentType: undefined,
+          kind: "video",
+          transcribed: false,
+          messageId: undefined,
+        },
+        {
+          path: undefined,
+          url: undefined,
+          contentType: "application/pdf",
+          kind: "document",
+          transcribed: false,
+          messageId: undefined,
+        },
+      ],
     });
   });
 });

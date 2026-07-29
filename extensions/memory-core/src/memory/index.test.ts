@@ -39,6 +39,7 @@ afterAll(() => {
 });
 
 let embedBatchCalls = 0;
+let embeddedBatchTexts: string[] = [];
 let embedBatchInputCalls = 0;
 let providerRuntimeBatchCalls: string[][] = [];
 let providerRuntimeBatchGate: Promise<void> | null = null;
@@ -189,6 +190,7 @@ vi.mock("./embeddings.js", () => {
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
+            embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
           ...(providerId === "gemini" || providerId === "fallback-provider"
@@ -321,6 +323,7 @@ describe("memory index", () => {
     vi.useRealTimers();
     clearRegistry();
     embedBatchCalls = 0;
+    embeddedBatchTexts = [];
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];
     providerRuntimeBatchGate = null;
@@ -647,7 +650,7 @@ describe("memory index", () => {
       ].join("\n"),
     );
 
-    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    const manager = await getFreshManager(createCfg({}));
     try {
       await manager.sync({ reason: "test", force: true });
       const db = Reflect.get(manager, "db") as DatabaseSync;
@@ -676,21 +679,21 @@ describe("memory index", () => {
       expect(memoryEntries).toHaveLength(3);
       expect(memoryEntries).toMatchObject([
         {
-          text: "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->\n  Keep the alpha gateway local.",
+          text: "- Alpha deploy preference.\n  Keep the alpha gateway local.",
           importance: 4,
           triggers: "alpha deploy",
           projectKey: "alpha-key",
           originClass: "agent",
         },
         {
-          text: "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
+          text: "- Beta deploy preference.",
           importance: 9,
           triggers: "beta deploy",
           projectKey: "beta-key",
           originClass: "agent",
         },
         {
-          text: "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
+          text: "- Global deploy preference.",
           importance: 7,
           triggers: "global defaults",
           projectKey: null,
@@ -715,6 +718,28 @@ describe("memory index", () => {
         projectKey: "path:/Users/Alice/Repo; path:/Users/alice/repo",
         originClass: "agent",
       });
+      expect(rows.every((row) => !row.text.includes("<!--"))).toBe(true);
+      expect(embeddedBatchTexts.length).toBeGreaterThan(0);
+      expect(embeddedBatchTexts.every((text) => !text.includes("<!--"))).toBe(true);
+
+      for (const query of ["trigger", "importance", "project"]) {
+        const annotationHits = await manager.search(query, {
+          lexicalOnly: true,
+          maxResults: 20,
+          minScore: 0,
+          sources: ["memory"],
+        });
+        expect(annotationHits).toEqual([]);
+      }
+
+      const bodyHits = await manager.search("Alpha deploy preference", {
+        lexicalOnly: true,
+        maxResults: 10,
+        minScore: 0,
+        sources: ["memory"],
+      });
+      expect(bodyHits[0]?.snippet).toContain("Alpha deploy preference.");
+      expect(bodyHits[0]?.snippet).not.toContain("<!--");
     } finally {
       await manager.close?.();
     }
@@ -881,8 +906,10 @@ describe("memory index", () => {
         .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
         .get() as { value: string };
       const currentMeta = JSON.parse(metaRow.value) as MemoryIndexMeta;
-      const legacyMeta: MemoryIndexMeta = { ...currentMeta };
-      delete legacyMeta.chunkingVersion;
+      const legacyMeta: MemoryIndexMeta = {
+        ...currentMeta,
+        chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+      };
 
       db.prepare("DELETE FROM memory_index_chunks WHERE path = ? AND source = 'memory'").run(
         "MEMORY.md",

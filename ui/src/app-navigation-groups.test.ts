@@ -9,6 +9,7 @@ import {
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
+  settingsNavigationOwnerRoute,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
 
@@ -59,6 +60,7 @@ describe("sidebar entries", () => {
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
     expect(settingsRoutes).not.toContain("model-setup");
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
+    expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
   });
 
   it("keeps devices in connection settings and drops stale pinned entries", () => {
