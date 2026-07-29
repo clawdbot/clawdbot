@@ -438,7 +438,7 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   };
 }
 
-export function withRealtimeBrowserOverrides(
+function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
   params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceProviderConfig {
