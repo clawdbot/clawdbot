@@ -75,6 +75,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onDefaultModelsReset: () => undefined,
     onThinkingChange: () => undefined,
     onFastModeChange: () => undefined,
+    onOpenModelSetup: () => undefined,
     ...overrides,
   };
 }
@@ -210,6 +211,97 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Default profile");
   });
 
+  it("puts model recovery first when credentials expose no selectable models", () => {
+    const onOpenModelSetup = vi.fn();
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "ok", profileCount: 1 },
+            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            modelCount: 0,
+            availableModelCount: 0,
+          }),
+        ],
+        configuredModels: [],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        onOpenModelSetup,
+      }),
+    );
+
+    const readiness = container.querySelector('[data-model-readiness="model-required"]');
+    expect(text(readiness)).toContain("Connect your AI");
+    expect(text(readiness)).toContain("No models available");
+    expect(text(readiness)).toContain("Choose another provider");
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain("Signed in");
+
+    button(readiness!, "Choose another provider")?.click();
+    expect(onOpenModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("does not report an unverified API key as ready", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "api-key", profileCount: 0 },
+          }),
+        ],
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("API key");
+    expect(text(provider)).not.toContain("Ready");
+  });
+
+  it("starts provider setup before showing disabled model controls", () => {
+    const onOpenModelSetup = vi.fn();
+    const container = mount(
+      props({
+        cards: [],
+        configuredModels: [],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        onOpenModelSetup,
+      }),
+    );
+
+    const readiness = container.querySelector('[data-model-readiness="model-required"]');
+    expect(text(readiness)).toContain("Model required");
+    expect(button(readiness!, "Connect your AI")).toBeDefined();
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+  });
+
+  it("recovers from a saved default that is no longer selectable", () => {
+    const container = mount(
+      props({
+        configuredModels: [
+          {
+            id: "retired-model",
+            provider: "openai",
+            name: "Retired model",
+            available: false,
+          },
+        ],
+        defaultModels: {
+          primary: "openai/retired-model",
+          fallbacks: [],
+          utilityModel: null,
+        },
+      }),
+    );
+
+    expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+  });
+
+  it("shows defaults normally when a selectable model exists", () => {
+    const container = mount(props());
+    expect(container.querySelector('[data-model-readiness="model-required"]')).toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
+  });
+
   it("labels provider usage and session cost as global", () => {
     const container = mount(
       props({
@@ -285,6 +377,41 @@ describe("renderModelProviders", () => {
     const probe = container.querySelector(".model-providers__probe--error");
     expect(text(probe)).toContain("Billing problem");
     expect(text(probe)).toContain("Account has no credits");
+  });
+
+  it("presents no-model probe results as a setup state, not a connection failure", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "ok", profileCount: 1 },
+            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            modelCount: 0,
+            availableModelCount: 0,
+          }),
+        ],
+        configuredModels: [],
+        probeResults: {
+          openai: {
+            provider: "openai",
+            status: "no_model",
+            error: "No model is available for this provider.",
+            results: [
+              {
+                profileId: "openai:chatgpt",
+                label: "ChatGPT",
+                status: "no_model",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("Signed in");
+    expect(text(provider)).toContain("No models available");
+    expect(text(provider)).not.toContain("Connection failed");
   });
 
   it("qualifies slash-bearing model IDs with their catalog provider", () => {
