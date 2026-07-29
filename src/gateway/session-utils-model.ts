@@ -343,12 +343,12 @@ function resolveGatewayProviderStaticModel(params: {
   if (!staticEntry) {
     return undefined;
   }
-  if (params.catalogEntry?.api && staticEntry.api && params.catalogEntry.api !== staticEntry.api) {
+  if (params.catalogEntry?.api && params.catalogEntry.api !== staticEntry.api) {
     return undefined;
   }
   const catalogBaseUrl = normalizeGatewayModelCapabilityBaseUrl(params.catalogEntry?.baseUrl);
   const staticBaseUrl = normalizeGatewayModelCapabilityBaseUrl(staticEntry.baseUrl);
-  if (catalogBaseUrl && staticBaseUrl && catalogBaseUrl !== staticBaseUrl) {
+  if (catalogBaseUrl && catalogBaseUrl !== staticBaseUrl) {
     return undefined;
   }
 
@@ -364,13 +364,13 @@ function resolveGatewayProviderStaticModel(params: {
     return undefined;
   }
   const configuredApi = configuredModel?.api ?? configuredProvider?.api;
-  if (configuredApi && staticEntry.api && configuredApi !== staticEntry.api) {
+  if (configuredApi && configuredApi !== staticEntry.api) {
     return undefined;
   }
   const configuredBaseUrl = normalizeGatewayModelCapabilityBaseUrl(
     configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
   );
-  if (configuredBaseUrl && staticBaseUrl && configuredBaseUrl !== staticBaseUrl) {
+  if (configuredBaseUrl && configuredBaseUrl !== staticBaseUrl) {
     return undefined;
   }
   return staticEntry;

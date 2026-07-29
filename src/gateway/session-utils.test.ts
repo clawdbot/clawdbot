@@ -3599,6 +3599,93 @@ describe("resolveGatewayModelSupportsImages", () => {
     },
   );
 
+  test.each([
+    {
+      route: "visible API",
+      visibleRoute: {
+        api: "openai-completions" as const,
+        baseUrl: "https://api.openai.com/v1",
+      },
+      configuredRoute: undefined,
+      staticRoute: { baseUrl: "https://api.openai.com/v1" },
+    },
+    {
+      route: "visible base URL",
+      visibleRoute: {
+        api: "openai-responses" as const,
+        baseUrl: "https://custom.example.test/v1",
+      },
+      configuredRoute: undefined,
+      staticRoute: { api: "openai-responses" as const },
+    },
+    {
+      route: "configured API",
+      visibleRoute: undefined,
+      configuredRoute: {
+        api: "openai-completions" as const,
+        baseUrl: "https://api.openai.com/v1",
+      },
+      staticRoute: { baseUrl: "https://api.openai.com/v1" },
+    },
+    {
+      route: "configured base URL",
+      visibleRoute: undefined,
+      configuredRoute: { baseUrl: "https://custom.example.test/v1" },
+      staticRoute: { api: "openai-responses" as const },
+    },
+  ])(
+    "does not borrow provider-static vision when its $route provenance is missing",
+    async ({ visibleRoute, configuredRoute, staticRoute }) => {
+      await expect(
+        resolveGatewayModelSupportsImages({
+          agentId: "qa",
+          model: "gpt-5.4",
+          provider: "openai",
+          loadGatewayModelCatalog: async () => [],
+          loadGatewayModelCatalogSnapshot: async () =>
+            createModelCatalogSnapshot({
+              ...(configuredRoute
+                ? {
+                    config: {
+                      models: {
+                        providers: {
+                          openai: {
+                            baseUrl: configuredRoute.baseUrl,
+                            ...("api" in configuredRoute ? { api: configuredRoute.api } : {}),
+                            models: [],
+                          },
+                        },
+                      },
+                    },
+                  }
+                : {}),
+              agentId: "qa",
+              entries: visibleRoute
+                ? [
+                    {
+                      id: "gpt-5.4",
+                      name: "Text only",
+                      provider: "openai",
+                      input: ["text"],
+                      ...visibleRoute,
+                    },
+                  ]
+                : [],
+              staticEntries: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  provider: "openai",
+                  input: ["text", "image"],
+                  ...staticRoute,
+                },
+              ],
+            }),
+        }),
+      ).resolves.toBe(false);
+    },
+  );
+
   test("does not borrow provider-static image capabilities from another provider", async () => {
     await expect(
       resolveGatewayModelSupportsImages({
