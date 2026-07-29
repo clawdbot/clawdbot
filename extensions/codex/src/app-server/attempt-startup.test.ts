@@ -782,10 +782,11 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
-    const pluginList = await waitForRequest(harness, "plugin/list");
-    expect(
-      readHarnessMessages(harness.writes).find((message) => message.id === pluginList.id),
-    ).toMatchObject({ method: "plugin/list", params: {} });
+    // Discovery requests (plugin/installed, and plugin/list only when the
+    // missing-plugin catalog fetch wins the race against the shared deadline)
+    // are deliberately left unanswered; the contract under test is that the
+    // thread still starts, carrying the deny-all apps patch.
+    await waitForRequest(harness, "plugin/installed");
 
     const threadStart = await waitForThreadStart(harness);
     const startMessage = readHarnessMessages(harness.writes).find(

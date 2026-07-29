@@ -1,7 +1,10 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
+import {
+  isAdminOnlyNodeInvokeCommand,
+  isBrowserProxyNodeInvokeCommand,
+} from "../infra/node-commands.js";
 import {
   getActivePluginHttpRouteRegistry,
   getActivePluginSessionExtensionRegistry,
@@ -195,7 +198,10 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     const command = record?.command;
     // Invalid persistent-profile mutations must reach the handler's precise fail-closed
     // rejection instead of being disguised as an admin-scope failure.
-    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(record?.params)) {
+    if (
+      isBrowserProxyNodeInvokeCommand(command) &&
+      isForbiddenBrowserProxyMutation(record?.params)
+    ) {
       return [WRITE_SCOPE];
     }
     return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];

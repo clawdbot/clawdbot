@@ -657,14 +657,15 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       onAddonChange: (pluginId, enabled) => void this.changeAddon(pluginId, enabled),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
+      agentId,
+      agents,
+      onAgentChange: (next) => this.selectAgent(next),
       overview: renderMemoryOverview({
         agentId,
-        agents,
         engineSelection,
         engineDisabled: this.engineState(engineSelection) === "disabled",
         status: this.overviewStatus,
         probingEmbeddings: this.probingEmbeddings,
-        onAgentChange: (next) => this.selectAgent(next),
         onRefresh: () => void this.loadOverviewStatus({ force: true }),
         onProbeEmbeddings: () =>
           void this.loadOverviewStatus({ force: true, probeEmbeddings: true }),
@@ -679,17 +680,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
             "memory.search",
           ) === true}
           .agentId=${agentId}
-          .agents=${agents}
-          .onAgentChange=${(next: string | null) => this.selectAgent(next)}
         ></openclaw-memory-memories>
       `,
-      dreams: html`
-        <openclaw-memory-dreaming
-          .agentId=${agentId}
-          .agents=${agents}
-          .onAgentChange=${(next: string | null) => this.selectAgent(next)}
-        ></openclaw-memory-dreaming>
-      `,
+      dreams: html` <openclaw-memory-dreaming .agentId=${agentId}></openclaw-memory-dreaming> `,
       editor:
         activeTab === "settings"
           ? this.buildEditor(memorySchemaKeysForTab("settings", backend))
