@@ -12,8 +12,9 @@ import {
   resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
-} from "../../scripts/code-mode-model-matrix.ts";
-import type { AgentExecEnvelope } from "../../src/commands/agent-exec.ts";
+} from "../../../scripts/code-mode-model-matrix.ts";
+import type { AgentExecEnvelope } from "../../../src/commands/agent-exec.ts";
+import { validateQaEvidenceSummaryJson } from "../api.ts";
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
