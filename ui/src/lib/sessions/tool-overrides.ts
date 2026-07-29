@@ -2,17 +2,44 @@ import type { SessionToolOverrides } from "./patch.ts";
 
 type BooleanOverrideGroup = "mcpServers" | "skills";
 
+function copyDynamicKeyRecord<T>(
+  values: Record<string, T> | undefined,
+  copyValue: (value: T) => T = (value) => value,
+): Record<string, T> {
+  const copy: Record<string, T> = {};
+  for (const [name, value] of Object.entries(values ?? {})) {
+    Object.defineProperty(copy, name, {
+      configurable: true,
+      enumerable: true,
+      value: copyValue(value),
+      writable: true,
+    });
+  }
+  return copy;
+}
+
+function ownValue<T>(values: Record<string, T> | undefined, name: string): T | undefined {
+  return values && Object.hasOwn(values, name) ? values[name] : undefined;
+}
+
+function setOwnValue<T>(values: Record<string, T>, name: string, value: T): void {
+  Object.defineProperty(values, name, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
 function copyOverrides(overrides: SessionToolOverrides | null | undefined): SessionToolOverrides {
   return {
-    ...(overrides?.mcpServers ? { mcpServers: { ...overrides.mcpServers } } : {}),
+    ...(overrides?.mcpServers ? { mcpServers: copyDynamicKeyRecord(overrides.mcpServers) } : {}),
     ...(overrides?.mcpToolsDeny
       ? {
-          mcpToolsDeny: Object.fromEntries(
-            Object.entries(overrides.mcpToolsDeny).map(([name, tools]) => [name, [...tools]]),
-          ),
+          mcpToolsDeny: copyDynamicKeyRecord(overrides.mcpToolsDeny, (tools) => [...tools]),
         }
       : {}),
-    ...(overrides?.skills ? { skills: { ...overrides.skills } } : {}),
+    ...(overrides?.skills ? { skills: copyDynamicKeyRecord(overrides.skills) } : {}),
     ...(overrides?.webSearch !== undefined ? { webSearch: overrides.webSearch } : {}),
   };
 }
@@ -29,11 +56,11 @@ export function nextBooleanToolOverrides(
   baseEnabled: boolean,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
-  const values = { ...next[group] };
+  const values = copyDynamicKeyRecord(Object.hasOwn(next, group) ? next[group] : undefined);
   if (nextEnabled === baseEnabled) {
     delete values[name];
   } else {
-    values[name] = nextEnabled;
+    setOwnValue(values, name, nextEnabled);
   }
   if (Object.keys(values).length === 0) {
     delete next[group];
@@ -64,15 +91,16 @@ export function nextMcpToolsDenyOverrides(
   denied: boolean,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
-  const deniedTools = new Set(next.mcpToolsDeny?.[server] ?? []);
+  const currentDeny = Object.hasOwn(next, "mcpToolsDeny") ? next.mcpToolsDeny : undefined;
+  const deniedTools = new Set(ownValue(currentDeny, server) ?? []);
   if (denied) {
     deniedTools.add(rawToolName);
   } else {
     deniedTools.delete(rawToolName);
   }
-  const mcpToolsDeny = { ...next.mcpToolsDeny };
+  const mcpToolsDeny = copyDynamicKeyRecord(currentDeny, (tools) => [...tools]);
   if (deniedTools.size > 0) {
-    mcpToolsDeny[server] = [...deniedTools].toSorted();
+    setOwnValue(mcpToolsDeny, server, [...deniedTools].toSorted());
   } else {
     delete mcpToolsDeny[server];
   }

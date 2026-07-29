@@ -352,6 +352,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
                 onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
                 onAddServer: props.capabilityMenu?.onAddServer,
+                onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
                 onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
               <div class="agent-chat__composer-combobox">

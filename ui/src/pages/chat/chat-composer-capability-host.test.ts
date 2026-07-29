@@ -21,6 +21,7 @@ function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContex
       ensureLoaded: vi.fn(async () => undefined),
       state: { configLoading: false, configSnapshot },
     },
+    sessions: { state: { modelOverrides: {} } },
   } as unknown as ApplicationContext;
 }
 
@@ -291,5 +292,44 @@ describe("ChatComposerCapabilityHost", () => {
       { name: "runtime", enabled: false },
     ]);
     expect(props.webSearchBaseEnabled).toBe(true);
+  });
+
+  it("records an unexpected effective-tools loader rejection", async () => {
+    const notify = vi.fn();
+    const host = new ChatComposerCapabilityHost(notify);
+    const context = createContext({ runtimeConfig: {} });
+    context.gateway.snapshot.hello = {
+      features: { methods: ["tools.effective"] },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    let stateReads = 0;
+    Object.defineProperty(context.sessions, "state", {
+      configurable: true,
+      get: () => {
+        stateReads += 1;
+        if (stateReads === 3) {
+          throw new Error("unexpected loader failure");
+        }
+        return { modelOverrides: {} };
+      },
+    });
+    const state = createState();
+    const request = vi.fn().mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveError).toBe(true);
+    });
+
+    expect(host.props(context, state, session, "main").toolAccessMutationBlockedReason).toBe(
+      "Couldn’t load tools.",
+    );
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).not.toBeNull();
+    });
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

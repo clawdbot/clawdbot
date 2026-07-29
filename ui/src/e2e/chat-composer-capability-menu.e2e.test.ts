@@ -41,17 +41,20 @@ function skill(
   };
 }
 
-function sessionsList(toolOverrides?: Record<string, unknown>) {
+function sessionsList(
+  toolOverrides?: Record<string, unknown>,
+  model: { id: string; provider: string } = { id: "gpt-5.5", provider: "openai" },
+) {
   return {
     count: 1,
-    defaults: { contextTokens: 200_000, model: "gpt-5.5", modelProvider: "openai" },
+    defaults: { contextTokens: 200_000, model: model.id, modelProvider: model.provider },
     path: "",
     sessions: [
       {
         key: "main",
         kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
+        model: model.id,
+        modelProvider: model.provider,
         status: "done",
         updatedAt: Date.now(),
         ...(toolOverrides ? { toolOverrides } : {}),
@@ -368,24 +371,44 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       await expect.poll(() => menu.getByRole("menuitem", { name: "delete_page" }).count()).toBe(0);
 
       const toolRows = menu.locator('wa-dropdown-item[value^="mcp-tool:"]');
+      const rawToolNames = toolRows.locator(
+        ".agent-chat__capability-menu-label > span:first-child",
+      );
       await expect
-        .poll(() => toolRows.allTextContents())
-        .toEqual([
-          expect.stringContaining("list_issues"),
-          expect.stringContaining("search_items"),
-          expect.stringContaining("search_items"),
-        ]);
-      const collisions = toolRows.filter({ hasText: "search_items" });
-      await expect.poll(() => collisions.count()).toBe(2);
+        .poll(() => rawToolNames.allTextContents())
+        .toEqual(["list-issues", "search-items", "search_items"]);
+      await expect
+        .poll(async () => [
+          await rawToolNames.nth(1).isVisible(),
+          await rawToolNames.nth(2).isVisible(),
+        ])
+        .toEqual([true, true]);
       await expect
         .poll(() =>
-          collisions
-            .nth(1)
+          toolRows
+            .nth(2)
             .locator("wa-switch")
             .evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
         )
         .toBe(false);
-      await collisions.first().click();
+
+      await gateway.deferNext("tools.effective");
+      await gateway.setMethodResponse(
+        "sessions.list",
+        sessionsList(
+          { mcpToolsDeny: { github: ["search_items"] } },
+          { id: "gpt-5.6", provider: "openai" },
+        ),
+      );
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "main" });
+      await expect.poll(async () => (await gateway.getRequests("tools.effective")).length).toBe(2);
+      await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
+      await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
+      await expect
+        .poll(() => rawToolNames.allTextContents())
+        .toEqual(["list-issues", "search-items", "search_items"]);
+
+      await toolRows.nth(1).click();
       await expect
         .poll(() => latestToolOverrides(gateway))
         .toEqual({ mcpToolsDeny: { github: ["search-items", "search_items"] } });

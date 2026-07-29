@@ -79,6 +79,25 @@ describe("session tool overrides", () => {
     ).toEqual({});
   });
 
+  it("treats constructor as an own MCP server key", () => {
+    expect(
+      nextMcpToolsDenyOverrides(
+        { mcpToolsDeny: { github: ["read"] } },
+        "constructor",
+        "inspect",
+        true,
+      ),
+    ).toEqual({
+      mcpToolsDeny: { constructor: ["inspect"], github: ["read"] },
+    });
+  });
+
+  it.each(["mcpServers", "skills"] as const)("treats hasOwnProperty as an own %s key", (group) => {
+    expect(nextBooleanToolOverrides({}, group, "hasOwnProperty", false, true)).toEqual({
+      [group]: { hasOwnProperty: false },
+    });
+  });
+
   it("counts override categories and returns deterministic tooltip names", () => {
     const overrides = {
       mcpServers: { zeta: false, alpha: true },

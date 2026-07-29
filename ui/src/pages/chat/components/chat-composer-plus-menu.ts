@@ -57,6 +57,7 @@ export type ChatComposerPlusMenuProps = {
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
   onNavigate: (routeId: MenuRoute, options?: ApplicationNavigationOptions) => void;
   onAddServer?: () => void;
+  onEnsureToolAccess?: (serverName: string) => void;
   onOpenToolAccess?: (serverName: string) => void;
 };
 
@@ -347,7 +348,8 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
             ${t("chat.composer.menu.toolAccess.noTools")}
           </div>`
         : tools.map((tool, index) => {
-            const label = tool.label || tool.mcpToolName;
+            const rawToolName = tool.mcpToolName;
+            const label = tool.label?.trim();
             const denied = isToolDenied(props, tool);
             return html`
               <wa-dropdown-item
@@ -356,7 +358,12 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
                 ?disabled=${props.toolAccessMutationBlockedReason !== null}
                 title=${props.toolAccessMutationBlockedReason ?? ""}
               >
-                <span>${label}</span>
+                <span class="agent-chat__capability-menu-label">
+                  <span>${rawToolName}</span>
+                  ${label && label !== rawToolName
+                    ? html`<span class="agent-chat__capability-menu-note">${label}</span>`
+                    : nothing}
+                </span>
                 <wa-switch
                   slot="details"
                   class="agent-chat__capability-menu-switch"
@@ -364,7 +371,7 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
                   tabindex="-1"
                   .checked=${!denied}
                   ?disabled=${props.toolAccessMutationBlockedReason !== null}
-                  aria-label=${label}
+                  aria-label=${rawToolName}
                 ></wa-switch>
               </wa-dropdown-item>
             `;
@@ -504,6 +511,9 @@ function handleMenuSelection(
 
 export function renderChatComposerPlusMenu(props: ChatComposerPlusMenuProps) {
   const view = props.showCapabilities ? props.view : "root";
+  if (view.startsWith("tools:")) {
+    props.onEnsureToolAccess?.(view.slice("tools:".length));
+  }
   const content =
     view === "skills"
       ? renderSkillView(props)

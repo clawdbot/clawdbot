@@ -201,6 +201,7 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
+    retryError = false,
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
@@ -209,7 +210,8 @@ export class ChatComposerCapabilityHost {
       !state.connected ||
       !client ||
       this.effectiveTools.has(requestKey) ||
-      this.effectiveToolsLoadingKey === requestKey
+      this.effectiveToolsLoadingKey === requestKey ||
+      (!retryError && this.effectiveToolsErrors.has(requestKey))
     ) {
       return;
     }
@@ -241,6 +243,11 @@ export class ChatComposerCapabilityHost {
         if (loader.toolsEffectiveResult && loader.toolsEffectiveResultKey === requestKey) {
           this.effectiveTools.set(requestKey, loader.toolsEffectiveResult);
         } else if (loader.toolsEffectiveError) {
+          this.effectiveToolsErrors.add(requestKey);
+        }
+      })
+      .catch(() => {
+        if (isCurrent()) {
           this.effectiveToolsErrors.add(requestKey);
         }
       })
@@ -612,7 +619,10 @@ export class ChatComposerCapabilityHost {
         this.notify();
       },
       ...(effectiveToolsAvailable
-        ? { onOpenToolAccess: () => this.loadEffectiveTools(context, state, agentId) }
+        ? {
+            onEnsureToolAccess: () => this.loadEffectiveTools(context, state, agentId),
+            onOpenToolAccess: () => this.loadEffectiveTools(context, state, agentId, true),
+          }
         : {}),
     };
   }
