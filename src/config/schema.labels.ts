@@ -294,6 +294,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "approvals.plugin.targets[].to": "Plugin Approval Target Destination",
   "approvals.plugin.targets[].accountId": "Plugin Approval Target Account ID",
   "approvals.plugin.targets[].threadId": "Plugin Approval Target Thread ID",
+  "approvals.systemAgent": "System-Agent Approval Policy",
+  "approvals.systemAgent.mode": "System-Agent Approval Mode",
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
   "tools.message.crossContext.marker.enabled": "Cross-Context Marker",
