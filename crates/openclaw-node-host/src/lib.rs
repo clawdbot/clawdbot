@@ -1,5 +1,12 @@
 //! Reusable `OpenClaw` node profile, bounded command runtime, and headless host.
+//!
+//! Register ordinary handlers with [`CommandRuntimeBuilder::command`] and long-lived
+//! handlers with [`CommandRuntimeBuilder::duplex_command`]. Duplex handlers receive
+//! transport-neutral ordered input, UTF-8 progress output, heartbeats, and cooperative
+//! cancellation through [`InvocationContext`]. Process spawning, command policy, and
+//! platform credential storage remain embedding-owned.
 
+mod duplex;
 mod host;
 mod identity;
 mod lifecycle;
@@ -7,6 +14,7 @@ mod node;
 mod reconnect;
 mod runtime;
 
+pub use duplex::InvocationIo;
 pub use host::{run_host, AuthKind, HostConfig, HostCredentials, HostError};
 pub use identity::{DeviceSigningRequest, IdentityError, NodeIdentity};
 pub use lifecycle::{
