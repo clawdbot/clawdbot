@@ -463,11 +463,11 @@ export class GatewayBrowserClient {
       });
     }
     const scopes = resolveGatewayConnectScopes({
-      requestedScopes: selectedAuth.authBootstrapToken
-        ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
-        : this.opts.operatorScopes?.length
-          ? [...this.opts.operatorScopes]
-        : undefined,
+      requestedScopes: this.opts.operatorScopes?.length
+        ? [...this.opts.operatorScopes]
+        : selectedAuth.authBootstrapToken
+          ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
+          : undefined,
       usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: CONTROL_UI_OPERATOR_SCOPES,
