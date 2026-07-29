@@ -111,6 +111,42 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   return pane;
 }
 
+function createGatewayBoardPane(params: {
+  sessionKey: string;
+  methods?: readonly string[];
+  scopes?: readonly string[];
+  capabilities?: readonly string[];
+  lifecycleConnected?: boolean;
+}) {
+  window.history.replaceState({}, "", "/");
+  const pane = createTestPane();
+  const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
+  const removeListener = vi.fn();
+  const request = vi.fn(async () => snapshot);
+  const addEventListener = vi.fn(() => removeListener);
+  const client = { request, addEventListener } as unknown as GatewayBrowserClient;
+  pane.state.sessionKey = params.sessionKey;
+  pane.state.client = client;
+  Reflect.set(pane, "boardProviderLifecycleConnected", params.lifecycleConnected ?? true);
+  pane.context = {
+    ...pane.context,
+    gateway: {
+      snapshot: {
+        client,
+        phase: "connected",
+        hello: {
+          ...(params.scopes ? { auth: { role: "operator", scopes: params.scopes } } : {}),
+          features: {
+            methods: params.methods ?? ["board.get"],
+            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+          },
+        },
+      },
+    },
+  } as unknown as ApplicationContext;
+  return { pane, snapshot, client, request, addEventListener, removeListener };
+}
+
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -535,28 +571,12 @@ describe("chat pane board shell", () => {
   });
 
   it("does not subscribe to a gateway board before the pane owns a lifecycle lease", async () => {
-    window.history.replaceState({}, "", "/");
-    const pane = createTestPane();
     const sessionKey = "agent:main:board-lifecycle-ownership";
-    const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
-    const removeListener = vi.fn();
-    const request = vi.fn(async () => snapshot);
-    const addEventListener = vi.fn(() => removeListener);
-    const client = { request, addEventListener } as unknown as GatewayBrowserClient;
-    pane.state.sessionKey = sessionKey;
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        snapshot: {
-          client,
-          phase: "connected",
-          hello: {
-            auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-            features: { methods: ["board.get"] },
-          },
-        },
-      },
-    } as unknown as ApplicationContext;
+    const { pane, snapshot, request, addEventListener, removeListener } = createGatewayBoardPane({
+      sessionKey,
+      scopes: ["operator.read", "operator.write"],
+      lifecycleConnected: false,
+    });
 
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe(sessionKey);
     expect(request).not.toHaveBeenCalled();
@@ -577,24 +597,10 @@ describe("chat pane board shell", () => {
   });
 
   it("keeps gateways without board support on the null provider", () => {
-    window.history.replaceState({}, "", "/");
-    const pane = createTestPane();
-    const sessionKey = "agent:main:board-unsupported";
-    const request = vi.fn();
-    const addEventListener = vi.fn(() => () => {});
-    const client = { request, addEventListener } as unknown as GatewayBrowserClient;
-    pane.state.sessionKey = sessionKey;
-    Reflect.set(pane, "boardProviderLifecycleConnected", true);
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        snapshot: {
-          client,
-          phase: "connected",
-          hello: { features: { methods: ["chat.history"] } },
-        },
-      },
-    } as unknown as ApplicationContext;
+    const { pane, request, addEventListener } = createGatewayBoardPane({
+      sessionKey: "agent:main:board-unsupported",
+      methods: ["chat.history"],
+    });
 
     expect(pane.resolveBoardProvider()).toMatchObject({
       canMutate: false,
@@ -607,25 +613,11 @@ describe("chat pane board shell", () => {
   });
 
   it("does not reuse another board lease after gateway board support disappears", () => {
-    window.history.replaceState({}, "", "/");
-    const pane = createTestPane();
     const sessionKey = "agent:main:board-support-revoked";
-    const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
-    const request = vi.fn(async () => snapshot);
-    const addEventListener = vi.fn(() => () => {});
-    const client = { request, addEventListener } as unknown as GatewayBrowserClient;
-    pane.state.sessionKey = sessionKey;
-    Reflect.set(pane, "boardProviderLifecycleConnected", true);
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        snapshot: {
-          client,
-          phase: "connected",
-          hello: { features: { methods: ["chat.history"] } },
-        },
-      },
-    } as unknown as ApplicationContext;
+    const { pane, client, addEventListener } = createGatewayBoardPane({
+      sessionKey,
+      methods: ["chat.history"],
+    });
 
     const otherConsumer = acquireBoardProviderForSession(sessionKey, client);
     try {
@@ -642,7 +634,6 @@ describe("chat pane board shell", () => {
   });
 
   it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
-    window.history.replaceState({}, "", "/");
     const cases = [
       { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
       { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
@@ -654,62 +645,27 @@ describe("chat pane board shell", () => {
     ];
 
     for (const testCase of cases) {
-      const pane = createTestPane();
-      Reflect.set(pane, "boardProviderLifecycleConnected", true);
-      const sessionKey = `agent:main:${testCase.suffix}`;
-      const client = {
-        request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
-        addEventListener: vi.fn(() => () => {}),
-      } as unknown as GatewayBrowserClient;
-      pane.state.sessionKey = sessionKey;
-      pane.context = {
-        ...pane.context,
-        gateway: {
-          ...pane.context.gateway,
-          snapshot: {
-            client,
-            phase: "connected",
-            hello: { features: { methods: testCase.methods } },
-          } as never,
-        },
-      };
-
+      const { pane } = createGatewayBoardPane({
+        sessionKey: `agent:main:${testCase.suffix}`,
+        methods: testCase.methods,
+      });
       expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
     }
   });
 
   it("updates chat authorization without changing another consumer of the same board", async () => {
-    window.history.replaceState({}, "", "/");
-    const pane = createTestPane();
     const sessionKey = "agent:main:chat-lease-scope-change";
-    const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
-    const removeListener = vi.fn();
-    const request = vi.fn(async () => snapshot);
-    const addEventListener = vi.fn(() => removeListener);
-    const client = {
-      request,
-      addEventListener,
-    } as unknown as GatewayBrowserClient;
     const features = {
       methods: ["board.get", "board.widget.appView", "board.widget.put"],
       capabilities: ["board-widget-put-canvas-doc"],
     };
-    pane.state.sessionKey = sessionKey;
-    pane.state.client = client;
-    Reflect.set(pane, "boardProviderLifecycleConnected", true);
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        snapshot: {
-          client,
-          phase: "connected",
-          hello: {
-            auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-            features,
-          },
-        },
-      },
-    } as unknown as ApplicationContext;
+    const { pane, snapshot, client, request, addEventListener, removeListener } =
+      createGatewayBoardPane({
+        sessionKey,
+        scopes: ["operator.read", "operator.write"],
+        methods: features.methods,
+        capabilities: features.capabilities,
+      });
     const chat = pane.resolveBoardProvider();
     const approvals = acquireBoardProviderForSession(
       sessionKey,
@@ -788,33 +744,12 @@ describe("chat pane board shell", () => {
       canGrant: true,
     },
   ])("derives board actions from the $profile connection scopes", (profile) => {
-    window.history.replaceState({}, "", "/");
-    const pane = createTestPane();
-    Reflect.set(pane, "boardProviderLifecycleConnected", true);
-    const sessionKey = `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`;
-    const client = {
-      request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
-      addEventListener: vi.fn(() => () => {}),
-    } as unknown as GatewayBrowserClient;
-    pane.state.sessionKey = sessionKey;
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        ...pane.context.gateway,
-        snapshot: {
-          client,
-          phase: "connected",
-          hello: {
-            auth: { role: "operator", scopes: profile.scopes },
-            features: {
-              methods: ["board.get", "board.widget.appView", "board.widget.put"],
-              capabilities: ["board-widget-put-canvas-doc"],
-            },
-          },
-        } as never,
-      },
-    };
-
+    const { pane } = createGatewayBoardPane({
+      sessionKey: `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`,
+      scopes: profile.scopes,
+      methods: ["board.get", "board.widget.appView", "board.widget.put"],
+      capabilities: ["board-widget-put-canvas-doc"],
+    });
     const provider = pane.resolveBoardProvider();
     expect(provider.canMutate).toBe(profile.canMutate);
     expect(provider.canGrant).toBe(profile.canGrant);

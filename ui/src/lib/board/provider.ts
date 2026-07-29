@@ -164,42 +164,21 @@ class MockBoardProvider implements BoardProvider {
   }
 
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
-    const snapshot = this.snapshotSignal.value;
     const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = normalizeBoardWidgetTitle(input.title);
-    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
-    const tabs = snapshot.tabs.length
-      ? snapshot.tabs
-      : [
-          {
-            tabId: "main",
-            title: t("chat.board.defaultTab"),
-            position: 0,
-            chatDock: "right" as const,
-          },
-        ];
-    const existing = snapshot.widgets.find((widget) => widget.name === name);
-    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
-    widgets.push({
-      name,
-      tabId,
-      ...(title ? { title } : {}),
-      contentKind: "html",
-      sizeW: existing?.sizeW ?? 6,
-      sizeH: existing?.sizeH ?? 4,
-      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
-      grantState: "none",
-      revision: (existing?.revision ?? 0) + 1,
-      frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}`,
-    });
-    this.snapshotSignal.set(
-      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
-    );
+    this.pinMockBoardWidget(input, name, "html");
   }
 
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    const snapshot = this.snapshotSignal.value;
     const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+    this.pinMockBoardWidget(input, name, "mcp-app");
+  }
+
+  private pinMockBoardWidget(
+    input: BoardPinWidgetInput | BoardPinMcpAppInput,
+    name: string,
+    contentKind: "html" | "mcp-app",
+  ): void {
+    const snapshot = this.snapshotSignal.value;
     const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
@@ -218,20 +197,18 @@ class MockBoardProvider implements BoardProvider {
       name,
       tabId,
       ...(title ? { title } : {}),
-      contentKind: "mcp-app",
+      contentKind,
       sizeW: existing?.sizeW ?? 6,
       sizeH: existing?.sizeH ?? 4,
       position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
       grantState: "none",
       revision: (existing?.revision ?? 0) + 1,
+      ...(contentKind === "html"
+        ? { frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}` }
+        : {}),
     });
     this.snapshotSignal.set(
-      normalizeMockBoardSnapshot({
-        ...snapshot,
-        revision: snapshot.revision + 1,
-        tabs,
-        widgets,
-      }),
+      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
     );
   }
 

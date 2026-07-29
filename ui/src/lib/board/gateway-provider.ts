@@ -139,32 +139,25 @@ export class GatewayBoardProvider implements BoardProvider {
     });
   }
 
-  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
-    const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = normalizeBoardWidgetTitle(input.title);
-    await this.mutate(
-      "board.widget.put",
-      {
-        sessionKey: this.sessionKey,
-        name,
-        ...(title ? { title } : {}),
-        content: { kind: "canvas-doc", docId: input.docId },
-        ...(input.tabId || input.size || input.after
-          ? {
-              placement: {
-                ...(input.tabId ? { tabId: input.tabId } : {}),
-                ...(input.size ? { size: input.size } : {}),
-                ...(input.after ? { after: input.after } : {}),
-              },
-            }
-          : {}),
-      },
-      name,
-    );
+  pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    return this.pinBoardWidget(input, input.name ?? canvasWidgetNameForDocument(input.docId), {
+      kind: "canvas-doc",
+      docId: input.docId,
+    });
   }
 
-  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+  pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    return this.pinBoardWidget(input, input.name ?? mcpAppWidgetNameForViewId(input.viewId), {
+      kind: "mcp-app",
+      viewId: input.viewId,
+    });
+  }
+
+  private async pinBoardWidget(
+    input: BoardPinWidgetInput | BoardPinMcpAppInput,
+    name: string,
+    content: { kind: "canvas-doc"; docId: string } | { kind: "mcp-app"; viewId: string },
+  ): Promise<void> {
     const title = normalizeBoardWidgetTitle(input.title);
     await this.mutate(
       "board.widget.put",
@@ -172,7 +165,7 @@ export class GatewayBoardProvider implements BoardProvider {
         sessionKey: this.sessionKey,
         name,
         ...(title ? { title } : {}),
-        content: { kind: "mcp-app", viewId: input.viewId },
+        content,
         ...(input.tabId || input.size || input.after
           ? {
               placement: {
