@@ -11,6 +11,7 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
   consumeSessionWorkAdmissionHandoff,
+  createSessionWorkAdmissionHandoffForCurrent,
   getCurrentSessionWorkAdmissionRelease,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
@@ -231,6 +232,86 @@ it("keeps an admission handoff bound to its original identities", async () => {
   expect(isSessionWorkAdmissionActive("store-bound-handoff", ["session-bound-handoff"])).toBe(
     false,
   );
+});
+
+it("hands off every covering admission held by the current context", async () => {
+  const scope = "store-nested-handoff";
+  const sessionKey = "agent:main:web:nested-handoff";
+  const sessionId = "session-nested-handoff";
+  // A gateway chat.send turn retains an outer admission while the reply run
+  // opens an inner one for the same session. /close must hand off both;
+  // adopting only one leaves the drain deadlocking on the other.
+  const outer = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, sessionId],
+    assertAllowed: () => {},
+  });
+  const inner = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey],
+    assertAllowed: () => {},
+  });
+  try {
+    const handoffId = await outer.run(async () =>
+      inner.run(async () =>
+        createSessionWorkAdmissionHandoffForCurrent({ scope, identities: [sessionKey] }),
+      ),
+    );
+    expect(handoffId).toBeDefined();
+    const adopted = consumeSessionWorkAdmissionHandoff({
+      handoffId: handoffId ?? "",
+      scope,
+      identities: [sessionKey],
+      onInterrupt: () => {},
+    });
+    expect(adopted).toBeDefined();
+    await adopted?.run(async () => {
+      expect(
+        await interruptSessionWorkAdmissions({
+          scope,
+          identities: [sessionKey, sessionId],
+          timeoutMs: 250,
+        }),
+      ).toBe(true);
+    });
+  } finally {
+    inner.release();
+    outer.release();
+  }
+});
+
+it("invalidates a multi-admission handoff when a member admission releases", async () => {
+  const scope = "store-multi-handoff-release";
+  const sessionKey = "agent:main:web:multi-handoff-release";
+  const outer = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, "session-multi-release"],
+    assertAllowed: () => {},
+  });
+  const inner = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey],
+    assertAllowed: () => {},
+  });
+  const handoffId = await outer.run(async () =>
+    inner.run(async () =>
+      createSessionWorkAdmissionHandoffForCurrent({ scope, identities: [sessionKey] }),
+    ),
+  );
+  expect(handoffId).toBeDefined();
+  inner.release();
+  try {
+    expect(
+      consumeSessionWorkAdmissionHandoff({
+        handoffId: handoffId ?? "",
+        scope,
+        identities: [sessionKey],
+      }),
+    ).toBeUndefined();
+    expect(cancelSessionWorkAdmissionHandoff(handoffId ?? "")).toBe(false);
+  } finally {
+    outer.release();
+  }
 });
 
 it("counts one multi-identity lifecycle mutation once across module instances", async () => {
