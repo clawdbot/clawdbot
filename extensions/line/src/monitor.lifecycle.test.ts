@@ -378,7 +378,7 @@ describe("monitorLineProvider lifecycle", () => {
     await secondMonitor.stop();
   });
 
-  it("redacts structured admission failures from signed HTTP webhook requests", async () => {
+  it("marks only durably admitted signed HTTP webhooks and redacts failures", async () => {
     const runtimeError = vi.fn<(...args: unknown[]) => void>();
     const runtime: RuntimeEnv = {
       log: vi.fn<(...args: unknown[]) => void>(),
@@ -421,6 +421,7 @@ describe("monitorLineProvider lifecycle", () => {
         body: payload,
       });
       expect(rejected.status).toBe(401);
+      expect(rejected.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       expect(await rejected.json()).toEqual({ error: "Invalid signature" });
 
       const bot = createLineBotMock.mock.results[0]?.value;
@@ -429,13 +430,63 @@ describe("monitorLineProvider lifecycle", () => {
       }
       expect(bot.handleWebhook).not.toHaveBeenCalled();
 
+      const verificationPayload = JSON.stringify({ events: [] });
+      const verificationSignature = crypto
+        .createHmac("SHA256", "secret")
+        .update(verificationPayload)
+        .digest("base64");
+      const verification = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-line-signature": verificationSignature,
+        },
+        body: verificationPayload,
+      });
+      expect(verification.status).toBe(200);
+      expect(verification.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+      expect(await verification.json()).toEqual({ status: "ok" });
+      expect(bot.handleWebhook).not.toHaveBeenCalled();
+
+      let releaseAdmission: (() => void) | undefined;
+      bot.handleWebhook.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseAdmission = resolve;
+          }),
+      );
+      const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+      let acceptedResponseReceived = false;
+      const acceptedRequest = fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-line-signature": signature,
+        },
+        body: payload,
+      }).then((response) => {
+        acceptedResponseReceived = true;
+        return response;
+      });
+      await vi.waitFor(() => {
+        expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+      });
+      expect(acceptedResponseReceived).toBe(false);
+      if (!releaseAdmission) {
+        throw new Error("expected pending LINE durable admission");
+      }
+      releaseAdmission();
+      const accepted = await acceptedRequest;
+      expect(accepted.status).toBe(200);
+      expect(accepted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+      expect(await accepted.json()).toEqual({ status: "ok" });
+
       const bearerToken = "test_line_access_token_1234567890";
       bot.handleWebhook.mockRejectedValueOnce({
         code: "LINE_ADMISSION_REJECTED",
         retryAfterMs: 250,
         authorization: `Bearer ${bearerToken}`,
       });
-      const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
       const response = await fetch(webhookUrl, {
         method: "POST",
         headers: {
@@ -446,8 +497,9 @@ describe("monitorLineProvider lifecycle", () => {
       });
 
       expect(response.status).toBe(500);
+      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       expect(await response.json()).toEqual({ error: "Internal server error" });
-      expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+      expect(bot.handleWebhook).toHaveBeenCalledTimes(2);
       expect(runtimeError).toHaveBeenCalledTimes(1);
       const message = String(runtimeError.mock.calls[0]?.[0]);
       expect(message).toContain("line webhook error:");

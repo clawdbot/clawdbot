@@ -14,6 +14,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
+import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = {
   input?: number;
@@ -51,6 +52,7 @@ export type CliOutput = {
   usage?: CliUsage;
   /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
   diagnosticUsage?: CliUsage;
+  toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
   diagnostics?: {
@@ -152,6 +154,11 @@ function isClaudeCliProvider(providerId: string): boolean {
 
 function isGeminiCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "google-gemini-cli";
+}
+
+function isCodexExecJsonlProvider(providerId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(providerId);
+  return normalized === "codex" || normalized === "codex-cli";
 }
 
 function isGeminiStreamJsonDialect(params: {
@@ -1167,6 +1174,128 @@ function dispatchGeminiCliStreamingToolEvent(params: {
   }
 }
 
+type CodexToolEvent = {
+  toolCallId: string;
+  name: string;
+  kind: CliToolUseStartDelta["kind"];
+  args: Record<string, unknown>;
+  result?: unknown;
+  isError: boolean;
+};
+
+function readCodexToolEvent(item: Record<string, unknown>): CodexToolEvent | null {
+  const toolCallId = typeof item.id === "string" ? item.id.trim() : "";
+  if (!toolCallId) {
+    return null;
+  }
+  const type = normalizeLowercaseStringOrEmpty(item.type);
+  if (type === "command_execution") {
+    return {
+      toolCallId,
+      name: "bash",
+      kind: "tool_use",
+      args: typeof item.command === "string" ? { command: item.command } : {},
+      result: item.aggregated_output,
+      isError: item.status === "failed" || item.status === "declined",
+    };
+  }
+  if (type === "file_change") {
+    return {
+      toolCallId,
+      name: "apply_patch",
+      kind: "tool_use",
+      args: Array.isArray(item.changes) ? { changes: item.changes } : {},
+      result: item.changes,
+      isError: item.status === "failed",
+    };
+  }
+  if (type === "web_search") {
+    return {
+      toolCallId,
+      name: "web_search",
+      kind: "server_tool_use",
+      args: typeof item.query === "string" ? { query: item.query } : {},
+      result: item.query,
+      isError: false,
+    };
+  }
+  if (type !== "mcp_tool_call") {
+    if (type !== "collab_tool_call") {
+      return null;
+    }
+    const tool = typeof item.tool === "string" ? item.tool.trim() : "";
+    if (!tool) {
+      return null;
+    }
+    return {
+      toolCallId,
+      name: `collab.${tool}`,
+      kind: "server_tool_use",
+      args: {
+        ...(typeof item.sender_thread_id === "string"
+          ? { sender_thread_id: item.sender_thread_id }
+          : {}),
+        ...(Array.isArray(item.receiver_thread_ids)
+          ? { receiver_thread_ids: item.receiver_thread_ids }
+          : {}),
+        ...(typeof item.prompt === "string" ? { prompt: item.prompt } : {}),
+      },
+      result: item.agents_states,
+      isError: item.status === "failed",
+    };
+  }
+  const server = typeof item.server === "string" ? item.server.trim() : "";
+  const tool = typeof item.tool === "string" ? item.tool.trim() : "";
+  if (!tool) {
+    return null;
+  }
+  return {
+    toolCallId,
+    name: server ? `${server}.${tool}` : tool,
+    kind: "mcp_tool_use",
+    args: isRecord(item.arguments) ? item.arguments : {},
+    result: item.status === "failed" ? item.error : item.result,
+    isError: item.status === "failed",
+  };
+}
+
+function dispatchCodexCliStreamingToolEvent(params: {
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ToolUseTracker;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+}): void {
+  if (
+    !isCodexExecJsonlProvider(params.providerId) ||
+    (params.parsed.type !== "item.started" && params.parsed.type !== "item.completed") ||
+    !isRecord(params.parsed.item)
+  ) {
+    return;
+  }
+  const event = readCodexToolEvent(params.parsed.item);
+  if (!event) {
+    return;
+  }
+  emitToolStartOnce(
+    params.tracker,
+    event.toolCallId,
+    event.name,
+    event.kind,
+    event.args,
+    params.onToolUseStart,
+  );
+  if (params.parsed.type === "item.completed") {
+    emitToolResultOnce(
+      params.tracker,
+      event.toolCallId,
+      event.isError,
+      event.result,
+      params.onToolResult,
+    );
+  }
+}
+
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
 const GEMINI_CLI_RESULT_ERROR_FALLBACK = "Gemini CLI result status was error.";
 
@@ -1398,6 +1527,13 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     if (params.onToolUseStart || params.onToolResult) {
+      dispatchCodexCliStreamingToolEvent({
+        providerId: params.providerId,
+        parsed,
+        tracker: toolTracker,
+        onToolUseStart: params.onToolUseStart,
+        onToolResult: params.onToolResult,
+      });
       dispatchGeminiCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,
