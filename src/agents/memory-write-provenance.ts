@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { logWarn } from "../logger.js";
 import type { MemoryFlushPlan } from "../plugins/memory-state.js";
@@ -67,7 +68,14 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
 }
 
 function resolveMemoryRelativePath(root: string, absolutePath: string): string | undefined {
-  const relativePath = path.relative(path.resolve(root), path.resolve(absolutePath));
+  const canonicalPath = (candidate: string) => {
+    try {
+      return realpathSync.native(candidate);
+    } catch {
+      return path.join(realpathSync.native(path.dirname(candidate)), path.basename(candidate));
+    }
+  };
+  const relativePath = path.relative(canonicalPath(root), canonicalPath(absolutePath));
   if (
     !relativePath ||
     path.isAbsolute(relativePath) ||

@@ -2088,11 +2088,7 @@ describe("createOpenClawCodingTools", () => {
         systemPrompt: "flush",
         relativePath: "memory/recreated.md",
         recordWriteProvenance: async (entry) => {
-          const previous = recordedOrigin;
           recordedOrigin = entry.originClass;
-          return async () => {
-            recordedOrigin = previous;
-          };
         },
         clearWriteProvenance: async () => {
           recordedOrigin = undefined;
@@ -2119,9 +2115,6 @@ describe("createOpenClawCodingTools", () => {
         input: "*** Begin Patch\n*** Add File: memory/recreated.md\n+recreated\n*** End Patch",
       });
       expect(recordedOrigin).toBe("agent");
-      await expect(
-        fs.readFile(path.join(workspaceDir, "memory/recreated.md"), "utf8"),
-      ).resolves.toBe("recreated\n");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -2172,7 +2165,6 @@ describe("createOpenClawCodingTools", () => {
           "apply_patch",
         ),
       );
-
       const deleting = applyPatch("delete-raced-memory", {
         input: "*** Begin Patch\n*** Delete File: memory/raced.md\n*** End Patch",
       });

@@ -5,8 +5,8 @@ describe("memory write provenance", () => {
   it("rolls provenance back when the filesystem write fails", async () => {
     let provenance = "before";
     const observer = createMemoryWriteProvenanceObserver({
-      mutationRoot: "/workspace",
-      workspaceDir: "/workspace",
+      mutationRoot: process.cwd(),
+      workspaceDir: process.cwd(),
       plan: {
         recordWriteProvenance: async () => {
           provenance = "predicted";
@@ -24,7 +24,7 @@ describe("memory write provenance", () => {
 
     await expect(
       observer?.write({
-        absolutePath: "/workspace/memory/2026-07-29.md",
+        absolutePath: `${process.cwd()}/MEMORY.md`,
         contentBefore: "before",
         contentAfter: "after",
         commit,
