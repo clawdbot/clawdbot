@@ -141,7 +141,9 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(await gateway.getRequests("update.status")).toHaveLength(2);
       expect(pageErrors).toEqual([]);
-      await page.screenshot({ path: path.join(artifactDir, "managed-handoff-version-mismatch.png") });
+      await page.screenshot({
+        path: path.join(artifactDir, "managed-handoff-version-mismatch.png"),
+      });
     } finally {
       await context.close();
     }
