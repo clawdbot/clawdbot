@@ -21,6 +21,21 @@ describe("resolveSkillInvocationPolicy", () => {
     expect(policy.userInvocable).toBe(false);
     expect(policy.disableModelInvocation).toBe(true);
   });
+
+  it("honors a Codex sidecar disable even when frontmatter allows invocation", () => {
+    const policy = resolveSkillInvocationPolicy({ "disable-model-invocation": "false" }, true);
+    expect(policy.disableModelInvocation).toBe(true);
+  });
+
+  it("keeps invocation enabled when neither declaration disables it", () => {
+    const policy = resolveSkillInvocationPolicy({}, false);
+    expect(policy.disableModelInvocation).toBe(false);
+  });
+
+  it("frontmatter disable still applies when the sidecar allows invocation", () => {
+    const policy = resolveSkillInvocationPolicy({ "disable-model-invocation": "true" }, false);
+    expect(policy.disableModelInvocation).toBe(true);
+  });
 });
 
 describe("parseFrontmatter", () => {
