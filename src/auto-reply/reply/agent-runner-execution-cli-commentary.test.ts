@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -11,6 +13,43 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = setupAgentRunnerExecutionTestState();
 
+const scriptedCliProgram = String.raw`
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  if (!input.trim()) process.exit(2);
+  const events = [
+    { type: "init", session_id: "scripted-commentary" },
+    {
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "The subprocess findings are durable." },
+      },
+    },
+    {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "tool-scripted", name: "Read", input: {} },
+      },
+    },
+    {
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "Subprocess final answer." },
+      },
+    },
+    { type: "stream_event", event: { type: "message_stop" } },
+    { type: "result", session_id: "scripted-commentary", result: "Subprocess final answer." },
+  ];
+  process.stdout.write(events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+});
+`;
+
 function useClaudeCliFallback() {
   state.isCliProviderMock.mockReturnValue(true);
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -21,10 +60,41 @@ function useClaudeCliFallback() {
   }));
 }
 
+function useScriptedClaudeCliBackend() {
+  const backend = {
+    id: "claude-cli",
+    modelProvider: "anthropic",
+    pluginId: "anthropic",
+    bundleMcp: false,
+    config: {
+      command: process.execPath,
+      args: ["-e", scriptedCliProgram],
+      input: "stdin" as const,
+      output: "jsonl" as const,
+      jsonlDialect: "claude-stream-json" as const,
+      sessionMode: "none" as const,
+      systemPromptWhen: "never" as const,
+    },
+  };
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: ({ backend: id }) =>
+      id === backend.id ? { pluginId: backend.pluginId, backend } : undefined,
+    resolveRuntimeCliBackends: () => [backend],
+  });
+  state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+    if (!state.runCliAgentActual) {
+      throw new Error("real CLI runner was not initialized");
+    }
+    return await state.runCliAgentActual(params);
+  });
+}
+
 function createClaudeCliFollowupRun() {
   const followupRun = createFollowupRun();
   followupRun.run.provider = "claude-cli";
   followupRun.run.model = "claude-opus-4-6";
+  followupRun.run.skillsSnapshot = { prompt: "", skills: [], version: 0 };
+  followupRun.run.timeoutMs = 10_000;
   return followupRun;
 }
 
@@ -51,6 +121,27 @@ function createTurnParams(opts: GetReplyOptions, blockStreamingEnabled: boolean)
 }
 
 describe("executeAgentTurn: CLI durable commentary", () => {
+  it("delivers commentary from a real JSONL CLI subprocess", async () => {
+    useClaudeCliFallback();
+    useScriptedClaudeCliBackend();
+    state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
+      (params: { onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]> }) =>
+        params.onBlockReply,
+    );
+    const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(async () => undefined);
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createTurnParams({ onBlockReply }, true));
+
+    expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({ emitCommentaryText: true });
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([{ text: "Subprocess final answer." }]);
+    }
+    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
+      text: "The subprocess findings are durable.",
+    });
+  });
+
   it("delivers completed CLI commentary through block streaming", async () => {
     useClaudeCliFallback();
     state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
