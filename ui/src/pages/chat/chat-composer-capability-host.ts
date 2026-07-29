@@ -4,7 +4,6 @@ import type { GatewaySessionRow, SkillStatusEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
@@ -28,14 +27,6 @@ type CapabilityMenuProps = Omit<
   | "onViewChange"
   | "showCapabilities"
 >;
-
-function hasConfiguredWebSearchProvider(config: Record<string, unknown> | null): boolean {
-  const entries = asRecord(asRecord(config?.plugins)?.entries);
-  return Object.values(entries ?? {}).some((entry) => {
-    const plugin = asRecord(entry);
-    return plugin?.enabled !== false && asRecord(asRecord(plugin?.config)?.webSearch) !== null;
-  });
-}
 
 function webSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
@@ -172,18 +163,22 @@ export class ChatComposerCapabilityHost {
       this.loadErrors.clear();
       this.patchTokens.clear();
     }
-    const snapshot = context.runtimeConfig.state.configSnapshot;
-    const editableConfig = resolveEditableSnapshotConfig(snapshot);
+    // Sparse session overrides resolve against active runtime defaults, so display and key
+    // removal decisions must use the same runtime snapshot that executes the session.
+    const runtimeConfig = context.runtimeConfig.state.configSnapshot?.runtimeConfig ?? null;
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
-    const sessionsAvailable = state.connected && Boolean(state.client);
-    const mutationBlockedReason = !sessionsAvailable
+    const gatewayAvailable = state.connected && Boolean(state.client);
+    const sessionAvailable = gatewayAvailable && session !== undefined;
+    const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
-      : !access.canWrite
-        ? t("chat.composer.menu.readOnlyBlocked")
-        : this.patchTokens.has(state.sessionKey)
-          ? t("chat.composer.menu.savingBlocked")
-          : null;
-    const adminBlockedReason = !sessionsAvailable
+      : !sessionAvailable
+        ? t("common.loading")
+        : !access.canWrite
+          ? t("chat.composer.menu.readOnlyBlocked")
+          : this.patchTokens.has(state.sessionKey)
+            ? t("chat.composer.menu.savingBlocked")
+            : null;
+    const adminBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
       : !access.canAdmin
         ? t("chat.composer.menu.adminBlocked")
@@ -201,11 +196,10 @@ export class ChatComposerCapabilityHost {
         ) ?? null,
       skillsLoading: this.loading.has(agentId),
       skillsError: this.loadErrors.has(agentId),
-      mcpServers: summarizeMcpServers(editableConfig) ?? [],
-      webSearchConfigured: hasConfiguredWebSearchProvider(editableConfig),
-      webSearchBaseEnabled: webSearchBaseEnabled(editableConfig),
+      mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
+      webSearchBaseEnabled: webSearchBaseEnabled(runtimeConfig),
       mutationBlockedReason,
-      canAdmin: access.canAdmin && sessionsAvailable,
+      canAdmin: access.canAdmin && gatewayAvailable,
       adminBlockedReason,
       onLoadSkills: () => this.loadSkills(context, state, agentId),
       onPatchToolOverrides: (next) => this.patch(context, state, next),

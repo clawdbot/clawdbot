@@ -310,6 +310,53 @@ describeControlUiE2e("Control UI composer capability menu", () => {
     }
   });
 
+  it("blocks capability mutations until the authoritative session row loads", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.list"],
+      methodResponses: {
+        "config.get": configResponse({ github: { url: "https://mcp.example.test" } }),
+        "skills.status": {
+          workspaceDir: "/tmp/openclaw-e2e/workspace",
+          managedSkillsDir: "/tmp/openclaw-e2e/skills",
+          skills: [skill("Docs")],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.list");
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      const webSearch = menu.getByRole("menuitemcheckbox", { name: "Web search" });
+      await expect.poll(() => webSearch.isDisabled()).toBe(true);
+      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
+      await webSearch.evaluate((item) => {
+        item
+          .closest("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+
+      await gateway.resolveDeferred(
+        "sessions.list",
+        sessionsList({ mcpToolsDeny: { notion: ["delete_page"] } }),
+      );
+      await expect.poll(() => webSearch.isDisabled()).toBe(false);
+      await webSearch.click();
+      await expect
+        .poll(() => latestToolOverrides(gateway))
+        .toEqual({
+          mcpToolsDeny: { notion: ["delete_page"] },
+          webSearch: false,
+        });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows empty skills and connector states", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
@@ -331,7 +378,7 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await expect
         .poll(() => menu.getByRole("menuitemcheckbox", { name: "Web search" }).count())
-        .toBe(0);
+        .toBe(1);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
       await menu.getByRole("menuitem", { name: "Back" }).click();
