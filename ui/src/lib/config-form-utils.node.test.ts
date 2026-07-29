@@ -89,11 +89,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
 
     expect(
-      sanitizeRedactedFormForSubmit(
-        form,
-        originalForm,
-        '{\n  gateway: {\n    mode: "remote"\n  }\n}\n',
-      ),
+      sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { mode: "remote" } }),
     ).toEqual({
       gateway: {
         mode: "remote",
@@ -113,11 +109,9 @@ describe("sanitizeRedactedFormForSubmit", () => {
     const originalForm = cloneConfigObject(form);
 
     expect(
-      sanitizeRedactedFormForSubmit(
-        form,
-        originalForm,
-        '{\n  gateway: {\n    mode: "remote",\n    remote: {\n      token: "__OPENCLAW_REDACTED__"\n    }\n  }\n}\n',
-      ),
+      sanitizeRedactedFormForSubmit(form, originalForm, {
+        gateway: { mode: "remote", remote: { token: "__OPENCLAW_REDACTED__" } },
+      }),
     ).toEqual(form);
   });
 
@@ -135,13 +129,9 @@ describe("sanitizeRedactedFormForSubmit", () => {
       },
     };
 
-    expect(
-      sanitizeRedactedFormForSubmit(
-        form,
-        originalForm,
-        "{\n  gateway: {\n    remote: {}\n  }\n}\n",
-      ),
-    ).toEqual(form);
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { remote: {} } })).toEqual(
+      form,
+    );
   });
 
   it("prunes empty object parents when they are absent from original raw config", () => {
@@ -157,9 +147,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
     const originalForm = cloneConfigObject(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, '{\n  ui: { theme: "dark" }\n}\n'),
-    ).toEqual({
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, { ui: { theme: "dark" } })).toEqual({
       ui: { theme: "dark" },
     });
   });
@@ -175,15 +163,13 @@ describe("sanitizeRedactedFormForSubmit", () => {
     const originalForm = cloneConfigObject(form);
 
     expect(
-      sanitizeRedactedFormForSubmit(
-        form,
-        originalForm,
-        '{\n  channels: { slack: { tokens: ["second-token"] } }\n}\n',
-      ),
+      sanitizeRedactedFormForSubmit(form, originalForm, {
+        channels: { slack: { tokens: ["second-token"] } },
+      }),
     ).toEqual(form);
   });
 
-  it("leaves the form unchanged when original raw config cannot be parsed", () => {
+  it("leaves the form unchanged when the original raw config has no parsed snapshot", () => {
     const form = {
       gateway: {
         remote: {
@@ -193,7 +179,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
     const originalForm = cloneConfigObject(form);
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, "{")).toEqual(form);
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, null)).toEqual(form);
   });
 });
 describe("prototype pollution prevention", () => {

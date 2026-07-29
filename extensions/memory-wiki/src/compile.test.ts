@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
 import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -57,12 +58,12 @@ describe("compileMemoryWikiVault", () => {
     return page;
   }
 
-  function expectDigestCluster<T extends { key: string }>(clusters: T[], key: string): T {
-    const cluster = clusters.find((candidate) => candidate.key === key);
-    if (!cluster) {
-      throw new Error(`Expected digest contradiction cluster ${key}`);
+  async function expectCompiledCache(config: Parameters<typeof compileMemoryWikiVault>[0]) {
+    const snapshot = await loadMemoryWikiCompiledCache(config);
+    if (!snapshot) {
+      throw new Error(`Expected compiled cache for ${config.vault.path}`);
     }
-    return cluster;
+    return snapshot;
   }
 
   it("writes root and directory indexes for native markdown", async () => {
@@ -104,21 +105,14 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
       "[Alpha](alpha.md)",
     );
-    const agentDigest = JSON.parse(
-      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ) as {
-      claimCount: number;
-      pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
-    };
+    const { digest: agentDigest, claims } = await expectCompiledCache(config);
     expect(agentDigest.claimCount).toBe(1);
     const alphaPage = expectDigestPage(agentDigest.pages, "sources/alpha.md");
     expect(alphaPage.claimCount).toBe(1);
     expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
       "Alpha is the canonical source page.",
     ]);
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
-    ).resolves.toContain('"text":"Alpha is the canonical source page."');
+    expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
   });
 
   it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
@@ -167,9 +161,9 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.not.toContain(
       "Broken",
     );
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ).resolves.not.toContain("syntheses/broken.md");
+    expect((await expectCompiledCache(config)).digest.pages.map((page) => page.path)).not.toContain(
+      "syntheses/broken.md",
+    );
   });
 
   it.each([
@@ -695,17 +689,7 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
     ).resolves.toContain("Tracked Raw Alpha Source");
-    const agentDigest = JSON.parse(
-      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ) as {
-      claimHealth: { missingEvidence: number; freshness: { unknown: number } };
-      contradictionClusters: Array<{ key: string }>;
-    };
-    expect(agentDigest.claimHealth.missingEvidence).toBeGreaterThanOrEqual(1);
-    expect(agentDigest.claimHealth.freshness.unknown).toBeGreaterThanOrEqual(1);
-    expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
-      "claim.alpha.db",
-    );
+    expect((await expectCompiledCache(config)).digest.contradictionCount).toBeGreaterThanOrEqual(1);
   });
 
   it("excludes concept and synthesis pages from stale-pages report", async () => {
@@ -886,25 +870,13 @@ describe("compileMemoryWikiVault", () => {
       fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
     ).resolves.toContain("[Brad Groux](../entities/brad.md)");
 
-    const agentDigest = JSON.parse(
-      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ) as {
-      pages: Array<{
-        path: string;
-        canonicalId?: string;
-        aliases?: string[];
-        personCard?: { lane?: string };
-        relationshipCount?: number;
-      }>;
-    };
+    const { digest: agentDigest, claims } = await expectCompiledCache(config);
     const bradPage = expectDigestPage(agentDigest.pages, "entities/brad.md");
     expect(bradPage.canonicalId).toBe("maintainer.brad-groux");
     expect(bradPage.aliases).toEqual(["brad"]);
     expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
     expect(bradPage.relationshipCount).toBe(1);
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
-    ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
+    expect(claims.flatMap((claim) => claim.evidenceKinds ?? [])).toContain("maintainer-whois");
   });
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {

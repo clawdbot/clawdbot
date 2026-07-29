@@ -53,7 +53,7 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   "test/vitest/vitest.extension-matrix.config.ts": 0.28,
   "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
   "test/vitest/vitest.extension-media.config.ts": 0.7,
-  "test/vitest/vitest.extension-memory.config.ts": 0.25,
+  "test/vitest/vitest.extension-memory.config.ts": 1,
   "test/vitest/vitest.extension-messaging.config.ts": 0.4,
   "test/vitest/vitest.extension-misc.config.ts": 0.7,
   "test/vitest/vitest.extension-msteams.config.ts": 0.5,
@@ -69,6 +69,11 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
+const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map([
+  // The non-isolated Matrix suite intentionally shares module state within a process.
+  // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
+  ["test/vitest/vitest.extension-matrix.config.ts", 40],
+]);
 const EXTENSION_TEST_CONFIG_ROUTES = [
   [isActiveMemoryExtensionRoot, "test/vitest/vitest.extension-active-memory.config.ts"],
   [isAcpxExtensionRoot, "test/vitest/vitest.extension-acpx.config.ts"],
@@ -198,6 +203,51 @@ export function listTrackedTestFilesForRoots(roots) {
     files.push(...trackedFiles);
   }
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** List working-tree test files for extension roots, including new untracked tests. */
+export function listExtensionTestFilesForRoots(roots) {
+  const files = roots.flatMap((root) => listFilesystemTestFiles(path.join(repoRoot, root)));
+  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Split an extension config's test files across bounded process lifetimes when required. */
+export function splitExtensionTestProcessTargets(config, targets) {
+  const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
+  const orderedTargets = [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
+  if (!maxFilesPerProcess || orderedTargets.length <= maxFilesPerProcess) {
+    return [orderedTargets];
+  }
+
+  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerProcess);
+  const baseSize = Math.floor(orderedTargets.length / chunkCount);
+  const remainder = orderedTargets.length % chunkCount;
+  const chunks = [];
+  let offset = 0;
+  for (let index = 0; index < chunkCount; index += 1) {
+    const chunkSize = baseSize + (index < remainder ? 1 : 0);
+    chunks.push(orderedTargets.slice(offset, offset + chunkSize));
+    offset += chunkSize;
+  }
+  return chunks;
+}
+
+/** Whether a Vitest invocation can safely be split into independent one-shot processes. */
+export function shouldSplitExtensionTestProcesses(config, vitestArgs = []) {
+  // Passthrough options can carry suite-wide semantics such as bail thresholds,
+  // filtering, watch state, or shared artifacts. Only plain one-shot runs are splittable.
+  return EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config) && vitestArgs.length === 0;
+}
+
+/** Resolve process targets for an extension config, expanding roots only when it is bounded. */
+export function createExtensionTestProcessTargetChunks(config, roots, vitestArgs = []) {
+  if (!shouldSplitExtensionTestProcesses(config, vitestArgs)) {
+    return [roots];
+  }
+  // Explicit file targets replace Vitest's root discovery, so inventory the working tree.
+  // Otherwise a newly authored untracked test would silently disappear from a broad run.
+  const testFiles = listExtensionTestFilesForRoots(roots);
+  return testFiles.length > 0 ? splitExtensionTestProcessTargets(config, testFiles) : [roots];
 }
 
 function countTestFiles(rootPath) {

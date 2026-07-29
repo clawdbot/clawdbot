@@ -1,5 +1,8 @@
 // Control UI tests cover dreaming behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../../i18n/index.ts";
+import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { en } from "../../../i18n/locales/en.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
 import {
   backfillDreamDiary,
@@ -23,6 +26,53 @@ type DreamingConfigCapability = Pick<
   RuntimeConfigCapability,
   "lookupSchemaPath" | "patch" | "state"
 >;
+
+let restoreTranslations = () => {};
+
+function asTranslationMap(value: string | TranslationMap | undefined): TranslationMap {
+  return value && typeof value === "object" ? value : {};
+}
+
+beforeAll(() => {
+  const dreaming = asTranslationMap(en.dreaming);
+  i18n.registerTranslation("en", {
+    ...en,
+    dreaming: {
+      ...dreaming,
+      actions: {
+        dedupeRemovedOneAndKept: "Removed {removed} duplicate dream entry and kept {kept}.",
+        dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
+        dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
+        dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
+        repairArchivedThreadCorpus: "archived thread corpus",
+        repairArchivedIngestionState: "archived ingestion state",
+        repairArchivedDreamDiary: "archived dream diary",
+        repairNoChanges: "Dream cache repair finished with no changes.",
+        repairCompleteWithArchive: "Dream cache repair complete: {actions}. Archive: {archiveDir}",
+        repairComplete: "Dream cache repair complete: {actions}.",
+        backfillComplete: "Backfilled {count} dream diary entries.",
+        resetDiaryComplete: "Removed {count} backfilled dream diary entries.",
+        clearReplayedComplete: "Cleared {count} replayed short-term entries.",
+        complete: "Dream diary action complete.",
+        confirmRepair:
+          "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+        confirmDedupe:
+          "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+        archivePathCopied: "Archive path copied.",
+        archivePathCopyFailed: "Could not copy archive path.",
+        updateFailed: "Could not update dreaming settings.",
+        unsupportedPlugin:
+          'Selected memory plugin "{pluginId}" does not support dreaming settings.',
+        configHashMissing: "Config hash missing; refresh and retry.",
+      },
+    },
+  });
+  restoreTranslations = () => i18n.registerTranslation("en", en);
+});
+
+afterAll(() => {
+  restoreTranslations();
+});
 
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -1306,14 +1356,16 @@ describe("dreaming controller", () => {
     const ok = await repairDreamingArtifacts(state);
 
     expect(ok).toBe(true);
-    expect(confirmSpy).toHaveBeenCalled();
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+    );
     expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {});
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
-      text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+      text: "Dream cache repair complete: archived thread corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
     });
     expect(state.dreamDiaryActionArchivePath).toBe(
       "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
@@ -1344,7 +1396,9 @@ describe("dreaming controller", () => {
     const ok = await dedupeDreamDiary(state);
 
     expect(ok).toBe(true);
-    expect(confirmSpy).toHaveBeenCalled();
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+    );
     expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", {});
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
@@ -1373,6 +1427,22 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
       text: "Archive path copied.",
+    });
+  });
+
+  it("reports when the dreaming repair archive path cannot be copied", async () => {
+    const { state } = createState();
+    state.dreamDiaryActionArchivePath = "/tmp/openclaw/archive";
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    } as unknown as Navigator);
+
+    const ok = await copyDreamingArchivePath(state);
+
+    expect(ok).toBe(false);
+    expect(state.dreamDiaryActionMessage).toEqual({
+      kind: "error",
+      text: "Could not copy archive path.",
     });
   });
 

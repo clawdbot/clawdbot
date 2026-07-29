@@ -1,6 +1,7 @@
 // Verifies plain-text sanitization strips runtime scaffolding, tool-call blocks,
 // prompt-data wrappers, and conservative HTML markup.
 import { describe, expect, it } from "vitest";
+import { escapeInternalRuntimeContextDelimiters } from "../../agents/internal-runtime-context.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { sanitizeForPlainText } from "./sanitize-text.js";
 
@@ -171,6 +172,74 @@ describe("stripInternalRuntimeScaffolding", () => {
     ).toBe("before\nafter");
   });
 
+  it("removes complete internal runtime context blocks glued to visible text", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private runtime metadata<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+      ),
+    ).toBe("before  after");
+  });
+
+  it("preserves inline marker mentions before a later complete runtime context block", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
+          "visible",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "private runtime metadata",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?\nvisible\nafter");
+  });
+
+  it("removes marker-shaped private text from complete inline runtime context blocks", () => {
+    const escapedPrivateContext = escapeInternalRuntimeContextDelimiters(
+      "private <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>nested<<<END_OPENCLAW_INTERNAL_CONTEXT>>> metadata",
+    );
+    expect(
+      stripInternalRuntimeScaffolding(
+        `before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>${escapedPrivateContext}<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after`,
+      ),
+    ).toBe("before  after");
+
+    expect(
+      stripInternalRuntimeScaffolding(
+        "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private <<<END_OPENCLAW_INTERNAL_CONTEXT>>> metadata<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+      ),
+    ).toBe("before  after");
+  });
+
+  it("removes indented runtime context delimiters without leaving marker fragments", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before",
+          "  <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal",
+          "\t<<<END_OPENCLAW_INTERNAL_CONTEXT>>>  ",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("preserves visible whitespace around removed runtime context", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before  ",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "    indented code",
+        ].join("\n"),
+      ),
+    ).toBe("before  \n    indented code");
+  });
+
   it("unwraps standalone untrusted child-result marker lines", () => {
     expect(
       stripInternalRuntimeScaffolding(
@@ -224,6 +293,9 @@ describe("stripInternalRuntimeScaffolding", () => {
   });
 
   it("preserves inline delimiter mentions", () => {
+    expect(stripInternalRuntimeScaffolding("what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?")).toBe(
+      "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
+    );
     expect(
       stripInternalRuntimeScaffolding("visible <<<END_OPENCLAW_INTERNAL_CONTEXT>>> inline mention"),
     ).toBe("visible <<<END_OPENCLAW_INTERNAL_CONTEXT>>> inline mention");

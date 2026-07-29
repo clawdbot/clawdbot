@@ -294,6 +294,9 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
+          runId: requestContext.runId,
+          workspaceDir: requestContext.workspaceDir,
+          cwd: requestContext.cwd,
           modelProvider: requestContext.modelProvider,
           modelId: requestContext.modelId,
           yieldContextCacheKey: yieldContext?.cacheKey,
@@ -310,6 +313,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           toolsAllow: requestContext.toolsAllow,
+          scheduledToolPolicy: requestContext.scheduledToolPolicy,
           senderIsOwner: requestContext.senderIsOwner,
           nodeExecAllowed: requestContext.nodeExecAllowed,
           execSession: requestContext.execSession,
@@ -418,7 +422,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(payload);
       } catch (error) {
-        logWarn(`mcp loopback: request handling failed: ${formatErrorMessage(error)}`);
+        logWarn(`mcp-loopback: request handling failed: ${formatErrorMessage(error)}`);
         logMcpLoopbackTraffic("request-failed", {
           message: formatErrorMessage(error),
         });

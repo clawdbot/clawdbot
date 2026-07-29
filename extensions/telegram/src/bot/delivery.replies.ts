@@ -54,6 +54,7 @@ import {
 } from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { resolveTelegramTargetChatType } from "../targets.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -844,7 +845,9 @@ export async function deliverReplies(params: {
     }),
   );
   for (const originalReply of normalizedReplies) {
-    let reply = canonicalizeTelegramPresentationPayload(originalReply);
+    let reply = canonicalizeTelegramPresentationPayload(originalReply, {
+      allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
+    });
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
       : reply?.mediaUrl

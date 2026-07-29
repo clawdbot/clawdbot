@@ -1,11 +1,18 @@
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 // Qqbot tests cover api-client plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../../../test-support/streaming-error-response.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const ssrfRuntimeActual = vi.hoisted(() => ({
+  fetchWithSsrFGuard: undefined as
+    | typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard
+    | undefined,
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  ssrfRuntimeActual.fetchWithSsrFGuard = actual.fetchWithSsrFGuard;
   return {
     ...actual,
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -39,6 +46,7 @@ function cancelTrackedResponse(
 
 describe("ApiClient", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     fetchWithSsrFGuardMock.mockReset();
   });
@@ -79,13 +87,13 @@ describe("ApiClient", () => {
           "Content-Type": "application/json",
           "User-Agent": "QQBotPlugin/unknown",
         },
-        signal: expect.any(AbortSignal),
       },
       auditContext: "qqbot-api",
       policy: {
         hostnameAllowlist: ["qqbot.test"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
     });
   });
 
@@ -119,4 +127,58 @@ describe("ApiClient", () => {
     expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it.each([0, 25])(
+    "keeps the %dms request deadline active while reading a hanging response body",
+    async (timeoutMs) => {
+      vi.useFakeTimers();
+      const actualGuard = ssrfRuntimeActual.fetchWithSsrFGuard;
+      if (!actualGuard) {
+        throw new Error("expected the real SSRF guard implementation");
+      }
+      let requestSignal: AbortSignal | undefined;
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("expected the guarded fetch to pass its deadline signal");
+        }
+        requestSignal = signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+      const lookupFn = vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+      ]) as unknown as LookupFn;
+      fetchWithSsrFGuardMock.mockImplementationOnce(
+        async (request: Parameters<typeof actualGuard>[0]) =>
+          await actualGuard({ ...request, fetchImpl, lookupFn }),
+      );
+
+      const client = new ApiClient({
+        baseUrl: "https://qqbot.test",
+        defaultTimeoutMs: timeoutMs,
+      });
+
+      const rejection = expect(client.request("token-1", "GET", "/v2/users/@me")).rejects.toThrow(
+        `Request timeout [/v2/users/@me]: exceeded ${timeoutMs}ms`,
+      );
+      const guardedTimeoutMs = Math.max(1, timeoutMs);
+      await vi.advanceTimersByTimeAsync(guardedTimeoutMs);
+
+      await rejection;
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: guardedTimeoutMs }),
+      );
+      expect(requestSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });

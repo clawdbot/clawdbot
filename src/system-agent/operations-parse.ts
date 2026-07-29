@@ -19,6 +19,10 @@ export type { SystemAgentOperation };
 /** Result returned by the operation executor. */
 export type SystemAgentOperationResult = {
   applied: boolean;
+  /** Creation created or preserved BOOTSTRAP.md for the agent's first turn. */
+  bootstrapPending?: boolean;
+  /** Agent created by this operation, when applicable. */
+  agentId?: string;
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
@@ -35,17 +39,7 @@ export type SystemAgentCommandDeps = {
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
   formatOverview?: SystemAgentOverviewFormatter;
   loadOverview?: SystemAgentOverviewLoader;
-  runAgentsAdd?: (
-    opts: {
-      name?: string;
-      workspace?: string;
-      model?: string;
-      nonInteractive?: boolean;
-      json?: boolean;
-    },
-    runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean },
-  ) => Promise<void>;
+  createAgent?: typeof import("../agents/agent-create.js").createAgent;
   runConfigSet?: (opts: {
     path?: string;
     value?: string;
@@ -64,6 +58,7 @@ export type SystemAgentCommandDeps = {
     session?: string;
     deliver?: boolean;
     historyLimit?: number;
+    message?: string;
   }) => Promise<TuiResult | void>;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
@@ -112,7 +107,8 @@ const TALK_AGENT_RE = new RegExp(
   String.raw`^(?:talk\s+to|switch\s+to|open|enter)\s+(?:(?:my|the)\s+)?(?:(?<agent>[a-z0-9_-]+)\s+)?agent(?:\s+(?:for|in|workspace)\s+(?<workspace>${ARG_WORD}))?$`,
   "i",
 );
-const SET_MODEL_RE = /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)$/i;
+const SET_MODEL_RE =
+  /^(?:set|configure|use)\s+(?:the\s+)?(?:default\s+)?models?\s+(?<model>\S+)(?:\s+for\s+agent\s+(?<agent>\S+))?$/i;
 const GATEWAY_RE =
   /^(?:gateway\s+(?<sub>status|start|stop|restart)|(?<verb>start|stop|restart)\s+(?:the\s+)?gateway)$/i;
 const PLUGIN_LIST_RE = /^(?:(?:plugins?|clawhub)\s+list|list\s+plugins?)$/i;
@@ -127,13 +123,20 @@ const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
 const CHANNEL_INFO_RE =
   /^(?:channel\s+info\s+(?<channel>[a-z0-9_-]+)|about\s+(?<aboutChannel>[a-z0-9_-]+)\s+channel)$/i;
+const SKILLS_SETUP_RE = /^(?:configure|set\s*up|setup)\s+skills$/i;
+const SEARCH_SETUP_RE =
+  /^(?:(?:configure|set\s*up|setup)\s+(?:web\s+)?search|(?:web\s+)?search\s+provider\s+setup)$/i;
+const GATEWAY_CONFIG_SETUP_RE = /^(?:configure\s+gateway|set\s*up\s+gateway|gateway\s+settings)$/i;
+const MEMORY_IMPORT_RE = /^(?:import\s+memor(?:y|ies)|memory\s+import)$/i;
 const OPEN_GUIDED_SETUP_RE =
   /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i;
 const OPEN_CLASSIC_SETUP_RE = /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i;
 const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
+const OPEN_SEARCH_SETUP_RE = /^open\s+(?:web\s+)?search\s+wizard$/i;
+const OPEN_GATEWAY_SETUP_RE = /^open\s+gateway\s+wizard$/i;
 
 const NO_MATCH_MESSAGE =
-  "I can run doctor/status/health, check or restart Gateway, list agents/models, configure a model provider, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+  "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
 /**
  * Parse one user command into OpenClaw's closed operation union. Anything
  * that does not match the anchored grammar exactly returns kind "none" so the
@@ -248,6 +251,18 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
   }
+  if (SKILLS_SETUP_RE.test(trimmed)) {
+    return { kind: "skills-setup" };
+  }
+  if (SEARCH_SETUP_RE.test(trimmed)) {
+    return { kind: "search-setup" };
+  }
+  if (GATEWAY_CONFIG_SETUP_RE.test(trimmed)) {
+    return { kind: "gateway-config-setup" };
+  }
+  if (MEMORY_IMPORT_RE.test(trimmed)) {
+    return { kind: "memory-import" };
+  }
   const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
   if (modelSetupMatch) {
     const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
@@ -270,6 +285,12 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       target: "channels",
       ...(channel ? { channel } : {}),
     };
+  }
+  if (OPEN_SEARCH_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "search" };
+  }
+  if (OPEN_GATEWAY_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "gateway" };
   }
   const setupMatch = trimmed.match(SETUP_RE);
   if (setupMatch) {
@@ -317,7 +338,12 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const setModelMatch = trimmed.match(SET_MODEL_RE);
   if (setModelMatch?.groups?.model) {
-    return { kind: "set-default-model", model: setModelMatch.groups.model };
+    const agent = setModelMatch.groups.agent?.trim();
+    return {
+      kind: "set-default-model",
+      model: setModelMatch.groups.model,
+      ...(agent ? { agentId: normalizeAgentId(agent) } : {}),
+    };
   }
   return { kind: "none", message: NO_MATCH_MESSAGE };
 }
@@ -360,6 +386,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
+    operation.kind === "plugin-uninstall" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
       !isReservedSystemAgentId(operation.agentId)) ||
@@ -373,7 +400,9 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
 export function describeSystemAgentPersistentOperation(operation: SystemAgentOperation): string {
   switch (operation.kind) {
     case "set-default-model":
-      return `set agents.defaults.model.primary to ${operation.model}`;
+      return operation.agentId
+        ? `set agent ${operation.agentId}'s model to ${operation.model}`
+        : `set agents.defaults.model.primary to ${operation.model}`;
     case "config-set":
       return `set config ${operation.path} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":

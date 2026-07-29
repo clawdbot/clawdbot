@@ -4,12 +4,14 @@ import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
-import type { SessionEntry } from "../../../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -97,6 +99,8 @@ export type FollowupRun = {
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
@@ -128,6 +132,7 @@ export type FollowupRun = {
     runtimePolicySessionKey?: string;
     messageProvider?: string;
     clientCaps?: string[];
+    toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
@@ -148,9 +153,11 @@ export type FollowupRun = {
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
     cwd?: string;
     config: OpenClawConfig;
+    toolOverrides?: SessionToolOverrides;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    requestedRouteResolution?: ModelFallbackRouteResolution;
     /** Prevents the queued run from selecting configured fallback models. */
     modelSelectionLocked?: boolean;
     hasSessionModelOverride?: boolean;
@@ -274,7 +281,8 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
       return;
     }
     completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-    // onSettled must run even when onAbandoned throws (gateway/plugin cleanup).
+    // Async onAbandoned work must contain its own rejections; core guarantees a
+    // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
         lifecycle.onAbandoned?.();

@@ -1,5 +1,3 @@
-import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
-
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
 const DISCORD_SESSION_CONFLICT_FAILURE_TEXT =
   "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.";
@@ -32,9 +30,9 @@ export async function completeDiscordSessionConflict(
   } catch (deliveryError) {
     // Keep the conflict retryable when its visible terminal notice cannot land.
     onDeliveryError(deliveryError, { kind: "final" });
-    throw new DiscordRetryableInboundError(
+    throw new Error(
       `discord: reply session init conflict exhausted and terminal notice failed: ${String(deliveryError)}`,
-      { cause: error },
+      { cause: deliveryError },
     );
   }
 }

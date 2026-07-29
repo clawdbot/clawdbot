@@ -1,5 +1,7 @@
+import { createLlmRuntime, type LlmRuntime } from "@openclaw/ai";
 import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -20,7 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
  * Scans remote provider model catalogs for configured providers.
  */
 import { readResponseWithLimit } from "../infra/http-body.js";
-import { complete } from "../llm/stream.js";
+import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
@@ -299,6 +301,7 @@ async function probeTool(
   model: OpenAIModel,
   apiKey: string,
   timeoutMs: number,
+  complete: LlmRuntime["complete"],
 ): Promise<ProbeResult> {
   const context: Context = {
     messages: [
@@ -345,6 +348,7 @@ async function probeImage(
   model: OpenAIModel,
   apiKey: string,
   timeoutMs: number,
+  complete: LlmRuntime["complete"],
 ): Promise<ProbeResult> {
   const context: Context = {
     messages: [
@@ -433,6 +437,8 @@ export async function scanOpenRouterModels(
   const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
   const catalog = await fetchOpenRouterModels(fetchImpl, timeoutMs);
+  const llmRuntime = createLlmRuntime();
+  registerBuiltInApiProviders(llmRuntime.registry);
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
@@ -504,9 +510,9 @@ export async function scanOpenRouterModels(
           reasoning: baseModel.reasoning,
         };
 
-        const toolResult = await probeTool(model, apiKey, timeoutMs);
+        const toolResult = await probeTool(model, apiKey, timeoutMs, llmRuntime.complete);
         const imageResult = model.input?.includes("image")
-          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
+          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs, llmRuntime.complete)
           : { ok: false, latencyMs: null, skipped: true };
 
         result = buildOpenRouterScanResult({

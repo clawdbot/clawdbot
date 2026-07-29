@@ -67,13 +67,13 @@ function createTarget(): WebhookTarget {
       enabled: true,
       credentialSource: "inline",
       config: {
-        dm: { allowFrom: ["users/123"] },
+        allowFrom: ["users/123"],
       },
     },
     config: {
       channels: {
         googlechat: {
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     },
@@ -81,6 +81,7 @@ function createTarget(): WebhookTarget {
     core: {} as never,
     path: "/googlechat",
     mediaMaxMb: 20,
+    ingress: { receive: vi.fn(async () => ({ kind: "ignored" as const })) },
   };
 }
 

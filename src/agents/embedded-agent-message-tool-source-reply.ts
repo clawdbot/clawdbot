@@ -37,6 +37,10 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
+  return asRecord(asRecord(value).details).sourceReplyRoute === "current-source";
+}
+
 function hasStringValue(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -80,7 +84,12 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
     const normalized = normalizeStatus(value);
     return Boolean(normalized && !NON_DELIVERY_MESSAGE_IDS.has(normalized));
   };
-  if (hasDeliveredId(record.messageId) || hasDeliveredId(record.pollId)) {
+  const message = asRecord(record.message);
+  if (
+    hasDeliveredId(record.messageId) ||
+    hasDeliveredId(record.pollId) ||
+    hasDeliveredId(message.id)
+  ) {
     return true;
   }
   const receipt = record.receipt;
@@ -563,7 +572,9 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }
-  if (hasExplicitMessageRoute(args) && params.allowExplicitSourceRoute !== true) {
+  const hasConfirmedExplicitSourceRoute =
+    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+  if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }
   return isDeliveredMessagingToolResult(params);

@@ -3,6 +3,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -18,7 +19,7 @@ import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
 import {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
@@ -51,7 +52,12 @@ async function resolveStickerVisionSupport(
   agentId: string,
 ) {
   try {
-    const catalog = await loadModelCatalog({ config: cfg });
+    const catalog = await loadPreparedModelCatalog({
+      config: cfg,
+      agentId,
+      agentDir: resolveAgentDir(cfg, agentId),
+      readOnly: true,
+    });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     return entry ? modelSupportsVision(entry) : false;
@@ -60,20 +66,23 @@ async function resolveStickerVisionSupport(
   }
 }
 
-function includeStickerDescription(body: string | undefined, formattedDescription: string): string {
-  if (!body) {
-    return formattedDescription;
+function includeStickerDescription(params: {
+  body: string | undefined;
+  formattedDescription: string;
+}): string {
+  if (!params.body) {
+    return params.formattedDescription;
   }
-  const current = body.trim();
-  if (!current || current === "<media:image>") {
-    return formattedDescription;
+  const current = params.body.trim();
+  if (!current) {
+    return params.formattedDescription;
   }
   // Cached descriptions can already be present from inbound context construction.
   // Keep that body intact so captions, forwarded text, and supplemental context survive.
-  if (body.includes(formattedDescription)) {
-    return body;
+  if (params.body.includes(params.formattedDescription)) {
+    return params.body;
   }
-  return `${formattedDescription}\n${body}`;
+  return `${params.formattedDescription}\n${params.body}`;
 }
 
 function resolveTelegramQuoteContext(params: {
@@ -157,7 +166,13 @@ async function prepareTelegramSticker(params: {
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
-  if (!sticker?.fileId || !sticker.fileUniqueId || !context.ctxPayload.MediaPath) {
+  const stickerFact = context.ctxPayload.media?.find((media) => media.kind === "sticker");
+  const stickerPath =
+    stickerFact?.path ??
+    (!stickerFact && context.ctxPayload.StickerMediaIncluded
+      ? context.ctxPayload.media?.[0]?.path
+      : undefined);
+  if (!sticker?.fileId || !sticker.fileUniqueId || !stickerPath) {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
@@ -168,7 +183,7 @@ async function prepareTelegramSticker(params: {
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
-      imagePath: context.ctxPayload.MediaPath,
+      imagePath: stickerPath,
       cfg: params.cfg,
       agentDir,
       agentId: context.route.agentId,
@@ -182,14 +197,19 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    context.ctxPayload.Body = includeStickerDescription(
-      context.ctxPayload.Body,
+    const isCaptionlessSticker =
+      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
+    context.ctxPayload.Body = includeStickerDescription({
+      body: context.ctxPayload.Body,
       formattedDescription,
-    );
-    context.ctxPayload.BodyForAgent = includeStickerDescription(
-      context.ctxPayload.BodyForAgent,
-      formattedDescription,
-    );
+    });
+    context.ctxPayload.BodyForAgent =
+      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
+        ? formattedDescription
+        : includeStickerDescription({
+            body: context.ctxPayload.BodyForAgent,
+            formattedDescription,
+          });
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
   cacheSticker({
@@ -279,7 +299,7 @@ export const dispatchTelegramMessage = async ({
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
-  const status = createTelegramDispatchStatus({ cfg, context: dispatchContext });
+  const status = createTelegramDispatchStatus({ context: dispatchContext });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -295,11 +315,19 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
+  // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
+  // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
+    allowProviderPreview,
     bot,
     cfg,
     chatId: dispatchContext.chatId,
@@ -449,9 +477,7 @@ export const dispatchTelegramMessage = async ({
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done", hasFinalResponse: true }, "finalize");
-    } else {
-      status.removeAck();
+      status.finalizeInBackground({ outcome: "done" }, "finalize");
     }
     return { kind: "completed" };
   }
@@ -463,8 +489,8 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
-      deliverySummary.skippedNonSilent > 0 ||
-      deliverySummary.failedNonSilent > 0);
+      deliverySummary.failedNonSilent > 0 ||
+      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -530,7 +556,7 @@ export const dispatchTelegramMessage = async ({
       : null);
 
   if (status.controller && !hasVisibleResponse) {
-    status.finalizeInBackground({ outcome: "error", hasFinalResponse: false }, "error finalize");
+    status.finalizeInBackground({ outcome: "error" }, "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -557,12 +583,9 @@ export const dispatchTelegramMessage = async ({
           !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
             ? "error"
             : "done",
-        hasFinalResponse: true,
       },
       "finalize",
     );
-  } else {
-    status.removeAck();
   }
   return { kind: "completed" };
 };

@@ -5,6 +5,7 @@ import type {
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -41,6 +42,7 @@ export type McpServerCatalog = {
     include?: string[];
     exclude?: string[];
   };
+  deniedToolNames?: string[];
 };
 
 /** MCP tool entry after server-name sanitization and schema normalization. */
@@ -99,6 +101,10 @@ export type SessionMcpRuntime = {
    */
   isRequesterScopedServer?: (serverName: string) => boolean;
   mcpAppsEnabled?: boolean;
+  /** Latest non-persisted App context, owned by the exact live view that supplied it. */
+  pendingMcpAppModelContext?: { owner: object; text: string; leased?: boolean };
+  /** Blocks a deferred-retirement view from restoring context across reset. */
+  mcpAppModelContextRevoked?: boolean;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;
@@ -134,6 +140,7 @@ export type SessionMcpRuntimeManager = {
     requesterSenderId?: string | null;
     agentAccountId?: string | null;
     messageChannel?: string | null;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime>;
   /**
    * Requester-scoped partition only — never creates static transports.
@@ -149,6 +156,7 @@ export type SessionMcpRuntimeManager = {
     requesterSenderId?: string | null;
     agentAccountId?: string | null;
     messageChannel?: string | null;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread

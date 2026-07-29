@@ -5,7 +5,7 @@ import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
-} from "./model-picker-visibility.js";
+} from "./model-runtime-aliases.js";
 import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
@@ -252,15 +252,7 @@ describe("areRuntimeModelRefsEquivalent", () => {
 
     expect(
       areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       }),
     ).toBe(true);
   });

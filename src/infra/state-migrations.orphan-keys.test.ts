@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { migrateOrphanedSessionKeys } from "./state-migrations.js";
+import { resolveSessionStoreOwnership } from "./state-migrations.session-store.js";
 
 const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -166,10 +167,79 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(store["agent:voice:metadata"]).toEqual({
         updatedAt: 1500,
         groupActivation: "always",
+        delivery: { kind: "none" },
       });
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it("distinguishes large adjacent inodes before planning store aliases", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
+      const targetStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+      writeStore(configuredStorePath, {});
+      writeStore(targetStorePath, {});
+      const cfg = {
+        session: { store: configuredStorePath },
+        agents: { list: [{ id: "ops", default: true }] },
+      } as OpenClawConfig;
+      const realStatSync = fs.statSync.bind(fs);
+      const largeInodes = new Map([
+        [configuredStorePath, 72057594037932382n],
+        [targetStorePath, 72057594037932383n],
+      ]);
+      const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((
+        candidate: Parameters<typeof fs.statSync>[0],
+        options?: { bigint?: boolean },
+      ) => {
+        const resolvedPath = path.resolve(candidate.toString());
+        const inode = largeInodes.get(resolvedPath);
+        const useBigInt = options?.bigint === true;
+        const stat = useBigInt
+          ? realStatSync(candidate, { bigint: true })
+          : realStatSync(candidate);
+        if (inode === undefined) {
+          return stat;
+        }
+        return new Proxy(stat, {
+          get(target, property, receiver) {
+            if (property === "dev") {
+              return useBigInt ? 2n : 2;
+            }
+            if (property === "ino") {
+              return useBigInt ? inode : Number(inode);
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+      }) as typeof fs.statSync);
+
+      let ownership: ReturnType<typeof resolveSessionStoreOwnership>;
+      try {
+        ownership = resolveSessionStoreOwnership({
+          cfg,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          stateDir,
+          targetAgentId: "voice",
+          pluginSessionStoreAgentIds: ["voice"],
+        });
+        expect(statSpy).toHaveBeenCalledWith(configuredStorePath, { bigint: true });
+        expect(statSpy).toHaveBeenCalledWith(targetStorePath, { bigint: true });
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect(ownership).toEqual({
+        preserveAmbiguousKeys: false,
+        preserveForeignMainAliases: false,
+        targetStoreAliases: {
+          hasDistinctAliases: false,
+          hasFinalSymlink: false,
+          hasUnresolvedIdentity: false,
+        },
+      });
     });
   });
 

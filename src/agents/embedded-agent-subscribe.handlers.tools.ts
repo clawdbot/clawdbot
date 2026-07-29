@@ -19,18 +19,17 @@ import {
 import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
-  AgentApprovalEventData,
   AgentCommandOutputEventData,
   AgentItemEventData,
   AgentPatchSummaryEventData,
-} from "../infra/agent-events.js";
+} from "../infra/agent-activity-events.js";
 import {
   emitAgentApprovalEvent,
   emitAgentCommandOutputEvent,
-  emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
-} from "../infra/agent-events.js";
+} from "../infra/agent-activity-events.js";
+import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -89,6 +88,8 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
+import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
@@ -98,6 +99,13 @@ import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import {
+  cancelAskUserPromptDelivery,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+  settleAskUserPromptDelivery,
+  waitForAskUserPromptReady,
+} from "./tools/ask-user-tool.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -111,6 +119,7 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
+
 const fallbackToolTerminalObservers = new WeakMap<
   ToolHandlerContext["state"],
   ReturnType<typeof createToolTerminalObserver>
@@ -142,6 +151,31 @@ function readUpdatePlanResult(
   const steps = normalizeAgentPlanSteps(details.plan) ?? [];
   const explanation = readStringValue(details.explanation);
   return { ...(explanation ? { explanation } : {}), steps };
+}
+
+function buildAskUserPromptPayload(
+  toolCallId: string,
+  sessionKey: string | undefined,
+  runId: string,
+  args: unknown,
+) {
+  try {
+    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId,
+      sessionKey,
+      runId,
+      questions,
+      timeoutSeconds,
+    });
+    if (!reservation) {
+      return undefined;
+    }
+    return reservation;
+  } catch {
+    // Argument validation owns malformed calls; do not deliver an unusable prompt first.
+    return undefined;
+  }
 }
 
 function isMiddlewareToolResultError(result: unknown): boolean {
@@ -943,21 +977,40 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
-  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-      reason: "tool_start",
-      assistantMessageIndex: ctx.state.assistantMessageIndex,
-    });
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(() => {
-        continueToolExecutionStart();
-      });
+  const startToolName = normalizeToolName(evt.toolName);
+  const askUserPromptReservation =
+    startToolName === "ask_user" && ctx.params.onToolResult
+      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
+      : undefined;
+  const cancelAskUserPromptReservation = () => {
+    if (askUserPromptReservation) {
+      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
     }
-    continueToolExecutionStart();
-    return undefined;
+  };
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
+    let onBlockReplyFlushResult: void | Promise<void>;
+    try {
+      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+        reason: "tool_start",
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+      });
+    } catch (error) {
+      cancelAskUserPromptReservation();
+      throw error;
+    }
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.then(
+        () => continueToolExecutionStart(),
+        (error: unknown) => {
+          cancelAskUserPromptReservation();
+          throw error;
+        },
+      );
+    }
+    return continueToolExecutionStart();
   };
 
-  const continueToolExecutionStart = () => {
+  const continueToolExecutionStart = (): void | Promise<void> => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -1165,12 +1218,54 @@ export function handleToolExecutionStart(
         }
       }
     }
+
+    if (toolName === "ask_user" && ctx.params.onToolResult) {
+      const payload = askUserPromptReservation;
+      if (payload) {
+        const questionId = payload.questionId;
+        void waitForAskUserPromptReady(questionId)
+          .then((questions) => {
+            if (!questions) {
+              return;
+            }
+            return ctx.params.onToolResult?.(
+              buildAgentHarnessQuestionPromptPayload({
+                questionId,
+                questions: questions.map(({ questionId: id, ...question }) => ({
+                  ...question,
+                  id,
+                })),
+                options: { intro: "Question for you:" },
+              }),
+            );
+          })
+          .then(
+            () => settleAskUserPromptDelivery(questionId),
+            (error: unknown) => {
+              settleAskUserPromptDelivery(questionId, error);
+              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
+            },
+          );
+      }
+    }
   };
 
   // Flush pending block replies to preserve message boundaries before tool execution.
-  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  let flushBlockReplyBufferResult: void | Promise<void>;
+  try {
+    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  } catch (error) {
+    cancelAskUserPromptReservation();
+    throw error;
+  }
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(() => continueAfterBlockReplyFlush());
+    return flushBlockReplyBufferResult.then(
+      () => continueAfterBlockReplyFlush(),
+      (error: unknown) => {
+        cancelAskUserPromptReservation();
+        throw error;
+      },
+    );
   }
   return continueAfterBlockReplyFlush();
 }
@@ -1280,6 +1375,9 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
+  if (toolName === "ask_user") {
+    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
+  }
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
@@ -1290,6 +1388,13 @@ export async function handleToolExecutionEnd(
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
   const isToolError = observerIsError && !approvalUnavailable;
+  if (!isToolError) {
+    const channelView = readMcpAppChannelView(result);
+    if (channelView) {
+      // A later successful app result supersedes the earlier launch target.
+      ctx.state.latestMcpAppChannelView = channelView;
+    }
+  }
   try {
     ctx.params.onAgentToolResult?.({
       toolName,

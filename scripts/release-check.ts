@@ -32,6 +32,7 @@ import {
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   isLegacyPluginDependencyInstallStagePath,
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -41,7 +42,8 @@ import {
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import {
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mjs";
 import {
   runInstalledWorkspaceBootstrapSmoke,
@@ -82,11 +84,11 @@ const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDir
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
 const requiredPathGroups = [
-  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -105,14 +107,15 @@ const requiredPathGroups = [
   "scripts/lib/official-external-plugin-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/recommended-tool-installs.json",
+  "scripts/lib/guard-inventory-utils.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
-  "dist/plugin-sdk/compat.js",
-  "dist/plugin-sdk/root-alias.cjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/audit/audit-event-writer.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
+  "dist/state/openclaw-database-verify.worker.js",
+  "dist/system-agent/setup-inference-detection.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
@@ -137,7 +140,11 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-  ...listPrivateLocalOnlyPluginSdkDistArtifacts(),
+  "dist/plugin-sdk/index.",
+  "dist/plugin-sdk/compat.",
+  "dist/plugin-sdk/root-alias.",
+  "dist/extensionAPI.",
+  ...listUnpackagedPrivatePluginSdkDistArtifacts(),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
@@ -159,7 +166,6 @@ const forbiddenPrivatePluginSdkDeclarationMarkers = [
   "//#region src/test-utils/",
 ] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
-const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionReleaseKey = 20260227;
@@ -196,21 +202,6 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
 );
 
-function positiveEnvInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function runReleaseCheckCommand(
   invocation: ReleaseCheckCommandInvocation,
   options: {
@@ -230,16 +221,18 @@ export function runReleaseCheckCommand(
     killSignal: "SIGKILL",
     maxBuffer:
       options.maxBuffer ??
-      positiveEnvInt(
+      readPositiveEnvInt(
         "OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES",
+        process.env,
         DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES,
       ),
     shell: invocation.shell ?? options.shell,
     stdio: options.stdio,
     timeout:
       options.timeoutMs ??
-      positiveEnvInt(
+      readPositiveEnvInt(
         "OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+        process.env,
         DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
       ),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
@@ -451,6 +444,7 @@ export function resolvePackedTarballPath(packDestination: string, results: PackR
 
 export function resolveReleaseCheckLocalPackageTarballs(
   tarballDir: string | undefined = process.env[RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV],
+  requiresAi = rootPackageRequiresLocalAiTarball(),
 ): string[] {
   if (!tarballDir) {
     return [];
@@ -465,12 +459,57 @@ export function resolveReleaseCheckLocalPackageTarballs(
     .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
     .map((entry) => resolve(resolvedDir, entry.name))
     .toSorted((left, right) => left.localeCompare(right));
-  if (tarballs.length !== 1) {
+  const aiTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/ai",
+  );
+  const gatewayProtocolTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-protocol",
+  );
+  const gatewayClientTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-client",
+  );
+  const recognizedTarballs =
+    aiTarballs.length + gatewayProtocolTarballs.length + gatewayClientTarballs.length;
+  if (recognizedTarballs !== tarballs.length) {
     throw new Error(
-      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains ${tarballs.length} tarballs; expected exactly one.`,
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains an unsupported package tarball.`,
+    );
+  }
+  const expectedAiTarballs = requiresAi ? 1 : 0;
+  const aiTarballRequirement = requiresAi
+    ? "exactly one @openclaw/ai tarball"
+    : "no @openclaw/ai tarballs";
+  if (
+    aiTarballs.length !== expectedAiTarballs ||
+    gatewayProtocolTarballs.length > 1 ||
+    gatewayClientTarballs.length > 1
+  ) {
+    throw new Error(
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain ${aiTarballRequirement}, at most one @openclaw/gateway-protocol tarball, and at most one @openclaw/gateway-client tarball; found ${aiTarballs.length}, ${gatewayProtocolTarballs.length}, and ${gatewayClientTarballs.length}.`,
     );
   }
   return tarballs;
+}
+
+function rootPackageRequiresLocalAiTarball(): boolean {
+  const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+    dependencies?: Record<string, unknown>;
+  };
+  return typeof packageJson.dependencies?.["@openclaw/ai"] === "string";
+}
+
+function localPackageNameForTarball(tarballPath: string): string | undefined {
+  const filename = basename(tarballPath);
+  if (/^openclaw-ai(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/ai";
+  }
+  if (/^openclaw-gateway-protocol(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/gateway-protocol";
+  }
+  if (/^openclaw-gateway-client(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/gateway-client";
+  }
+  return undefined;
 }
 
 export function prepareReleaseCheckLocalPackageTarballs(params: {
@@ -500,17 +539,38 @@ export function writePackedTarballInstallManifest(
   prefixDir: string,
   tarballPath: string,
   localPackageTarballs: string[],
+  requiresAi = rootPackageRequiresLocalAiTarball(),
 ): void {
-  const aiTarball = localPackageTarballs[0];
-  if (localPackageTarballs.length !== 1 || !aiTarball) {
+  const localPackages = localPackageTarballs.map((localPackageTarballPath) => ({
+    packageName: localPackageNameForTarball(localPackageTarballPath),
+    tarballPath: localPackageTarballPath,
+  }));
+  const aiTarballs = localPackages.filter(({ packageName }) => packageName === "@openclaw/ai");
+  const expectedAiTarballs = requiresAi ? 1 : 0;
+  const aiTarballRequirement = requiresAi
+    ? "exactly one @openclaw/ai tarball"
+    : "no @openclaw/ai tarballs";
+  if (aiTarballs.length !== expectedAiTarballs) {
     throw new Error(
-      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
+      `release-check: packed install requires ${aiTarballRequirement}; found ${aiTarballs.length}.`,
     );
   }
-  const dependencies: Record<string, string> = {
-    "@openclaw/ai": pathToFileURL(aiTarball).href,
-    openclaw: pathToFileURL(tarballPath).href,
-  };
+  const unsupportedTarball = localPackages.find(({ packageName }) => !packageName);
+  if (unsupportedTarball) {
+    throw new Error(
+      `release-check: packed install received an unsupported package tarball: ${basename(unsupportedTarball.tarballPath)}.`,
+    );
+  }
+  const dependencies = Object.fromEntries(
+    localPackages.map(({ packageName, tarballPath: localPackageTarballPath }) => [
+      packageName as string,
+      pathToFileURL(localPackageTarballPath).href,
+    ]),
+  );
+  if (Object.keys(dependencies).length !== localPackages.length) {
+    throw new Error("release-check: packed install received duplicate local package tarballs.");
+  }
+  dependencies.openclaw = pathToFileURL(tarballPath).href;
   mkdirSync(prefixDir, { recursive: true });
   writeFileSync(
     join(prefixDir, "package.json"),
@@ -669,15 +729,6 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
       `installed openclaw binary version mismatch: expected ${params.expectedVersion}, found ${params.installedBinaryVersion || "<missing>"}.`,
     );
   }
-  const rootAliasPath = join(params.packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
-  if (existsSync(rootAliasPath)) {
-    const rootAliasSource = readFileSync(rootAliasPath, "utf8");
-    if (forbiddenPluginSdkRootAliasMinifiedExportPattern.test(rootAliasSource)) {
-      errors.push(
-        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
-      );
-    }
-  }
   return errors;
 }
 
@@ -769,10 +820,13 @@ function runPackedPluginSdkTypescriptSmoke(
   localPackageTarballs: string[],
 ): void {
   const consumerDir = join(tmpRoot, "plugin-sdk-type-consumer");
+  const aiTarball = localPackageTarballs.find(
+    (localPackageTarball) => localPackageNameForTarball(localPackageTarball) === "@openclaw/ai",
+  );
   createPackedPluginSdkTypescriptSmokeProject({
     consumerDir,
     packageSpec: `file:${tarballPath}`,
-    aiPackageSpec: localPackageTarballs[0] ? `file:${localPackageTarballs[0]}` : undefined,
+    aiPackageSpec: aiTarball ? `file:${aiTarball}` : undefined,
   });
   execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: consumerDir,

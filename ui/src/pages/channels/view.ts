@@ -27,6 +27,7 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelArt } from "./hub-meta.ts";
 import { renderChannelDetail } from "./view.detail.ts";
+import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
@@ -59,6 +60,7 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
+      ${renderChannelPairingQueue(props)}
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
@@ -100,19 +102,6 @@ export function renderChannels(props: ChannelsProps) {
           ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
         `,
       )}
-      ${renderSettingsSection(
-        {
-          title: t("channels.health.title"),
-          description: t("channels.health.subtitle"),
-        },
-        html`
-          <div class="settings-row settings-row--stacked">
-            <pre class="code-block">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-            </pre>
-          </div>
-        `,
-      )}
     `)}
     ${selected
       ? renderChannelDetail({
@@ -138,6 +127,7 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.
       onWhatsAppStart: props.onWhatsAppStart,
       onWhatsAppWait: props.onWhatsAppWait,
     })}
+    ${renderChannelPairingPrompt(props)}
   `;
 }
 

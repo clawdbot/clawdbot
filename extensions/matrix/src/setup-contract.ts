@@ -2,7 +2,12 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 
 export const matrixSingleAccountKeysToMove = [
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
   "deviceId",
+  "deviceName",
   "avatarUrl",
   "initialSyncLimit",
   "encryption",

@@ -7,6 +7,15 @@ export const runNodeWatchedPaths: string[];
 /** Plugin metadata files that require a runtime restart even without source edits. */
 export const extensionRestartMetadataFiles: Set<string>;
 
+export interface RunNodePathClassifier {
+  refreshGeneratedPluginAssetPaths(): void;
+  isBuildRelevantRunNodePath(repoPath: unknown): boolean;
+  isRestartRelevantRunNodePath(repoPath: unknown): boolean;
+}
+
+/** Creates a path classifier whose generated-output metadata can be refreshed. */
+export function createRunNodePathClassifier(params?: { rootDir?: string }): RunNodePathClassifier;
+
 /** Normalizes watch paths to repository-style POSIX separators. */
 export function normalizeRunNodePath(filePath: unknown): string;
 /** Returns true when a repo path should trigger a dev rebuild. */

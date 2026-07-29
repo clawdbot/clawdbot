@@ -1629,6 +1629,79 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it.each([
+    {
+      name: "invalid alphabet from output item",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs!bG8=" },
+      },
+    },
+    {
+      name: "invalid alphabet from completed output",
+      event: {
+        type: "response.completed",
+        response: {
+          output: [{ type: "image_generation_call", result: "aGVs!bG8=" }],
+        },
+      },
+    },
+    {
+      name: "missing canonical padding",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVsbG8" },
+      },
+    },
+    {
+      name: "internal whitespace",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs bG8=" },
+      },
+    },
+    {
+      name: "non-zero trailing bits",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "Zh==" },
+      },
+    },
+  ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n`);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw from malformed image data",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation returned malformed base64 image data");
+  });
+
+  it("accepts Codex-compatible surrounding Unicode whitespace", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "\u0085aGVsbG8=\u0085" },
+      })}\n\n`,
+    );
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw from valid image data",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("hello"));
+  });
+
   it("honors configured Codex transport overrides for OAuth image generation", async () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });

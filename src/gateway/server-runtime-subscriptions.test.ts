@@ -23,6 +23,13 @@ import {
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const warn = vi.fn();
 const mockLog: SubsystemLogger = {
   subsystem: "gateway-test",
@@ -135,7 +142,11 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({ runId: "enabled-audit", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentAuditEvent({
+      runId: "enabled-audit",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     expect(auditTestState.recorded).toBe(1);
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
@@ -149,11 +160,15 @@ describe("startGatewayEventSubscriptions", () => {
     emitAgentAuditEvent({
       runId: "disabled-private",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
-    emitAgentEvent({ runId: "disabled-public", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "disabled-public",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     expect(auditTestState.recorded).toBe(0);
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
     warn.mockClear();
     // Disabled wiring must still unsubscribe cleanly.
     await unsubs.agentUnsub();
@@ -163,9 +178,13 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs lazy agent event handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
 
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
       expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
@@ -179,7 +198,7 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     emitAgentEvent({ runId: "run-dispose", stream: "lifecycle", data: { phase: "error" } });
-    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
 
     await unsubs.agentUnsub();
     expect(dispose).toHaveBeenCalledOnce();
@@ -193,7 +212,7 @@ describe("startGatewayEventSubscriptions", () => {
       sessionKey: "agent:main:main",
     } as InternalSessionTranscriptUpdate);
 
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
       "Transcript update dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
@@ -205,7 +224,7 @@ describe("startGatewayEventSubscriptions", () => {
 
     emitSessionLifecycleEvent({ sessionKey: "agent:main:main", reason: "created" });
 
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
       "Lifecycle event dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
@@ -215,7 +234,7 @@ describe("startGatewayEventSubscriptions", () => {
   it("broadcasts bounded public task summaries with ledger statuses", async () => {
     const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
     unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
-    await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
     const completed = createTaskRecord({
       runtime: "subagent",
@@ -262,7 +281,7 @@ describe("startGatewayEventSubscriptions", () => {
     expect(wireTerminalSummary?.length ?? 0).toBeLessThan(10_000);
 
     void unsubs?.taskUnsub();
-    await vi.waitFor(() => expect(getTaskRegistryObservers()).toBeNull());
+    await waitForFast(() => expect(getTaskRegistryObservers()).toBeNull());
     broadcast.mockClear();
     createTaskRecord({
       runtime: "cli",
@@ -283,7 +302,7 @@ describe("startGatewayEventSubscriptions", () => {
       ...createParams(),
       broadcast: staleBroadcast,
     });
-    await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
     const staleObservers = getTaskRegistryObservers();
 
     const replacementBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
@@ -291,7 +310,7 @@ describe("startGatewayEventSubscriptions", () => {
       ...createParams(),
       broadcast: replacementBroadcast,
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const current = getTaskRegistryObservers();
       expect(current).not.toBeNull();
       expect(current).not.toBe(staleObservers);

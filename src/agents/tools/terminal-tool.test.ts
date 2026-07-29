@@ -1,8 +1,10 @@
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { TERMINAL_OPEN_DEADLINE_MS } from "../../gateway/terminal/open-deadline.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
 import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createTerminalTool } from "./terminal-tool.js";
 
@@ -89,8 +91,13 @@ describe("terminal tool", () => {
       callGateway,
       getGatewayContext: () => makeContext(manager),
     });
+    expect(tool.outputSchema).toBeDefined();
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { agentId: string; cwd: string; ok: true; sessionId: string; shell: string } | { sessionId: string; text: string } | { ok: boolean }",
+    );
 
     const opened = await tool.execute("open", { action: "open", command: "echo ready" });
+    expect(Value.Check(tool.outputSchema!, opened.details)).toBe(true);
     const sessionId = (opened.details as { sessionId: string }).sessionId;
     expect(backend.writes).toEqual(["echo ready\r"]);
     expect(callGateway).toHaveBeenCalledWith("ui.command", {
@@ -106,9 +113,11 @@ describe("terminal tool", () => {
     backend.emitData("\u001b[31mready\u001b[0m\r\n");
     const read = await tool.execute("read", { action: "read", sessionId });
     expect(read.details).toEqual({ sessionId, text: "ready\n" });
+    expect(Value.Check(tool.outputSchema!, read.details)).toBe(true);
 
     const input = await tool.execute("input", { action: "input", sessionId, data: "yes\r" });
     expect(input.details).toEqual({ ok: true });
+    expect(Value.Check(tool.outputSchema!, input.details)).toBe(true);
     expect(backend.writes).toEqual(["echo ready\r", "yes\r"]);
     const resize = await tool.execute("resize", {
       action: "resize",
@@ -117,6 +126,7 @@ describe("terminal tool", () => {
       rows: 40,
     });
     expect(resize.details).toEqual({ ok: true });
+    expect(Value.Check(tool.outputSchema!, resize.details)).toBe(true);
     expect(backend.resizes).toEqual([[120, 40]]);
 
     const list = await tool.execute("list", { action: "list" });
@@ -128,8 +138,10 @@ describe("terminal tool", () => {
         }),
       ],
     });
+    expect(Value.Check(tool.outputSchema!, list.details)).toBe(true);
     const closed = await tool.execute("close", { action: "close", sessionId });
     expect(closed.details).toEqual({ ok: true });
+    expect(Value.Check(tool.outputSchema!, closed.details)).toBe(true);
     expect(backend.killed).toBe(true);
   });
 

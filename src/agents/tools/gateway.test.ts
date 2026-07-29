@@ -299,6 +299,7 @@ describe("gateway tool defaults", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -915,47 +916,6 @@ describe("gateway tool defaults", () => {
   it("fails env-selected approval calls when requester device identity is unavailable", async () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
     mocks.deviceIdentityError = new Error("state directory read-only");
-
-    await expect(
-      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("fails remote approval calls when requester device identity is not persisted", async () => {
-    mocks.configState.value = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "ws://127.0.0.1:18789",
-          token: "remote-token",
-        },
-      },
-    };
-    mocks.persistedDeviceIdentity = null;
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
-
-    await expect(
-      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("fails remote approval calls when requester device identity readback differs", async () => {
-    mocks.configState.value = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          token: "remote-token",
-        },
-      },
-    };
-    mocks.persistedDeviceIdentity = {
-      ...mocks.deviceIdentity,
-      deviceId: "other-device",
-    };
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
 
     await expect(
       callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),

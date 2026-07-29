@@ -63,6 +63,23 @@ export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "run
   return "completed";
 }
 
+export function unknownItemStatus(item: CodexThreadItem): string | undefined {
+  const status = readItemString(item, "status");
+  switch (status) {
+    case undefined:
+    case "completed":
+    case "failed":
+    case "error":
+    case "declined":
+    case "inProgress":
+    case "in_progress":
+    case "running":
+      return undefined;
+    default:
+      return status;
+  }
+}
+
 export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
   if (item.type === "imageView" || item.type === "sleep") {
     return "completed";

@@ -4,8 +4,6 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { defaultApiRegistry, registerApiProvider } from "@openclaw/ai/internal/runtime";
-import { resetApiProviders } from "@openclaw/ai/providers";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
@@ -26,11 +24,16 @@ import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.j
 import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
-  listPluginModelCatalogFiles,
+  loadPersistedPluginModelCatalogs,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
+import {
+  getModelRegistryRuntime,
+  initializeModelRegistryRuntime,
+  resetModelRegistryRuntime,
+} from "./model-registry-runtime.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   clearConfigValueCache,
@@ -126,6 +129,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
   openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
   vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
   supportsStrictMode: Type.Optional(Type.Boolean()),
+  supportsJsonSchemaResponseFormat: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
@@ -208,6 +212,7 @@ const ModelsConfigSchema = Type.Object({
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
+type MaxTokensSource = "configured" | "discovered";
 
 function formatValidationPath(error: TLocalizedValidationError): string {
   if (error.keyword === "required") {
@@ -260,7 +265,17 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 
 type ModelRegistryOptions = {
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  sourceSnapshot?: ModelRegistry;
   workspaceDir?: string;
+};
+
+type ModelRegistryCatalogSnapshot = {
+  models: Model[];
+  providerRequestConfigs: Map<string, ProviderRequestConfig>;
+  modelRequestHeaders: Map<string, Record<string, string>>;
+  loadError: string | undefined;
+  pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
+  oauthProviders: OAuthProviderInterface[];
 };
 
 function mergeCompat(
@@ -314,6 +329,8 @@ export class ModelRegistry {
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
+  private baseCatalogSnapshot: ModelRegistryCatalogSnapshot | undefined;
+  private sourceSnapshot: ModelRegistryCatalogSnapshot | undefined;
 
   private constructor(
     authStorage: AuthStorage,
@@ -321,6 +338,25 @@ export class ModelRegistry {
     options: ModelRegistryOptions = {},
   ) {
     this.authStorage = authStorage;
+    initializeModelRegistryRuntime(this);
+    if (options.sourceSnapshot) {
+      const source = options.sourceSnapshot;
+      const sourceSnapshot = source.baseCatalogSnapshot ?? source.captureCatalogSnapshot();
+      this.sourceSnapshot = sourceSnapshot;
+      this.baseCatalogSnapshot = sourceSnapshot;
+      this.restoreSourceCatalog(sourceSnapshot);
+      this.registeredProviders = new Map(
+        [...source.registeredProviders].map(([provider, config]) => [provider, { ...config }]),
+      );
+      getAuthStorageOAuthProviderRegistry(authStorage).reset();
+      for (const oauthProvider of sourceSnapshot.oauthProviders) {
+        getAuthStorageOAuthProviderRegistry(authStorage).register(oauthProvider);
+      }
+      for (const [providerName, config] of this.registeredProviders.entries()) {
+        this.applyProviderConfig(providerName, config);
+      }
+      return;
+    }
     this.modelsJsonPath = modelsJsonPath;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       ...(options.pluginMetadataSnapshot
@@ -331,6 +367,34 @@ export class ModelRegistry {
       useRuntimeConfig: true,
     });
     this.loadModels();
+    this.baseCatalogSnapshot = this.captureCatalogSnapshot();
+  }
+
+  private captureCatalogSnapshot(): ModelRegistryCatalogSnapshot {
+    return {
+      models: structuredClone(this.models),
+      providerRequestConfigs: new Map(
+        [...this.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
+      ),
+      modelRequestHeaders: new Map(
+        [...this.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
+      ),
+      loadError: this.loadError,
+      pluginMetadataSnapshot: this.pluginMetadataSnapshot,
+      oauthProviders: [...this.authStorage.getOAuthProviders()],
+    };
+  }
+
+  private restoreSourceCatalog(source: ModelRegistryCatalogSnapshot): void {
+    this.models = structuredClone(source.models);
+    this.providerRequestConfigs = new Map(
+      [...source.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
+    );
+    this.modelRequestHeaders = new Map(
+      [...source.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
+    );
+    this.loadError = source.loadError;
+    this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
   static create(
@@ -345,6 +409,11 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined);
   }
 
+  /** Creates a request-isolated registry from this lifecycle-owned catalog snapshot. */
+  fork(authStorage: AuthStorage): ModelRegistry {
+    return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this });
+  }
+
   /**
    * Reload models from disk (models.json).
    */
@@ -353,11 +422,20 @@ export class ModelRegistry {
     this.modelRequestHeaders.clear();
     this.loadError = undefined;
 
-    // Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
-    resetApiProviders(defaultApiRegistry);
+    // Rebuild this lifecycle's API/OAuth registrations from current provider state.
+    resetModelRegistryRuntime(this);
     getAuthStorageOAuthProviderRegistry(this.authStorage).reset();
 
-    this.loadModels();
+    if (this.sourceSnapshot) {
+      this.restoreSourceCatalog(this.sourceSnapshot);
+      for (const oauthProvider of this.sourceSnapshot.oauthProviders) {
+        getAuthStorageOAuthProviderRegistry(this.authStorage).register(oauthProvider);
+      }
+    } else {
+      this.loadModels();
+      // Forks start from the latest disk-backed base, then replay this registry's dynamic providers.
+      this.baseCatalogSnapshot = this.captureCatalogSnapshot();
+    }
 
     for (const [providerName, config] of this.registeredProviders.entries()) {
       this.applyProviderConfig(providerName, config);
@@ -370,8 +448,8 @@ export class ModelRegistry {
   }
 
   private loadModels(): void {
-    // Load configured models and request settings from models.json plus
-    // generated plugin-owned catalog shards under the agent plugin state.
+    // Keep authored models.json separate from rebuildable provider catalogs
+    // owned by the agent SQLite cache.
     const { models: customModels, error } = this.modelsJsonPath
       ? this.loadCustomModels(this.modelsJsonPath)
       : emptyCustomModelsResult();
@@ -399,18 +477,19 @@ export class ModelRegistry {
     modelsJsonPath: string,
     options: {
       catalogPluginId?: string;
+      contents?: string;
       includePluginCatalogs?: boolean;
       requireGeneratedCatalog?: boolean;
     } = {
       includePluginCatalogs: true,
     },
   ): CustomModelsResult {
-    if (!existsSync(modelsJsonPath)) {
+    if (options.contents === undefined && !existsSync(modelsJsonPath)) {
       return emptyCustomModelsResult();
     }
 
     try {
-      const content = readFileSync(modelsJsonPath, "utf-8");
+      const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
       const parsed = JSON.parse(stripJsonComments(content)) as unknown;
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
@@ -451,15 +530,36 @@ export class ModelRegistry {
         }
       }
 
-      const models = this.parseModels(configForUse);
+      // Root models.json rows are author-owned; generated plugin shards are
+      // catalog-owned. Preserve that distinction before runtime resolution.
+      const models = this.parseModels(
+        configForUse,
+        options.requireGeneratedCatalog === true ? "discovered" : "configured",
+      );
       const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
-        for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
-          const pluginResult = this.loadCustomModels(pluginCatalog.path, {
-            catalogPluginId: pluginCatalog.pluginId,
-            includePluginCatalogs: false,
-            requireGeneratedCatalog: true,
-          });
+        let pluginCatalogs: ReturnType<typeof loadPersistedPluginModelCatalogs>["catalogs"] = [];
+        try {
+          const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
+          pluginCatalogs = loaded.catalogs;
+          pluginCatalogErrors.push(...loaded.warnings);
+        } catch (error) {
+          pluginCatalogErrors.push(
+            `Failed to load generated plugin model catalogs: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+        for (const pluginCatalog of pluginCatalogs) {
+          const pluginResult = this.loadCustomModels(
+            `sqlite:plugin-model-catalog/${pluginCatalog.pluginId}`,
+            {
+              catalogPluginId: pluginCatalog.pluginId,
+              contents: pluginCatalog.contents,
+              includePluginCatalogs: false,
+              requireGeneratedCatalog: true,
+            },
+          );
           if (pluginResult.error) {
             pluginCatalogErrors.push(pluginResult.error);
             continue;
@@ -522,7 +622,7 @@ export class ModelRegistry {
     }
   }
 
-  private parseModels(config: ModelsConfig): Model[] {
+  private parseModels(config: ModelsConfig, maxTokensSource: MaxTokensSource): Model[] {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
@@ -566,6 +666,7 @@ export class ModelRegistry {
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
+          ...(modelDef.maxTokens !== undefined ? { maxTokensSource } : {}),
           params: modelDef.params,
           headers: undefined,
           compat,
@@ -852,7 +953,7 @@ export class ModelRegistry {
 
     if (config.streamSimple) {
       const streamSimple = config.streamSimple;
-      registerApiProvider(
+      getModelRegistryRuntime(this).apiRegistry.registerApiProvider(
         {
           api: config.api!,
           stream: (model, context, options) =>

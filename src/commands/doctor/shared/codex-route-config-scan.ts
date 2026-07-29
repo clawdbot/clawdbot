@@ -2,7 +2,7 @@ import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   asAgentRuntimePolicyConfig,
   isOpenAICodexModelRef,
@@ -26,10 +26,7 @@ import type {
   CodexRouteHit,
   DisabledCodexPluginRouteHit,
   DisabledCodexPluginRouteIssue,
-  MutableRecord,
 } from "./codex-route-types.js";
-
-const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
 
 function collectModelsMapRefs(params: {
   hits: CodexRouteHit[];
@@ -49,6 +46,26 @@ function collectModelsMapRefs(params: {
       hits: params.hits,
       path: `${params.path}.${modelRef}`,
       model: modelRef,
+      blockedModelIdentities: params.blockedModelIdentities,
+    });
+  }
+}
+
+function collectModelPolicyAllowRefs(params: {
+  hits: CodexRouteHit[];
+  path: string;
+  modelPolicy: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): void {
+  const allow = asMutableRecord(params.modelPolicy)?.allow;
+  if (!Array.isArray(allow)) {
+    return;
+  }
+  for (const [index, modelRef] of allow.entries()) {
+    collectStringModelSlot({
+      hits: params.hits,
+      path: `${params.path}.allow.${index}`,
+      value: modelRef,
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
@@ -74,11 +91,12 @@ function collectAgentModelRefs(params: {
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
-  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+  const mediaModels = asMutableRecord(agent.mediaModels);
+  for (const key of ["image", "video"] as const) {
     collectModelConfigSlot({
       hits: params.hits,
-      path: `${params.path}.${key}`,
-      value: agent[key],
+      path: `${params.path}.mediaModels.${key}`,
+      value: mediaModels?.[key],
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
@@ -113,6 +131,12 @@ function collectAgentModelRefs(params: {
     models: agent.models,
     blockedModelIdentities: params.blockedModelIdentities,
   });
+  collectModelPolicyAllowRefs({
+    hits: params.hits,
+    path: `${params.path}.modelPolicy`,
+    modelPolicy: agent.modelPolicy,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
 }
 
 export function collectConfigModelRefs(
@@ -130,17 +154,12 @@ export function collectConfigModelRefs(
     blockedModelIdentities,
   });
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  const agents = listMutableCodexRouteAgentEntries(cfg);
+  for (const { agent: agentRecord, path } of agents) {
     collectAgentModelRefs({
       hits,
       agent: agentRecord,
-      path: `agents.list.${id}`,
+      path,
       runtime: resolveRuntime({
         agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
@@ -181,8 +200,8 @@ export function collectConfigModelRefs(
   });
   collectStringModelSlot({
     hits,
-    path: "messages.tts.summaryModel",
-    value: cfg.messages?.tts?.summaryModel,
+    path: "tts.summaryModel",
+    value: cfg.tts?.summaryModel,
     blockedModelIdentities,
   });
   collectStringModelSlot({
@@ -221,7 +240,7 @@ export function collectDisabledCodexPluginRouteHits(
     });
   }
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listMutableCodexRouteAgentEntries(cfg);
   const inheritedDefaultAuxRefs = defaultRefs.filter(
     (ref) =>
       ref.path === "agents.defaults.heartbeat.model" ||
@@ -237,15 +256,7 @@ export function collectDisabledCodexPluginRouteHits(
   const channelRefs = collectChannelAgentRuntimeModelRefs(cfg);
   const candidateRefs: Array<{ path: string; modelRef: string; agentId?: string }> =
     agents.length === 0 ? [...defaultRefs, ...channelRefs] : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const pathId = readAgentPathId(agentRecord, index);
-    const agentId = normalizeAgentId(
-      typeof agentRecord.id === "string" ? agentRecord.id : undefined,
-    );
+  for (const { agent: agentRecord, agentId, path } of agents) {
     for (const ref of channelRefs) {
       candidateRefs.push({ path: ref.path, modelRef: ref.modelRef, agentId });
     }
@@ -261,7 +272,7 @@ export function collectDisabledCodexPluginRouteHits(
     inheritedModelRefs.push(...inheritedDefaultModelPolicyRefs);
     for (const ref of collectAgentRuntimeModelRefs({
       agent: agentRecord,
-      path: `agents.list.${pathId}`,
+      path,
       fallbackModelRefs: inheritedDefaultModelRefs,
       inheritedModelRefs,
     })) {
@@ -431,8 +442,4 @@ function collectChannelAgentRuntimeModelRefs(
     }
   }
   return refs;
-}
-
-function readAgentPathId(agent: MutableRecord, index: number): string {
-  return typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
 }

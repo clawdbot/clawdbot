@@ -81,7 +81,7 @@ describe("msteams thread parent context injection", () => {
     fetchThreadRepliesMock.mockImplementation(async () => []);
     resolveTeamGroupIdMock.mockReset();
     resolveTeamGroupIdMock.mockImplementation(async () => "group-1");
-    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
   const cfg: OpenClawConfig = {
@@ -220,9 +220,7 @@ describe("msteams thread parent context injection", () => {
 
     expect(fetchChannelMessageMock).not.toHaveBeenCalled();
     expect(fetchThreadRepliesMock).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
-      1,
-    );
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
   it("does not fetch parent for DM replyToId", async () => {

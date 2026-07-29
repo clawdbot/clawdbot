@@ -24,6 +24,7 @@ type GatewayBenchCase = {
   name: string;
   pluginActivationOnStartup?: boolean;
   pluginCount?: number;
+  providerCatalogStallMs?: number;
 };
 
 type ProbeResult = {
@@ -98,6 +99,7 @@ type CliOptions = {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
   json: boolean;
   output?: string;
   runs: number;
@@ -114,6 +116,7 @@ const VALUE_FLAGS = new Set([
   "--case",
   "--cpu-prof-dir",
   "--entry",
+  "--heap-prof-dir",
   "--output",
   "--runs",
   "--timeout-ms",
@@ -141,6 +144,9 @@ const BASE_CONFIG = {
   },
 } satisfies Record<string, unknown>;
 
+const STALLED_CATALOG_PROVIDER_ID = "bench-catalog-stall";
+const STALLED_CATALOG_MODEL_ID = "bench-model";
+
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "default",
@@ -152,6 +158,25 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     name: "gateway, skip channels",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
+  },
+  {
+    id: "preparedRuntimeCatalogStall",
+    name: "gateway, prepared runtime with CPU-stalling live catalog",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    providerCatalogStallMs: 2_000,
+    config: {
+      ...BASE_CONFIG,
+      agents: {
+        defaults: {
+          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
+          models: {
+            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
+              agentRuntime: { id: "openclaw" },
+            },
+          },
+        },
+      },
+    },
   },
   {
     id: "oneInternalHook",
@@ -314,6 +339,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
     cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
     entry: resolveEntry(parseFlagValue(argv, "--entry")),
+    heapProfDir: parseFlagValue(argv, "--heap-prof-dir"),
     json: hasFlag(argv, "--json"),
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
     runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
@@ -340,6 +366,7 @@ Options:
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
+  --heap-prof-dir <dir> Write one V8 heap profile per run
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
@@ -612,17 +639,36 @@ function writePluginFixtures(
   root: string,
   count: number,
   activationOnStartup?: boolean,
+  providerCatalogStallMs?: number,
 ): PluginFixtureResult {
   const pluginIds: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });
   for (let index = 0; index < count; index += 1) {
     const id = `bench-plugin-${String(index + 1).padStart(2, "0")}`;
+    const stallsProviderCatalog = providerCatalogStallMs !== undefined && index === 0;
     pluginIds.push(id);
     const pluginDir = path.join(pluginsDir, id);
     mkdirSync(pluginDir, { recursive: true });
     const entry = path.join(pluginDir, "index.cjs");
-    writeFileSync(entry, `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`);
+    const model = {
+      id: STALLED_CATALOG_MODEL_ID,
+      name: "Benchmark Model",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    };
+    const provider = {
+      baseUrl: "http://127.0.0.1:1/v1",
+      api: "openai-completions",
+      models: [model],
+    };
+    const entrySource = stallsProviderCatalog
+      ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Catalog Stall", auth: [], catalog: { order: "simple", run: async () => { const stopAt = Date.now() + ${providerCatalogStallMs}; while (Date.now() < stopAt) {} return { provider }; } }, staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
+      : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
+    writeFileSync(entry, entrySource);
     writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       `${JSON.stringify(
@@ -631,6 +677,14 @@ function writePluginFixtures(
           ...(activationOnStartup === undefined
             ? {}
             : { activation: { onStartup: activationOnStartup } }),
+          ...(stallsProviderCatalog
+            ? {
+                providers: [STALLED_CATALOG_PROVIDER_ID],
+                modelCatalog: {
+                  providers: { [STALLED_CATALOG_PROVIDER_ID]: provider },
+                },
+              }
+            : {}),
           configSchema: { type: "object", additionalProperties: false },
         },
         null,
@@ -642,8 +696,14 @@ function writePluginFixtures(
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
-  const pluginFixtures = benchCase.pluginCount
-    ? writePluginFixtures(root, benchCase.pluginCount, benchCase.pluginActivationOnStartup)
+  const pluginCount = benchCase.providerCatalogStallMs === undefined ? benchCase.pluginCount : 1;
+  const pluginFixtures = pluginCount
+    ? writePluginFixtures(
+        root,
+        pluginCount,
+        benchCase.providerCatalogStallMs === undefined ? benchCase.pluginActivationOnStartup : true,
+        benchCase.providerCatalogStallMs,
+      )
     : null;
   const config = {
     ...benchCase.config,
@@ -678,7 +738,6 @@ function sanitizedEnv(
     TMPDIR: process.env.TMPDIR,
     USER: process.env.USER ?? "openclaw-bench",
     npm_config_update_notifier: "false",
-    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     OPENCLAW_HOME: root,
@@ -751,6 +810,7 @@ async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
   sampleIndex: number;
   timeoutMs: number;
 }): Promise<GatewaySample> {
@@ -780,6 +840,7 @@ async function runGatewaySample(options: {
           `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
         ]
       : []),
+    ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
     options.entry,
     "gateway",
     "run",
@@ -892,6 +953,7 @@ async function runCase(options: {
   benchCase: GatewayBenchCase;
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
   runs: number;
   timeoutMs: number;
   warmup: number;
@@ -903,6 +965,7 @@ async function runCase(options: {
       benchCase: options.benchCase,
       cpuProfDir: options.cpuProfDir,
       entry: options.entry,
+      heapProfDir: options.heapProfDir,
       sampleIndex: index + 1,
       timeoutMs: options.timeoutMs,
     });
@@ -958,6 +1021,9 @@ async function main() {
   if (options.cpuProfDir) {
     mkdirSync(options.cpuProfDir, { recursive: true });
   }
+  if (options.heapProfDir) {
+    mkdirSync(options.heapProfDir, { recursive: true });
+  }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
@@ -965,6 +1031,7 @@ async function main() {
         benchCase,
         cpuProfDir: options.cpuProfDir,
         entry: options.entry,
+        heapProfDir: options.heapProfDir,
         runs: options.runs,
         timeoutMs: options.timeoutMs,
         warmup: options.warmup,

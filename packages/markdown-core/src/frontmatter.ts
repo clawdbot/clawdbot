@@ -200,11 +200,12 @@ function normalizeFrontmatterContent(content: string): string {
 }
 
 const FRONTMATTER_CLOSING_DELIMITER = /(?:^|\n)---[^\S\n]*(?:\n|(?![\s\S]))/;
+const FRONTMATTER_OPENING_DELIMITER = /^---[^\S\n]*\n/;
 
 function extractFrontmatterBlockFromNormalized(
   normalized: string,
 ): ExtractedFrontmatterBlock | undefined {
-  const opening = /^---[^\S\n]*\n/.exec(normalized);
+  const opening = FRONTMATTER_OPENING_DELIMITER.exec(normalized);
   if (!opening) {
     return undefined;
   }
@@ -239,6 +240,20 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
 
 /** Parses frontmatter once while retaining recoverable YAML parser issues for owning loaders. */
 export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterBlockResult {
-  const block = extractFrontmatterBlock(content)?.block;
-  return block ? parseYamlFrontmatter(block) : { frontmatter: {}, issues: [] };
+  const normalized = normalizeFrontmatterContent(content);
+  const block = extractFrontmatterBlockFromNormalized(normalized)?.block;
+  if (block !== undefined) {
+    return block ? parseYamlFrontmatter(block) : { frontmatter: {}, issues: [] };
+  }
+  return FRONTMATTER_OPENING_DELIMITER.test(normalized)
+    ? {
+        frontmatter: {},
+        issues: [
+          {
+            code: "UNTERMINATED_FRONTMATTER",
+            message: "missing closing --- delimiter",
+          },
+        ],
+      }
+    : { frontmatter: {}, issues: [] };
 }

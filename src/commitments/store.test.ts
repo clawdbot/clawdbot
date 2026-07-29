@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -17,11 +17,35 @@ import {
 import { readCommitmentsForTest, seedCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentCandidate, CommitmentRecord } from "./types.js";
 
+const resolveCommitmentsConfigMock = vi.hoisted(() => vi.fn());
+const enabledConfig = (maxPerDay = 3) => ({
+  enabled: true,
+  maxPerDay,
+  extraction: {
+    debounceMs: 15_000,
+    batchMaxItems: 8,
+    queueMaxItems: 64,
+    confidenceThreshold: 0.72,
+    careConfidenceThreshold: 0.86,
+    timeoutSeconds: 45,
+  },
+});
+
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: resolveCommitmentsConfigMock,
+}));
+
 describe("commitment SQLite store", () => {
   const tmpDirs: string[] = [];
   let stateDirEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
   const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
   const sessionKey = "agent:main:telegram:user-155462274";
+
+  beforeEach(() => {
+    resolveCommitmentsConfigMock.mockReset();
+    resolveCommitmentsConfigMock.mockReturnValue(enabledConfig());
+  });
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
@@ -68,6 +92,7 @@ describe("commitment SQLite store", () => {
   }
 
   it("does not surface due commitments unless inferred commitments are enabled", async () => {
+    resolveCommitmentsConfigMock.mockReturnValue({ ...enabledConfig(), enabled: false });
     await useTempStateDir();
     seedCommitmentsForTest([commitment()]);
 
@@ -77,6 +102,7 @@ describe("commitment SQLite store", () => {
   });
 
   it("limits delivered commitments per agent session in a rolling day", async () => {
+    resolveCommitmentsConfigMock.mockReturnValue(enabledConfig(1));
     await useTempStateDir();
     seedCommitmentsForTest([
       commitment({ id: "cm_sent", status: "sent", sentAtMs: nowMs - 60_000 }),
@@ -85,7 +111,7 @@ describe("commitment SQLite store", () => {
 
     await expect(
       listDueCommitmentsForSession({
-        cfg: { commitments: { enabled: true, maxPerDay: 1 } },
+        cfg: {},
         agentId: "main",
         sessionKey,
         nowMs,
@@ -95,6 +121,7 @@ describe("commitment SQLite store", () => {
   });
 
   it("preserves due windows, snoozes, caps, agent scope, and key ordering", async () => {
+    resolveCommitmentsConfigMock.mockReturnValue(enabledConfig(2));
     await useTempStateDir();
     const sessionA = "agent:main:telegram:user-a";
     const sessionB = "agent:main:telegram:user-b";
@@ -136,7 +163,7 @@ describe("commitment SQLite store", () => {
 
     await expect(
       listDueCommitmentSessionKeys({
-        cfg: { commitments: { enabled: true, maxPerDay: 2 } },
+        cfg: {},
         agentId: "main",
         nowMs,
       }),
@@ -154,7 +181,7 @@ describe("commitment SQLite store", () => {
 
     await expect(
       listDueCommitmentSessionKeys({
-        cfg: { commitments: { enabled: true } },
+        cfg: {},
         agentId: "main",
         nowMs,
         limit: 10,
@@ -176,7 +203,7 @@ describe("commitment SQLite store", () => {
 
     await expect(
       listDueCommitmentsForSession({
-        cfg: { commitments: { enabled: true } },
+        cfg: {},
         agentId: "main",
         sessionKey,
         nowMs,
@@ -237,7 +264,7 @@ describe("commitment SQLite store", () => {
       }),
     ]);
     await listDueCommitmentsForSession({
-      cfg: { commitments: { enabled: true } },
+      cfg: {},
       agentId: "main",
       sessionKey,
       nowMs,
@@ -357,7 +384,7 @@ describe("commitment SQLite store", () => {
     const stateDir = await useTempStateDir();
     seedCommitmentsForTest([commitment()]);
     await listDueCommitmentsForSession({
-      cfg: { commitments: { enabled: true } },
+      cfg: {},
       agentId: "main",
       sessionKey,
       nowMs,

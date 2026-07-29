@@ -820,6 +820,9 @@ describe("provider local service", () => {
     const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    // The assertion targets diagnostic-pipe cleanup after failed readiness.
+    // Give the nested Node child enough startup time under loaded CI.
+    const failedServiceReadyTimeoutMs = 5_000;
     const serviceScript = [
       `const fs=require("node:fs");`,
       `fs.writeFileSync(${JSON.stringify(servicePidPath)},String(process.pid));`,
@@ -837,7 +840,7 @@ describe("provider local service", () => {
       `    service: {`,
       `      command: process.execPath,`,
       `      args: ["-e", ${JSON.stringify(serviceScript)}],`,
-      `      readyTimeoutMs: 100,`,
+      `      readyTimeoutMs: ${failedServiceReadyTimeoutMs},`,
       `    },`,
       `  });`,
       `} catch {}`,

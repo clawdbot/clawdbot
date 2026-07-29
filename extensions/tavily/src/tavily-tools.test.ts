@@ -179,8 +179,8 @@ describe("tavily tools", () => {
       max_results: 5,
       include_answer: true,
       time_range: "week",
-      include_domains: ["docs.openclaw.ai", "", "openclaw.ai"],
-      exclude_domains: ["bad.example", ""],
+      include_domains: [" docs.openclaw.ai ", "   ", "openclaw.ai"],
+      exclude_domains: [" bad.example ", ""],
     });
 
     expect(runTavilySearch).toHaveBeenCalledWith({
@@ -313,7 +313,7 @@ describe("tavily tools", () => {
     await expect(
       searchTool.execute("call-2", {
         query: "simple",
-        include_domains: [""],
+        include_domains: ["   "],
         exclude_domains: [],
       }),
     ).resolves.toEqual({
@@ -349,6 +349,28 @@ describe("tavily tools", () => {
     ).rejects.toThrow("tavily_extract requires query when chunks_per_source is set.");
 
     expect(runTavilyExtract).not.toHaveBeenCalled();
+  });
+
+  it("rejects blank extract URLs before Tavily calls and trims valid URLs", async () => {
+    const tool = createTavilyExtractTool(fakeApi());
+
+    await expect(
+      tool.execute("extract-call", {
+        urls: ["   "],
+      }),
+    ).rejects.toThrow("tavily_extract requires at least one URL.");
+
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+
+    await tool.execute("extract-call", {
+      urls: [" https://example.com/article "],
+    });
+
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.urls).toEqual(["https://example.com/article"]);
   });
 
   it("rejects fractional and out-of-range integer options before Tavily calls", async () => {

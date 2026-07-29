@@ -126,6 +126,26 @@ describe("scripts/lib/docker-e2e-plan", () => {
     );
   });
 
+  it("plans the package-backed sandbox browser sidecar lane", () => {
+    const plan = planFor({
+      selectedLaneNames: ["sandbox-browser-sidecar"],
+    });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:sandbox-browser-sidecar",
+        imageKind: "functional",
+        live: false,
+        name: "sandbox-browser-sidecar",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 4,
+      },
+    ]);
+    expect(plan.needs.functionalImage).toBe(true);
+  });
+
   it("routes live Docker scripts through the nested trusted release harness", () => {
     const sourceLane = allReleasePathLanes({ releaseProfile: "beta" }).find(
       (candidate) => candidate.name === "live-codex-npm-plugin",
@@ -248,6 +268,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
+  it("includes deterministic packaged MCP code-mode proof in the unfiltered release core", () => {
+    const plan = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "core",
+    });
+    const codeModeLanes = plan.lanes.filter((lane) => lane.name === "mcp-code-mode-gateway");
+
+    expect(plan.selectedLanes).toEqual([]);
+    expect(codeModeLanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-code-mode-gateway",
+        imageKind: "functional",
+        live: false,
+        name: "mcp-code-mode-gateway",
+        resources: ["docker", "service", "npm"],
+        stateScenario: "empty",
+        weight: 3,
+      },
+    ]);
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("live-mcp-code-mode-gateway");
+  });
+
   it("plans Open WebUI only when release-path coverage requests it", () => {
     const withoutOpenWebUI = planFor({
       includeOpenWebUI: false,
@@ -277,6 +319,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(laneNames).toContain("install-e2e-openai");
     expect(laneNames).toContain("openai-chat-tools");
     expect(laneNames).toContain("live-codex-npm-plugin");
+    expect(laneNames).toContain("release-typed-onboarding");
     expect(laneNames).toContain("install-e2e-anthropic");
     expect(laneNames).toContain("update-channel-switch");
     expect(laneNames).not.toContain("plugins");
@@ -310,6 +353,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(laneNames).not.toContain("live-codex-npm-plugin");
     expect(laneNames).not.toContain("install-e2e-anthropic");
     expect(laneNames).toContain("codex-on-demand");
+    expect(laneNames).toContain("release-typed-onboarding");
     expect(laneNames).toContain("update-channel-switch");
   });
 
@@ -396,6 +440,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "openai-chat-tools",
       "live-codex-npm-plugin",
       "codex-on-demand",
+      "release-typed-onboarding",
+    ]);
+    expect(
+      packageInstallOpenAi.lanes
+        .filter((lane) => lane.name === "release-typed-onboarding")
+        .map(summarizeLane),
+    ).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
+        imageKind: "bare",
+        live: false,
+        name: "release-typed-onboarding",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
     ]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-anthropic",
@@ -497,6 +558,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
         resources: ["docker", "npm"],
         stateScenario: "upgrade-survivor",
         timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command:
+          "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
+        imageKind: "bare",
+        live: false,
+        name: "update-run-package-self-upgrade",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 2_700_000,
         weight: 3,
       },
     ]);
@@ -645,6 +717,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "openai-chat-tools",
       "live-codex-npm-plugin",
       "codex-on-demand",
+      "release-typed-onboarding",
       "install-e2e-anthropic",
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
@@ -656,6 +729,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor",
       "root-managed-vps-upgrade",
       "update-restart-auth",
+      "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
       "plugins",
@@ -781,7 +855,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.4.29-cron-scheduled-authority",
     ]);
   });
 
@@ -818,6 +894,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
     expect(plan.omittedUnsupportedLanes).toEqual([
       "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+      "published-upgrade-survivor-2026.6.11-meeting-transcripts-sqlite",
+      "published-upgrade-survivor-2026.6.11-cron-scheduled-authority",
     ]);
   });
 
@@ -855,6 +933,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(plan.omittedUnsupportedLanes).toEqual([
       "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+      "published-upgrade-survivor-2026.6.11-meeting-transcripts-sqlite",
+      "published-upgrade-survivor-2026.6.11-cron-scheduled-authority",
     ]);
   });
 
@@ -870,7 +950,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes).toEqual([]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(12);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor-2026.6.11");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
@@ -915,7 +995,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(12);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-versioned-runtime-deps",
@@ -1049,7 +1129,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.4.29-cron-scheduled-authority",
       "published-upgrade-survivor-2026.4.22",
       "published-upgrade-survivor-2026.4.22-acpx-openclaw-tools-bridge",
       "published-upgrade-survivor-2026.4.22-feishu-channel",
@@ -1058,7 +1140,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.22-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.22-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.22-tilde-log-path",
+      "published-upgrade-survivor-2026.4.22-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.22-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.4.22-cron-scheduled-authority",
       "published-upgrade-survivor-2026.4.21",
       "published-upgrade-survivor-2026.4.21-feishu-channel",
       "published-upgrade-survivor-2026.4.21-bootstrap-persona",
@@ -1066,7 +1150,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.21-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.21-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.21-tilde-log-path",
+      "published-upgrade-survivor-2026.4.21-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.21-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.4.21-cron-scheduled-authority",
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
@@ -1074,7 +1160,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
       "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",
+      "published-upgrade-survivor-2026.3.13-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.3.13-cron-scheduled-authority",
     ]);
   });
 

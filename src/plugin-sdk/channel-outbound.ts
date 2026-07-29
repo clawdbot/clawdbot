@@ -15,8 +15,15 @@ const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
 
 export type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 export {
+  isRecentOutboundMessageIdentity,
+  recordOutboundMessageIdentity,
+} from "../channels/message/outbound-echo.js";
+export type { OutboundMessageIdentity } from "../channels/message/outbound-echo.js";
+export {
   bindIngressLifecycleToReplyOptions,
+  createChannelIngressError,
   createChannelIngressDrain,
+  createChannelIngressMonitor,
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -148,6 +155,8 @@ export type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
   ChannelIngressDrain,
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,

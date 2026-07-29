@@ -1,6 +1,11 @@
 // Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  computeBackoff,
+  sleepWithAbort,
+  type BackoffPolicy,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
@@ -21,8 +26,18 @@ const pollLimit = 100;
 // getUpdates can return up to 100 updates; 4 MiB is a generous bound that no legitimate
 // Telegram Bot API response will reach, guarding against misbehaving/hostile endpoints.
 const TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-const retryInitialMs = 1000;
-const retryMaxMs = 30_000;
+const TELEGRAM_EMPTY_POLL_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 50,
+  maxMs: 1_000,
+  factor: 2,
+  jitter: 0,
+};
+const TELEGRAM_RETRY_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 1_000,
+  maxMs: 30_000,
+  factor: 2,
+  jitter: 0,
+};
 
 type TelegramGetUpdatesJson = {
   ok?: unknown;
@@ -55,22 +70,6 @@ type TelegramIngressWorkerRuntimeData = TelegramIngressWorkerOptions & {
   runtime: typeof TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER;
 };
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", done);
-      resolve();
-    };
-    const timeout = setTimeout(done, ms);
-    timeout.unref?.();
-    signal.addEventListener("abort", done, { once: true });
-  });
-}
-
 function formatErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     return err.message || err.name;
@@ -96,10 +95,6 @@ function postPollError(port: TelegramIngressRuntimePort, err: unknown): void {
     ...(errorCode === undefined ? {} : { errorCode }),
     finishedAt: Date.now(),
   });
-}
-
-function resolveBackoff(attempt: number): number {
-  return Math.min(retryMaxMs, retryInitialMs * 2 ** Math.max(0, attempt - 1));
 }
 
 function createTelegramGetUpdatesError(params: {
@@ -200,6 +195,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
+  let consecutiveEmptyPolls = 0;
 
   port.onMessage((message) => {
     if (message?.type === "stop") {
@@ -284,10 +280,30 @@ export async function runTelegramIngressWorkerRuntime(params: {
           count: result.length,
           finishedAt: Date.now(),
         });
+        if (result.length > 0) {
+          consecutiveEmptyPolls = 0;
+          continue;
+        }
+        consecutiveEmptyPolls += 1;
+        if (consecutiveEmptyPolls > 1) {
+          // Some Bot API endpoints return empty long polls immediately. Escalate only
+          // while idle, then reset above so active chats keep draining without delay.
+          const minIntervalMs = computeBackoff(
+            TELEGRAM_EMPTY_POLL_BACKOFF_POLICY,
+            consecutiveEmptyPolls - 1,
+          );
+          const elapsedMs = Math.max(0, Date.now() - startedAt);
+          if (elapsedMs < minIntervalMs) {
+            await sleepWithAbort(minIntervalMs - elapsedMs, stopController.signal, {
+              ref: false,
+            });
+          }
+        }
       } catch (err) {
         if (stopped) {
           break;
         }
+        consecutiveEmptyPolls = 0;
         failures += 1;
         postPollError(port, err);
         // 409 must propagate to the parent: it owns duplicate-poller/webhook
@@ -295,10 +311,18 @@ export async function runTelegramIngressWorkerRuntime(params: {
         if (!isRetryableTelegramApiError(err, { context: "polling" })) {
           throw err;
         }
-        await sleep(
-          readTelegramRetryAfterMs(err) ?? resolveBackoff(failures),
-          stopController.signal,
-        );
+        try {
+          await sleepWithAbort(
+            readTelegramRetryAfterMs(err) ??
+              computeBackoff(TELEGRAM_RETRY_BACKOFF_POLICY, failures),
+            stopController.signal,
+            { ref: false },
+          );
+        } catch (sleepErr) {
+          if (!stopped) {
+            throw sleepErr;
+          }
+        }
       }
     }
   } finally {

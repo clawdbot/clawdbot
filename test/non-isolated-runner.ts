@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
+import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -14,8 +15,13 @@ type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
 };
 
+type SerializableMocker = {
+  reset?: () => void;
+  resolveMocks?: () => Promise<void>;
+};
+
 type TestRunnerInternals = {
-  moduleRunner?: { mocker?: { reset?: () => void } };
+  moduleRunner?: { mocker?: SerializableMocker };
   workerState: { evaluatedModules: unknown };
 };
 
@@ -23,6 +29,9 @@ const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
 const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
 const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
 const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
+const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
+  "openclaw.diagnosticEventListenerPresence.v1",
+);
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -225,11 +234,84 @@ function resetOpenClawGlobalDiagnosticState(): void {
   state?.toolExecutionListeners?.clear();
   state?.asyncQueue?.splice(0);
   Reflect.deleteProperty(globalStore, DIAGNOSTIC_EVENTS_STATE);
+  // The listener-presence mirror is a separate globalThis record; clearing the
+  // sets above without zeroing it leaves hasInternalDiagnosticEventListeners()
+  // true for the next file (e.g. an import-time registration like
+  // diagnostic-run-activity.ts whose stop handle died with the module registry).
+  const presence = globalStore[DIAGNOSTIC_EVENT_LISTENER_PRESENCE] as
+    | { internalCount?: number; trustedCount?: number }
+    | undefined;
+  if (presence) {
+    presence.internalCount = 0;
+    presence.trustedCount = 0;
+  }
+}
+
+const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
+
+// Vitest's BareModuleMocker.resolveMocks has no in-flight guard: pendingIds is
+// cleared only after all parallel resolveId RPCs settle, and every registration
+// re-invalidates the mock module node. In a shared isolate:false worker, stray
+// async work from an earlier file (a leaked timer running a dynamic import) can
+// start a second concurrent pass over the same pendingIds while the next file's
+// vi.mock registrations resolve. The slower pass then re-registers and wipes
+// already-evaluated manual mock modules mid-import-chain, so importers before
+// the wipe hold one factory instance and later importers get a fresh one
+// (vi.mocked(...) on the test's binding silently stops reaching prod).
+//
+// The pin chains each caller onto its own sequential pass instead of sharing
+// one in-flight pass. Two invariants both matter:
+// - Serialization: a pass queued behind an in-flight one sees the cleared
+//   queue and no-ops, so a snapshot is never registered (and its mock modules
+//   never invalidated) twice.
+// - Freshness: every caller's pass starts at or after its call, so ids the
+//   caller queued (vi.mock/doMock/doUnmock before a dynamic import) are
+//   registered before its fetch proceeds. Sharing one pass breaks this — a
+//   caller can coalesce onto a pass snapshotted before its ids were queued and
+//   then import with mock state unresolved (observed: auth-provenance's
+//   doUnmock + Promise.all imports loading the real provider-auth warm worker
+//   and a 120s oauth refresh instead of the mocked provider hook).
+export function serializeMockerResolveMocks(
+  mocker: SerializableMocker & { [SERIALIZED_RESOLVE_MOCKS]?: boolean },
+): void {
+  if (!mocker.resolveMocks || mocker[SERIALIZED_RESOLVE_MOCKS]) {
+    return;
+  }
+  mocker[SERIALIZED_RESOLVE_MOCKS] = true;
+  const original = mocker.resolveMocks.bind(mocker);
+  const statics = mocker.constructor as { pendingIds?: unknown[] };
+  const runPass = async (): Promise<void> => {
+    const queue = statics.pendingIds;
+    const processedCount = queue?.length ?? 0;
+    await original();
+    // Upstream snapshots the queue contents at pass start and reassigns the
+    // pendingIds static to [] at the end, so ids queued during the pass's RPC
+    // window land in the abandoned array. Requeue them so the next chained
+    // pass registers them instead of silently dropping the registration.
+    if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
+      statics.pendingIds?.push(...queue.slice(processedCount));
+    }
+  };
+  let tail: Promise<void> = Promise.resolve();
+  mocker.resolveMocks = () => {
+    const pass = tail.then(runPass);
+    // Keep the chain alive after a rejected pass; the rejection still reaches
+    // the caller that owns that pass, matching upstream behavior.
+    tail = pass.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pass;
+  };
 }
 
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
+    const internals = this as unknown as TestRunnerInternals;
+    if (internals.moduleRunner?.mocker) {
+      serializeMockerResolveMocks(internals.moduleRunner.mocker);
+    }
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
@@ -282,6 +364,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
     resetOpenClawGlobalDiagnosticState();
+    // Named plugin runtimes intentionally survive duplicate module evaluation in production.
+    // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
+    clearNamedPluginRuntimeStoresForTest();
     vi.resetModules();
     const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();

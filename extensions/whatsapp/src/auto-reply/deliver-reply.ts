@@ -5,7 +5,7 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isReasoningReplyPayload,
@@ -27,8 +27,7 @@ import { sendWhatsAppOutboundWithRetry } from "../outbound-retry.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
-import { convertMarkdownTables } from "../text-runtime.js";
-import { markdownToWhatsApp } from "../text-runtime.js";
+import { markdownToWhatsAppChunks } from "../text-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide, markWhatsAppVisibleDeliveryError } from "./util.js";
 
@@ -131,10 +130,12 @@ export async function deliverWebReply(params: {
     normalizeWhatsAppOutboundPayload(replyResult, {
       normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
     });
-  const convertedText = markdownToWhatsApp(
-    convertMarkdownTables(normalizedReply.text ?? "", tableMode),
+  const textChunks = markdownToWhatsAppChunks(
+    normalizedReply.text ?? "",
+    textLimit,
+    tableMode,
+    chunkMode,
   );
-  const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = normalizedReply.mediaUrls ?? [];
 
   const getQuote = () => {
@@ -156,6 +157,7 @@ export async function deliverWebReply(params: {
       participant:
         cached?.participant ?? (isGroupConversation ? msg.platform.senderJid : undefined),
       messageText: cached?.body ?? "",
+      media: cached?.media,
     });
   };
 

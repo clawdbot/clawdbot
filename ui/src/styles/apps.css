@@ -1,0 +1,293 @@
+/* Apps & extensions promo page — hero, card grid, and community pills. */
+
+.apps-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 16px 10px;
+  text-align: center;
+}
+
+.apps-hero__title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.apps-hero__tagline {
+  max-width: 460px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.apps-section {
+  margin-top: 26px;
+}
+
+/* Mirrors .settings-section__heading typography; cards intentionally do not
+   sit inside a .settings-group surface (one level of elevation only). */
+.apps-section__heading {
+  margin: 0 0 10px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-4, 16px);
+}
+
+.apps-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease;
+}
+
+.apps-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--border) 55%, var(--text) 45%);
+}
+
+.apps-card__art {
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--apps-art-a) 70%, var(--card)),
+    color-mix(in srgb, var(--apps-art-b) 70%, var(--card))
+  );
+}
+
+.apps-card__art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Per-theme art variants; the app root always carries data-theme-mode
+   (bootstrap.ts), dark stays the fallback to match the dark-default tokens. */
+.apps-card__art .apps-card__art-img--light {
+  display: none;
+}
+
+:root[data-theme-mode="light"] .apps-card__art .apps-card__art-img--light {
+  display: block;
+}
+
+:root[data-theme-mode="light"] .apps-card__art .apps-card__art-img--dark {
+  display: none;
+}
+
+.apps-card__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+}
+
+.apps-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.apps-card__icon {
+  display: inline-flex;
+  color: var(--text);
+}
+
+.apps-card__title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md, 15px);
+  font-weight: 600;
+}
+
+.apps-card__badge {
+  margin-inline-start: auto;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 55%, var(--card) 45%);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.apps-card__desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.apps-card__ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.apps-card__cta {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.apps-card__cta--primary {
+  border-color: color-mix(in srgb, var(--border) 30%, var(--text) 70%);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.apps-card__cta:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.apps-card__cta--primary:hover {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.apps-card__cta:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.apps-pair-hint {
+  margin: 10px 2px 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.apps-pair-hint button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.apps-pair-hint button:hover {
+  color: var(--text-strong);
+}
+
+.apps-pair-hint button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
+.apps-community {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.apps-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 15px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  text-decoration: none;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.apps-pill:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.apps-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.apps-pill__icon {
+  display: inline-flex;
+}
+
+.apps-card__icon svg,
+.apps-pill svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.apps-card__icon svg.icon--filled,
+.apps-pill svg.icon--filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apps-card,
+  .apps-card__cta,
+  .apps-pill {
+    transition: none;
+  }
+
+  .apps-card:hover,
+  .apps-card__cta:hover,
+  .apps-pill:hover {
+    transform: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .apps-hero__title {
+    font-size: 25px;
+  }
+}

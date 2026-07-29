@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
 });
 
 import {
+  buildDeepInfraModelDefinition,
   DEEPINFRA_DEFAULT_MODEL_REF,
   DEEPINFRA_MODEL_CATALOG,
   discoverDeepInfraModels,
@@ -59,12 +60,9 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
 }
 
 function expectedStaticChatCatalog() {
-  return DEEPINFRA_MODEL_CATALOG.map((model) => {
-    const compat = Object.assign({}, model.compat, {
-      supportsUsageInStreaming: model.compat?.supportsUsageInStreaming ?? true,
-    });
-    return Object.assign({}, model, { compat });
-  });
+  // Mirror the production mapping (provider-catalog.ts / discoverDeepInfraModels)
+  // so per-family compat tagging (e.g. thinkingFormat) stays in one place.
+  return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
 }
 
 function expectedLiveChatCatalog(liveModels: ReturnType<typeof expectedStaticChatCatalog>) {
@@ -116,6 +114,43 @@ function requireFirstFetchCall(mockFetch: ReturnType<typeof vi.fn>): [unknown, u
   }
   return call as [unknown, unknown];
 }
+
+describe("buildDeepInfraModelDefinition", () => {
+  it("tags DeepSeek-family models with thinkingFormat 'deepseek'", () => {
+    const built = buildDeepInfraModelDefinition({
+      id: "deepseek-ai/DeepSeek-V4-Flash",
+      name: "DeepSeek V4 Flash",
+    } as never);
+    expect(built.compat?.thinkingFormat).toBe("deepseek");
+    expect(built.compat?.supportsUsageInStreaming).toBe(true);
+  });
+
+  it("leaves non-DeepSeek families without a thinkingFormat", () => {
+    for (const id of ["openai/gpt-oss-120b", "Qwen/Qwen3-Max", "zai-org/GLM-5.2"]) {
+      const built = buildDeepInfraModelDefinition({ id, name: id } as never);
+      expect(built.compat?.thinkingFormat).toBeUndefined();
+    }
+  });
+
+  it("preserves an explicitly configured thinkingFormat", () => {
+    const built = buildDeepInfraModelDefinition({
+      id: "deepseek-ai/DeepSeek-V3.2",
+      name: "DeepSeek V3.2",
+      compat: { thinkingFormat: "openai" },
+    } as never);
+    expect(built.compat?.thinkingFormat).toBe("openai");
+  });
+
+  it("tags the static manifest DeepSeek models", () => {
+    const deepseekModels = DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition).filter(
+      (model) => model.id.toLowerCase().startsWith("deepseek-ai/"),
+    );
+    expect(deepseekModels.length).toBeGreaterThan(0);
+    for (const model of deepseekModels) {
+      expect(model.compat?.thinkingFormat).toBe("deepseek");
+    }
+  });
+});
 
 describe("DEEPINFRA_MODELS_URL", () => {
   it("points at /v1/openai/models with the openclaw sort + filter=with_meta gate", () => {

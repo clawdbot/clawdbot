@@ -238,8 +238,8 @@ actor VoicePushToTalk {
         }
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
         guard let request = self.recognitionRequest else { return }
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
         if self.audioEngine == nil {

@@ -1,16 +1,15 @@
 /** Agent tools for addressing external conversations independently from local model sessions. */
 import crypto from "node:crypto";
 import { Type } from "typebox";
-import type {
-  ConversationSendResult,
-  ConversationTurnResult,
-} from "../../../packages/gateway-protocol/src/schema/agent.js";
+// Keep Gateway wire schemas as the single owner so Code Mode never advertises a divergent shape.
 import {
-  listConversations,
-  type ConversationRecord,
-  type ConversationRegistryScope,
-} from "../../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+  ConversationListResultSchema,
+  ConversationSendResultSchema,
+  ConversationTurnResultSchema,
+  type ConversationListResult,
+  type ConversationSendResult,
+  type ConversationTurnResult,
+} from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -29,6 +28,7 @@ const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 const ConversationsListSchema = Type.Object(
   {
     channel: Type.Optional(Type.String({ minLength: 1 })),
+    query: Type.Optional(Type.String({ minLength: 1 })),
     limit: optionalPositiveIntegerSchema(),
   },
   { additionalProperties: false },
@@ -61,25 +61,14 @@ type ConversationToolOptions = {
 
 type ConversationToolDeps = {
   callGateway: typeof callGateway;
-  listConversations: typeof listConversations;
 };
 
 const defaultDeps: ConversationToolDeps = {
   callGateway,
-  listConversations,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
   return options.agentId ?? resolveAgentIdFromSessionKey(options.agentSessionKey);
-}
-
-function resolveConversationScope(options: ConversationToolOptions): ConversationRegistryScope {
-  const agentId = resolveToolAgentId(options);
-  const configuredStore = options.config?.session?.store;
-  return {
-    agentId,
-    ...(configuredStore ? { storePath: resolveStorePath(configuredStore, { agentId }) } : {}),
-  };
 }
 
 function requireOwner(options: ConversationToolOptions): void {
@@ -94,20 +83,6 @@ function readConversationRef(value: string): string {
     throw new ToolInputError(`Invalid conversationRef: ${value}`);
   }
   return conversationRef;
-}
-
-function presentConversation(conversation: ConversationRecord) {
-  return {
-    conversationRef: conversation.conversationRef,
-    channel: conversation.channel,
-    accountId: conversation.accountId,
-    kind: conversation.kind,
-    target: conversation.target,
-    ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
-    ...(conversation.label ? { label: conversation.label } : {}),
-    firstSeenAt: conversation.firstSeenAt,
-    lastSeenAt: conversation.lastSeenAt,
-  };
 }
 
 function buildConversationOperationId(params: {
@@ -139,19 +114,24 @@ export function createConversationsListTool(
     description:
       "List external conversations as stable conversationRef values. Sessions hold local model context; conversationRef selects an exact external channel destination.",
     parameters: ConversationsListSchema,
+    outputSchema: ConversationListResultSchema,
     execute: async (_toolCallId, args) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
       const channel = readStringParam(params, "channel");
-      return jsonResult({
-        conversations: deps
-          .listConversations(resolveConversationScope(options), {
-            limit,
-            ...(channel ? { channel } : {}),
-          })
-          .map(presentConversation),
+      const query = readStringParam(params, "query");
+      const result = await deps.callGateway<ConversationListResult>({
+        method: "conversations.list",
+        params: {
+          agentId: resolveToolAgentId(options),
+          limit,
+          ...(channel ? { channel } : {}),
+          ...(query ? { query } : {}),
+        },
+        ...(options.config ? { config: options.config } : {}),
       });
+      return jsonResult(result);
     },
   };
 }
@@ -168,6 +148,7 @@ export function createConversationsSendTool(
     description:
       "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
+    outputSchema: ConversationSendResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
@@ -210,6 +191,7 @@ export function createConversationsTurnTool(
     description:
       "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",
     parameters: ConversationsTurnSchema,
+    outputSchema: ConversationTurnResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;

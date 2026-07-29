@@ -110,14 +110,6 @@
       ]
     }
   },
-  "channelEnvVars": {
-    "feishu": [
-      "FEISHU_APP_ID",
-      "FEISHU_APP_SECRET",
-      "FEISHU_VERIFICATION_TOKEN",
-      "FEISHU_ENCRYPT_KEY"
-    ]
-  },
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
@@ -206,6 +198,7 @@
             "enum": ["disabled", "enabled"]
           },
           "allowBots": { "type": "boolean" },
+          "vcAutoJoin": { "type": "boolean" },
           "typingIndicator": { "type": "boolean" }
         }
       }
@@ -243,6 +236,7 @@
         "enum": ["disabled", "enabled"]
       },
       "allowBots": { "type": "boolean" },
+      "vcAutoJoin": { "type": "boolean" },
       "typingIndicator": { "type": "boolean" },
       "accounts": {
         "type": "object",

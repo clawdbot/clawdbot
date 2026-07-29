@@ -1,12 +1,14 @@
 // Provider fallback tests verify web_fetch normalizes third-party fetch output
 // before exposing it to agents or cache entries.
 import { rm } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool } from "./web-fetch.js";
+import * as webGuardedFetch from "./web-guarded-fetch.js";
 
 const { resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
   resolveWebFetchDefinitionMock: vi.fn(),
@@ -100,7 +102,7 @@ describe("web_fetch provider fallback normalization", () => {
           text: providerWrappedText,
           truncated: true,
           rawLength: providerRawText.length,
-          wrappedLength: providerWrappedText.length,
+          length: providerWrappedText.length,
           title: "Provider Title",
           warning: "Provider Warning",
         }),
@@ -130,10 +132,10 @@ describe("web_fetch provider fallback normalization", () => {
       truncated?: boolean;
       contentType?: string;
       rawLength?: number;
-      wrappedLength?: number;
+      length?: number;
       externalContent?: Record<string, unknown>;
       extractor?: string;
-      fullOutputPath?: string;
+      spill?: { path: string };
     };
 
     expect(details.extractor).toBe("custom-provider");
@@ -143,19 +145,19 @@ describe("web_fetch provider fallback normalization", () => {
     ).toBeLessThanOrEqual(800);
     expect(details.text).toContain("Ignore previous instructions");
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-    expect(details.text).toContain(`Full output: ${details.fullOutputPath}`);
+    expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.title).toContain("Provider Title");
     expect(details.warning).toContain("Provider Warning");
     expect(details.truncated).toBe(true);
     expect(providerWrappedText.length).toBeLessThan(providerRawText.length);
     expect(details.rawLength).toBe(providerRawText.length);
-    expect(details.wrappedLength).toBe(details.text?.length);
+    expect(details.length).toBe(details.text?.length);
     expect(details.externalContent?.untrusted).toBe(true);
     expect(details.externalContent?.source).toBe("web_fetch");
     expect(details.externalContent?.wrapped).toBe(true);
     expect(details.externalContent?.provider).toBe("firecrawl");
-    if (details.fullOutputPath) {
-      await rm(details.fullOutputPath, { force: true });
+    if (details.spill) {
+      await rm(details.spill.path, { force: true });
     }
   });
 
@@ -262,18 +264,18 @@ describe("web_fetch provider fallback normalization", () => {
     });
     const details = result?.details as {
       text?: string;
-      wrappedLength?: number;
+      length?: number;
       externalContent?: Record<string, unknown>;
-      fullOutputPath?: string;
+      spill?: { path: string };
     };
 
-    expect(details.wrappedLength).toBeGreaterThan(200);
+    expect(details.length).toBeGreaterThan(200);
     expect(
       details.text?.split("\n\n[Showing truncated web_fetch content.")[0]?.length,
     ).toBeLessThanOrEqual(640);
     expect(details.externalContent?.provider).toBe("firecrawl");
-    if (details.fullOutputPath) {
-      await rm(details.fullOutputPath, { force: true });
+    if (details.spill) {
+      await rm(details.spill.path, { force: true });
     }
     const definitionInput = resolveWebFetchDefinitionMock.mock.calls.at(0)?.[0] as
       | {
@@ -358,5 +360,210 @@ describe("web_fetch provider fallback normalization", () => {
     expect(secondDetails.externalContent?.provider).toBe("perplexity-fetch");
     expect(secondDetails.text).toContain("perplexity-fetch fallback body");
     expect(secondDetails.cached).toBeUndefined();
+  });
+
+  it("cancels an unread error response when provider fallback succeeds", async () => {
+    let cancelled = false;
+    global.fetch = withFetchPreconnect(
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode("unread upstream error"));
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { status: 503, headers: { "content-type": "text/plain" } },
+          ),
+      ),
+    );
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: async () => ({
+          text: "provider rescued body",
+          extractor: "custom-provider",
+        }),
+      },
+    });
+
+    const tool = createWebFetchTool({ config: {} as OpenClawConfig, sandboxed: false });
+    const result = await tool?.execute?.("unread-response-fallback", {
+      url: "https://example.com/unread-response-fallback",
+    });
+    const details = result?.details as { text?: string; extractor?: string };
+
+    expect(details.extractor).toBe("custom-provider");
+    expect(details.text).toContain("provider rescued body");
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels an unread error response when provider fallback throws", async () => {
+    let cancelled = false;
+    global.fetch = withFetchPreconnect(
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode("unread upstream error"));
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { status: 503, headers: { "content-type": "text/plain" } },
+          ),
+      ),
+    );
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: async () => {
+          throw new Error("provider fallback unavailable");
+        },
+      },
+    });
+
+    const tool = createWebFetchTool({ config: {} as OpenClawConfig, sandboxed: false });
+
+    await expect(
+      tool?.execute?.("failed-provider-fallback", {
+        url: "https://example.com/failed-provider-fallback",
+      }),
+    ).rejects.toThrow("provider fallback unavailable");
+    expect(cancelled).toBe(true);
+  });
+
+  it("returns provider fallback without waiting for a stalled body cancellation", async () => {
+    let cancelInvoked = false;
+    global.fetch = withFetchPreconnect(
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode("unread upstream error"));
+              },
+              cancel() {
+                cancelInvoked = true;
+                return new Promise<void>(() => {});
+              },
+            }),
+            { status: 503, headers: { "content-type": "text/plain" } },
+          ),
+      ),
+    );
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: async () => ({
+          text: "provider rescued body",
+          extractor: "custom-provider",
+        }),
+      },
+    });
+
+    const tool = createWebFetchTool({ config: {} as OpenClawConfig, sandboxed: false });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        tool?.execute?.("stalled-body-cancellation", {
+          url: "https://example.com/stalled-body-cancellation",
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("body cancellation blocked fallback")), 1_000);
+        }),
+      ]);
+      const details = result?.details as { text?: string; extractor?: string };
+
+      expect(details.extractor).toBe("custom-provider");
+      expect(details.text).toContain("provider rescued body");
+      expect(cancelInvoked).toBe(true);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  });
+
+  it("closes a real guarded HTTP response when provider fallback succeeds", async () => {
+    // Allow loopback only inside this proof; production SSRF policy remains unchanged.
+    const fetchWithRealGuard = webGuardedFetch.fetchWithWebToolsNetworkGuard;
+    vi.spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard").mockImplementation((params) =>
+      fetchWithRealGuard({
+        ...params,
+        policy: { ...params.policy, dangerouslyAllowPrivateNetwork: true },
+      }),
+    );
+
+    let upstreamClosed = false;
+    let server: Server | undefined;
+    try {
+      server = createServer((request, response) => {
+        response.writeHead(503, {
+          "content-type": "text/plain; charset=utf-8",
+          "content-length": "1048576",
+        });
+        response.write("unread upstream error\n");
+        const timer = setInterval(() => {
+          response.write("x".repeat(2_048));
+        }, 10);
+        const markClosed = () => {
+          upstreamClosed = true;
+          clearInterval(timer);
+        };
+        request.once("aborted", markClosed);
+        response.once("close", markClosed);
+      });
+      await new Promise<void>((resolve) => {
+        server?.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a loopback TCP address");
+      }
+
+      resolveWebFetchDefinitionMock.mockReturnValue({
+        provider: { id: "firecrawl" },
+        definition: {
+          description: "firecrawl",
+          parameters: {},
+          execute: async () => ({
+            text: "provider rescued real guarded HTTP",
+            extractor: "custom-provider",
+          }),
+        },
+      });
+      const tool = createWebFetchTool({ config: {} as OpenClawConfig, sandboxed: false });
+      const result = await tool?.execute?.("guarded-http-body-cancellation", {
+        url: `http://127.0.0.1:${address.port}/fallback`,
+      });
+      const details = result?.details as { text?: string; extractor?: string };
+
+      expect(details.extractor).toBe("custom-provider");
+      expect(details.text).toContain("provider rescued real guarded HTTP");
+      await vi.waitFor(() => expect(upstreamClosed).toBe(true), {
+        timeout: 2_000,
+        interval: 10,
+      });
+    } finally {
+      if (server) {
+        const activeServer = server;
+        await new Promise<void>((resolve) => {
+          activeServer.close(() => resolve());
+          activeServer.closeAllConnections();
+        });
+      }
+    }
   });
 });

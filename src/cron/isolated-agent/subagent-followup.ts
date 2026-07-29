@@ -2,10 +2,11 @@
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function resolveCronSubagentTimings() {
-  const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
+  const fastTestMode = isFastTestRuntimeEnv();
   return {
     waitMinMs: fastTestMode ? 10 : 30_000,
     finalReplyGraceMs: fastTestMode ? 50 : 5_000,

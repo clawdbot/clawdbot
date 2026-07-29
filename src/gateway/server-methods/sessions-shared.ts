@@ -1,6 +1,5 @@
 // Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -14,6 +13,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import {
+  resolvePluginSessionOwnershipError,
+  type PluginSessionOwnershipAction,
+} from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
   resolveFreshestSessionEntryFromStoreKeys,
@@ -31,7 +34,7 @@ export const sessionLog = createSubsystemLogger("gateway/sessions");
 export class SessionWorkerPlacementMutationError extends Error {
   constructor(
     readonly placementState: SessionPlacement["state"],
-    action: "delete" | "reset" | "restore",
+    action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch",
     key: string,
   ) {
     super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
@@ -39,7 +42,7 @@ export class SessionWorkerPlacementMutationError extends Error {
 }
 
 export function resolveSessionWorkerPlacementMutationError(params: {
-  action: "delete" | "reset" | "restore";
+  action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
   context: GatewayRequestContext;
   key: string;
   sessionId: string | undefined;
@@ -162,27 +165,23 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
   return normalized;
 }
 
-export function rejectPluginRuntimeDeleteMismatch(params: {
+export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
+  action: PluginSessionOwnershipAction;
   client: GatewayClient | null;
   key: string;
   entry: SessionEntry | undefined;
   respond: RespondFn;
 }): boolean {
-  const pluginOwnerId = normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId);
-  if (!pluginOwnerId || !params.entry) {
+  const error = resolvePluginSessionOwnershipError({
+    action: params.action,
+    entry: params.entry,
+    key: params.key,
+    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+  });
+  if (!error) {
     return false;
   }
-  if (normalizeOptionalString(params.entry.pluginOwnerId) === pluginOwnerId) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Plugin "${pluginOwnerId}" cannot delete session "${params.key}" because it did not create it.`,
-    ),
-  );
+  params.respond(false, undefined, error);
   return true;
 }
 
@@ -275,29 +274,6 @@ export function emitSessionOperation(
     connIds,
     { dropIfSlow: true },
   );
-}
-
-export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "branch" | "restore" | "dispatch" | "reclaim";
-  client: GatewayClient | null;
-  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
-  respond: RespondFn;
-}): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
-    return false;
-  }
-  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
-    ),
-  );
-  return true;
 }
 
 export function isWorkerDispatchInputError(error: unknown): boolean {

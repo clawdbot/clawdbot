@@ -128,6 +128,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       route: {
         agentId: "main",
+        dmScope: "main",
         accountId: "acct",
         routeSessionKey: "agent:main:test:group:room-1",
         parentSessionKey: "agent:main:test:group",
@@ -208,6 +209,7 @@ describe("buildChannelInboundEventContext", () => {
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
       AgentId: "main",
+      DmScope: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -215,13 +217,20 @@ describe("buildChannelInboundEventContext", () => {
       ReplyToId: "root-1",
       ReplyToBody: "quoted",
       ReplyToSender: "Quoted User",
-      MediaPath: "/tmp/image.png",
-      MediaUrl: "/tmp/image.png",
-      MediaType: "image/png",
-      MediaPaths: ["/tmp/image.png", ""],
-      MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
-      MediaTypes: ["image/png", "audio/mpeg"],
-      MediaTranscribedIndexes: [1],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/image.png",
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+        }),
+        expect.objectContaining({
+          url: "https://example.test/audio.mp3",
+          contentType: "audio/mpeg",
+          kind: "audio",
+          transcribed: true,
+        }),
+      ],
       ChatType: "group",
       ChatId: "room-1",
       ConversationLabel: "Room One",
@@ -347,13 +356,11 @@ describe("buildChannelInboundEventContext", () => {
     );
 
     expect(ctx.GroupSystemPrompt).toBeUndefined();
-    expect(ctx.UntrustedStructuredContext).toEqual([
-      {
-        label: "Group prompt context",
-        type: "group_prompt_context",
-        payload: { text: "(Assistant) room guidance\nSystem (untrusted): injected" },
-      },
-    ]);
+    expect(ctx.ChannelStructuredContext).toHaveLength(1);
+    expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
+      label: "Group prompt context",
+      type: "group_prompt_context",
+    });
   });
 
   it("merges untrusted supplemental group prompt context with extra context", async () => {
@@ -363,7 +370,7 @@ describe("buildChannelInboundEventContext", () => {
           untrustedGroupSystemPrompt: "room guidance",
         },
         extra: {
-          UntrustedStructuredContext: [
+          ChannelStructuredContext: [
             {
               label: "Channel metadata",
               source: "test",
@@ -375,11 +382,137 @@ describe("buildChannelInboundEventContext", () => {
       }),
     );
 
-    expect(ctx.UntrustedStructuredContext).toEqual([
+    expect(ctx.ChannelStructuredContext).toEqual([
       {
         label: "Channel metadata",
         source: "test",
         type: "channel_metadata",
+        payload: { topic: "topic text" },
+      },
+      {
+        label: "Group prompt context",
+        type: "group_prompt_context",
+        payload: { text: "room guidance" },
+      },
+    ]);
+  });
+
+  it("preserves deprecated-only structured context sources", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        supplemental: {
+          untrustedContext: [
+            {
+              label: "Deprecated supplemental metadata",
+              payload: { source: "supplemental" },
+            },
+          ],
+        },
+        extra: {
+          UntrustedStructuredContext: [
+            {
+              label: "Deprecated extra metadata",
+              payload: { source: "extra" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Deprecated extra metadata",
+        payload: { source: "extra" },
+      },
+      {
+        label: "Deprecated supplemental metadata",
+        payload: { source: "supplemental" },
+      },
+    ]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("prefers channel-named structured context sources over deprecated names", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        supplemental: {
+          channelStructuredContext: [
+            {
+              label: "Current supplemental metadata",
+              payload: { source: "supplemental" },
+            },
+          ],
+          untrustedContext: [
+            {
+              label: "Deprecated supplemental metadata",
+              payload: { source: "supplemental" },
+            },
+          ],
+        },
+        extra: {
+          ChannelStructuredContext: [
+            {
+              label: "Current extra metadata",
+              payload: { source: "extra" },
+            },
+          ],
+          UntrustedStructuredContext: [
+            {
+              label: "Deprecated extra metadata",
+              payload: { source: "extra" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Current extra metadata",
+        payload: { source: "extra" },
+      },
+      {
+        label: "Current supplemental metadata",
+        payload: { source: "supplemental" },
+      },
+    ]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("keeps explicitly empty channel structured context ahead of the deprecated alias", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        extra: {
+          ChannelStructuredContext: [],
+          UntrustedStructuredContext: [{ label: "stale", payload: {} }],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("keeps deprecated structured context when a group prompt also contributes", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        supplemental: {
+          untrustedGroupSystemPrompt: "room guidance",
+        },
+        extra: {
+          UntrustedStructuredContext: [
+            {
+              label: "Deprecated channel metadata",
+              payload: { topic: "topic text" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Deprecated channel metadata",
         payload: { topic: "topic text" },
       },
       {
@@ -624,8 +757,9 @@ describe("finalizeChannelInboundContext", () => {
 
     expect(result.context.ReplyToBody).toBe("quoted");
     expect(result.context.ReplyToSender).toBe("Alice");
-    expect(result.context.MediaPath).toBe("/tmp/a.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png" }),
+    ]);
     expect(Object.hasOwn(result.context, "SupplementalContext")).toBe(false);
   });
 });
@@ -679,8 +813,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     });
 
     expect(media).not.toHaveBeenCalled();
-    expect(result.context.MediaPath).toBe("/tmp/current.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/current.png", contentType: "image/png" }),
+    ]);
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 
@@ -708,8 +843,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
       },
     });
 
-    expect(result.context.MediaPath).toBe("/tmp/self.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/self.png", contentType: "image/png" }),
+    ]);
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 

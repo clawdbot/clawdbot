@@ -4,13 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import {
+  loadPendingDeliveries,
+  markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
 import {
   type DeliverFn,
   drainPendingDeliveries,
   enqueueDelivery,
   failDelivery,
-  markDeliveryPlatformOutcomeUnknown,
   type RecoveryLogger,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
@@ -27,8 +31,12 @@ const MAX_RETRIES = 5;
 const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
+}));
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
   return (accountId ?? "").trim() || "default";
@@ -146,6 +154,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     tmpDir = fixtures.tmpDir();
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
+    resolveOutboundChannelMessageAdapterMock.mockReset();
   });
 
   it("drains entries that failed with 'no listener' error", async () => {
@@ -216,6 +225,46 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
     expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
+  });
+
+  it("reconciles an exhausted final attempt before dead-lettering", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+    const id = await enqueueDelivery(
+      {
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "maybe sent" }],
+        accountId: "acct1",
+        maxRetries: 1,
+      },
+      tmpDir,
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir);
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "platform-final",
+      receipt: {
+        primaryPlatformMessageId: "platform-final",
+        platformMessageIds: ["platform-final"],
+        parts: [{ platformMessageId: "platform-final", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("skips entries where retryCount >= MAX_RETRIES", async () => {

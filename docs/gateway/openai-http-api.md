@@ -104,9 +104,12 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
 
-## Request limits (config)
+## Request limits
 
-Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
+The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
+parts from the latest user message, and 20 MB of cumulative decoded image
+data. Image source policy remains configurable under
+`gateway.http.endpoints.chatCompletions.images`:
 
 ```json5
 {
@@ -115,9 +118,6 @@ Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
       endpoints: {
         chatCompletions: {
           enabled: true,
-          maxBodyBytes: 20000000,
-          maxImageParts: 8,
-          maxTotalImageBytes: 20000000,
           images: {
             allowUrl: false,
             urlAllowlist: ["cdn.example.com", "*.assets.example.com"],
@@ -140,17 +140,14 @@ Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
 }
 ```
 
-Defaults when omitted:
+Image settings default to:
 
-| Key                   | Default                                                                     |
-| --------------------- | --------------------------------------------------------------------------- |
-| `maxBodyBytes`        | 20MB                                                                        |
-| `maxImageParts`       | 8 (max `image_url` parts read from the latest user message)                 |
-| `maxTotalImageBytes`  | 20MB (cumulative decoded bytes across all `image_url` parts in one request) |
-| `images.allowUrl`     | `false` (URL-sourced `image_url` parts are rejected unless enabled)         |
-| `images.maxBytes`     | 10MB per image                                                              |
-| `images.maxRedirects` | 3                                                                           |
-| `images.timeoutMs`    | 10s                                                                         |
+| Key                   | Default                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `images.allowUrl`     | `false` (URL-sourced `image_url` parts are rejected unless enabled) |
+| `images.maxBytes`     | 10MB per image                                                      |
+| `images.maxRedirects` | 3                                                                   |
+| `images.timeoutMs`    | 10s                                                                 |
 
 HEIC/HEIF `image_url` sources are accepted and normalized to JPEG before provider delivery through the shared OpenClaw image processor (Rastermill), which falls back to a system converter (`sips`, ImageMagick, GraphicsMagick, or ffmpeg) for formats needing external codec support.
 

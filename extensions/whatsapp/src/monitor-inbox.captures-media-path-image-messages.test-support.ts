@@ -104,7 +104,8 @@ describe("web monitor inbox", () => {
     });
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("<media:image>");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.media?.kind).toBe("image");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "888@s.whatsapp.net",

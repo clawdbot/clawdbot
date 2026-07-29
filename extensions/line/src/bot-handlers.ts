@@ -34,11 +34,12 @@ import {
   getLineSourceInfo,
   type LineInboundContext,
 } from "./bot-message-context.js";
-import { downloadLineMedia } from "./download.js";
+import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 type FollowEvent = webhook.FollowEvent;
 type JoinEvent = webhook.JoinEvent;
@@ -73,10 +74,9 @@ interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (
     ctx: LineInboundContext,
-    control: { abortSignal?: AbortSignal; onTurnAdopted?: () => Promise<void> },
+    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
   ) => Promise<void>;
-  abortSignal?: AbortSignal;
-  onTurnAdopted?: () => Promise<void>;
+  turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
 }
@@ -414,6 +414,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           contentType: media.contentType,
         });
       } catch (err) {
+        if (isRetryableLineInboundMediaError(err)) {
+          // Preparation-phase failure before turn adoption: reject so the durable
+          // ingress drain retries the whole event once LINE finishes preparing the
+          // media, instead of degrading it to an unavailable-attachment notice that
+          // permanently loses media with no text fallback.
+          throw err;
+        }
         mediaUnavailable = true;
         const errMsg = String(err);
         if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
@@ -439,10 +446,10 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       return;
     }
 
-    await processMessage(messageContext, {
-      ...(context.abortSignal ? { abortSignal: context.abortSignal } : {}),
-      ...(context.onTurnAdopted ? { onTurnAdopted: context.onTurnAdopted } : {}),
-    });
+    await processMessage(
+      messageContext,
+      context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
+    );
     historyReservation.commit();
   } finally {
     historyReservation.release();
@@ -494,10 +501,10 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(postbackContext, {
-    ...(context.abortSignal ? { abortSignal: context.abortSignal } : {}),
-    ...(context.onTurnAdopted ? { onTurnAdopted: context.onTurnAdopted } : {}),
-  });
+  await context.processMessage(
+    postbackContext,
+    context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
+  );
 }
 
 export async function handleLineWebhookEvents(

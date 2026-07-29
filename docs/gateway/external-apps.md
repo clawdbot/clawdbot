@@ -14,11 +14,15 @@ transport plus RPC methods. Use it when a script, dashboard, CI job, IDE
 extension, or another process wants to start agent runs, stream events, wait
 for results, cancel work, or inspect Gateway resources.
 
-<Warning>
-  There is no public npm client package yet. Do not add OpenClaw client package
-  names as application dependencies until release notes announce a published
-  package and this page includes install instructions.
-</Warning>
+<Note>
+  For npm packages, device pairing, reconnect recovery, history, subscriptions,
+  and approvals, start with
+  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  app supervises the Gateway as a child process, also read
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
+  initial package rollout, npm may return `E404` until the first package-bearing
+  OpenClaw release is published.
+</Note>
 
 <Note>
   This page is for code outside the OpenClaw process. Plugin code that runs
@@ -27,16 +31,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                 | Status | Use it for                                                                                    |
-| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
-| [Gateway protocol](/gateway/protocol)   | Ready  | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc) | Ready  | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)          | Ready  | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)      | Ready  | Sending messages or channel actions from scripts.                                             |
-
-A future client library package is in progress internally, but it is not a
-public install surface yet. Treat it as preview implementation detail until a
-release announces a published, versioned package.
+| Surface                                                          | Status        | Use it for                                                                                    |
+| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -176,6 +178,8 @@ plugins loaded by OpenClaw.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
 - [Gateway RPC reference](/reference/rpc)
 - [CLI agent command](/cli/agent)

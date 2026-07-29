@@ -4,6 +4,7 @@ import {
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -15,6 +16,7 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -72,6 +74,7 @@ export function usesClaudeStreamingRefusalContract(model: {
   return (
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(model) !== undefined
   );
 }
@@ -96,13 +99,14 @@ export function defaultsClaudeAdaptiveThinking(model: {
   return (
     requiresClaudeAdaptiveThinking(model) ||
     (normalizeApi(model.api) === "anthropic-messages" &&
-      resolveClaudeSonnet5ModelIdentity(model) !== undefined)
+      (resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+        resolveClaudeSonnet5ModelIdentity(model) !== undefined))
   );
 }
 
-/** Remove Sonnet 5 assistant prefills while preserving completed tool-use turns. */
-export function prepareClaudeSonnet5RequestContext(model: Model, context: Context): Context {
-  if (!resolveClaudeSonnet5ModelIdentity(model)) {
+/** Remove unsupported assistant prefills while preserving completed tool-use turns. */
+export function prepareClaudeNoPrefillRequestContext(model: Model, context: Context): Context {
+  if (!resolveClaudeOpus5ModelIdentity(model) && !resolveClaudeSonnet5ModelIdentity(model)) {
     return context;
   }
 
@@ -133,14 +137,15 @@ export function applyClaudeRequestContract(
   if (normalizeApi(model.api) !== "anthropic-messages") {
     return;
   }
+  const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-  if (!requiresClaudeDefaultSampling(model) && !sonnet5) {
+  if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
     return;
   }
   delete params.temperature;
   delete params.top_p;
   delete params.top_k;
-  if (sonnet5) {
+  if (opus5 || sonnet5) {
     delete params.service_tier;
   }
 }
@@ -159,6 +164,10 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
   const mythosIdentity = resolveClaudeMythos5ModelIdentity(modelRef);
   if (mythosIdentity) {
     return `mythos:${mythosIdentity}`;
+  }
+  const opusIdentity = resolveClaudeOpus5ModelIdentity(modelRef);
+  if (opusIdentity) {
+    return `opus:${opusIdentity}`;
   }
   const sonnetIdentity = resolveClaudeSonnet5ModelIdentity(modelRef);
   return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
