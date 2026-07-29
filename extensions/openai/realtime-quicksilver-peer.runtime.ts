@@ -319,7 +319,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         distance: forwardSequenceDistance(expected, sequenceNumber),
       }))
       .filter(({ distance }) => distance < RTP_SEQUENCE_HALF_RANGE)
-      .sort((left, right) => left.distance - right.distance);
+      .toSorted((left, right) => left.distance - right.distance);
     const nearest = pending[0];
     const farthest = pending.at(-1);
     if (!nearest || !farthest || (!force && farthest.distance < INBOUND_REORDER_DEPTH)) {
