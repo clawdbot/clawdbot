@@ -10,8 +10,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
-  toPluginInboundClaimEvent,
-  toPluginInboundClaimContext,
+  toPluginInboundClaimPair,
   toInternalMessagePreprocessedContext,
   toInternalMessageReceivedContext,
   toInternalMessageSentContext,
@@ -175,7 +174,7 @@ describe("message hook mappers", () => {
       replyToIsQuote: true,
     });
 
-    const claimContext = toPluginInboundClaimContext(canonical);
+    const { context: claimContext, event: claimEvent } = toPluginInboundClaimPair(canonical);
     expect(claimContext).toMatchObject({
       replyToId: "discord-message-42",
       replyToIdFull: "discord:channel-1:discord-message-42",
@@ -184,7 +183,6 @@ describe("message hook mappers", () => {
       replyToIsQuote: true,
     });
 
-    const claimEvent = toPluginInboundClaimEvent(canonical);
     expect(claimEvent).toMatchObject({
       replyToId: "discord-message-42",
       replyToIdFull: "discord:channel-1:discord-message-42",
@@ -305,7 +303,7 @@ describe("message hook mappers", () => {
       "https://example.test/ramp.jpg",
     ]);
     expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
-    const claimEvent = toPluginInboundClaimEvent(canonical);
+    const { event: claimEvent } = toPluginInboundClaimPair(canonical);
     expect(claimEvent.metadata?.mediaPath).toBe("/tmp/tree.jpg");
     expect(claimEvent.metadata?.mediaUrl).toBe("https://example.test/tree.jpg");
     expect(claimEvent.metadata?.mediaType).toBe("image/jpeg");
@@ -376,7 +374,7 @@ describe("message hook mappers", () => {
     },
   ])("dual-emits $name hook media from canonical facts", (testCase) => {
     const ctx = finalizeInboundContextForSdk(makeInboundCtx(testCase.input));
-    const event = toPluginInboundClaimEvent(deriveInboundMessageHookContext(ctx));
+    const { event } = toPluginInboundClaimPair(deriveInboundMessageHookContext(ctx));
     const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
 
     expect(event.media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
@@ -408,7 +406,7 @@ describe("message hook mappers", () => {
     ];
 
     for (const event of [
-      toPluginInboundClaimEvent(canonical),
+      toPluginInboundClaimPair(canonical).event,
       toPluginMessageReceivedEvent(canonical),
       toInternalMessageReceivedContext(canonical),
       toInternalMessageTranscribedContext(canonical, {}),
@@ -418,7 +416,7 @@ describe("message hook mappers", () => {
       expect(event.originalMedia).toEqual(expectedOriginalMedia);
       expect(event.mediaStagingPending).toBe(true);
     }
-    expect(toPluginInboundClaimEvent(canonical).metadata?.mediaPath).toBeUndefined();
+    expect(toPluginInboundClaimPair(canonical).event.metadata?.mediaPath).toBeUndefined();
     expect(toPluginMessageReceivedEvent(canonical).metadata?.mediaPath).toBeUndefined();
     expect(toInternalMessageReceivedContext(canonical).metadata?.mediaPath).toBeUndefined();
   });
@@ -622,8 +620,7 @@ describe("message hook mappers", () => {
       ...deriveInboundMessageHookContext(makeInboundCtx()),
       trace,
     };
-    const inboundContext = toPluginInboundClaimContext(inbound);
-    const inboundEvent = toPluginInboundClaimEvent(inbound);
+    const { context: inboundContext, event: inboundEvent } = toPluginInboundClaimPair(inbound);
     expect(inboundContext.trace).not.toBe(trace);
     expect(inboundContext.trace).toEqual(trace);
     expect(Object.isFrozen(inboundContext.trace)).toBe(true);
@@ -657,7 +654,7 @@ describe("message hook mappers", () => {
       }),
     );
 
-    expect(toPluginInboundClaimContext(canonical)).toEqual({
+    expect(toPluginInboundClaimPair(canonical).context).toEqual({
       channelId: "claim-chat",
       accountId: "acc-1",
       conversationId: "channel:123456789012345678",
@@ -688,8 +685,9 @@ describe("message hook mappers", () => {
       }),
     );
 
-    expect(toPluginInboundClaimContext(canonical).conversationId).toBeUndefined();
-    expect(toPluginInboundClaimEvent(canonical).conversationId).toBeUndefined();
+    const { context, event } = toPluginInboundClaimPair(canonical);
+    expect(context.conversationId).toBeUndefined();
+    expect(event.conversationId).toBeUndefined();
   });
 
   it("passes thread parent ids to channel plugin claim resolvers", () => {
@@ -707,7 +705,7 @@ describe("message hook mappers", () => {
       }),
     );
 
-    expect(toPluginInboundClaimContext(canonical)).toMatchObject({
+    expect(toPluginInboundClaimPair(canonical).context).toMatchObject({
       channelId: "thread-claim-chat",
       conversationId: "1510164477642014740",
       parentConversationId: "channel:1510164477642014999",
@@ -728,7 +726,7 @@ describe("message hook mappers", () => {
       }),
     );
 
-    expect(toPluginInboundClaimContext(canonical)).toEqual({
+    expect(toPluginInboundClaimPair(canonical).context).toEqual({
       channelId: "claim-chat",
       accountId: "acc-1",
       conversationId: "user:1177378744822943744",

@@ -14,6 +14,7 @@ import {
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -406,6 +407,7 @@ export function createSessionMcpRuntime(params: {
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
   configFingerprint?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): SessionMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
@@ -416,6 +418,7 @@ export function createSessionMcpRuntime(params: {
     excludeServerNames: params.excludeServerNames,
     redactConnectionServerNames: params.redactConnectionServerNames,
     safeServerNamesByServer: params.safeServerNamesByServer,
+    toolOverrides: params.toolOverrides,
   });
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
@@ -655,6 +658,9 @@ export function createSessionMcpRuntime(params: {
       const tools: McpCatalogTool[] = (retryBaseCatalog?.tools ?? []).filter(
         (tool) => !retryServerNames?.has(tool.serverName),
       );
+      const sessionDeniedTools: McpCatalogTool[] = (
+        retryBaseCatalog?.sessionDeniedTools ?? []
+      ).filter((tool) => !retryServerNames?.has(tool.serverName));
       const diagnostics: McpToolCatalogDiagnostic[] = [];
       // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
       const safeServerNamesByServer =
@@ -825,9 +831,17 @@ export function createSessionMcpRuntime(params: {
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
-                const exposedTools = listedTools.filter((tool) =>
+                const denialMap = params.toolOverrides?.mcpToolsDeny;
+                const deniedToolNames = new Set(
+                  denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
+                );
+                const policyEligibleTools = listedTools.filter((tool) =>
                   shouldExposeMcpTool(selection, tool.name.trim()),
                 );
+                const exposedTools = policyEligibleTools.filter((tool) => {
+                  const toolName = tool.name.trim();
+                  return !deniedToolNames.has(toolName);
+                });
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
@@ -855,9 +869,12 @@ export function createSessionMcpRuntime(params: {
                         },
                       }
                     : {}),
+                  ...(deniedToolNames.size > 0
+                    ? { deniedToolNames: [...deniedToolNames].toSorted() }
+                    : {}),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const tool of exposedTools) {
+                for (const tool of policyEligibleTools) {
                   const toolName = tool.name.trim();
                   if (!toolName) {
                     continue;
@@ -883,6 +900,7 @@ export function createSessionMcpRuntime(params: {
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
+                    ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
                   });
                 }
                 return {
@@ -950,7 +968,13 @@ export function createSessionMcpRuntime(params: {
           if (serverEntry) {
             servers[result.serverName] = serverEntry;
           }
-          tools.push(...toolEntries);
+          for (const tool of toolEntries) {
+            if (tool.deniedBySession) {
+              sessionDeniedTools.push(tool);
+            } else {
+              tools.push(tool);
+            }
+          }
           diagnostics.push(...serverDiags);
         }
 
@@ -960,6 +984,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {

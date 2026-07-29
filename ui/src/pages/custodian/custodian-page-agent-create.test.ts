@@ -61,8 +61,19 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const context = {
     gateway,
     agents: {
-      state: { agentsList: { mainKey: "main" } },
+      state: {
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "global",
+          agents: [
+            { id: "main", model: { primary: "openai/gpt-5.5" } },
+            { id: "researcher", model: { primary: "openai/gpt-5.5" } },
+          ],
+        },
+      },
       refreshList,
+      subscribe: () => () => undefined,
     },
     agentSelection: { state: { selectedId: "main" }, set: setAgent },
     basePath: "",

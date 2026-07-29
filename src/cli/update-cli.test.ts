@@ -6986,6 +6986,7 @@ describe("update-cli", () => {
     expect(cloneCall?.[0]).toEqual([
       "git",
       "clone",
+      "--filter=blob:none",
       "https://github.com/openclaw/openclaw.git",
       checkoutDir,
     ]);

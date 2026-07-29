@@ -129,6 +129,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual([
       "extensions/openai/openai-provider.live.test.ts",
       "extensions/openai/openai.live.test.ts",
+      "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
       "extensions/openai/realtime-quicksilver.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([

@@ -593,67 +593,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     texts: string[],
     generation?: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
-    if (texts.length === 0) {
-      return [];
-    }
-    const provider = generation?.provider ?? this.provider;
-    if (!provider) {
-      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
-    }
-    try {
-      return await this.withProviderUse(
-        provider,
-        async () =>
-          await runMemoryEmbeddingBatchRetryWithSplit({
-            items: texts,
-            run: async (batchTexts) => {
-              const timeoutMs = this.resolveEmbeddingTimeout(
-                "batch",
-                provider,
-                generation?.runtime,
-              );
-              log.debug("memory embeddings: batch start", {
-                provider: provider.id,
-                items: batchTexts.length,
-                timeoutMs,
-              });
-              const result = await runEmbeddingOperationWithTimeout({
-                timeoutMs,
-                message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-                run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
-              });
-              log.debug("memory embeddings: batch completed", {
-                provider: provider.id,
-                items: batchTexts.length,
-              });
-              return result;
-            },
-            isRetryable: isRetryableMemoryEmbeddingError,
-            isSplittable: isSplittableMemoryEmbeddingTransportError,
-            waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying");
-            },
-            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-            onSplit: ({ itemCount, splitAt }) => {
-              log.warn(
-                `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
-              );
-            },
-          }),
-      );
-    } catch (err) {
-      log.debug("memory embeddings: batch failed", {
-        provider: provider.id,
-        error: formatErrorMessage(err),
-      });
-      this.markLocalEmbeddingProviderDegraded(err);
-      throw createMemoryEmbeddingOperationError({
-        operation: "batch",
-        providerId: provider.id,
-        cause: err,
-      });
-    }
+    return await this.runProviderBatchWithRetry({
+      items: texts,
+      generation,
+      operation: "batch",
+      run: async (provider, batchTexts, signal) =>
+        await provider.embedBatch(batchTexts, { signal }),
+    });
   }
 
   protected async embedBatchInputsWithRetry(
@@ -671,47 +617,87 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         generation,
       );
     }
+    return await this.runProviderBatchWithRetry({
+      items: inputs,
+      generation,
+      operation: "structured-batch",
+      run: async (_provider, batchInputs, signal) =>
+        await embedBatchInputs(batchInputs, { signal }),
+    });
+  }
+
+  private async runProviderBatchWithRetry<T>(params: {
+    items: T[];
+    generation?: MemorySemanticProviderGeneration;
+    operation: "batch" | "structured-batch";
+    run: (provider: EmbeddingProvider, items: T[], signal: AbortSignal) => Promise<number[][]>;
+  }): Promise<number[][]> {
+    if (params.items.length === 0) {
+      return [];
+    }
+    const provider = params.generation?.provider ?? this.provider;
+    if (!provider) {
+      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
+    }
+    const structured = params.operation === "structured-batch";
+    const label = structured ? "structured batch" : "batch";
     try {
       return await this.withProviderUse(
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
-            items: inputs,
-            run: async (batchInputs) => {
+            items: params.items,
+            run: async (batchItems) => {
               const timeoutMs = this.resolveEmbeddingTimeout(
                 "batch",
                 provider,
-                generation?.runtime,
+                params.generation?.runtime,
               );
-              log.debug("memory embeddings: structured batch start", {
+              log.debug(`memory embeddings: ${label} start`, {
                 provider: provider.id,
-                items: batchInputs.length,
+                items: batchItems.length,
                 timeoutMs,
               });
-              return await runEmbeddingOperationWithTimeout({
+              const result = await runEmbeddingOperationWithTimeout({
                 timeoutMs,
                 message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-                run: async (signal) => await embedBatchInputs(batchInputs, { signal }),
+                run: async (signal) => await params.run(provider, batchItems, signal),
               });
+              if (!structured) {
+                log.debug("memory embeddings: batch completed", {
+                  provider: provider.id,
+                  items: batchItems.length,
+                });
+              }
+              return result;
             },
             isRetryable: isRetryableMemoryEmbeddingError,
             isSplittable: isSplittableMemoryEmbeddingTransportError,
             waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+              await this.waitForEmbeddingRetry(
+                delayMs,
+                structured ? "retrying structured batch" : "retrying",
+              );
             },
             maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
             onSplit: ({ itemCount, splitAt }) => {
               log.warn(
-                `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+                `memory embeddings transport failed after retries; splitting ${label} of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
               );
             },
           }),
       );
     } catch (err) {
+      if (!structured) {
+        log.debug("memory embeddings: batch failed", {
+          provider: provider.id,
+          error: formatErrorMessage(err),
+        });
+      }
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
-        operation: "structured-batch",
+        operation: params.operation,
         providerId: provider.id,
         cause: err,
       });

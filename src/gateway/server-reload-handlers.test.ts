@@ -1,7 +1,10 @@
 /**
  * Gateway config reload handler tests.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
@@ -59,6 +62,8 @@ import {
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
+import { applyHookMappings } from "./hooks-mapping.js";
+import { commitHooksConfigReload } from "./hooks.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
@@ -84,6 +89,9 @@ function waitForFast<T>(
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
 }
+
+const tempDirs: string[] = [];
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const restartTesting = {
   resetSigusr1State() {
@@ -849,6 +857,9 @@ afterEach(() => {
   hoisted.buildGatewayCronService.mockClear();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 async function runManagedOwnershipScenario(params: {
@@ -1742,6 +1753,70 @@ describe("gateway hot reload commit policy", () => {
     ).rejects.toThrow("hooks.enabled requires hooks.token");
 
     expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
+  });
+
+  it("preserves the active hook transform cache when hook preparation rejects the config", async () => {
+    const configDir = autoCleanupTempDirs.make("openclaw-rejected-hook-reload-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const transformPath = path.join(transformsRoot, "reloadable.mjs");
+    fs.writeFileSync(transformPath, 'export default () => ({ kind: "wake", text: "accepted" });');
+    const activeMappings = [
+      {
+        id: "reloadable",
+        matchPath: "reloadable",
+        action: "agent" as const,
+        messageTemplate: "unused",
+        transform: { modulePath: transformPath },
+      },
+    ];
+    commitHooksConfigReload();
+    const applyActiveTransform = () =>
+      applyHookMappings(activeMappings, {
+        payload: {},
+        headers: {},
+        url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
+        path: "reloadable",
+      });
+
+    const first = await applyActiveTransform();
+    expect(first?.ok).toBe(true);
+    if (first?.ok && first.action?.kind === "wake") {
+      expect(first.action.text).toBe("accepted");
+    }
+
+    const { applyHotReload } = createReloadHandlersForTest();
+
+    fs.writeFileSync(transformPath, 'export default () => ({ kind: "wake", text: "candidate" });');
+    const nextTime = new Date(Date.now() + 5_000);
+    fs.utimesSync(transformPath, nextTime, nextTime);
+
+    await expect(
+      applyHotReload(
+        {
+          changedPaths: ["hooks.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["hooks.token"],
+          reloadHooks: true,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        { hooks: { enabled: true } },
+      ),
+    ).rejects.toThrow("hooks.enabled requires hooks.token");
+
+    const afterRejectedReload = await applyActiveTransform();
+    expect(afterRejectedReload?.ok).toBe(true);
+    if (afterRejectedReload?.ok && afterRejectedReload.action?.kind === "wake") {
+      expect(afterRejectedReload.action.text).toBe("accepted");
+    }
   });
 });
 

@@ -1,6 +1,7 @@
 // Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -318,7 +319,11 @@ function parseInteractiveCardContent(parsed: unknown): string {
   return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
 }
 
-function parseFeishuMessageContent(rawContent: string, msgType: string): string {
+function parseFeishuMessageContent(
+  rawContent: string,
+  msgType: string,
+  messageId?: string,
+): string {
   if (!rawContent) {
     return "";
   }
@@ -327,6 +332,8 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   try {
     parsed = JSON.parse(rawContent);
   } catch {
+    const safeId = messageId ? ` (id: ${messageId})` : "";
+    logVerbose(`feishu message content parse failed for ${msgType} message${safeId}`);
     return rawContent;
   }
 
@@ -379,7 +386,7 @@ function parseFeishuMessageItem(
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
-    content: parseFeishuMessageContent(rawContent, msgType),
+    content: parseFeishuMessageContent(rawContent, msgType, item.message_id),
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,

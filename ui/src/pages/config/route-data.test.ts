@@ -5,12 +5,12 @@ describe("config route data", () => {
   it("normalizes the selected section and decodes the target block", () => {
     expect(
       configRouteData({
-        pathname: "/settings/general",
+        pathname: "/settings/appearance",
         search: "?section=%20browser%20",
         hash: "#config-section-browser%2Fprofiles",
       }),
     ).toEqual({
-      pathname: "/settings/general",
+      pathname: "/settings/appearance",
       search: "?section=+browser+",
       hash: "#config-section-browser%2Fprofiles",
       section: "browser",
@@ -22,8 +22,8 @@ describe("config route data", () => {
 
   it("ignores malformed target hashes", () => {
     expect(configTargetIdFromHash("#%")).toBeNull();
-    expect(configRouteData({ pathname: "/settings/general", search: "", hash: "#%" })).toEqual({
-      pathname: "/settings/general",
+    expect(configRouteData({ pathname: "/settings/appearance", search: "", hash: "#%" })).toEqual({
+      pathname: "/settings/appearance",
       search: "",
       hash: "#%",
       section: null,

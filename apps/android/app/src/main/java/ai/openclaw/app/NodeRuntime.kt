@@ -39,6 +39,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -4914,6 +4915,11 @@ class NodeRuntime private constructor(
   }
 
   internal suspend fun loadChatImageArtifact(artifactId: String) = chat.loadImageArtifact(artifactId)
+
+  internal suspend fun loadChatMediaArtifact(
+    artifactId: String,
+    kind: GatewayMediaKind,
+  ) = chat.loadMediaArtifact(artifactId, kind)
 
   fun loadChat(
     sessionKey: String,

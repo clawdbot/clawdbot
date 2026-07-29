@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import {
   renderChatPreferencesSection,
+  renderLanguageSection,
   renderLobsterPetSection,
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
@@ -132,6 +133,7 @@ export function renderAppearanceSection(
         ${t("configView.appearance.intro")}
         ${renderDocsLink(APPEARANCE_DOCS_URL, t("common.learnMore"))}
       </p>
+      ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>

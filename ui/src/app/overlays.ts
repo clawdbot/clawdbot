@@ -5,6 +5,7 @@ import {
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
 import { controlUiVersionDiffersFrom } from "../build-info.ts";
+import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
   createDevicePairSetupState,
@@ -522,7 +523,10 @@ export function createApplicationOverlays(
           return;
         }
         const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
-        const expectedVersion = response.result?.after?.version?.trim() || null;
+        const expectedVersion =
+          response.result?.after?.version?.trim() ||
+          snapshot.updateAvailable?.latestVersion?.trim() ||
+          null;
         if (
           response.ok === true &&
           status === "skipped" &&
@@ -541,7 +545,7 @@ export function createApplicationOverlays(
               ...snapshot,
               updateStatusBanner: {
                 tone: "info",
-                text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+                text: t("updates.coalescedRestart"),
               },
             };
           }
@@ -571,7 +575,9 @@ export function createApplicationOverlays(
           ...snapshot,
           updateStatusBanner: {
             tone: "danger",
-            text: `Update error: ${error instanceof Error ? error.message : String(error)}`,
+            text: t("updates.error", {
+              error: error instanceof Error ? error.message : String(error),
+            }),
           },
         };
       } finally {

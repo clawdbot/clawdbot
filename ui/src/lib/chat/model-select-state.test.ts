@@ -558,6 +558,49 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it("keeps versioned catalog names visible for configured family aliases", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "claude-opus-4-8",
+          alias: "opus",
+          name: "Opus 4.8",
+          provider: "anthropic",
+        },
+        {
+          id: "claude-sonnet-5",
+          alias: "sonnet",
+          name: "Sonnet 5",
+          provider: "anthropic",
+        },
+        {
+          id: "moonshotai/kimi-k2.5",
+          alias: "Kimi K2.5 (NVIDIA)",
+          name: "Kimi K2.5",
+          provider: "nvidia",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "claude-opus-4-8",
+        modelProvider: "anthropic",
+        defaultsModel: "claude-opus-4-8",
+        defaultsProvider: "anthropic",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.defaultLabel).toBe("Default (Opus 4.8 · opus)");
+    expect(resolved.options).toEqual([
+      { value: "anthropic/claude-opus-4-8", label: "Opus 4.8 · opus" },
+      { value: "anthropic/claude-sonnet-5", label: "Sonnet 5 · sonnet" },
+      {
+        value: "nvidia/moonshotai/kimi-k2.5",
+        label: "Kimi K2.5 (NVIDIA)",
+      },
+    ]);
+  });
+
   it("uses the active agent model for the default label", () => {
     const state = createChatModelState({
       agentDefaultModel: "anthropic/claude-opus-4-5",

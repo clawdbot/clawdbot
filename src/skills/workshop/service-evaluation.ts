@@ -57,6 +57,7 @@ export async function evaluateSkillProposal(
         input.workspaceDir,
         input.env,
         input.agentId,
+        { reconcile: false },
       );
       if (read.record.status !== "pending") {
         throw new Error(
@@ -154,6 +155,7 @@ export async function evaluateSkillProposal(
         input.workspaceDir,
         input.env,
         input.agentId,
+        { reconcile: false },
       );
       if (
         current.record.status !== "pending" ||

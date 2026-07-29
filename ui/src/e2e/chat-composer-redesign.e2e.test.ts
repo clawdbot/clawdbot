@@ -568,6 +568,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.3-codex-spark",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {

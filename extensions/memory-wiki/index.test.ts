@@ -65,7 +65,7 @@ describe("memory-wiki plugin", () => {
       "wiki.status",
       "wiki.importRuns",
       "wiki.importInsights",
-      "wiki.palace",
+      "wiki.overview",
       "wiki.init",
       "wiki.doctor",
       "wiki.compile",

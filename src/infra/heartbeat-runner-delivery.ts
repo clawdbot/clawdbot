@@ -439,7 +439,11 @@ export async function finalizeHeartbeatOutcome(params: {
     ...(normalized.silent === true ? { silent: true } : {}),
     indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
   });
-  consumeInspectedSystemEvents(params.wake, params.prepared);
+  // Intentional internal-only/no-target runs consume above. Once this branch
+  // expects visible delivery, suppressed sends must retain the original event.
+  if (visibleSendSucceeded) {
+    consumeInspectedSystemEvents(params.wake, params.prepared);
+  }
   return { status: "ran", durationMs: Date.now() - startedAt };
 }
 

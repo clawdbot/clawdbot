@@ -6,7 +6,7 @@ import { property } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -15,6 +15,7 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs } from "../plugins/plugins-hub.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import {
   loadSkillWorkshopPageData,
@@ -128,13 +129,18 @@ function renderSkillWorkshopPage(
         </div>
       </section>
       <div class="plugins-hub-tabs-row">
-        ${renderPluginsHubTabs({
+        ${renderHubTabs({
+          id: "plugins",
           active: "workshop",
+          tabs: pluginsHubTabs(),
+          ariaLabel: t("pluginsPage.hubTablistLabel"),
+          panelId: PLUGINS_HUB_PANEL_ID,
+          className: "plugins-tabs",
           onSelect: (tab) => selectPluginsHubTab(context, tab),
         })}
       </div>
       <wa-tab-panel
-        id="plugins-hub-panel"
+        id=${PLUGINS_HUB_PANEL_ID}
         class="sw-hub-panel"
         name="workshop"
         active

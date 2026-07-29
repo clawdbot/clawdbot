@@ -497,7 +497,7 @@ describe("AppSidebar agent chip", () => {
       pathname: "/chat/settings",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
-    expect(onNavigate).not.toHaveBeenCalledWith("config");
+    expect(onNavigate).not.toHaveBeenCalledWith("appearance");
   });
 
   it("keeps the identity card available offline with reconnect and retry actions", async () => {

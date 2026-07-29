@@ -90,6 +90,7 @@ function buildAgentPayload(name: string, agentId?: string) {
     deliver: false,
     channel: "last" as const,
     to: undefined,
+    delivery: { mode: "none" as const },
     model: undefined,
     thinking: undefined,
     timeoutSeconds: undefined,
@@ -163,6 +164,33 @@ describe("dispatchAgentHook trust handling", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.restoreAllMocks();
+  });
+
+  it("passes normalized delivery through to the isolated CronJob", async () => {
+    const delivery = {
+      mode: "announce" as const,
+      channel: "telegram" as const,
+      to: "123456",
+    };
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: true,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Explicit delivery"),
+      deliver: true,
+      channel: delivery.channel,
+      to: delivery.to,
+      delivery,
+    });
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
+      job: { delivery },
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("retains detached agent work after the hook request releases admission", async () => {

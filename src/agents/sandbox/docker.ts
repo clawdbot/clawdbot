@@ -96,7 +96,7 @@ import {
 } from "./constants.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
-import { buildSandboxContainerName, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
@@ -496,7 +496,7 @@ async function readContainerConfigHash(containerName: string): Promise<string | 
 }
 
 type EnsureSandboxContainerParams = {
-  sessionKey: string;
+  scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
@@ -505,20 +505,18 @@ type EnsureSandboxContainerParams = {
 };
 
 export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
-  const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
+  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const containerName = buildSandboxContainerName(params.cfg.docker.containerPrefix, slug);
 
   // Independent agent runs can converge on one Docker resource. Serialize the
   // full lifecycle so followers re-read state after create, start, or replace.
   return await sandboxContainerLifecycleQueue.enqueue(containerName, async () => {
-    return await ensureSandboxContainerLifecycle(params, scopeKey, containerName);
+    return await ensureSandboxContainerLifecycle(params, containerName);
   });
 }
 
 async function ensureSandboxContainerLifecycle(
   params: EnsureSandboxContainerParams,
-  scopeKey: string,
   containerName: string,
 ) {
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
@@ -568,7 +566,7 @@ async function ensureSandboxContainerLifecycle(
         handleHotSandboxConfigMismatch({
           containerName,
           scope: params.cfg.scope,
-          sessionKey: scopeKey,
+          sessionKey: params.scopeKey,
           ...(params.requireCurrentConfig !== undefined
             ? { requireCurrentConfig: params.requireCurrentConfig }
             : {}),
@@ -588,7 +586,7 @@ async function ensureSandboxContainerLifecycle(
       workspaceAccess: params.cfg.workspaceAccess,
       agentWorkspaceDir: params.agentWorkspaceDir,
       skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey,
+      scopeKey: params.scopeKey,
       configHash: expectedHash,
       readOnlyWorkspaceSkillMounts,
     });
@@ -599,7 +597,7 @@ async function ensureSandboxContainerLifecycle(
     containerName,
     backendId: "docker",
     runtimeLabel: containerName,
-    sessionKey: scopeKey,
+    sessionKey: params.scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,

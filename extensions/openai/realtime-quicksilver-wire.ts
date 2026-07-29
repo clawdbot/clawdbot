@@ -54,6 +54,11 @@ type OpenAIQuicksilverSession = {
   }>;
 };
 
+type OpenAIQuicksilverSessionUpdate = {
+  type: "session.update";
+  session: Omit<OpenAIQuicksilverSession, "model">;
+};
+
 const eventEnvelopeSchema = z.object({ type: z.string() }).passthrough();
 const sessionStartedSchema = z
   .object({
@@ -64,6 +69,12 @@ const sessionStartedSchema = z
 const transcriptAddedSchema = z
   .object({
     item: z.object({ text: z.string() }).passthrough(),
+  })
+  .passthrough();
+const outputAudioDeltaSchema = z
+  .object({
+    type: z.literal("output_audio.delta"),
+    audio: z.string(),
   })
   .passthrough();
 const turnDoneSchema = z
@@ -102,6 +113,7 @@ const delegationSchema = z
 export type OpenAIQuicksilverInboundEvent =
   | { kind: "ignored"; eventType: string }
   | { kind: "session-started"; expiresAt?: number }
+  | { kind: "audio"; data: string }
   | { kind: "transcript-delta"; role: "user" | "assistant"; text: string }
   | { kind: "transcript-done"; role: "user" | "assistant"; text: string }
   | { kind: "delegation"; id: string; prompt: string }
@@ -153,6 +165,26 @@ export function buildOpenAIQuicksilverSession(params: {
     delegation: { type: "client" },
     ...(initialItems && initialItems.length > 0 ? { initial_items: initialItems } : {}),
   };
+}
+
+/** Builds the direct Frameless Bidi WebSocket handshake used by Codex realtime v3. */
+export function buildOpenAIQuicksilverSessionUpdate(params: {
+  instructions?: string;
+  voice?: string;
+  initialItems?: readonly OpenAIQuicksilverInitialItem[];
+}): OpenAIQuicksilverSessionUpdate {
+  const { model: _model, ...session } = buildOpenAIQuicksilverSession({
+    model: "direct-websocket",
+    ...params,
+  });
+  return { type: "session.update", session };
+}
+
+export function buildOpenAIQuicksilverWebSocketUrl(model: string): string {
+  const url = new URL(OPENAI_QUICKSILVER_CALL_URL);
+  url.protocol = "wss:";
+  url.searchParams.set("model", model);
+  return url.toString();
 }
 
 function truncateOpenAIQuicksilverContextText(text: string, maxBytes: number): string {
@@ -501,7 +533,13 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
       ? { kind: "transcript-done", role: turn.data.turn.role, text: turn.data.turn.transcript }
       : { kind: "ignored", eventType };
   }
-  if (eventType === "session.updated" || eventType === "output_audio.delta") {
+  if (eventType === "output_audio.delta") {
+    const audio = outputAudioDeltaSchema.safeParse(decoded);
+    return audio.success
+      ? { kind: "audio", data: audio.data.audio }
+      : { kind: "ignored", eventType };
+  }
+  if (eventType === "session.updated") {
     return { kind: "ignored", eventType };
   }
   if (eventType === "delegation.created") {
