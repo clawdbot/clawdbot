@@ -21,6 +21,11 @@
   min-height: 0;
 }
 
+.custodian-surface--empty-error {
+  grid-template-rows: auto auto auto;
+  align-content: start;
+}
+
 .custodian > openclaw-custodian-surface {
   display: block;
   height: 100%;
