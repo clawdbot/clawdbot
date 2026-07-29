@@ -313,6 +313,18 @@ struct ChatGatewayRequestTests {
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
     }
 
+    @Test func `send request omits inherited thinking override`() {
+        let inherited = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "global",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "inherit",
+            thinking: nil,
+            idempotencyKey: "send-inherit",
+            attachments: [])
+        #expect(inherited.params["thinking"] == nil)
+    }
+
     @Test func `question resolve request preserves answer arrays`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
