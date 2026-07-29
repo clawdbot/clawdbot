@@ -4,7 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const mocks = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
   info: vi.fn(),
+  isNixMode: false,
   mutateConfigFileWithRetry: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -12,13 +14,22 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: mocks.info }),
+  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn }),
 }));
 
-import { persistStickyModelSelection } from "./sticky-model-selection.js";
+vi.mock("../config/paths.js", () => ({
+  resolveIsNixMode: () => mocks.isNixMode,
+}));
+
+import {
+  persistStickyModelSelection,
+  persistStickyModelSelectionBestEffort,
+} from "./sticky-model-selection.js";
 
 beforeEach(() => {
   mocks.info.mockReset();
+  mocks.warn.mockReset();
+  mocks.isNixMode = false;
   mocks.mutateConfigFileWithRetry.mockReset().mockImplementation(async ({ mutate }) => {
     const draft = structuredClone(mocks.cfg);
     const result = await mutate(draft, {});
@@ -90,5 +101,32 @@ describe("persistStickyModelSelection", () => {
       "Sticky model selection must be non-empty.",
     );
     expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("warns and absorbs asynchronous config write failures", async () => {
+    mocks.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config is read-only"));
+
+    expect(
+      persistStickyModelSelectionBestEffort({ agentId: "main", model: "openai/gpt-5.6-sol" }),
+    ).toBeUndefined();
+
+    await vi.waitFor(() =>
+      expect(mocks.warn).toHaveBeenCalledWith(
+        "failed sticky model persistence agentId=main model=openai/gpt-5.6-sol reason=config is read-only",
+      ),
+    );
+  });
+
+  it("skips immutable Nix config and warns only once per process", () => {
+    mocks.isNixMode = true;
+
+    persistStickyModelSelectionBestEffort({ agentId: "main", model: "openai/gpt-5.6-sol" });
+    persistStickyModelSelectionBestEffort({ agentId: "work", model: "openai/gpt-5.6-luna" });
+
+    expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    expect(mocks.warn).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(
+      "skipped sticky model persistence agentId=main model=openai/gpt-5.6-sol reason=config is immutable in OPENCLAW_NIX_MODE",
+    );
   });
 });

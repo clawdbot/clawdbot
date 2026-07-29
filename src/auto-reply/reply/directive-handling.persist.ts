@@ -8,7 +8,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { modelKey, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
-import { persistStickyModelSelection } from "../../agents/sticky-model-selection.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -68,6 +68,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  canPersistStickyModelSelection?: boolean;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
   messageProvider?: string;
   surface?: string;
@@ -427,9 +428,10 @@ export async function persistInlineDirectives(params: {
         modelDirective &&
         modelResolution?.modelSelection &&
         modelApplied &&
-        !modelResolution.modelSelection.isDefault
+        !modelResolution.modelSelection.isDefault &&
+        params.canPersistStickyModelSelection === true
       ) {
-        await persistStickyModelSelection({
+        persistStickyModelSelectionBestEffort({
           agentId: activeAgentId,
           model: `${provider}/${model}`,
         });

@@ -10,7 +10,7 @@ import {
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { persistStickyModelSelection } from "../../agents/sticky-model-selection.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -612,9 +612,10 @@ export async function handleDirectiveOnly(
       modelSelection &&
       modelSelectionApplied &&
       !modelSelection.isDefault &&
-      !params.persistenceState
+      !params.persistenceState &&
+      params.canPersistStickyModelSelection === true
     ) {
-      await persistStickyModelSelection({
+      persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,
       });

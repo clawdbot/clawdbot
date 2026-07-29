@@ -1,17 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const effects = vi.hoisted(() => ({
-  persistStickyModelSelection: vi.fn(async () => "defaults" as const),
+  info: vi.fn(),
+  mutateConfigFileWithRetry: vi.fn(),
+  warn: vi.fn(),
 }));
 
-vi.mock("../../agents/sticky-model-selection.js", () => ({
-  persistStickyModelSelection: effects.persistStickyModelSelection,
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return { ...actual, mutateConfigFileWithRetry: effects.mutateConfigFileWithRetry };
+});
+
+vi.mock("../../logging/subsystem.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
+    "../../logging/subsystem.js",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      subsystem === "agents/sticky-model-selection"
+        ? { info: effects.info, warn: effects.warn }
+        : actual.createSubsystemLogger(subsystem),
+  };
+});
 
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
@@ -39,11 +56,23 @@ function context(): GatewayRequestContext {
   } as unknown as GatewayRequestContext;
 }
 
-async function patchSession(params: Record<string, unknown>) {
+function client(scopes: string[]): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+      role: "operator",
+      scopes,
+    },
+  };
+}
+
+async function patchSession(params: Record<string, unknown>, scopes = ["operator.admin"]) {
   const responses: Parameters<RespondFn>[] = [];
   await sessionMutationHandlers["sessions.patch"]?.({
     params,
-    client: null,
+    client: client(scopes),
     context: context(),
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   } as never);
@@ -52,7 +81,19 @@ async function patchSession(params: Record<string, unknown>) {
 }
 
 beforeEach(() => {
-  effects.persistStickyModelSelection.mockClear();
+  effects.info.mockReset();
+  effects.warn.mockReset();
+  effects.mutateConfigFileWithRetry
+    .mockReset()
+    .mockImplementation(
+      async (params: {
+        mutate: (draft: OpenClawConfig, context: unknown) => unknown | Promise<unknown>;
+      }) => {
+        const draft = structuredClone(cfg);
+        const result = await params.mutate(draft, {});
+        return { nextConfig: draft, result };
+      },
+    );
 });
 
 afterEach(() => {
@@ -75,13 +116,55 @@ describe("sessions.patch sticky model persistence", () => {
         const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
 
         expect(response[0]).toBe(true);
-        expect(effects.persistStickyModelSelection).toHaveBeenCalledWith({
-          agentId,
-          model: "openai/gpt-5.6-sol",
-        });
+        await vi.waitFor(() => expect(effects.mutateConfigFileWithRetry).toHaveBeenCalledOnce());
       });
     },
   );
+
+  it("keeps a non-admin model switch session-scoped", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:dm:non-admin";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId: "session-non-admin", updatedAt: 1 },
+      );
+
+      const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
+        "operator.write",
+      ]);
+
+      expect(response[0]).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns session success and warns when the sticky config write fails", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:dm:write-failure";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId: "session-write-failure", updatedAt: 1 },
+      );
+      effects.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config write failed"));
+
+      const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
+
+      expect(response[0]).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      await vi.waitFor(() =>
+        expect(effects.warn).toHaveBeenCalledWith(
+          "failed sticky model persistence agentId=main model=openai/gpt-5.6-sol reason=config write failed",
+        ),
+      );
+    });
+  });
 
   it.each([
     { name: "omitted", patch: { label: "Sticky" } },
@@ -105,7 +188,7 @@ describe("sessions.patch sticky model persistence", () => {
       const response = await patchSession({ key: sessionKey, ...patch });
 
       expect(response[0]).toBe(true);
-      expect(effects.persistStickyModelSelection).not.toHaveBeenCalled();
+      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     });
   });
 });
