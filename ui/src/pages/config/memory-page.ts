@@ -5,6 +5,7 @@ import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/schema/system-info.ts";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -70,6 +71,11 @@ type MemoryCatalog =
   | { kind: "unavailable" }
   | { kind: "ready"; plugins: readonly PluginCatalogItem[] };
 
+type MemoryAddonNotice = {
+  message: string;
+  processInstanceId: string | null;
+};
+
 type MemoryPageProps = {
   configObject: Record<string, unknown>;
   pluginsHref: string;
@@ -118,7 +124,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private engineError: string | null = null;
   @state() private addonBusy = new Set<string>();
   @state() private addonErrors = new Map<string, string>();
-  @state() private addonNotices = new Map<string, string>();
+  @state() private addonNotices = new Map<string, MemoryAddonNotice>();
   @state() private selectedAgentId: string | null = null;
   @state() private overviewStatus: MemoryOverviewStatus = { kind: "idle" };
   @state() private probingEmbeddings = false;
@@ -245,7 +251,39 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     this.catalog = { kind: "loading" };
     void this.loadCatalog(client, connection);
+    void this.reconcileAddonNotices(client, connection);
     void this.loadOverviewStatus();
+  }
+
+  private async readProcessInstanceId(client: GatewayClient): Promise<string | null> {
+    if (!isGatewayMethodAdvertised(this.context.gateway.snapshot, "system.info")) {
+      return null;
+    }
+    try {
+      const info = await client.request<SystemInfoResult>("system.info", {});
+      return info.processInstanceId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async reconcileAddonNotices(client: GatewayClient, connection: CatalogConnection) {
+    if (this.addonNotices.size === 0) {
+      return;
+    }
+    const processInstanceId = await this.readProcessInstanceId(client);
+    if (!processInstanceId || !this.isConnected || this.connection !== connection) {
+      return;
+    }
+    const notices = new Map(
+      [...this.addonNotices].filter(
+        ([, notice]) =>
+          notice.processInstanceId === null || notice.processInstanceId === processInstanceId,
+      ),
+    );
+    if (notices.size !== this.addonNotices.size) {
+      this.addonNotices = notices;
+    }
   }
 
   private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
@@ -389,7 +427,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         state: pluginState(catalog, entry),
         busy: this.addonBusy.has(addon.id),
         error: this.addonErrors.get(addon.id) ?? null,
-        notice: this.addonNotices.get(addon.id) ?? null,
+        notice: this.addonNotices.get(addon.id)?.message ?? null,
       };
     });
   }
@@ -421,14 +459,20 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.addonNotices = notices;
     try {
       try {
+        const processInstanceIdPromise = this.readProcessInstanceId(client);
         const result = await setPluginEnabled(client, pluginId, enabled);
         if (result.restartRequired) {
           const key = enabled ? "pluginsPage.enabledRestart" : "pluginsPage.disabledRestart";
           const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-          this.addonNotices = new Map(this.addonNotices).set(
-            pluginId,
-            [t(key, { name: result.plugin.name }), ...warnings].filter(Boolean).join(" "),
-          );
+          const processInstanceId = await processInstanceIdPromise;
+          this.addonNotices = new Map(this.addonNotices).set(pluginId, {
+            message: [t(key, { name: result.plugin.name }), ...warnings].filter(Boolean).join(" "),
+            processInstanceId,
+          });
+          const currentConnection = this.connection;
+          if (currentConnection?.connected && currentConnection.client) {
+            void this.reconcileAddonNotices(currentConnection.client, currentConnection);
+          }
         }
       } catch (error) {
         this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));

@@ -73,11 +73,13 @@ function createPage(params: {
   basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
   memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
+  processInstanceIds?: string[];
   scopes?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
   let listCalls = 0;
   let schemaLookups = 0;
+  let systemInfoCalls = 0;
   const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
     if (method === "plugins.list") {
       const call = listCalls++;
@@ -94,6 +96,11 @@ function createPage(params: {
             embedding: { ok: false, checked: false },
           });
     }
+    if (method === "system.info") {
+      const ids = params.processInstanceIds ?? [];
+      const processInstanceId = ids[Math.min(systemInfoCalls++, ids.length - 1)];
+      return Promise.resolve({ processInstanceId });
+    }
     return Promise.resolve({});
   });
   vi.mocked(setPluginEnabled).mockImplementation(
@@ -108,7 +115,10 @@ function createPage(params: {
     snapshot: {
       client: { request },
       phase: "connected",
-      hello: { auth: { role: "operator", scopes: params.scopes } },
+      hello: {
+        auth: { role: "operator", scopes: params.scopes },
+        features: { methods: params.processInstanceIds ? ["system.info"] : [] },
+      },
     },
     subscribe: (notify: () => void) => {
       gatewayListeners.add(notify);
@@ -536,7 +546,7 @@ describe("MemorySettingsPage catalog state", () => {
   it("surfaces restart-required outcomes from add-on mutations", async () => {
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", true), addon("memory-wiki", true)];
-    const { element } = createPage({
+    const { element, request, setPhase } = createPage({
       configObject: {},
       listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
       setEnabled: (_pluginId, enabled) =>
@@ -545,6 +555,7 @@ describe("MemorySettingsPage catalog state", () => {
           plugin: addon("memory-wiki", enabled),
           restartRequired: true,
         }),
+      processInstanceIds: ["process-a", "process-a", "process-a", "process-b"],
     });
     document.body.append(element);
     try {
@@ -556,6 +567,23 @@ describe("MemorySettingsPage catalog state", () => {
         "Enabled memory-wiki. A Gateway restart is required to apply the change.",
       );
       expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(3),
+      );
+      expect(element.textContent).toContain(
+        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+      );
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() =>
+        expect(element.textContent).not.toContain(
+          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+        ),
+      );
     } finally {
       element.remove();
     }
