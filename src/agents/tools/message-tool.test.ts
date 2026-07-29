@@ -404,6 +404,7 @@ function createChannelPlugin(params: {
   config?: Partial<ChannelPlugin["config"]>;
   message?: ChannelMessageAdapterShape;
   messaging?: ChannelPlugin["messaging"];
+  outbound?: ChannelPlugin["outbound"];
 }): ChannelPlugin {
   return {
     id: params.id as ChannelPlugin["id"],
@@ -423,6 +424,7 @@ function createChannelPlugin(params: {
     },
     ...(params.message ? { message: params.message } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
+    ...(params.outbound ? { outbound: params.outbound } : {}),
     actions: {
       describeMessageTool:
         params.describeMessageTool ??
@@ -1772,6 +1774,44 @@ describe("message tool secret scoping", () => {
       broadcastTargets: ["slack:channel:one", "slack:channel:two"],
     },
     {
+      name: "delegated fallback-resolved current-provider broadcast",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: true,
+      broadcast: true,
+      broadcastChannel: "last",
+      broadcastTargets: ["googlechat:spaces/current"],
+    },
+    {
+      name: "delegated fallback-resolved broadcast with matching current account",
+      channel: "googlechat",
+      accountId: "current",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: false,
+      broadcast: true,
+      broadcastChannel: "last",
+      broadcastTargets: ["googlechat:spaces/current"],
+      expectedRunnerChannel: "googlechat",
+    },
+    {
+      name: "direct fallback-resolved broadcast with alternate account",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: undefined,
+      trusted: false,
+      origin: "direct-operator" as const,
+      rejected: false,
+      broadcast: true,
+      broadcastChannel: "last",
+      broadcastTargets: ["googlechat:spaces/current"],
+      expectedRunnerChannel: "googlechat",
+    },
+    {
       name: "delegated channel-less broadcast with matching current account",
       channel: "googlechat",
       accountId: "current",
@@ -1806,6 +1846,7 @@ describe("message tool secret scoping", () => {
           listAccountIds: () => ["current", "alternate"],
           resolveAccount: () => ({ enabled: true }),
         },
+        outbound: { deliveryMode: "direct", sendText: vi.fn() as never },
       });
       const slackPlugin = createChannelPlugin({
         id: "slack",
@@ -1817,6 +1858,7 @@ describe("message tool secret scoping", () => {
           listAccountIds: () => ["alternate"],
           resolveAccount: () => ({ enabled: true }),
         },
+        outbound: { deliveryMode: "direct", sendText: vi.fn() as never },
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -1905,6 +1947,9 @@ describe("message tool secret scoping", () => {
       await expect(invocation).resolves.toBeDefined();
       expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
       expect(mocks.runMessageAction).toHaveBeenCalledOnce();
+      if ("expectedRunnerChannel" in testCase) {
+        expect(firstRunMessageActionInput()?.params?.channel).toBe(testCase.expectedRunnerChannel);
+      }
     },
   );
 

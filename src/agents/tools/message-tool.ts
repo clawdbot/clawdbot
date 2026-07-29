@@ -51,6 +51,7 @@ import {
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
@@ -1589,12 +1590,26 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
       const requestedAccountId = readStringParam(params, "accountId");
-      const requestedScope = resolveMessageSecretScope({
-        channel: params.channel,
-        target: params.target,
-        targets: params.targets,
+      validateExplicitMessageAccountSelection({
+        cfg: rawConfig,
         accountId: requestedAccountId,
+        checkResolvedAccount: false,
       });
+      const requestedBroadcastChannel = normalizeOptionalLowercaseString(params.channel);
+      if (
+        action === "broadcast" &&
+        requestedBroadcastChannel &&
+        requestedBroadcastChannel !== "all"
+      ) {
+        // Authorize and execute the same canonical provider. Otherwise an unavailable
+        // hint can fall back to the current provider only after account authorization.
+        const selection = await resolveMessageChannelSelection({
+          cfg: rawConfig,
+          channel: requestedBroadcastChannel,
+          fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
+        });
+        params.channel = selection.channel;
+      }
       const scope = resolveMessageSecretScope({
         channel: params.channel,
         target: params.target,
@@ -1603,7 +1618,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         accountId: requestedAccountId,
         fallbackAccountId: agentAccountId,
       });
-      const requestedBroadcastChannel = normalizeOptionalLowercaseString(params.channel);
       // Broadcast execution only narrows on an explicit non-all channel. Target
       // prefixes cannot authorize fewer providers than the runner will execute.
       const unscopedExplicitBroadcast =
@@ -1627,12 +1641,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         explicitAccountId,
         selectedChannels: broadcastAccountPlan
           ? broadcastAccountPlan.candidateChannels
-          : [
-              requestedScope.channel ??
-                (action === "broadcast"
-                  ? undefined
-                  : trustedTurnContext?.toolContext?.currentChannelProvider),
-            ],
+          : [scope.channel],
         trustedCurrentChannel: trustedTurnContext?.toolContext?.currentChannelProvider,
         trustedRequesterAccountId: trustedTurnContext?.requesterAccountId,
         hasTrustedTurnContext: trustedTurnContext !== undefined,
