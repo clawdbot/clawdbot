@@ -1063,8 +1063,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     const attemptedPathname = this.routeState.location?.pathname;
     const activeRouteFailed =
       !attemptedPathname ||
-      attemptedPathname ===
-        sessionNavigationTarget({ context, face, sessionKey }).options.pathname;
+      attemptedPathname === sessionNavigationTarget({ context, face, sessionKey }).options.pathname;
     const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
     const knownAgents = context.agents.state.agentsList?.agents;
     // A parseable retired agent is not a navigable owner; never turn its

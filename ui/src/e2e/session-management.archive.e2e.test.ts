@@ -338,7 +338,7 @@ suite.define(() => {
           sessionRow(deletedKey, "Deleted thread", updatedAt - 1_000),
         ]),
       },
-      sessionKey: deletedKey,
+      sessionKey: mainKey,
     });
 
     try {
