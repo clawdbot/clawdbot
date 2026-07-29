@@ -952,10 +952,6 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         }
         throw new Error("OpenAI API key or Codex OAuth missing");
       }
-      // Responses image tools support moderation; direct Images edits do not.
-      if (isEdit && req.providerOptions?.openai?.moderation !== undefined) {
-        throw new Error("OpenAI image edits do not support moderation.");
-      }
       const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
       const openAIProviderConfig = req.cfg?.models?.providers?.openai;
 

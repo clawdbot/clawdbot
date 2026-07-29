@@ -94,6 +94,11 @@ provider does not declare support. Bundled transparent-background support is
 OpenAI-specific; other providers may still preserve PNG alpha if their
 backend emits it.
 
+OpenAI supports `low` and `auto` moderation for both text-to-image generation
+and reference-image edits through the direct Images API or the Codex Responses
+backend. For CLI requests, pass `--openai-moderation low|auto` to either
+`openclaw infer image generate` or `openclaw infer image edit`.
+
 ## Supported providers
 
 | Provider          | Default model                           | Edit support                       | Auth                                                  |

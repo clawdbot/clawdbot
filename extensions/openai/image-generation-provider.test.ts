@@ -1050,26 +1050,32 @@ describe("openai image generation provider", () => {
   });
 
   it.each(["low", "auto"] as const)(
-    "rejects unsupported %s moderation before submitting a multipart image edit",
+    "forwards %s moderation on multipart image edits",
     async (moderation) => {
       mockGeneratedPngResponse();
 
       const provider = buildOpenAIImageGenerationProvider();
-      await expect(
-        provider.generateImage({
-          provider: "openai",
-          model: "gpt-image-2",
-          prompt: "Edit without unsupported moderation",
-          cfg: {},
-          inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          providerOptions: {
-            openai: { moderation },
-          },
-        }),
-      ).rejects.toThrow("OpenAI image edits do not support moderation.");
+      const result = await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Edit with supported moderation",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        providerOptions: {
+          openai: { moderation },
+        },
+      });
 
-      expect(postMultipartRequestMock).not.toHaveBeenCalled();
+      const request = multipartRequestCall() as RequestCall & {
+        body: FormData;
+      };
+      expect(postMultipartRequestMock).toHaveBeenCalledOnce();
+      expect(request.url).toBe("https://api.openai.com/v1/images/edits");
+      expect(request.body).toBeInstanceOf(FormData);
+      expect(request.body.get("moderation")).toBe(moderation);
       expect(postJsonRequestMock).not.toHaveBeenCalled();
+      expect(result.images).toHaveLength(1);
+      expect(result.images[0]?.mimeType).toBe("image/png");
     },
   );
 

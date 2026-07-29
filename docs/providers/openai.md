@@ -594,6 +594,7 @@ generation through the same `openai/gpt-image-2` model ref.
 | Transport                 | OpenAI Images API                  | Codex Responses backend              |
 | Max images per request    | 4                                  | 4                                    |
 | Edit mode                 | Enabled (up to 5 reference images) | Enabled (up to 5 reference images)   |
+| Moderation                | `low` or `auto`; generate and edit | `low` or `auto`; generate and edit   |
 | Size overrides            | Supported, including 2K/4K sizes   | Supported, including 2K/4K sizes     |
 | Aspect ratio / resolution | Not forwarded to OpenAI Images API | Mapped to a supported size when safe |
 
@@ -641,11 +642,10 @@ Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias. Use
 `--quality low|medium|high|auto` to control OpenAI Images quality and cost.
-Use `--openai-moderation low|auto` with `image generate` to pass OpenAI's
-moderation hint. The direct OpenAI Images API does not support moderation for
-`image edit`; explicitly supplying it fails rather than silently ignoring the
-requested option. ChatGPT/Codex OAuth image edits use the Responses backend,
-which supports the moderation hint.
+Use `--openai-moderation low|auto` with both `image generate` and `image edit`
+to pass OpenAI's moderation hint. The direct OpenAI Images API and the
+ChatGPT/Codex OAuth Responses backend both support moderation for text-to-image
+generation and reference-image edits.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When
 an `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
