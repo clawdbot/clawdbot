@@ -48,6 +48,8 @@ describe("config view", () => {
     version: "2026.3.11",
     theme: "claw" as ThemeName,
     themeMode: "system" as ThemeMode,
+    locale: "en" as const,
+    onLocaleChange: vi.fn(),
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
     hasCustomTheme: false,
@@ -99,6 +101,31 @@ describe("config view", () => {
     } finally {
       container.remove();
     }
+  });
+
+  it("renders Language first on Appearance with its synced description", () => {
+    const onLocaleChange = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      locale: "pt-BR",
+      onLocaleChange,
+    });
+
+    const sections = [...container.querySelectorAll<HTMLElement>(".settings-section")];
+    expect(sections[0]?.id).toBe("settings-language");
+    expect(sections[0]?.textContent).toContain("Language");
+    expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
+
+    const select = sections[0]?.querySelector("wa-select") as
+      | (HTMLElement & { value: string })
+      | null;
+    expect(select?.getAttribute("value")).toBe("pt-BR");
+    if (select) {
+      Object.defineProperty(select, "value", { configurable: true, value: "fr" });
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    expect(onLocaleChange).toHaveBeenCalledWith("fr");
   });
 
   function findOptionalButtonByText(

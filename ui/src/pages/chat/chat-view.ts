@@ -31,6 +31,7 @@ import type {
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
+import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
@@ -40,6 +41,7 @@ import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
+import type { ChatComposerPlusMenuProps } from "./components/chat-composer-plus-menu.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
@@ -160,6 +162,18 @@ export type ChatProps = {
   workspaceConflict?: WorkspaceResultConflict;
   onDismissWorkspaceConflict?: () => void;
   sessions: SessionsListResult | null;
+  toolOverrides?: SessionToolOverrides;
+  capabilityMenu?: Omit<
+    ChatComposerPlusMenuProps,
+    | "attachments"
+    | "disabled"
+    | "open"
+    | "view"
+    | "toolOverrides"
+    | "onOpenChange"
+    | "onViewChange"
+    | "showCapabilities"
+  >;
   swarmSessions?: readonly GatewaySessionRow[];
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -404,6 +418,8 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
+    toolOverrides: props.toolOverrides,
+    capabilityMenu: props.capabilityMenu,
     providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,

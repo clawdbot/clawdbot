@@ -15,10 +15,6 @@ import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
 const TLON_INGRESS_PAYLOAD_VERSION = 1;
 const TLON_INGRESS_POLL_INTERVAL_MS = 1_000;
-const TLON_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const TLON_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// Preserve the retired process-local guard's full 2,000-message key window.
-const TLON_INGRESS_TOMBSTONE_MAX_ENTRIES = 2_000;
 
 export type TlonIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -195,11 +191,11 @@ export function createTlonIngressMonitor(options: {
     },
     deliver: (raw, lifecycle) => options.dispatch(raw.source, raw.event, lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
+    // Preserve the retired process-local guard's full 2,000-message key window.
     retention: {
-      pruneIntervalMs: TLON_INGRESS_PRUNE_INTERVAL_MS,
-      completedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: TLON_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
+      completedTtlMs: undefined,
+      completedMaxEntries: 2_000,
+      failedMaxEntries: 2_000,
     },
     // The Tlon firehose has always surfaced a failed append to its awaited callback.
     appendRetryDelaysMs: [0],

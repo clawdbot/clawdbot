@@ -57,12 +57,13 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
-  async readFile(params: { filePath: string; cwd?: string }): Promise<Buffer> {
+  async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (
       await fsRoot(target.mount.hostRoot)
     ).readBytes(target.mountRelativePath, {
       hardlinks: "reject",
+      ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
   }
 

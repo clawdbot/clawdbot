@@ -129,7 +129,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-logging": 4,
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
-  "channel-message": 130,
+  // +1: shared ingress retention defaults projected through the deprecated message barrel.
+  "channel-message": 131,
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
@@ -201,7 +202,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +11: attributed skill proposal evaluation and committed skill lifecycle contracts.
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
-      4771,
+      // +2: shared ingress retention defaults through channel-outbound and channel-message.
+      4773,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -249,7 +251,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: channel prompt-context type and metadata builder compatibility aliases.
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
-      1702,
+      // +1: shared ingress retention defaults projected through channel-message.
+      1703,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
