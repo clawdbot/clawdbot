@@ -2,7 +2,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
@@ -56,6 +56,7 @@ function heartbeatRunOwnsPendingFinalDelivery(
 export function classifyHeartbeatAgentOutcome(params: {
   agentRun: CompletedHeartbeatAgentRun;
   hasRelayableExecCompletion: boolean;
+  suppressUnmarkedSourceReplies: boolean;
   responsePrefix: string | undefined;
   ackMaxChars: number;
 }) {
@@ -67,6 +68,19 @@ export function classifyHeartbeatAgentOutcome(params: {
       preview: truncateHeartbeatPreview(heartbeatToolResponse.summary),
       response: heartbeatToolResponse,
     } as const;
+  }
+  if (
+    params.suppressUnmarkedSourceReplies &&
+    !params.hasRelayableExecCompletion &&
+    !heartbeatToolResponse &&
+    !heartbeatTerminalToolFailure &&
+    replyPayload &&
+    replyPayload.isError !== true &&
+    getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression !== true
+  ) {
+    // Message-tool privacy never makes an ordinary assistant final outbound;
+    // marked operator notices and terminal failures keep their visible paths.
+    return { kind: "ack", eventStatus: "ok-token", silent: true } as const;
   }
   if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
     return { kind: "ack", eventStatus: "ok-empty" } as const;
