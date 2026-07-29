@@ -12,7 +12,6 @@ import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-t
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { sessionViewerPresenceForGateway } from "../../lib/session-viewer-presence.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -21,6 +20,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
 import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
@@ -44,6 +44,7 @@ import {
   singlePaneLayout,
   splitRatio,
   splitWeight,
+  visiblePanesOf,
   type ChatSplitLayout,
   type ChatSplitPane,
 } from "./split-layout.ts";
@@ -80,6 +81,7 @@ export class ChatPage extends OpenClawLightDomElement {
   private classicColumnId = "c1";
   private classicPaneId = "p1";
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
+  private readonly viewerPresence = new ChatViewerPresenceController(this);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -101,10 +103,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    const gateway = this.context?.gateway;
-    if (gateway && typeof gateway.subscribe === "function") {
-      sessionViewerPresenceForGateway(gateway).unwatch(this);
-    }
+    this.viewerPresence.dispose();
     this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
@@ -121,7 +120,11 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
-    this.syncViewerPresence();
+    const layout = this.layout ?? this.classicLayout();
+    this.viewerPresence.sync(
+      this.context?.gateway,
+      visiblePanesOf(layout, this.narrow).map((pane) => pane.sessionKey),
+    );
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
     const routeDraftWasRendered =
@@ -545,26 +548,6 @@ export class ChatPage extends OpenClawLightDomElement {
     return data.draft;
   }
 
-  private renderedPanes(layout: ChatSplitLayout): ChatSplitPane[] {
-    if (!this.narrow) {
-      return panesOf(layout);
-    }
-    const activePane = findPane(layout, layout.activePaneId)?.pane;
-    return activePane ? [activePane] : [];
-  }
-
-  private syncViewerPresence() {
-    const gateway = this.context?.gateway;
-    if (!gateway || typeof gateway.subscribe !== "function") {
-      return;
-    }
-    const layout = this.layout ?? this.classicLayout();
-    const sessionKeys = this.renderedPanes(layout)
-      .map((pane) => pane.sessionKey.trim())
-      .filter(Boolean);
-    sessionViewerPresenceForGateway(gateway).watch(this, sessionKeys);
-  }
-
   private renderPaneCell(
     pane: ChatSplitPane,
     active: boolean,
@@ -721,7 +704,7 @@ export class ChatPage extends OpenClawLightDomElement {
   override render() {
     const indicator = this.dropIndicator;
     const layout = this.layout ?? this.classicLayout();
-    const renderedPaneIds = new Set(this.renderedPanes(layout).map((pane) => pane.id));
+    const renderedPaneIds = new Set(visiblePanesOf(layout, this.narrow).map((pane) => pane.id));
     const renderedPaneOwners = layout.columns.flatMap((column) =>
       column.panes
         .filter((pane) => renderedPaneIds.has(pane.id))

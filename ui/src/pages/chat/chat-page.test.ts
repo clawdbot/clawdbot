@@ -16,6 +16,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
@@ -162,7 +163,7 @@ function setViewerPresenceContext(page: ChatPage) {
     features: { methods: [SESSION_VIEWERS_SET_METHOD] },
     snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } },
   } as GatewayHelloOk;
-  const snapshotListeners = new Set<() => void>();
+  const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
     snapshot: {
       client,

@@ -11,7 +11,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagent-lifecycle-events.js";
 import { createSubagentRegistryLifecycleController } from "../agents/subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
@@ -247,7 +247,7 @@ describe("session.message websocket events", () => {
       }
       const afterNarration = await rpcReq(observerWs, "system-presence", {});
       expect(
-        (afterNarration.payload as Array<Record<string, unknown>>).find(
+        (afterNarration.payload as unknown as Array<Record<string, unknown>>).find(
           (entry) => entry.instanceId === instanceId,
         )?.watchedSessions,
       ).toEqual(declaredKeys);
@@ -259,7 +259,7 @@ describe("session.message websocket events", () => {
       expect(failedUnsubscribe.ok).toBe(false);
       const afterFailedUnsubscribe = await rpcReq(observerWs, "system-presence", {});
       expect(
-        (afterFailedUnsubscribe.payload as Array<Record<string, unknown>>).find(
+        (afterFailedUnsubscribe.payload as unknown as Array<Record<string, unknown>>).find(
           (entry) => entry.instanceId === instanceId,
         )?.watchedSessions,
       ).toEqual(declaredKeys);
@@ -285,7 +285,7 @@ describe("session.message websocket events", () => {
       expect(oversized.ok).toBe(false);
       const afterOversized = await rpcReq(observerWs, "system-presence", {});
       expect(
-        (afterOversized.payload as Array<Record<string, unknown>>).find(
+        (afterOversized.payload as unknown as Array<Record<string, unknown>>).find(
           (entry) => entry.instanceId === instanceId,
         )?.watchedSessions,
       ).toEqual([replacementKey]);
@@ -315,8 +315,9 @@ describe("session.message websocket events", () => {
       });
       watchedWs.close();
       const disconnectedEvent = await disconnectPresence;
+      const hiddenPresenceVersion = hiddenEvent.stateVersion?.presence;
       expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
-        hiddenEvent.stateVersion?.presence ?? 0,
+        typeof hiddenPresenceVersion === "number" ? hiddenPresenceVersion : 0,
       );
     } finally {
       observerWs.close();

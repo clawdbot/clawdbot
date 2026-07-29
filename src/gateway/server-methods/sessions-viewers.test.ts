@@ -1,11 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import { sessionsHandlers } from "./sessions.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 async function declare(params: {
-  body: unknown;
+  body: Record<string, unknown>;
   connId?: string;
   context: GatewayRequestContext;
 }) {

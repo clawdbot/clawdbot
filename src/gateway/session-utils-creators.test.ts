@@ -83,6 +83,8 @@ it("preserves legacy list output across visibility, scope, creator, and search f
     id: profileId,
     displayName:
       profileId === "profile-ada" ? "Ada" : profileId === "profile-bob" ? "Bob" : "Carol",
+    hasAvatar: false,
+    updatedAt: now,
   }));
   const cfg = {
     agents: {

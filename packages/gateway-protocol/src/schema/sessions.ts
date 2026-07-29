@@ -6,7 +6,7 @@ import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
-import { ChatSendSessionKeyString, NonEmptyString, SessionLabelString } from "./primitives.js";
+import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionToolOverridesSchema } from "./sessions-row.js";
 
@@ -29,9 +29,6 @@ export const SESSION_OBSERVER_HEALTH_VALUES = [
   "done",
   "failed",
 ] as const;
-
-/** Maximum sessions one connection may declare as concurrently visible. */
-export const SESSION_VIEWER_PRESENCE_MAX_KEYS = 32;
 
 /** Trajectory judgment produced for one observed agent session. */
 export const SessionObserverHealthSchema = Type.Union([
@@ -480,20 +477,6 @@ export const SessionsMessagesUnsubscribeParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
-/** Replaces the sessions this connection is currently rendering. */
-export const SessionsViewerPresenceSetParamsSchema = closedObject({
-  sessionKeys: Type.Array(ChatSendSessionKeyString, {
-    maxItems: SESSION_VIEWER_PRESENCE_MAX_KEYS,
-  }),
-});
-
-/** Canonical session keys retained for this connection's viewer presence. */
-export const SessionsViewerPresenceSetResultSchema = closedObject({
-  sessionKeys: Type.Array(ChatSendSessionKeyString, {
-    maxItems: SESSION_VIEWER_PRESENCE_MAX_KEYS,
-  }),
-});
-
 /** Aborts the active or named run for a session. */
 export const SessionsAbortParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
@@ -887,12 +870,6 @@ export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<
   typeof SessionsMessagesUnsubscribeParamsSchema
->;
-export type SessionsViewerPresenceSetParams = Static<
-  typeof SessionsViewerPresenceSetParamsSchema
->;
-export type SessionsViewerPresenceSetResult = Static<
-  typeof SessionsViewerPresenceSetResultSchema
 >;
 export type SessionsAbortParams = Static<typeof SessionsAbortParamsSchema>;
 export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsSchema>;
