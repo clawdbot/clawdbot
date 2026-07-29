@@ -665,7 +665,12 @@ ${this.windowsPluginIsolationScript()}`,
       `$ErrorActionPreference = 'Stop'
 ${windowsPortableGitPathScript}
 $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if (Test-Path $configPath) {
+  $config = Get-Content $configPath -Raw | ConvertFrom-Json
+} else {
+  New-Item -ItemType Directory -Path (Split-Path $configPath -Parent) -Force | Out-Null
+  $config = [pscustomobject]@{}
+}
 if ($null -eq $config.update) {
   $config | Add-Member -MemberType NoteProperty -Name update -Value ([pscustomobject]@{})
 }

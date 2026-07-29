@@ -1646,6 +1646,10 @@ exit 0
     expect(script).not.toMatch(/private installMain\(tempName: string\): void/u);
     expect(script).not.toMatch(/private installLatestRelease\(\): void/u);
     expect(script).not.toMatch(/private runDevChannelUpdate\(\): void/u);
+    expect(script).toContain("if (Test-Path $configPath)");
+    expect(script).toContain(
+      "New-Item -ItemType Directory -Path (Split-Path $configPath -Parent) -Force",
+    );
   });
 
   it("runs the macOS dev update through a detached done-file runner", () => {
@@ -1663,6 +1667,10 @@ exit 0
     expect(transports).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
     expect(transports).toContain("*${posixSingleQuote(runnerPath)}*)");
     expect(transports).not.toContain('transport(["/bin/bash", "-c"');
+    expect(script).toContain(
+      'fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {}',
+    );
+    expect(script).toContain("fs.mkdirSync(path.dirname(configPath), { recursive: true })");
   });
 
   it("accepts an ambiguous POSIX background launch after its run materializes", async () => {
