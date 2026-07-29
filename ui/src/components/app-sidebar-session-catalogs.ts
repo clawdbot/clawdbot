@@ -12,7 +12,12 @@ import type {
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const now = Date.now();
-  if (timestampMs != null && Number.isFinite(timestampMs) && Math.abs(now - timestampMs) < 60_000) {
+  if (
+    timestampMs != null &&
+    Number.isFinite(timestampMs) &&
+    timestampMs <= now &&
+    now - timestampMs < 60_000
+  ) {
     return t("common.now");
   }
   return formatRelativeTimestamp(timestampMs, {

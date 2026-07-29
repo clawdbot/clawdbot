@@ -27,6 +27,7 @@ describe("formatSidebarTimestamp", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T08:00:00Z"));
 
+    expect(formatSidebarTimestamp(Date.now() + 30_000)).toBe("in 30s");
     expect(formatSidebarTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
   });
 });
