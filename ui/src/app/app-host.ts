@@ -2033,7 +2033,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           offline: gatewaySnapshot.offlineStable,
           queuedOutboxCount: storedOutboxes?.total ?? 0,
           lastError: gatewaySnapshot.lastError,
-          version:
+          gatewayVersion:
             context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
           updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
           updateRunning: overlaySnapshot.updateRunning,
