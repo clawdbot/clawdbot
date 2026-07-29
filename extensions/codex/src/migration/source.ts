@@ -199,7 +199,10 @@ function discoverInstalledCuratedPluginSources(
     if (!isOpenAiCuratedMarketplace(marketplace)) {
       continue;
     }
-    const remote = marketplace.name !== CODEX_PLUGINS_MARKETPLACE_NAME;
+    // Remote catalog entries carry no local path; the API-key curated variant
+    // (`openai-api-curated`) is local like `openai-curated` and must not be
+    // routed through remote plugin ids it does not have.
+    const remote = !marketplace.path;
     for (const summary of marketplace.plugins) {
       if (!summary.installed) {
         continue;
@@ -540,6 +543,7 @@ function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
     }
     const marketplaceSuffix = [
       `@${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`,
+      `@openai-api-curated`,
       `@${CODEX_PLUGINS_MARKETPLACE_NAME}`,
     ].find((suffix) => trimmed.endsWith(suffix));
     const withoutMarketplaceSuffix = marketplaceSuffix

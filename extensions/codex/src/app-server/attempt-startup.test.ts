@@ -766,6 +766,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("continues with a deny-all apps patch when plugin discovery exceeds its shared deadline", async () => {
+    vi.useFakeTimers();
     const deadlinePluginConfig = {
       appServer: { command: "codex", requestTimeoutMs: 400 },
       codexPlugins: {
@@ -782,11 +783,8 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
-    // Discovery requests (plugin/installed, and plugin/list only when the
-    // missing-plugin catalog fetch wins the race against the shared deadline)
-    // are deliberately left unanswered; the contract under test is that the
-    // thread still starts, carrying the deny-all apps patch.
     await waitForRequest(harness, "plugin/installed");
+    await vi.advanceTimersByTimeAsync(100);
 
     const threadStart = await waitForThreadStart(harness);
     const startMessage = readHarnessMessages(harness.writes).find(

@@ -307,25 +307,29 @@ function mcpDiscoveryNotice(
   if (mcpServerNames.length === 0) {
     return undefined;
   }
-  const servers = formatMcpServerNames(mcpServerNames);
+  const servers = mcpServerNames.toSorted((a, b) => a.localeCompare(b));
+  const formattedServers = formatMcpServerNames(servers);
   switch (reason) {
     case "stale-config":
       return {
         id: "mcp-stale-catalog",
         severity: "info",
-        message: `MCP servers ${servers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
+        message: `MCP servers ${formattedServers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
+        servers,
       };
     case "not-listed":
       return {
         id: "mcp-not-yet-listed",
         severity: "info",
-        message: `MCP servers ${servers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
+        message: `MCP servers ${formattedServers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
+        servers,
       };
     case "not-connected":
       return {
         id: "mcp-not-yet-connected",
         severity: "info",
-        message: `MCP servers ${servers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+        message: `MCP servers ${formattedServers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+        servers,
       };
     default:
       // Exhaustiveness guard for oxlint's consistent-return rule.

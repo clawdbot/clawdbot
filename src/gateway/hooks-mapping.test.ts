@@ -220,6 +220,71 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("defaults agent mappings to isolated sessions and accepts persistent overrides", async () => {
+    const isolated = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "isolated",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        }),
+      ],
+    });
+    expect(isolated?.ok).toBe(true);
+    if (isolated?.ok && isolated.action?.kind === "agent") {
+      expect(isolated.action.sessionMode).toBe("isolated");
+    }
+
+    const persistent = await applyGmailMappings({
+      mappings: [
+        {
+          ...createGmailAgentMapping({
+            id: "persistent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+          }),
+          sessionMode: "persistent",
+        },
+      ],
+    });
+    expect(persistent?.ok).toBe(true);
+    if (persistent?.ok && persistent.action?.kind === "agent") {
+      expect(persistent.action.sessionMode).toBe("persistent");
+    }
+  });
+
+  it("validates sessionMode returned by hook transforms", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hook-session-mode-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      'export default () => ({ sessionMode: "shared" });',
+    );
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "hook mapping sessionMode must be isolated or persistent",
+    });
+  });
+
   it("marks template-derived session keys as templated", async () => {
     const result = await applyGmailMappings({
       mappings: [

@@ -16,7 +16,7 @@ import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
-import { add, remove, update } from "./ops-mutations.js";
+import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
@@ -231,18 +231,20 @@ function insertCronJobRow(storePath: string, job: CronJob) {
   runOpenClawStateWriteTransaction(({ db }) => {
     db.prepare(
       `INSERT INTO cron_jobs (
-        store_key, job_id, name, enabled, created_at_ms, schedule_kind,
+        store_key, job_id, declaration_key, name, description, enabled, created_at_ms, schedule_kind,
         at, every_ms, anchor_ms, schedule_expr, session_target, wake_mode, payload_kind,
         payload_message, delivery_mode, delivery_to, job_json, state_json, updated_at
       ) VALUES (
-        $storeKey, $jobId, $name, $enabled, $createdAtMs, $scheduleKind,
+        $storeKey, $jobId, $declarationKey, $name, $description, $enabled, $createdAtMs, $scheduleKind,
         $at, $everyMs, $anchorMs, $scheduleExpr, $sessionTarget, $wakeMode, $payloadKind,
         $payloadMessage, $deliveryMode, $deliveryTo, $jobJson, $stateJson, $updatedAt
       )`,
     ).run({
       $storeKey: path.resolve(storePath),
       $jobId: job.id,
+      $declarationKey: job.declarationKey ?? null,
       $name: job.name,
+      $description: job.description ?? null,
       $enabled: job.enabled ? 1 : 0,
       $createdAtMs: job.createdAtMs,
       $scheduleKind: job.schedule.kind,
@@ -262,6 +264,67 @@ function insertCronJobRow(storePath: string, job: CronJob) {
     });
   });
 }
+
+describe("cron stale job-family adoption", () => {
+  it("removes owner-tagged legacy rows outside the active store", async () => {
+    const { storePath } = await makeStorePath();
+    const staleStorePath = path.join(path.dirname(storePath), "legacy-copy", "jobs.json");
+    const now = Date.parse("2026-07-29T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const family = {
+      declarationKey: "memory-core:memory-dreaming-promotion",
+      name: "Memory Dreaming Promotion",
+      ownerPluginTag: "[managed-by=memory-core.short-term-promotion]",
+    };
+    await add(state, {
+      declarationKey: family.declarationKey,
+      name: family.name,
+      description: `${family.ownerPluginTag} current`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/3 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "dream" },
+    });
+    const legacy = {
+      id: "75e182e6-8728-43ae-832b-01f50702feed",
+      name: family.name,
+      description: `${family.ownerPluginTag} legacy`,
+      enabled: true,
+      createdAtMs: now - 10_000,
+      updatedAtMs: now - 10_000,
+      schedule: { kind: "cron" as const, expr: "0 3 * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "dream" },
+      state: {},
+    } satisfies CronJob;
+    insertCronJobRow(staleStorePath, legacy);
+    insertCronJobRow(staleStorePath, {
+      ...legacy,
+      id: "operator-same-name",
+      description: "Operator-owned job with the same display name",
+    });
+
+    await expect(removeStaleJobFamily(state, family)).resolves.toBe(1);
+
+    const remaining = runOpenClawStateWriteTransaction(({ db }) =>
+      db
+        .prepare("SELECT store_key, job_id FROM cron_jobs WHERE name = ? ORDER BY job_id")
+        .all(family.name),
+    );
+    expect(remaining).toHaveLength(2);
+    expect(remaining).toEqual(
+      expect.arrayContaining([
+        { store_key: path.resolve(storePath), job_id: expect.any(String) },
+        { store_key: path.resolve(staleStorePath), job_id: "operator-same-name" },
+      ]),
+    );
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+});
 
 async function expectDueIsolatedManualRunProgresses(storePath: string, now: number) {
   const state = createOkIsolatedCronState({ storePath, now, summary: "done" });

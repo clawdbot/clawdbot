@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   gatewayApply: undefined as
     | ((request: { method: string; params?: { proposalId?: string } }) => Promise<unknown>)
     | undefined,
+  acquireGatewayLock: vi.fn(),
+  releaseGatewayLock: vi.fn(),
   workspaceDir: "",
   defaultRuntime: {
     log: vi.fn(),
@@ -30,7 +32,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
   isGatewayTransportError: () => false,
+}));
+vi.mock("../infra/gateway-lock.js", () => ({
+  acquireGatewayLock: mocks.acquireGatewayLock,
 }));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
@@ -51,6 +58,8 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-cache-");
     delete mocks.config.gateway;
     mocks.gatewayApply = undefined;
+    mocks.releaseGatewayLock.mockReset();
+    mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
@@ -157,6 +166,76 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       "health",
       "skills.proposals.apply",
     ]);
+    await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { status: "pending" },
+    });
+  });
+
+  it("preserves configless offline apply when no local gateway is listening", async () => {
+    const workshop = await import("../skills/workshop/service.js");
+    const proposal = await workshop.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      name: "Offline Upgrade",
+      description: "Keep shipped configless Workshop apply behavior",
+      content: "# Offline Upgrade\n\nApply without a running gateway.\n",
+    });
+    const authError = Object.assign(new Error("gateway health requires credentials"), {
+      name: "GatewayCredentialsRequiredError",
+      method: "health",
+      configPath: "/tmp/openclaw.json",
+    });
+    mocks.callGateway.mockRejectedValueOnce(authError);
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await program.parseAsync(["skills", "workshop", "apply", proposal.record.id], {
+      from: "user",
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
+      allowInTests: true,
+      port: 18789,
+      role: "skill-workshop-apply",
+      timeoutMs: 250,
+    });
+    expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(1);
+    await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { status: "applied" },
+    });
+  });
+
+  it("does not bypass Gateway ownership when CLI credentials are missing", async () => {
+    const workshop = await import("../skills/workshop/service.js");
+    const proposal = await workshop.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      name: "Gateway Owned Upgrade",
+      description: "Keep snapshot invalidation in the running gateway",
+      content: "# Gateway Owned Upgrade\n\nDo not apply in the CLI process.\n",
+    });
+    const authError = Object.assign(new Error("gateway health requires credentials"), {
+      name: "GatewayCredentialsRequiredError",
+      method: "health",
+      configPath: "/tmp/openclaw.json",
+    });
+    mocks.callGateway.mockRejectedValueOnce(authError);
+    mocks.acquireGatewayLock.mockRejectedValueOnce(new Error("gateway lock is owned"));
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await expect(
+      program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
     await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },
     });

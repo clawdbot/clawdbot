@@ -19,17 +19,17 @@ export type OpenAIQuicksilverSocket = {
     listener: (data: RawData, isBinary: boolean) => void,
   ): OpenAIQuicksilverSocket;
   on(event: "error", listener: (error: Error) => void): OpenAIQuicksilverSocket;
-  on(event: "close", listener: () => void): OpenAIQuicksilverSocket;
+  on(event: "close", listener: (code: number, reason: Buffer) => void): OpenAIQuicksilverSocket;
   once(event: "open", listener: () => void): OpenAIQuicksilverSocket;
   once(event: "error", listener: (error: Error) => void): OpenAIQuicksilverSocket;
-  once(event: "close", listener: () => void): OpenAIQuicksilverSocket;
+  once(event: "close", listener: (code: number, reason: Buffer) => void): OpenAIQuicksilverSocket;
   off(event: "open", listener: () => void): OpenAIQuicksilverSocket;
   off(
     event: "message",
     listener: (data: RawData, isBinary: boolean) => void,
   ): OpenAIQuicksilverSocket;
   off(event: "error", listener: (error: Error) => void): OpenAIQuicksilverSocket;
-  off(event: "close", listener: () => void): OpenAIQuicksilverSocket;
+  off(event: "close", listener: (code: number, reason: Buffer) => void): OpenAIQuicksilverSocket;
 };
 
 export type OpenAIQuicksilverSocketFactory = (
@@ -38,7 +38,9 @@ export type OpenAIQuicksilverSocketFactory = (
 ) => OpenAIQuicksilverSocket;
 
 type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
-type OpenAIQuicksilverTerminalEvent = { kind: "error"; error: Error } | { kind: "close" };
+type OpenAIQuicksilverTerminalEvent =
+  | { kind: "error"; error: Error }
+  | { kind: "close"; code: number; reason: string };
 
 type OpenAIQuicksilverConnectedSideband = {
   socket: OpenAIQuicksilverSocket;
@@ -85,9 +87,13 @@ function waitForSocketOpen(params: {
       }
       finish(error);
     };
-    const onClose = () => {
+    const onClose = (code: number, reason: Buffer) => {
       if (opened) {
-        terminalEvent ??= { kind: "close" };
+        terminalEvent ??= {
+          kind: "close",
+          code: code ?? 1006,
+          reason: reason?.toString("utf8") ?? "",
+        };
         return;
       }
       finish(new Error("GPT-Live sideband closed during startup"));
@@ -169,6 +175,13 @@ export async function connectOpenAIQuicksilverSideband(params: {
     socket.on("message", bufferFrame);
     try {
       const openHandoff = await waitForSocketOpen({ socket, signal: params.signal });
+      if (params.signal.aborted) {
+        socket.off("message", bufferFrame);
+        openHandoff.detachTerminalListeners();
+        socket.on("error", () => {});
+        socket.close(1000, "sideband startup stopped");
+        throw params.signal.reason;
+      }
       return {
         socket,
         bufferedFrames,

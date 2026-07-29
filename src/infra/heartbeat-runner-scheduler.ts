@@ -356,6 +356,7 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           runScope: "global",
+          tasks: requestedTasks,
           deps: { runtime: state.runtime },
         });
       } catch (err) {
@@ -450,7 +451,12 @@ export function startHeartbeatRunner(opts: {
       if (!targetAgent && !allowsUnscheduledTarget) {
         return { status: "skipped", reason: "disabled" };
       }
-      if (isInterval && targetAgent && !requestedSessionKey && !requestedHeartbeat) {
+      if (
+        (isInterval || authoritativeScheduledTick) &&
+        targetAgent &&
+        !requestedSessionKey &&
+        !requestedHeartbeat
+      ) {
         // Cron monitor tick for one enrolled agent: use the full per-agent
         // path — including due-commitment sessions — that the broadcast
         // interval owned before cadence moved to cron. Wakes carrying

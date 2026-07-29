@@ -2739,6 +2739,27 @@ openclaw-chat-page {
   text-decoration: none;
 }
 
+.mcp-server-dialog {
+  width: min(520px, calc(100vw - 48px));
+  gap: var(--space-4);
+}
+
+.mcp-server-dialog__scope {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.mcp-server-dialog .mcp-server-form {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.mcp-server-dialog .mcp-server-message {
+  margin: 0;
+}
+
 .agent-chat__session-overrides-pill {
   display: inline-flex;
   order: 2;

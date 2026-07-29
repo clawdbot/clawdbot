@@ -165,6 +165,24 @@ struct ChatMarkdownBlockSegmenterTests {
             isComplete: true)))
     }
 
+    @Test func `type 6 HTML block cannot absorb the details closer`() {
+        #expect(self.segments("""
+        <details>
+        <summary>X</summary>
+
+        <div>body</div>
+        </details>
+
+        Following
+        """) == [
+            .disclosure(ChatMarkdownDisclosure(
+                summary: "X",
+                isExpanded: false,
+                blocks: [.prose("<div>body</div>")])),
+            .prose("Following"),
+        ])
+    }
+
     @Test @MainActor func `details preserve document scoped reference links`() throws {
         let destination = try #require(URL(string: "https://example.com"))
         let snapshot = ChatMarkdownRenderSnapshot(

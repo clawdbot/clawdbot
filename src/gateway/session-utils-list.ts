@@ -25,6 +25,7 @@ import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-lis
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 import type {
+  SessionActorProfileIdentity,
   SessionListRowContext,
   SessionListRowContextProvider,
 } from "./session-utils-contracts.js";
@@ -73,7 +74,7 @@ type ListSessionsFromStoreParams = {
 
 type SessionEntrySelection = {
   entries: SessionEntryPair[];
-  creators: Array<{ id: string; label?: string }>;
+  creators: Array<{ id: string; label?: string; avatarUrl?: string }>;
   totalCount: number;
   limitApplied?: number;
   offset: number;
@@ -82,25 +83,34 @@ type SessionEntrySelection = {
 };
 
 function addSessionCreatorIdentity(
-  creators: Map<string, { id: string; label?: string }>,
+  creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
   entry: SessionEntry,
-  userProfileLabelById: Map<string, string | undefined>,
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
 ): void {
-  const actor = projectSessionActor(entry.createdActor, userProfileLabelById);
+  const actor = projectSessionActor(entry.createdActor, userProfileIdentityById);
   const id = normalizeOptionalString(actor?.id);
   if (!id) {
     return;
   }
   const label = normalizeOptionalString(actor?.label);
+  const avatarUrl = normalizeOptionalString(actor?.avatarUrl);
   const existing = creators.get(id);
-  if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
-    creators.set(id, { id, ...(label ? { label } : {}) });
+  if (
+    !existing ||
+    (label && (!existing.label || label.localeCompare(existing.label) < 0)) ||
+    (avatarUrl && !existing.avatarUrl)
+  ) {
+    creators.set(id, {
+      id,
+      ...(label ? { label } : existing?.label ? { label: existing.label } : {}),
+      ...(avatarUrl ? { avatarUrl } : existing?.avatarUrl ? { avatarUrl: existing.avatarUrl } : {}),
+    });
   }
 }
 
 function sortSessionCreatorIdentities(
-  creators: Map<string, { id: string; label?: string }>,
-): Array<{ id: string; label?: string }> {
+  creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
+): Array<{ id: string; label?: string; avatarUrl?: string }> {
   return [...creators.values()].toSorted((a, b) => {
     const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
     return byLabel || a.id.localeCompare(b.id);
@@ -165,7 +175,7 @@ function filterSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
-  userProfileLabelById?: Map<string, string | undefined>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
 }): Pick<SessionEntrySelection, "creators" | "entries"> {
@@ -184,7 +194,7 @@ function filterSessionEntries(params: {
   const creatorId = normalizeOptionalString(opts.creatorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
-  const creators = new Map<string, { id: string; label?: string }>();
+  const creators = new Map<string, { id: string; label?: string; avatarUrl?: string }>();
 
   for (const [key, entry] of Object.entries(store)) {
     if (params.entryFilter && !params.entryFilter(key, entry)) {
@@ -282,8 +292,8 @@ function filterSessionEntries(params: {
     if (activeCutoff !== undefined && (entry.updatedAt ?? 0) < activeCutoff) {
       continue;
     }
-    if (params.userProfileLabelById) {
-      addSessionCreatorIdentity(creators, entry, params.userProfileLabelById);
+    if (params.userProfileIdentityById) {
+      addSessionCreatorIdentity(creators, entry, params.userProfileIdentityById);
     }
     if (creatorId && entry.createdActor?.id !== creatorId) {
       continue;
@@ -310,7 +320,7 @@ function selectSessionEntries(params: {
   now: number;
   getRowContext?: SessionListRowContextProvider;
   defaultLimit?: number;
-  userProfileLabelById?: Map<string, string | undefined>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
 }): SessionEntrySelection {
   const { creators, entries: filtered } = filterSessionEntries(params);
@@ -336,10 +346,10 @@ function selectSessionEntries(params: {
 function prepareSessionList(params: ListSessionsFromStoreParams) {
   const { cfg, store, opts } = params;
   const now = Date.now();
-  const userProfileLabelById = new Map<string, string | undefined>();
+  const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
-    rowContext ??= buildSessionListRowContext({ store, now, userProfileLabelById });
+    rowContext ??= buildSessionListRowContext({ store, now, userProfileIdentityById });
     return rowContext;
   };
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
@@ -364,7 +374,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
         ? getRowContext
         : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
-    userProfileLabelById,
+    userProfileIdentityById,
   });
   const fullRowContext =
     rowContext ||
@@ -385,7 +395,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const sharedRowContext =
     fullRowContext ??
     (selection.entries.length > 0
-      ? buildSessionListRowMetadataContext({ now, userProfileLabelById })
+      ? buildSessionListRowMetadataContext({ now, userProfileIdentityById })
       : undefined);
   populateSessionListAcpMetadata({
     cfg,

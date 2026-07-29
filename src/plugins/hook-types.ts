@@ -288,6 +288,8 @@ const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AG
 export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
   typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
 
+export type PluginToolMatcher = readonly [string, ...string[]];
+
 export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   priority?: number;
   registrationId?: string;
@@ -297,7 +299,10 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
       /** Host-enforced turn triggers that may invoke this reply hook. */
       eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
     }
-  : { eligibleTriggers?: never });
+  : { eligibleTriggers?: never }) &
+  (K extends "before_tool_call" | "after_tool_call"
+    ? { matcher?: PluginToolMatcher }
+    : { matcher?: never });
 
 export type PluginHookAgentContext = {
   runId?: string;
@@ -693,6 +698,8 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
+  abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
   toolName: string;
   /** Host-authoritative discriminator for tools that intentionally share names. */
@@ -995,6 +1002,7 @@ type PluginHookGatewayCronJobState = {
 
 export type PluginHookGatewayCronJob = {
   id: string;
+  declarationKey?: string;
   /** Agent id that owns this cron job. */
   agentId?: string;
   name?: string;
@@ -1066,6 +1074,7 @@ export type PluginHookCronChangedEvent = {
 };
 
 type PluginHookGatewayCronCreateInput = {
+  declarationKey?: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -1093,6 +1102,11 @@ export type PluginHookGatewayCronService = {
   add: (input: PluginHookGatewayCronCreateInput) => Promise<unknown>;
   update: (id: string, patch: PluginHookGatewayCronUpdateInput) => Promise<unknown>;
   remove: (id: string) => Promise<PluginHookGatewayCronRemoveResult>;
+  removeStaleJobFamily: (family: {
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }) => Promise<number>;
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";
@@ -1426,6 +1440,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   registrationId?: string;
   hookName: K;
   handler: PluginHookHandlerMap[K];
+  matcher?: PluginToolMatcher;
   priority?: number;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];

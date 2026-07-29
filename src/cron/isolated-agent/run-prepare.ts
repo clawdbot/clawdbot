@@ -276,11 +276,11 @@ export async function prepareCronRunContext(params: {
           )
         : Boolean(currentEntry);
       if (changed) {
-        throw new Error(`Session "${agentSessionKey}" changed while starting work. Retry.`);
+        throw new CronSessionLifecycleClaimError(agentSessionKey);
       }
       const archivedSessionError = resolveSessionWorkStartError(agentSessionKey, currentEntry);
       if (archivedSessionError) {
-        throw new Error(archivedSessionError);
+        throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
   });

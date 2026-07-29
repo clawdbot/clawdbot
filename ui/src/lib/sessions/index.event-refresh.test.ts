@@ -56,6 +56,40 @@ function createHarness(request: GatewayBrowserClient["request"]) {
 }
 
 describe("event-driven session list refresh", () => {
+  it("clears a recreated session's prior deletion before the debounced refresh", async () => {
+    vi.useFakeTimers();
+    const key = "agent:main:recreated-thread";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(1);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ force: true });
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { sessionKey: key, reason: "delete" },
+      });
+      expect(sessions.state.deletedSessions).toEqual([{ key, agentId: undefined }]);
+
+      emitEvent(sessionChangedEvent(key));
+
+      expect(sessions.state.deletedSessions).toEqual([]);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("debounces rapid session events into one trailing list refresh", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async (method: string) => {

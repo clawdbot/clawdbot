@@ -5,6 +5,7 @@ import path from "node:path";
 // Systemd tests cover Linux service install, start, stop, and status behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
 
 type ExecFileError = Error & {
   stderr?: string;
@@ -1319,6 +1320,80 @@ describe("stageSystemdService", () => {
       expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
       expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=dotenv-token\nLLM_API_KEY=dotenv-key\n");
       expect(envFileStat.mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("round-trips file-managed secrets through parse, repair planning, and emit", async () => {
+    await withStageFixture(async ({ env, unitPath, envFilePath, stateDir }) => {
+      const wrapperPath = path.join(stateDir, "openclaw-wrapper");
+      const fileBackedOpenAiKey = "file-backed-openai-test-key";
+      await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fs.chmod(wrapperPath, 0o755);
+      await fs.writeFile(envFilePath, `OPENAI_API_KEY=${fileBackedOpenAiKey}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(
+        unitPath,
+        [
+          "[Service]",
+          `ExecStart=${wrapperPath} gateway --port 18789`,
+          `EnvironmentFile=-${envFilePath}`,
+          "Environment=HOME=" + env.HOME,
+          "Environment=OPENCLAW_GATEWAY_PORT=18789",
+          "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const command = await readSystemdServiceExecStart(env);
+      expect(command?.environment?.OPENAI_API_KEY).toBe(fileBackedOpenAiKey);
+      expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+      expect(command?.environmentValueSources?.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("inline");
+
+      const plan = await buildGatewayInstallPlan({
+        env: { ...env, PATH: "/usr/bin:/bin" },
+        port: 18_789,
+        runtime: "node",
+        platform: "linux",
+        nodePath: process.execPath,
+        wrapperPath,
+        existingEnvironment: command?.environment,
+        existingEnvironmentValueSources: command?.environmentValueSources,
+        authStore: { version: 1, profiles: {} },
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
+
+      mockSystemctlStatusOk();
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        ...plan,
+      });
+
+      const [rewrittenUnit, rewrittenEnvFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+      expect(rewrittenUnit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(rewrittenUnit).toContain(
+        "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY",
+      );
+      expect(rewrittenUnit).not.toContain(fileBackedOpenAiKey);
+      expect(rewrittenEnvFile).toBe(`OPENAI_API_KEY=${fileBackedOpenAiKey}\n`);
     });
   });
 

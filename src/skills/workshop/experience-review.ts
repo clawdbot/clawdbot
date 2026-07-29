@@ -3,6 +3,7 @@ import { SessionManager } from "../../agents/sessions/index.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -98,6 +99,16 @@ type PendingExperienceReview = {
   generation: number;
   timer?: ExperienceReviewTimer;
 };
+
+function isAuthProfileMigrationRequiredError(
+  error: unknown,
+): error is { code: "AUTH_PROFILE_MIGRATION_REQUIRED" } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "AUTH_PROFILE_MIGRATION_REQUIRED"
+  );
+}
 
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   // Only harnesses that report both the resolved model and actual host-side
@@ -254,14 +265,22 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
               return;
             }
-            pendingBySession.delete(sessionKey);
             await deps.runReview(candidate);
+            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
+              pendingBySession.delete(sessionKey);
+            }
           } finally {
             reviewInFlight = false;
           }
         })
         .catch((error: unknown) => {
           log.warn(`skill experience review failed: ${String(error)}`);
+          if (isAuthProfileMigrationRequiredError(error)) {
+            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
+              pendingBySession.delete(sessionKey);
+            }
+            return;
+          }
           if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
             arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
           }
@@ -301,16 +320,19 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
       if (errored) {
+        log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
       if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
         return;
       }
       if (!isEligibleContext(params.ctx)) {
+        log.debug(`experience review skipped: reason=ineligible-context session=${sessionKey}`);
         return;
       }
       const workspaceDir = params.ctx.workspaceDir?.trim();
       if (!workspaceDir) {
+        log.debug(`experience review skipped: reason=missing-workspace session=${sessionKey}`);
         return;
       }
 
@@ -373,6 +395,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         pending.candidate = candidate;
         pendingBySession.set(sessionKey, pending);
         arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
+        log.debug(
+          `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
+        );
+      } else {
+        log.debug(
+          `experience review skipped: reason=below-depth-bar iterations=${modelIterations} session=${sessionKey}`,
+        );
       }
     },
     clear(): void {
@@ -389,6 +418,20 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
 export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
   deps: ExperienceReviewRunDeps = {},
+): Promise<void> {
+  // The idle timer that fires this review was armed inside the foreground
+  // run's root-work ALS context. By fire time that root is released, so any
+  // inherited-context lane enqueue is refused as GatewayDrainingError on a
+  // healthy gateway. Re-enter admission as independent root work; real
+  // restart drain still refuses it.
+  await runWithGatewayIndependentRootWorkAdmission(() =>
+    runSkillExperienceReviewInner(candidate, deps),
+  );
+}
+
+async function runSkillExperienceReviewInner(
+  candidate: ExperienceReviewCandidate,
+  deps: ExperienceReviewRunDeps,
 ): Promise<void> {
   const workspaceDir = candidate.ctx.workspaceDir;
   const sessionKey = candidate.ctx.sessionKey;

@@ -140,6 +140,37 @@ sessions, and updates pairing metadata only when the device/node identity is
 already paired. A self-declared `client.id` value is not enough to write
 last-seen state.
 
+## Silent local pairing
+
+The Gateway treats a loopback source address as local. This includes a client
+reaching a remote loopback-only Gateway through an SSH port forward: the SSH
+server terminates the connection on the Gateway host, so the Gateway sees the
+forwarded connection as loopback. This is intentional because ordinary SSH
+access already implies local trust, including the ability to read the shared
+Gateway token.
+
+By default, trusted local connections silently approve first-time device
+pairing plus role and scope upgrades. This keeps normal same-host and SSH
+tunnel reconnects convenient. Operators using shell-less, port-forward-only
+SSH keys or a multi-user Mac can require explicit approval for every device:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveLocal: false,
+      },
+    },
+  },
+}
+```
+
+With this setting, new pairing requests, role upgrades, and scope upgrades use
+the normal approval flow even when the connection is local. Metadata-only
+reconnect refreshes remain automatic so routine client or OS metadata changes
+do not create approval churn.
+
 ## SSH-verified device auto-approval (default)
 
 First-time `role: node` device pairing from a private/CGNAT address is
