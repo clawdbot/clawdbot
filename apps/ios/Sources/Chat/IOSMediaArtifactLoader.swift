@@ -55,7 +55,8 @@ struct IOSMediaArtifactLoader: Sendable {
     {
         let maximumBytes = Self.maximumBytes(for: kind)
         let declaredMIME = response.artifact.mimetype?.lowercased()
-        if let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if playback != .transcode,
+           let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
            !encoded.isEmpty
         {
             guard response.encoding == "base64",

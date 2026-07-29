@@ -169,6 +169,71 @@ struct IOSMediaArtifactLoaderTests {
         #expect(media.mimeType == "audio/mp4")
     }
 
+    @Test @MainActor func `transcode playback bypasses inline bytes for ticketed rendition`() async throws {
+        let config = try Self.config(url: #require(URL(string: "wss://gateway.example")))
+        let loader = IOSMediaArtifactLoader(
+            connectionProvider: {
+                IOSMediaArtifactLoader.Connection(
+                    config: config,
+                    gatewayID: config.effectiveStableID,
+                    customHeaders: [:])
+            },
+            requestFactory: { _, _ in
+                { request in
+                    #expect(request.url?.absoluteString == Self.ticketedPlaybackAbsoluteURL)
+                    return try Self.response(
+                        for: request,
+                        mimeType: "audio/mp4",
+                        data: Data([20, 21, 22]))
+                }
+            })
+
+        let loaded = try await loader.load(
+            response: Self.downloadResult(
+                mimeType: "audio/x-caf",
+                inlineData: Data([99, 98, 97])),
+            kind: .audio,
+            playback: .transcode,
+            expectedGatewayID: config.effectiveStableID)
+
+        guard case let .data(media) = loaded else {
+            Issue.record("transcode playback should fetch the ticketed rendition")
+            return
+        }
+        #expect(media.data == Data([20, 21, 22]))
+        #expect(media.mimeType == "audio/mp4")
+    }
+
+    @Test @MainActor func `native playback retains inline byte fast path`() async throws {
+        let config = Self.config()
+        let loader = IOSMediaArtifactLoader(
+            connectionProvider: {
+                IOSMediaArtifactLoader.Connection(
+                    config: config,
+                    gatewayID: config.effectiveStableID,
+                    customHeaders: [:])
+            },
+            requestFactory: { _, _ in
+                Issue.record("native inline bytes must not reach the URL path")
+                return { _ in throw CancellationError() }
+            })
+
+        let loaded = try await loader.load(
+            response: Self.downloadResult(
+                mimeType: "audio/mpeg",
+                inlineData: Data([30, 31, 32])),
+            kind: .audio,
+            playback: .native,
+            expectedGatewayID: config.effectiveStableID)
+
+        guard case let .data(media) = loaded else {
+            Issue.record("native playback should retain inline bytes")
+            return
+        }
+        #expect(media.data == Data([30, 31, 32]))
+        #expect(media.mimeType == "audio/mpeg")
+    }
+
     @Test @MainActor func `returns preparing for a pending streamed video rendition`() async throws {
         let config = try Self.config(url: #require(URL(string: "wss://gateway.example")))
         let loader = IOSMediaArtifactLoader(
@@ -242,6 +307,7 @@ struct IOSMediaArtifactLoaderTests {
     private static func downloadResult(
         mimeType: String?,
         sizeBytes: Int? = nil,
+        inlineData: Data? = nil,
         url: String = ticketedPath) -> ArtifactsDownloadResult
     {
         ArtifactsDownloadResult(
@@ -252,6 +318,8 @@ struct IOSMediaArtifactLoaderTests {
                 mimetype: mimeType,
                 sizebytes: sizeBytes,
                 download: ["mode": AnyCodable("url")]),
+            encoding: inlineData == nil ? nil : "base64",
+            data: inlineData?.base64EncodedString(),
             url: url)
     }
 

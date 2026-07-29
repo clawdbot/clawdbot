@@ -27,7 +27,8 @@ extension GatewayConnection {
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
         let maximumBytes = Self.maximumManagedMediaBytes(for: kind)
         let declaredMIME = response.artifact.mimetype?.lowercased()
-        if let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if playback != .transcode,
+           let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
            !encoded.isEmpty
         {
             guard response.encoding == "base64",

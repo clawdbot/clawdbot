@@ -81,6 +81,17 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    @Test func `file picker allows images and movie containers only`() {
+        #expect(OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes == [
+            .image,
+            .movie,
+            .mpeg4Movie,
+            .quickTimeMovie,
+        ])
+        #expect(!OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes.contains(.audiovisualContent))
+        #expect(!OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes.contains(.audio))
+    }
+
     @Test func `tagless movie metadata stages as video`() async throws {
         let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: .movie)
         #expect(metadata.fileExtension == "mov")
