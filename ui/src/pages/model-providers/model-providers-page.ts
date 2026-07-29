@@ -573,12 +573,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
     const agents = this.context.agents.state.agentsList?.agents ?? [];
-    const selectedAgent = agents.find(
-      (agent) => normalizeAgentId(agent.id) === this.selectedAgentId,
-    );
-    const selectedAgentLabel = selectedAgent
-      ? normalizeAgentLabel(selectedAgent)
-      : this.selectedAgentId;
+    const selected = agents.find((agent) => normalizeAgentId(agent.id) === this.selectedAgentId);
+    const selectedAgentLabel = selected ? normalizeAgentLabel(selected) : this.selectedAgentId;
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const config = readModelProviderConfig(data.config);
     const defaults = this.defaultsDraft ?? config.defaults;
@@ -591,11 +587,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const configuredFastMode = agentsDefaults?.fastModeDefault;
-    const fastMode =
-      configuredFastMode === "auto" || typeof configuredFastMode === "boolean"
-        ? configuredFastMode
-        : false;
+    const fastValue = agentsDefaults?.fastModeDefault;
+    const fastMode = fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : false;
     const update = this.context.overlays.snapshot;
     // The overlay update states replace General's old configUpdating prop,
     // which config-page derived from this same snapshot (isUpdateBusy); the
