@@ -4,7 +4,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { serializeSidebarEntry, titleForRoute } from "../../app-navigation.ts";
+import { serializeSidebarEntry, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -15,6 +15,7 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -55,6 +56,8 @@ import {
   type PluginRowMessage,
   type PluginsTab,
 } from "./view.ts";
+
+const PLUGINS_DOCS_URL = "https://docs.openclaw.ai/plugins/manage-plugins";
 
 export type PluginsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -969,6 +972,10 @@ class PluginsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page plugins-content-header">
         <div>
           <h1 class="page-title">${titleForRoute("plugins")}</h1>
+          <div class="page-subtitle">
+            ${subtitleForRoute("plugins")}
+            ${renderDocsLink(PLUGINS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(html`

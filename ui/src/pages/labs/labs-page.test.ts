@@ -88,6 +88,9 @@ describe("LabsPage", () => {
     });
 
     expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
+    const introLink = page.querySelector<HTMLAnchorElement>(".settings-page__intro a");
+    expect(introLink?.textContent?.trim()).toBe("Learn more");
+    expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
