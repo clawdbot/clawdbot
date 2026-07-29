@@ -23,6 +23,7 @@ const deletedKey = "agent:main:deleted-thread";
 
 function createSessionRecoveryShell(params: {
   activeSessionKey: string;
+  agentIds?: string[];
   sessionKeys: string[];
   deletedSessionKeys?: string[];
 }) {
@@ -32,7 +33,15 @@ function createSessionRecoveryShell(params: {
   shell.runtime = {
     context: {
       basePath: "",
-      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            agents: (params.agentIds ?? ["main"]).map((id) => ({ id })),
+          },
+        },
+      },
       agentSelection: { set: vi.fn(), state: { selectedId: "main" } },
       gateway: {
         setSessionKey,
@@ -63,6 +72,33 @@ describe("OpenClaw shell deleted-session recovery", () => {
   it("replaces an unresolvable session with the owning agent's main chat", () => {
     const { replace, setSessionKey, shell } = createSessionRecoveryShell({
       activeSessionKey: deletedKey,
+      sessionKeys: [mainKey],
+    });
+
+    shell.replaceChatWithCurrentSession();
+
+    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
+    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
+  });
+
+  it("preserves the owning non-default agent when its session is deleted", () => {
+    const researchKey = "agent:research:main";
+    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      activeSessionKey: "agent:research:deleted-thread",
+      agentIds: ["main", "research"],
+      sessionKeys: [mainKey, researchKey],
+    });
+
+    shell.replaceChatWithCurrentSession();
+
+    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(researchKey);
+    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/research" });
+  });
+
+  it("recovers to a known agent when the deleted session's owner was removed", () => {
+    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      activeSessionKey: "agent:retired:deleted-thread",
+      agentIds: ["main"],
       sessionKeys: [mainKey],
     });
 
