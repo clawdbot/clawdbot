@@ -38,6 +38,19 @@ struct RemotePortTunnelTests {
         #expect(drained.isEmpty)
     }
 
+    @Test func `process launch failures preserve the executable description`() async {
+        let executable = "/tmp/openclaw-missing-process-\(UUID().uuidString)"
+
+        do {
+            _ = try await RemotePortTunnel._testStartProcess(
+                executable: executable,
+                arguments: [])
+            Issue.record("expected the missing executable to fail")
+        } catch {
+            #expect(error.localizedDescription.contains(executable))
+        }
+    }
+
     @Test func `termination waits for the original child to exit`() async throws {
         let process = try await RemotePortTunnel._testStartProcess(
             executable: "/bin/sleep",
