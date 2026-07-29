@@ -1,4 +1,7 @@
-import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import type {
+  AgentMessage,
+  ToolResultContentSource,
+} from "../../../packages/agent-core/src/types.js";
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
@@ -10,7 +13,12 @@ import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.j
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type {
+  CliSessionBinding,
+  SessionEntry,
+  SessionToolOverrides,
+} from "../../config/sessions.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -39,6 +47,7 @@ import type {
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
+import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 type CliSessionRetryParams = {
@@ -49,8 +58,11 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
+  /** Caller-owned in-memory transcript for ephemeral helper runs. */
+  sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
@@ -65,6 +77,7 @@ export type RunCliAgentParams = {
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   prompt: string;
   transcriptPrompt?: string;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
@@ -303,6 +316,7 @@ export type PreparedCliRunContext = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
 };

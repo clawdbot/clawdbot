@@ -1,9 +1,14 @@
 // Qa Lab plugin module owns canonical taxonomy profile membership planning.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import type { QaProviderMode } from "./model-selection.js";
+import {
+  defaultQaModelForMode,
+  normalizeQaProviderMode,
+  type QaProviderMode,
+  type QaProviderModeInput,
+} from "./model-selection.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { describeQaProviderLaneMismatches } from "./scenario-lane.js";
+import { describeQaProviderLaneMismatches, resolveQaScenarioLaneChannel } from "./scenario-lane.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
@@ -75,7 +80,9 @@ export function resolveQaRunProfileMembership(
   const scenarioBySourcePath = new Map(
     scenarios.map((scenario) => [scenario.sourcePath, scenario] as const),
   );
-  const profileScenarios = uniqueStrings(categories.flatMap((category) => category.scenarioRefs))
+  const categoryScenarioRefs = new Set(categories.flatMap((category) => category.scenarioRefs));
+  const profileScenarios = profile.scenarioRefs
+    .filter((scenarioRef) => categoryScenarioRefs.has(scenarioRef))
     .map((scenarioRef) => scenarioBySourcePath.get(scenarioRef))
     .filter((scenario): scenario is QaSeedScenarioWithSource => scenario !== undefined);
   const requestedScenarioIds = uniqueStrings(
@@ -114,6 +121,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
   channel?: string | null;
   defaultChannel?: string;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  supportsChannel?: (channel: string) => boolean;
 }): QaRunProfileExecutionSelection {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
   const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
@@ -123,19 +131,33 @@ export function resolveQaRunProfileExecutionSelection(params: {
     if (scenario.execution.channel === "qa-channel" && params.channelDriver !== "qa-channel") {
       reasons.push("channelDriver=qa-channel");
     }
+    const effectiveChannel = resolveQaScenarioLaneChannel({
+      scenario,
+      channelDriver: params.channelDriver,
+      channel: params.channel,
+      defaultChannel: params.defaultChannel,
+      supportsChannel: params.supportsChannel,
+    });
     reasons.push(
       ...describeQaProviderLaneMismatches({
         scenario,
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
-        channel:
-          params.channelDriver === "qa-channel"
-            ? "qa-channel"
-            : (params.channel ?? scenario.execution.channel ?? params.defaultChannel),
+        channel: effectiveChannel,
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
     );
+    if (
+      reasons.length === 0 &&
+      scenario.execution.kind === "flow" &&
+      params.channelDriver !== "qa-channel" &&
+      effectiveChannel &&
+      params.supportsChannel &&
+      !params.supportsChannel(effectiveChannel)
+    ) {
+      reasons.push(`unsupported ${params.channelDriver} channel=${effectiveChannel}`);
+    }
     if (reasons.length > 0) {
       excludedScenarios.push({ scenario, reasons: uniqueStrings(reasons) });
     } else {
@@ -143,4 +165,92 @@ export function resolveQaRunProfileExecutionSelection(params: {
     }
   }
   return { excludedScenarios, selectedScenarios };
+}
+
+export function scenarioDeclaresQaChannel(scenario: QaSeedScenarioWithSource, channel: string) {
+  const normalizedChannel = channel.trim().toLowerCase();
+  if (scenario.execution.channel === normalizedChannel) {
+    return true;
+  }
+  return (
+    scenario.execution.kind === "flow" &&
+    scenario.execution.channels?.includes(normalizedChannel) === true
+  );
+}
+
+export function resolveQaProfileScenarios(params: {
+  profile: string;
+  providerMode: QaProviderModeInput;
+  primaryModel?: string;
+  channelDriver?: QaScorecardChannelDriver;
+  channel?: string;
+  eligibleChannels?: readonly string[];
+  requireDeclaredChannel?: boolean;
+  scenarioIds?: readonly string[];
+}) {
+  const membership = resolveQaRunProfileMembership({
+    profile: params.profile,
+    scenarioIds: params.scenarioIds,
+  });
+  if (membership.excludedScenarioIds.length > 0) {
+    throw new Error(`unknown QA scenario id(s): ${membership.excludedScenarioIds.join(", ")}`);
+  }
+
+  const providerMode = normalizeQaProviderMode(params.providerMode);
+  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
+  const channelDriver = params.channelDriver ?? membership.profile.channelDriver;
+  const channel = params.channel?.trim().toLowerCase();
+  const eligibleChannels = new Set(
+    params.eligibleChannels?.map((candidate) => candidate.trim().toLowerCase()),
+  );
+  const evaluatedCandidates = membership.selectedScenarios.map((scenario) => {
+    const reasons: string[] = [];
+    if (params.requireDeclaredChannel && channel && !scenarioDeclaresQaChannel(scenario, channel)) {
+      reasons.push(`does not declare channel ${channel}`);
+    }
+    if (eligibleChannels.size > 0) {
+      const declaredChannels = scenario.execution.channel
+        ? [scenario.execution.channel]
+        : scenario.execution.kind === "flow"
+          ? (scenario.execution.channels ?? [])
+          : [];
+      if (
+        declaredChannels.length > 0 &&
+        !declaredChannels.some((declaredChannel) => eligibleChannels.has(declaredChannel))
+      ) {
+        reasons.push(
+          `declared channels ${declaredChannels.join(", ")} do not match eligible channels ${[...eligibleChannels].join(", ")}`,
+        );
+      }
+    }
+    reasons.push(
+      ...resolveQaRunProfileExecutionSelection({
+        scenarios: [scenario],
+        providerMode,
+        primaryModel,
+        channelDriver,
+        channel: channel ?? scenario.execution.channel,
+      }).excludedScenarios.flatMap((entry) => entry.reasons),
+    );
+    return { scenario, reasons: uniqueStrings(reasons) };
+  });
+  const scenarios = evaluatedCandidates
+    .filter(({ reasons }) => reasons.length === 0)
+    .map(({ scenario }) => scenario);
+  const excludedScenarios = evaluatedCandidates.filter(({ reasons }) => reasons.length > 0);
+
+  if (params.scenarioIds?.length && excludedScenarios.length > 0) {
+    const ineligible = excludedScenarios
+      .map(({ scenario, reasons }) => `${scenario.id} (${reasons.join(", ")})`)
+      .toSorted();
+    throw new Error(
+      `QA profile ${membership.profile.id} cannot run ineligible scenario(s) for the selected lane: ${ineligible.join("; ")}.`,
+    );
+  }
+  if (scenarios.length === 0) {
+    throw new Error(
+      `QA taxonomy profile ${membership.profile.id} resolved no executable scenarios.`,
+    );
+  }
+  return { profile: membership.profile, scenarios, excludedScenarios };
 }

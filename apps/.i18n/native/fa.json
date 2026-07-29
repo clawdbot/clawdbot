@@ -1199,6 +1199,11 @@
       "translated": "در حال جستجو…"
     },
     {
+      "id": "native.android.60062377f4798a11",
+      "source": "Accept",
+      "translated": "پذیرفتن"
+    },
+    {
       "id": "native.android.1cbaba9cbffb2f97",
       "source": "Connecting…",
       "translated": "در حال اتصال…"
@@ -7719,6 +7724,11 @@
       "translated": "در حال صحبت…"
     },
     {
+      "id": "native.android.010f1a1fdd158ba0",
+      "source": "Image",
+      "translated": "تصویر"
+    },
+    {
       "id": "native.android.71ef7f8dbe2b0dbe",
       "source": "Preview · $domain",
       "translated": "پیش‌نمایش · $domain"
@@ -7849,6 +7859,21 @@
       "translated": "پیوست"
     },
     {
+      "id": "native.android.09720189ba712747",
+      "source": "Unsupported attachment",
+      "translated": "پیوست پشتیبانی‌نشده"
+    },
+    {
+      "id": "native.android.df7c0abff7557f23",
+      "source": "Image unavailable · Tap to retry",
+      "translated": "تصویر در دسترس نیست · برای تلاش مجدد ضربه بزنید"
+    },
+    {
+      "id": "native.android.3fdc2798b6eada4a",
+      "source": "Loading image…",
+      "translated": "در حال بارگذاری تصویر…"
+    },
+    {
       "id": "native.android.316927b46135a7ab",
       "source": "Open image preview",
       "translated": "باز کردن پیش‌نمایش تصویر"
@@ -7862,11 +7887,6 @@
       "id": "native.android.7f8cf7bee5cc491f",
       "source": "Close image preview",
       "translated": "بستن پیش‌نمایش تصویر"
-    },
-    {
-      "id": "native.android.09720189ba712747",
-      "source": "Unsupported attachment",
-      "translated": "پیوست پشتیبانی‌نشده"
     },
     {
       "id": "native.android.bf40f9f9a508155d",
@@ -8087,6 +8107,16 @@
       "id": "native.android.25d8575c0063aee5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.b18964167dbb3c02",
+      "source": "Image",
+      "translated": "تصویر"
+    },
+    {
+      "id": "native.android.952a88e71b4aaee4",
+      "source": "Additional images hidden: ${omittedImageCount}",
+      "translated": "تصاویر اضافی پنهان شده‌اند: ${omittedImageCount}"
     },
     {
       "id": "native.android.5aafbef3744d86f3",
@@ -8344,6 +8374,36 @@
       "translated": "حداکثر"
     },
     {
+      "id": "native.android.0ad9a3b0df19e18c",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.android.21915533b17bafea",
+      "source": "$running Running · $done Done · $failed Failed",
+      "translated": "$running در حال اجرا · $done انجام‌شده · $failed ناموفق"
+    },
+    {
+      "id": "native.android.41ba16bea6545210",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.android.38327b46c006c14c",
+      "source": "1 more worker",
+      "translated": "۱ کارگر دیگر"
+    },
+    {
+      "id": "native.android.d7afc539a21261eb",
+      "source": "$count more workers",
+      "translated": "$count کارگر دیگر"
+    },
+    {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "در مدت $duration انجام شد"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "۱ توکن"
@@ -8352,11 +8412,6 @@
       "id": "native.android.e7059e3a756908c4",
       "source": "$count tokens",
       "translated": "$count توکن"
-    },
-    {
-      "id": "native.android.c32ff602fa622e4b",
-      "source": "Done in $duration",
-      "translated": "در مدت $duration انجام شد"
     },
     {
       "id": "native.android.d2797e7488fe5021",
@@ -8704,16 +8759,6 @@
       "translated": "در حال شنیدن"
     },
     {
-      "id": "native.android.1f198e7aceb8411f",
-      "source": "Speech recognizer unavailable",
-      "translated": "تشخیص‌دهنده گفتار در دسترس نیست"
-    },
-    {
-      "id": "native.android.47a59f8798682ea0",
-      "source": "Ready",
-      "translated": "آماده"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "شروع ناموفق بود: $message"
@@ -8722,6 +8767,11 @@
       "id": "native.android.a9216e087452b75b",
       "source": "Connecting…",
       "translated": "در حال اتصال…"
+    },
+    {
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "تشخیص‌دهنده گفتار در دسترس نیست"
     },
     {
       "id": "native.android.24bc808758b925ca",
@@ -8769,6 +8819,11 @@
       "translated": "مکالمه ناموفق بود: $message"
     },
     {
+      "id": "native.android.47a59f8798682ea0",
+      "source": "Ready",
+      "translated": "آماده"
+    },
+    {
       "id": "native.android.bd863d5e8979cd79",
       "source": "Generating voice…",
       "translated": "در حال تولید صدا…"
@@ -8782,11 +8837,6 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "در حال صحبت…"
-    },
-    {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "در حال شنیدن (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -8814,6 +8864,16 @@
       "translated": "مهلت اتصال شبکه به پایان رسید"
     },
     {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "در حال گوش دادن"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "در حال شنیدن (PTT)"
+    },
+    {
       "id": "native.android.a445b7696f9b431c",
       "source": "Recognizer busy",
       "translated": "تشخیص‌دهنده مشغول است"
@@ -8822,11 +8882,6 @@
       "id": "native.android.297438db6f5fe8d7",
       "source": "Server error",
       "translated": "خطای سرور"
-    },
-    {
-      "id": "native.android.7b4dacae0686d138",
-      "source": "Listening",
-      "translated": "در حال گوش دادن"
     },
     {
       "id": "native.android.ea5d9621ef0f0482",
@@ -9259,6 +9314,11 @@
       "translated": "رشته گفتگو"
     },
     {
+      "id": "native.android.fc73a8c21e6a7b16",
+      "source": "Open thread",
+      "translated": "باز کردن رشته گفتگو"
+    },
+    {
       "id": "native.android.4863e4958bf9a886",
       "source": "← Swipe →",
       "translated": "← بکشید →"
@@ -9277,6 +9337,11 @@
       "id": "native.android.9f7fe0147a0b571a",
       "source": "Double tap",
       "translated": "دو بار ضربه بزنید"
+    },
+    {
+      "id": "native.android.75a41b3ed302ff41",
+      "source": "Show new messages",
+      "translated": "نمایش پیام‌های جدید"
     },
     {
       "id": "native.android.65caac394b5e4871",
@@ -19124,6 +19189,31 @@
       "translated": "ناشر"
     },
     {
+      "id": "native.apple.c43101e53076ff01",
+      "source": "Granted",
+      "translated": "اعطا شده"
+    },
+    {
+      "id": "native.apple.1312a2f2fcfa9685",
+      "source": "Missing permission",
+      "translated": "مجوز وجود ندارد"
+    },
+    {
+      "id": "native.apple.a7f2febd7dbf8978",
+      "source": "Accessibility grant may be stale",
+      "translated": "ممکن است مجوز دسترس‌پذیری منقضی شده باشد"
+    },
+    {
+      "id": "native.apple.7d37e7dfcd4b37c1",
+      "source": "Accessibility, Event Posting, and Screen Recording are granted.",
+      "translated": "مجوزهای دسترس‌پذیری، ارسال رویداد و ضبط صفحه اعطا شده‌اند."
+    },
+    {
+      "id": "native.apple.055a88d0f9d3d2fe",
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
+      "translated": "موارد فاقد مجوز: \\(buckets.map(\\.displayName).joined(separator: \", \")). در تنظیمات سیستم ← حریم خصوصی و امنیت، دسترسی را اعطا کنید و سپس OpenClaw را دوباره باز کنید."
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "هیچ بخش پیکربندی موجود نیست."
@@ -19724,6 +19814,36 @@
       "translated": "\\(toolBudget) ابزار"
     },
     {
+      "id": "native.apple.905508b749e99f2a",
+      "source": "OpenClaw Not Configured",
+      "translated": "OpenClaw پیکربندی نشده است"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "OpenClaw راه دور فعال است"
+    },
+    {
+      "id": "native.apple.a7b0d4e6bf5796c0",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw فعال است"
+    },
+    {
+      "id": "native.apple.b36a54d8fef80333",
+      "source": "OpenClaw Not Configured — \\(primaryName)",
+      "translated": "OpenClaw پیکربندی نشده است — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.adee4bfd71731d2d",
+      "source": "Remote OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw راه دور فعال است — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.2be6d3dd1a0d2699",
+      "source": "OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw فعال است — \\(primaryName)"
+    },
+    {
       "id": "native.apple.5eea57b14cab3876",
       "source": "Dashboard reconnecting",
       "translated": "در حال اتصال مجدد داشبورد"
@@ -19747,6 +19867,26 @@
       "id": "native.apple.3ed077c15e06c140",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "translated": "Settings → Connection را بررسی کنید یا از Debug → Reset Remote Tunnel استفاده کنید، سپس دوباره تلاش کنید."
+    },
+    {
+      "id": "native.apple.224e2db353f3a459",
+      "source": "Could Not Switch Gateway",
+      "translated": "امکان تعویض Gateway نبود"
+    },
+    {
+      "id": "native.apple.213d824f2205d071",
+      "source": "Could Not Open Gateway Window",
+      "translated": "امکان باز کردن پنجره Gateway نبود"
+    },
+    {
+      "id": "native.apple.11ffe8832b728acd",
+      "source": "\\(base)-\\(UUID().uuidString)",
+      "translated": "\\(base)-\\(UUID().uuidString)"
+    },
+    {
+      "id": "native.apple.f821306f90ed7692",
+      "source": "Could Not Set Primary Gateway",
+      "translated": "امکان تنظیم Gateway اصلی نبود"
     },
     {
       "id": "native.apple.226341f8c8b5d459",
@@ -20234,6 +20374,16 @@
       "translated": "ذخیره تأییدهای exec ممکن نشد. آخرین تنظیمات شناخته‌شده نمایش داده شده‌اند؛ تغییر را دوباره امتحان کنید."
     },
     {
+      "id": "native.apple.b28538e2e444510f",
+      "source": "Exec approvals need migration — run openclaw doctor --fix with OPENCLAW_STATE_DIR set to \\(error.stateDirectoryURL.path).",
+      "translated": "تأییدهای اجرا نیاز به مهاجرت دارند — دستور openclaw doctor --fix را با تنظیم OPENCLAW_STATE_DIR روی \\(error.stateDirectoryURL.path) اجرا کنید."
+    },
+    {
+      "id": "native.apple.49e886ab7a093e63",
+      "source": "Exec approvals unavailable. Retry to refresh.",
+      "translated": "تأییدهای اجرا در دسترس نیستند. برای تازه‌سازی دوباره تلاش کنید."
+    },
+    {
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
@@ -20514,9 +20664,14 @@
       "translated": "اجازه کنترل رایانه"
     },
     {
-      "id": "native.apple.124d07cfaa03f5e5",
-      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
-      "translated": "به یک عامل مجاز اجازه دهید نشانگر را حرکت دهد، کلیک کند و روی این مک تایپ کند. همچنین به Accessibility، Screen Recording و مجوز فرمان gateway نیاز دارد. ریسک بالا."
+      "id": "native.apple.a3d78847eaebbbd9",
+      "source": "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+      "translated": "در ابتدا فعال است. پس از جفت‌شدن این Mac و اعطای دسترسی macOS، Gateway جفت‌شده می‌تواند بدون تأیید جداگانه برای هر عمل، نشانگر را حرکت دهد، کلیک کند و تایپ کند. پرخطر."
+    },
+    {
+      "id": "native.apple.96eed7824b1f1ed6",
+      "source": "Computer Control access",
+      "translated": "دسترسی کنترل رایانه"
     },
     {
       "id": "native.apple.35cdb39a1214e0d8",
@@ -21219,21 +21374,6 @@
       "translated": "خروج"
     },
     {
-      "id": "native.apple.5021ed413c045620",
-      "source": "OpenClaw Not Configured",
-      "translated": "OpenClaw پیکربندی نشده است"
-    },
-    {
-      "id": "native.apple.4d10ab5feb4add3f",
-      "source": "Remote OpenClaw Active",
-      "translated": "OpenClaw راه دور فعال است"
-    },
-    {
-      "id": "native.apple.b49dea5c1fdb3dd3",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw فعال است"
-    },
-    {
       "id": "native.apple.1df24a30d7963640",
       "source": "Debug",
       "translated": "اشکال‌زدایی"
@@ -21367,6 +21507,31 @@
       "id": "native.apple.3e248379359c7593",
       "source": "Disconnected (using System default)",
       "translated": "قطع شده (با استفاده از پیش‌فرض سیستم)"
+    },
+    {
+      "id": "native.apple.ceb653c5fa582beb",
+      "source": "Gateways",
+      "translated": "Gatewayها"
+    },
+    {
+      "id": "native.apple.cce28f94dfe25e14",
+      "source": "Set \\(gateway.name) as Primary…",
+      "translated": "تنظیم \\(gateway.name) به‌عنوان اصلی…"
+    },
+    {
+      "id": "native.apple.86861746f8e1c38c",
+      "source": "\\(name), healthy",
+      "translated": "\\(name)، سالم"
+    },
+    {
+      "id": "native.apple.184a5dddee2c5794",
+      "source": "\\(name), health error",
+      "translated": "\\(name)، خطای سلامت"
+    },
+    {
+      "id": "native.apple.d34b1a73300c51f2",
+      "source": "\\(name), health unknown",
+      "translated": "\\(name)، سلامت نامشخص"
     },
     {
       "id": "native.apple.5a99e1ae62fe0ab9",
@@ -22119,9 +22284,49 @@
       "translated": "پیشرفته…"
     },
     {
-      "id": "native.apple.22947c17e44f76af",
-      "source": "Hide Advanced",
-      "translated": "پنهان کردن پیشرفته"
+      "id": "native.apple.2e11404d7539301e",
+      "source": "Remote connection",
+      "translated": "اتصال از راه دور"
+    },
+    {
+      "id": "native.apple.f6332654911cb2e2",
+      "source": "Verify OpenClaw can reach this gateway.",
+      "translated": "بررسی کنید که OpenClaw می‌تواند به این gateway دسترسی پیدا کند."
+    },
+    {
+      "id": "native.apple.6e5d3a3c3022e8c8",
+      "source": "Check connection",
+      "translated": "بررسی اتصال"
+    },
+    {
+      "id": "native.apple.23254b5b9707c581",
+      "source": "Advanced options",
+      "translated": "گزینه‌های پیشرفته"
+    },
+    {
+      "id": "native.apple.dfc5606a4813ecfc",
+      "source": "Hide advanced options",
+      "translated": "پنهان کردن گزینه‌های پیشرفته"
+    },
+    {
+      "id": "native.apple.1907a86a6cc2165b",
+      "source": "Gateway token",
+      "translated": "توکن Gateway"
+    },
+    {
+      "id": "native.apple.14a6b8d735579fae",
+      "source": "Paste the token from your gateway",
+      "translated": "توکن را از gateway خود جای‌گذاری کنید"
+    },
+    {
+      "id": "native.apple.143603a153dd0100",
+      "source": "Only needed when the gateway requires token auth.",
+      "translated": "فقط زمانی لازم است که gateway به احراز هویت با توکن نیاز دارد."
+    },
+    {
+      "id": "native.apple.2a50c3ee94dde35d",
+      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "مقدار فعلی gateway.remote.token متن ساده نیست. OpenClaw برای macOS نمی‌تواند مستقیماً از آن استفاده کند؛ برای جایگزینی، یک توکن متن ساده را اینجا وارد کنید."
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -22192,41 +22397,6 @@
       "id": "native.apple.ab88df30f426b434",
       "source": "Tip: keep Tailscale enabled so your gateway stays reachable.",
       "translated": "نکته: Tailscale را فعال نگه دارید تا gateway شما در دسترس بماند."
-    },
-    {
-      "id": "native.apple.2e11404d7539301e",
-      "source": "Remote connection",
-      "translated": "اتصال از راه دور"
-    },
-    {
-      "id": "native.apple.bee162bb681696a3",
-      "source": "Checks the real remote websocket and auth handshake.",
-      "translated": "وب‌سوکت راه دور واقعی و دست‌دهی احراز هویت را بررسی می‌کند."
-    },
-    {
-      "id": "native.apple.6e5d3a3c3022e8c8",
-      "source": "Check connection",
-      "translated": "بررسی اتصال"
-    },
-    {
-      "id": "native.apple.1907a86a6cc2165b",
-      "source": "Gateway token",
-      "translated": "توکن Gateway"
-    },
-    {
-      "id": "native.apple.014d9fcbd97f6c48",
-      "source": "remote gateway auth token (gateway.remote.token)",
-      "translated": "توکن احراز هویت gateway راه دور (gateway.remote.token)"
-    },
-    {
-      "id": "native.apple.cc14b91d20cc33ba",
-      "source": "Used when the remote gateway requires token auth.",
-      "translated": "زمانی استفاده می‌شود که Gateway راه دور به احراز هویت با توکن نیاز دارد."
-    },
-    {
-      "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "مقدار فعلی gateway.remote.token متن ساده نیست. OpenClaw برای macOS نمی‌تواند مستقیماً از آن استفاده کند؛ برای جایگزینی، یک توکن متن ساده را اینجا وارد کنید."
     },
     {
       "id": "native.apple.ef011af3c0e22127",
@@ -24969,6 +25139,31 @@
       "translated": "Image"
     },
     {
+      "id": "native.apple.8b0faa2f4f38e339",
+      "source": "Loading image…",
+      "translated": "در حال بارگذاری تصویر…"
+    },
+    {
+      "id": "native.apple.e776a9e0e3ef1ae7",
+      "source": "Opens image preview",
+      "translated": "پیش‌نمایش تصویر را باز می‌کند"
+    },
+    {
+      "id": "native.apple.cc336983da1cd070",
+      "source": "Close image preview",
+      "translated": "بستن پیش‌نمایش تصویر"
+    },
+    {
+      "id": "native.apple.4f97faec43e8e366",
+      "source": "Image unavailable",
+      "translated": "تصویر در دسترس نیست"
+    },
+    {
+      "id": "native.apple.2c50b099878d7c96",
+      "source": "Retry",
+      "translated": "تلاش مجدد"
+    },
+    {
       "id": "native.apple.14da4c958ae30949",
       "source": "%@ avatar",
       "translated": "آواتار %@"
@@ -24977,6 +25172,11 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "آواتار عامل"
+    },
+    {
+      "id": "native.apple.2bf58bad40fc4ae6",
+      "source": "Additional images hidden: %lld",
+      "translated": "تصاویر اضافی پنهان‌شده: %lld"
     },
     {
       "id": "native.apple.9d4cffc5588d8730",
@@ -25007,6 +25207,11 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
+    },
+    {
+      "id": "native.apple.eca473edeb132a44",
+      "source": "Attachment",
+      "translated": "پیوست"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -26229,6 +26434,11 @@
       "translated": "به‌سطح‌آمدن"
     },
     {
+      "id": "native.apple.286932b5ea17b3f8",
+      "source": "1 second",
+      "translated": "۱ ثانیه"
+    },
+    {
       "id": "native.apple.578503dfeef25502",
       "source": "Done in %@",
       "translated": "در %@ انجام شد"
@@ -26307,6 +26517,51 @@
       "id": "native.apple.f74d150ce05205dd",
       "source": "z",
       "translated": "z"
+    },
+    {
+      "id": "native.apple.d093ee119bfd5ab4",
+      "source": "Running",
+      "translated": "در حال اجرا"
+    },
+    {
+      "id": "native.apple.b8a4e570b04c8a5f",
+      "source": "Queued",
+      "translated": "در صف"
+    },
+    {
+      "id": "native.apple.caf64b5a59885ec0",
+      "source": "Failed",
+      "translated": "ناموفق"
+    },
+    {
+      "id": "native.apple.4819936ea780db96",
+      "source": "Done",
+      "translated": "انجام شد"
+    },
+    {
+      "id": "native.apple.1f8ce4f7dc387a62",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.apple.e8b9db6108d47853",
+      "source": "%1$lld Running · %2$lld Done · %3$lld Failed",
+      "translated": "%1$lld در حال اجرا · %2$lld انجام شد · %3$lld ناموفق"
+    },
+    {
+      "id": "native.apple.966f8d2b0b475f7c",
+      "source": "Unphased",
+      "translated": "بدون فاز"
+    },
+    {
+      "id": "native.apple.3b5805940eb33a47",
+      "source": "1 more worker",
+      "translated": "۱ کارگر دیگر"
+    },
+    {
+      "id": "native.apple.4278155768134e27",
+      "source": "%1$lld more workers",
+      "translated": "%1$lld کارگر دیگر"
     },
     {
       "id": "native.apple.71e0219d1501de06",
@@ -26429,9 +26684,29 @@
       "translated": "بیکار"
     },
     {
+      "id": "native.apple.a2fc153a4aa36cda",
+      "source": "Stopped",
+      "translated": "متوقف شد"
+    },
+    {
+      "id": "native.apple.ba2d6adb6ce70b40",
+      "source": "Failed",
+      "translated": "ناموفق"
+    },
+    {
+      "id": "native.apple.f343c1f83109a369",
+      "source": "Waiting",
+      "translated": "در انتظار"
+    },
+    {
       "id": "native.apple.0cb1206714c2bf4d",
       "source": "Setup",
       "translated": "راه‌اندازی"
+    },
+    {
+      "id": "native.apple.e6c1304a30abf56e",
+      "source": "Searching…",
+      "translated": "در حال جست‌وجو…"
     },
     {
       "id": "native.apple.081a07c7306b223e",

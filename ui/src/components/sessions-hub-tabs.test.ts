@@ -45,6 +45,16 @@ describe("renderSessionsHubTabs", () => {
     const onSelect = vi.fn();
     const container = await mount({ active: "sessions", onSelect });
 
+    container
+      .querySelector("#sessions-tab-worktrees")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+
+    expect(onSelect).toHaveBeenLastCalledWith("worktrees");
+  });
+
+  it("ignores setup-time tab-show events", async () => {
+    const onSelect = vi.fn();
+    const container = await mount({ active: "sessions", onSelect });
     container.querySelector("wa-tab-group")?.dispatchEvent(
       new CustomEvent("wa-tab-show", {
         bubbles: true,
@@ -52,8 +62,7 @@ describe("renderSessionsHubTabs", () => {
         detail: { name: "worktrees" },
       }),
     );
-
-    expect(onSelect).toHaveBeenLastCalledWith("worktrees");
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("hands focus to the destination strip after keyboard navigation", async () => {
@@ -63,13 +72,6 @@ describe("renderSessionsHubTabs", () => {
       ?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
       );
-    source.querySelector("wa-tab-group")?.dispatchEvent(
-      new CustomEvent("wa-tab-show", {
-        bubbles: true,
-        composed: true,
-        detail: { name: "worktrees" },
-      }),
-    );
     source.remove();
 
     const destination = await mount({ active: "worktrees", onSelect: () => undefined });

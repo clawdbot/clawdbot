@@ -4,9 +4,180 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import {
+  readCuratedProjectMemoryCandidates,
+  readCuratedMemoryTriggerCandidates,
+  readMemoryRecallMetadata,
+} from "./memory-recall-metadata.js";
+import { ensureMemoryRecallMetadataColumns } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index schema", () => {
+  it("lazily adds nullable recall metadata columns without a schema bump", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE memory_index_chunks (
+          id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
+          model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        ) STRICT;
+      `);
+      db.exec("BEGIN IMMEDIATE");
+      ensureMemoryRecallMetadataColumns(db);
+      db.exec("ROLLBACK");
+      expect(
+        db
+          .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).not.toContain("importance");
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      const columns = db
+        .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
+        .all()
+        .map((row) => (row as { name: string }).name);
+      expect(columns).toContain("importance");
+      expect(columns).toContain("triggers");
+      expect(columns).toContain("project_key");
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO memory_index_chunks
+             (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance)
+             VALUES ('bad', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 11)`,
+          )
+          .run(),
+      ).toThrow();
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+         VALUES ('good', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 9, 'when flying', 'github.com/openclaw/openclaw')`,
+      ).run();
+      expect(readMemoryRecallMetadata(db, ["good"]).get("good")).toEqual({
+        id: "good",
+        importance: 9,
+        triggers: "when flying",
+        project_key: "github.com/openclaw/openclaw",
+      });
+      expect(readCuratedMemoryTriggerCandidates(db, 10)).toEqual([
+        {
+          id: "good",
+          path: "MEMORY.md",
+          source: "memory",
+          start_line: 1,
+          end_line: 1,
+          text: "t",
+          importance: 9,
+          triggers: "when flying",
+          project_key: "github.com/openclaw/openclaw",
+        },
+      ]);
+      const insertDaily = db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, project_key)
+         VALUES (?, ?, 1, 1, ?, 'm', 'daily', '[]', 2, 'github.com/openclaw/openclaw')`,
+      );
+      for (let index = 0; index < 80; index += 1) {
+        const id = `daily-${String(index).padStart(3, "0")}`;
+        insertDaily.run(id, `memory/2026-07-${String(index + 1).padStart(3, "0")}.md`, id);
+      }
+      expect(readCuratedProjectMemoryCandidates(db, 1, ["github.com/openclaw/openclaw"])).toEqual([
+        {
+          id: "good",
+          path: "MEMORY.md",
+          source: "memory",
+          start_line: 1,
+          end_line: 1,
+          text: "t",
+          importance: 9,
+          triggers: "when flying",
+          project_key: "github.com/openclaw/openclaw",
+        },
+      ]);
+      const insertBootstrapCandidate = db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, project_key)
+         VALUES (?, 'MEMORY.md', ?, ?, ?, 'm', ?, '[]', 2, ?, 'github.com/openclaw/openclaw')`,
+      );
+      for (let index = 0; index < 64; index += 1) {
+        const id = `bootstrap-low-${String(index).padStart(3, "0")}`;
+        insertBootstrapCandidate.run(id, index + 2, index + 2, id, "low", 1);
+      }
+      insertBootstrapCandidate.run(
+        "bootstrap-high",
+        100,
+        100,
+        "bootstrap-high",
+        "high-priority bootstrap fact",
+        10,
+      );
+      expect(readCuratedProjectMemoryCandidates(db, 48, ["github.com/openclaw/openclaw"])).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "bootstrap-high",
+            text: "high-priority bootstrap fact",
+            importance: 10,
+          }),
+        ]),
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+         VALUES ('a-foreign', 'MEMORY.md', 2, 2, 'h2', 'm', 'foreign', '[]', 2, 9, 'when flying', 'github.com/example/other')`,
+      ).run();
+      expect(readCuratedMemoryTriggerCandidates(db, 1, ["github.com/openclaw/openclaw"])).toEqual([
+        {
+          id: "good",
+          path: "MEMORY.md",
+          source: "memory",
+          start_line: 1,
+          end_line: 1,
+          text: "t",
+          importance: 9,
+          triggers: "when flying",
+          project_key: "github.com/openclaw/openclaw",
+        },
+      ]);
+      expect(readCuratedMemoryTriggerCandidates(db, 1, [])).toEqual([]);
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+         VALUES ('a-fourth', 'MEMORY.md', 3, 3, 'h3', 'm', 'fourth', '[]', 3, 8, 'when flying', 'project/d')`,
+      ).run();
+      expect(
+        readCuratedMemoryTriggerCandidates(db, 1, [
+          "project/a",
+          "project/b",
+          "project/c",
+          "project/d",
+        ])[0],
+      ).toMatchObject({ id: "a-fourth", project_key: "project/d" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps recall metadata ensure read-only when the schema is current", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-recall-schema-"));
+    const databasePath = path.join(rootDir, "memory.sqlite");
+    const writable = new DatabaseSync(databasePath);
+    try {
+      ensureMemoryIndexSchema({ db: writable, cacheEnabled: false, ftsEnabled: false });
+    } finally {
+      writable.close();
+    }
+
+    const readOnly = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(() => ensureMemoryRecallMetadataColumns(readOnly)).not.toThrow();
+    } finally {
+      readOnly.close();
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates shipped generic tables into canonical memory tables", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -79,6 +250,34 @@ describe("memory index schema", () => {
       expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);
+      expect(db.prepare("SELECT * FROM memory_index_chunk_provenance").all()).toEqual([
+        {
+          chunk_id: "chunk-1",
+          origin_class: "untrusted",
+          session_kind: "unknown",
+          observed_at: 30,
+          supersedes_key: null,
+        },
+      ]);
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(
+        db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunk_provenance").get(),
+      ).toEqual({
+        count: 1,
+      });
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run("chunk-2", "MEMORY.md", "memory", 3, 3, "hash-2", "fts-only", "next", "[]", 50);
+      expect(
+        db
+          .prepare(
+            `SELECT origin_class, session_kind, observed_at
+           FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
+          )
+          .get("chunk-2"),
+      ).toEqual({ origin_class: "agent", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);
@@ -108,7 +307,7 @@ describe("memory index schema", () => {
     }
   });
 
-  it("upgrades already-canonical memory tables to STRICT and preserves precise mtimes", () => {
+  it("upgrades canonical tables, preserves mtimes, and invalidates missing provenance", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec(`
@@ -145,7 +344,9 @@ describe("memory index schema", () => {
         INSERT INTO memory_index_sources
           (path, source, hash, mtime, size)
         VALUES ('MEMORY.md', 'memory', 'source-hash', 10.75, 20);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-1', 'MEMORY.md', 'memory', 1, 1, 'chunk-hash', 'model', 'body', '[]', 30
         );
         INSERT INTO memory_index_state VALUES (1, 3);
@@ -177,6 +378,10 @@ describe("memory index schema", () => {
       expect(db.prepare("SELECT id, text FROM memory_index_chunks").get()).toEqual({
         id: "chunk-1",
         text: "body",
+      });
+      expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
+      expect(db.prepare("SELECT origin_class FROM memory_index_chunk_provenance").get()).toEqual({
+        origin_class: "untrusted",
       });
     } finally {
       db.close();
@@ -215,7 +420,9 @@ describe("memory index schema", () => {
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
       db.exec(`
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-before', 'before.md', 'memory', 1, 1, 'before-hash', 'fts-only',
           'before body', '[]', 1
         );
@@ -233,7 +440,9 @@ describe("memory index schema", () => {
           .get(),
       ).toBeUndefined();
       db.exec(`
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-disabled', 'disabled.md', 'memory', 1, 1, 'disabled-hash', 'fts-only',
           'disabled body', '[]', 2
         );

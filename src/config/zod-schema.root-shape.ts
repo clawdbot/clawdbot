@@ -225,7 +225,6 @@ export const OpenClawSchemaShape = {
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
-          showAdvancedSettings: z.boolean().optional(),
         })
         .optional(),
     })
@@ -426,7 +425,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           autonomous: z
             .strictObject({
-              enabled: z.boolean().optional(),
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
             })
             .optional(),
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),

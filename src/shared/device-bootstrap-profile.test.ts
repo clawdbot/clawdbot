@@ -5,8 +5,10 @@ import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   isMobilePairingSetupBootstrapProfile,
   isNodePairingSetupBootstrapProfile,
+  isVoiceNodePairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
@@ -132,6 +134,20 @@ describe("device bootstrap profile", () => {
     expect(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({ roles: ["node"], scopes: [] });
     expect(isNodePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
     expect(isMobilePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
+  });
+
+  test("voice-node setup profile carries only node, read, and Talk access", () => {
+    expect(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.read", "operator.talk"],
+      purpose: "voice-node",
+    });
+    expect(isMobilePairingSetupBootstrapProfile(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
+      false,
+    );
+    expect(
+      isVoiceNodePairingSetupBootstrapProfile(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE),
+    ).toBe(true);
   });
 
   test("recognizes only the supported mobile setup profiles", () => {

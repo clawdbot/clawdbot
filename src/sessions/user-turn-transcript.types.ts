@@ -4,19 +4,25 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-type UserTurnSessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-  sessionFile?: string;
-  threadId?: string | number;
-} & Record<string, unknown>;
+type UserTurnSessionEntry = SessionEntry;
 
 export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
-  "contentType" | "hydrationSuppressed" | "messageId" | "path" | "transcribed" | "url"
+  | "contentType"
+  | "durationMs"
+  | "fileName"
+  | "height"
+  | "hydrationSuppressed"
+  | "messageId"
+  | "path"
+  | "sizeBytes"
+  | "transcribed"
+  | "url"
+  | "width"
 > & {
   kind?: string | null;
   workspaceDir?: string | null;

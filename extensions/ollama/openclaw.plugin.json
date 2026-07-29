@@ -150,7 +150,8 @@
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -170,7 +171,8 @@
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           }
         ]

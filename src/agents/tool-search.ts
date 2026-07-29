@@ -3,16 +3,13 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
-  classifyTool,
-  reusableCatalogSnapshots,
+  isDirectVisibleCatalogTool,
   resolveCatalog,
-  sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
   appendToolSearchCodeStderrTail,
@@ -112,18 +109,7 @@ export function applyToolSearchCatalog(params: {
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
-    // Core file/shell primitives and caller-required names (e.g. message when it
-    // is the only reply path) stay visible while remaining searchable. Required
-    // names must resolve to trusted OpenClaw tools; an MCP lookalike must never
-    // become a direct delivery or core-coding tool.
-    isVisibleCatalogTool: (tool) => {
-      const classified = classifyTool(tool);
-      return (
-        classified.source === "openclaw" &&
-        (directToolNames.has(tool.name) ||
-          (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
-      );
-    },
+    isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
 }
 
@@ -238,8 +224,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  sessionCatalogs,
-  reusableCatalogSnapshots,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,

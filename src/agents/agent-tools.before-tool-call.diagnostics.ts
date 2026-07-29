@@ -468,23 +468,29 @@ export function emitToolBlockedSecurityEvent(params: {
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
   const control =
-    params.deniedReason === "tool-loop"
+    params.deniedReason === "client-voice-confirmation"
       ? ({
-          policyId: "tool-loop-detection",
-          controlId: "tool-loop-detection",
-          family: "authorization",
+          policyId: "talk-client-voice-confirmation",
+          controlId: "talk-client-voice-confirmation",
+          family: "approval",
         } as const)
-      : params.deniedReason === "plugin-approval"
+      : params.deniedReason === "tool-loop"
         ? ({
-            policyId: "plugin-tool-approval",
-            controlId: "plugin-tool-approval",
-            family: "approval",
+            policyId: "tool-loop-detection",
+            controlId: "tool-loop-detection",
+            family: "authorization",
           } as const)
-        : ({
-            policyId: "plugin-before-tool-call",
-            controlId: "before-tool-call",
-            family: "approval",
-          } as const);
+        : params.deniedReason === "plugin-approval"
+          ? ({
+              policyId: "plugin-tool-approval",
+              controlId: "plugin-tool-approval",
+              family: "approval",
+            } as const)
+          : ({
+              policyId: "plugin-before-tool-call",
+              controlId: "before-tool-call",
+              family: "approval",
+            } as const);
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -632,6 +638,7 @@ export async function recordLoopOutcome(args: {
   toolCallId?: string;
   result?: unknown;
   error?: unknown;
+  resultContentSource?: AnyAgentTool["resultContentSource"];
   toolCallOrdinal?: number;
   terminalPresentation?: string;
 }): Promise<void> {
@@ -678,6 +685,7 @@ export async function recordLoopOutcome(args: {
         toolName: record.toolName,
         argsHash: record.argsHash,
         resultHash: record.resultHash,
+        ...(args.resultContentSource ? { resultContentSource: args.resultContentSource } : {}),
         ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
         ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
       };

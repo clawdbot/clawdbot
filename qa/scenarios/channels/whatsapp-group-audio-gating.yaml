@@ -7,7 +7,6 @@ scenario:
       - whatsapp.group-allowlists
       - whatsapp.inbound-media-download
   execution:
-    profiles: { "whatsapp:mock-default": 26 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000

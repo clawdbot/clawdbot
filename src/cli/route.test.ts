@@ -120,14 +120,30 @@ describe("tryRouteCli", () => {
     });
   });
 
-  it("suppresses startup output for bare config get machine output", async () => {
+  it("suppresses config get machine output without running an observing startup guard", async () => {
+    const captured: boolean[] = [];
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+
     await expect(
       tryRouteCli(["node", "openclaw", "config", "get", "gateway.port"], {
         machineOutput: true,
       }),
     ).resolves.toBe(true);
 
-    expect(firstConfigReadyCall()?.suppressDoctorStdout).toBe(true);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(captured).toEqual([true]);
+  });
+
+  it("lets routed gateway health own its config read", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "gateway", "health", "--json"])).resolves.toBe(
+      true,
+    );
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("keeps logs routed to stderr for routed --json commands", async () => {

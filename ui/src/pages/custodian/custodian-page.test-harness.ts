@@ -13,10 +13,12 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
+  store: CustodianSessionStore;
   updateComplete: Promise<boolean>;
 };
 
@@ -30,6 +32,9 @@ type ContextHarness = {
 export function createContext(
   request: ReturnType<typeof vi.fn>,
   methods: string[] = ["openclaw.chat"],
+  options: {
+    agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
+  } = {},
 ): ContextHarness {
   const client = { request } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
@@ -70,10 +75,22 @@ export function createContext(
       return () => eventListeners.delete(listener);
     },
   } as unknown as ApplicationGateway;
+  const agentListeners = new Set<() => void>();
   const context = {
     gateway,
     agents: {
-      state: { agentsList: { mainKey: "main" } },
+      state: {
+        agentsList: options.agentsList ?? {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
+        },
+      },
+      subscribe: (listener: () => void) => {
+        agentListeners.add(listener);
+        return () => agentListeners.delete(listener);
+      },
       refreshList: vi.fn(),
     },
     agentSelection: { state: { selectedId: "main" } },
@@ -109,6 +126,7 @@ export async function mountPage(
 }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.store = new CustodianSessionStore();
   page.onboarding = options.onboarding ?? true;
   provider.append(page);
   document.body.append(provider);

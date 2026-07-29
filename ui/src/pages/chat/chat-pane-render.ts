@@ -1,64 +1,28 @@
+import { html, nothing } from "lit";
+import { findInlineApproval } from "../../app/approval-presentation.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { t } from "../../i18n/index.ts";
+import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import {
-  activeChatRunStartupStatus,
-  buildAgentMainSessionKey,
-  cancelQuestionPrompt,
-  chatPullRequestId,
-  clearChatHistory,
-  configureToolTitleFetcher,
-  createBackgroundTasksProps,
-  createPullRequestBranch,
-  createSessionWorkspaceProps,
-  dismissChatError,
-  dismissRealtimeTalkError,
-  findInlineApproval,
-  hasAbortableSessionRun,
-  hasOperatorAdminAccess,
-  hasOperatorWriteAccess,
-  hasSessionPresenceViewers,
-  html,
-  isGatewayMethodAdvertised,
-  nothing,
-  openSessionWorkspaceFile,
-  parseCatalogSessionKey,
-  pickFreshestObserverDigest,
-  readPresenceEntries,
-  refreshChatCommands,
-  refreshPageChat,
-  renderBoardSessionSurface,
-  renderChat,
-  renderChatControls,
-  resolveActiveRunOutputTokens,
-  resolveChatProjectionRunId,
-  resolveAssistantAttachmentAuthToken,
-  resolveChatAgentId,
-  resolveChatAvatarUrl,
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
-  resolveCurrentSelfUser,
+} from "../../lib/chat/follow-up-mode.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  pickFreshestObserverDigest,
+  projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
-  revealSessionWorkspaceFile,
-  scopedAgentParamsForSession,
-  selectedChatSessionRow,
-  submitQuestionPrompt,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-  t,
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
-  closeSlot,
-  detachPanelToColumn,
-  isSidebarRegionCollapsed,
-  mergePanelIntoColumn,
-  sidebarPrimaryWidth,
-  workspaceResultConflictFromPlacement,
-  type BoardViewCallbacks,
-  type ChatProps,
-  type SessionObserverDigest,
-  type SidebarSide,
-  type SidebarSlotId,
-} from "./chat-pane-deps.ts";
-import { ChatPaneHeaderRender } from "./chat-pane-header-render.ts";
+} from "../../lib/observer-digest.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import { renderBoardSessionSurface } from "./board-session-surface.ts";
+import { clearChatHistory } from "./chat-history.ts";
+import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
+import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
   SESSION_RAIL_DOCK_MIN_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
@@ -70,28 +34,57 @@ import {
   resolveSidebarLayoutForBoard,
   restoreHiddenSidebarChat,
 } from "./chat-pane-sidebar-layout.ts";
+import {
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+  resolveChatArtifactDownload,
+} from "./chat-pane-state.ts";
+import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import {
+  resolveChatAgentId,
+  resolveChatAvatarUrl,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { renderChatControls } from "./components/chat-controls.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
+import {
+  createSessionWorkspaceProps,
+  openSessionWorkspaceFile,
+  revealSessionWorkspaceFile,
+} from "./components/chat-session-workspace.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  detachPanelToColumn,
+  isSidebarRegionCollapsed,
+  mergePanelIntoColumn,
+  sidebarPrimaryWidth,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
+import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPaneRender extends ChatPaneHeaderRender {
+export class ChatPane extends ChatPaneHeader {
   override render() {
     const state = this.state;
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const selectedSession = selectedChatSessionRow(state);
-    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
-      ? {
-          sessionKey: selectedSession.key,
-          ...(selectedSession.observerDigest.agentId
-            ? { agentId: selectedSession.observerDigest.agentId }
-            : {}),
-          runId: selectedSession.observerDigest.runId,
-          revision: selectedSession.observerDigest.revision,
-          updatedAt: selectedSession.observerDigest.updatedAt,
-          headline: selectedSession.observerDigest.headline,
-          health: selectedSession.observerDigest.health,
-        }
-      : null;
+    const projectedObserverDigest = projectSessionObserverDigest(
+      selectedSession?.key ?? state.sessionKey,
+      selectedSession?.observerDigest,
+    );
     const observerDigest = pickFreshestObserverDigest(
       state.observerDigest,
       projectedObserverDigest,
@@ -115,18 +108,18 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    const runtimeConfigState = this.context.runtimeConfig.state;
-    const configSnapshot = runtimeConfigState.configSnapshot;
-    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
-      configNeedsApply: runtimeConfigState.configNeedsApply,
-      effectiveMode: state.chatEffectiveQueueMode,
-      sessionMetadataLoaded:
-        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-      sessionMode: state.chatQueueModeOverride,
-    });
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
-      serverQueueMode,
+      resolveControlUiServerQueueMode(
+        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
+        {
+          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
+          effectiveMode: state.chatEffectiveQueueMode,
+          sessionMetadataLoaded:
+            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+          sessionMode: state.chatQueueModeOverride,
+        },
+      ),
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
@@ -148,6 +141,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelSetupRequired = requiresChatModelSetup({
+      catalog: catalogKey !== null,
+      connected: state.connected,
+      agentsLoaded: this.context.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: agentDefaultModel,
+    });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
@@ -191,10 +191,9 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       column.panels.some((panel) => panel.slot === "chat"),
     );
     const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
-    const primaryWidth = sidebarPrimaryWidth(sidebarLayout, this.paneWidth);
     const chatLayoutWidth = sidebarRegionCollapsed
       ? this.paneWidth
-      : (sidebarChatColumn?.width ?? primaryWidth);
+      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -203,8 +202,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // The workspace rail claims the side slot first; the tasks rail needs
-    // room for both columns before it may side-dock next to it.
+    // The workspace rail claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:
         chatLayoutWidth <
@@ -214,8 +212,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    // Side-docked workspace surfaces narrow the conversation region; bottom
-    // strips do not affect whether the session rail can dock beside it.
+    // Only side-docked rails narrow the conversation region.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const selectedSessionRailMode =
@@ -231,7 +228,6 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       activeRunIds: selectedSession?.activeRunIds,
       usageByRun: state.chatRunUsageById,
     });
-    const loadSidebarFullMessage = createSidebarFullMessageLoader(state, Boolean(catalogKey));
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -332,7 +328,9 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
-        : !selectedSessionArchived && (!sessionParticipationBlocked || suggestionViewer),
+        : !modelSetupRequired &&
+          !selectedSessionArchived &&
+          (!sessionParticipationBlocked || suggestionViewer),
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
@@ -342,7 +340,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
               actionLabel: t("common.unarchive"),
               onAction: () => void this.restoreArchivedSession(state.sessionKey),
             }
-          : undefined,
+          : modelSetupRequired
+            ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+            : undefined,
+      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
+      onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
@@ -365,6 +367,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             }
           : undefined,
       sessions: state.sessionsResult,
+      toolOverrides: selectedSession?.toolOverrides,
+      capabilityMenu: catalogKey
+        ? undefined
+        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -559,6 +565,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
+      resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
       gatewayUrl: state.settings.gatewayUrl,
     };
@@ -608,7 +615,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             detail: html`<openclaw-chat-detail-panel
               class="chat-sidebar"
               .content=${state.sidebarContent}
-              .loadFullMessage=${loadSidebarFullMessage}
+              .loadFullMessage=${createSidebarFullMessageLoader(state, Boolean(catalogKey))}
               .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
               .embedSandboxMode=${state.embedSandboxMode}
               .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}

@@ -11,13 +11,14 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayEventFrame, GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -117,6 +118,10 @@ export function createSessionContext(
   client: GatewayBrowserClient,
   sessions: SessionCapability,
 ): ApplicationContext {
+  const eventListeners = new Set<GatewayEventListener>();
+  const snapshotListeners = new Set<
+    (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
+  >();
   return {
     gateway: {
       snapshot: {
@@ -127,6 +132,26 @@ export function createSessionContext(
             methods: ["taskSuggestions.list", "session.suggestions.list"],
           },
         },
+      },
+      connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+      eventLog: [],
+      subscribe: (listener: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void) => {
+        snapshotListeners.add(listener);
+        return () => snapshotListeners.delete(listener);
+      },
+      subscribeEvents: (listener: GatewayEventListener) => {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
+      subscribeEventLog: () => () => {},
+      connect: vi.fn(),
+      setSessionKey: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      emitTestEvent: (event: GatewayEventFrame) => {
+        for (const listener of eventListeners) {
+          listener(event);
+        }
       },
     },
     agents: { state: { agentsList: null } },
@@ -195,5 +220,17 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
-  return { pane, requestUpdate, state };
+  return {
+    pane,
+    requestUpdate,
+    state,
+    emitGatewayEvent: (event: string, payload: unknown) => {
+      const emit = (
+        pane.context.gateway as ApplicationContext["gateway"] & {
+          emitTestEvent: (event: GatewayEventFrame) => void;
+        }
+      ).emitTestEvent;
+      emit({ type: "event", event, payload, seq: 1 });
+    },
+  };
 }

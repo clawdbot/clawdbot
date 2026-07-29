@@ -296,6 +296,9 @@
       "openclaw/plugin-sdk/session-catalog": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog.d.ts"
       ],
+      "openclaw/plugin-sdk/session-catalog-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/session-key-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-key-runtime.d.ts"
       ],
@@ -749,17 +752,8 @@
       "@openclaw/acp-core": [
         "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"
       ],
-      "@openclaw/acp-core/normalize-text": [
-        "../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts"
-      ],
       "@openclaw/acp-core/meta": [
         "../dist/plugin-sdk/packages/acp-core/src/meta.d.ts"
-      ],
-      "@openclaw/acp-core/numeric-options": [
-        "../dist/plugin-sdk/packages/acp-core/src/numeric-options.d.ts"
-      ],
-      "@openclaw/acp-core/record-shared": [
-        "../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts"
       ],
       "@openclaw/acp-core/session": [
         "../dist/plugin-sdk/packages/acp-core/src/session.d.ts"

@@ -947,7 +947,7 @@ describe("createCopilotAgentHarness", () => {
           sdkSessionId: "sdk-sess-warm",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
-        return ATTEMPT_RESULT;
+        return { ...ATTEMPT_RESULT, journalValidated: true, sdkSessionId: "sdk-sess-warm" };
       });
       const harness = createCopilotAgentHarness({ pool });
 
@@ -956,11 +956,44 @@ describe("createCopilotAgentHarness", () => {
 
       expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { sdkSessionId?: string; replayInvalid?: boolean };
+        initialReplayState?: {
+          journalValidated?: boolean;
+          sdkSessionId?: string;
+          replayInvalid?: boolean;
+        };
       };
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-warm");
+      expect(secondCallParams.initialReplayState?.journalValidated).toBe(true);
       // Must not synthesize a replayInvalid signal: undefined → resumable.
       expect(secondCallParams.initialReplayState?.replayInvalid).toBeUndefined();
+    });
+
+    it("clears journal provenance before a resumed attempt and restores it after validation", async () => {
+      const pool = makePoolMock();
+      const client = createMockCopilotClient({ deleteSession: vi.fn() });
+      const sessionStore = makeSessionStoreMock();
+      let call = 0;
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        call += 1;
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-provenance",
+          pooledClient: { key: TEST_POOL_KEY, client },
+        });
+        if (call === 2) {
+          expect(sessionStore.entries.get("oc-sess-reuse")?.journalVersion).toBeUndefined();
+        }
+        return {
+          ...ATTEMPT_RESULT,
+          journalValidated: true,
+          sdkSessionId: "sdk-sess-provenance",
+        };
+      });
+      const harness = createCopilotAgentHarness({ pool, sessionStore: sessionStore.store });
+
+      await harness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await harness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      expect(sessionStore.entries.get("oc-sess-reuse")?.journalVersion).toBe(1);
     });
 
     it("blocks reuse while timed-out compaction is pending, then resumes after completion", async () => {
@@ -1409,9 +1442,10 @@ describe("createCopilotAgentHarness", () => {
         }),
       );
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { sdkSessionId?: string };
+        initialReplayState?: { journalValidated?: boolean; sdkSessionId?: string };
       };
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
+      expect(secondCallParams.initialReplayState?.journalValidated).toBeUndefined();
     });
 
     it("persists BYOK session compatibility with endpoint fingerprints instead of raw URLs", async () => {

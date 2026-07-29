@@ -8,6 +8,7 @@ import {
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   applySessionPatchProjection,
@@ -122,7 +123,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
     const loadPatchModelCatalog = async () => {
-      const catalog = await context.loadGatewayModelCatalog();
+      const catalog = await context.loadGatewayModelCatalog({ agentId: target.agentId });
       patchModelCatalog = catalog;
       return catalog;
     };
@@ -266,7 +267,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         try {
           await appendSessionAudit({
             cfg,
-            target: { agentId: target.agentId, entry: result.entry, storePath },
+            target: {
+              agentId: target.agentId,
+              entry: result.entry,
+              sessionKey: target.canonicalKey ?? key,
+              storePath,
+            },
             text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
             now: Date.now(),
           });
@@ -293,6 +299,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
 
     triggerSessionPatchHook({
       cfg,
@@ -304,8 +311,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     // Cron mutations are operator.admin surface while archive is write-scoped;
     // only cascade for internal callers (client == null) or admin operators so
     // write-scoped archiving cannot flip admin-managed schedules.
-    const callerScopes = client?.connect ? (client.connect.scopes ?? []) : null;
-    const callerCanManageCron = callerScopes === null || callerScopes.includes(ADMIN_SCOPE);
+    const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
     if (p.archived === true && callerCanManageCron) {
       // Archived sessions reject new work, so schedules bound to them would
       // only accumulate failing runs; disable them with the archive.
@@ -343,6 +349,18 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         : (parsed?.agentId ?? resolveDefaultAgentId(cfg)),
     );
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    if (
+      typeof p.model === "string" &&
+      callerScopes.includes(ADMIN_SCOPE) &&
+      applied.entry.modelOverrideSource === "user" &&
+      applied.entry.providerOverride &&
+      applied.entry.modelOverride
+    ) {
+      persistStickyModelSelectionBestEffort({
+        agentId,
+        model: `${resolved.provider}/${resolved.model}`,
+      });
+    }
     const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
       cfg,
       agentId,

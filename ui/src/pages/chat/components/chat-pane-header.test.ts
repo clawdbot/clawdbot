@@ -273,6 +273,25 @@ describe("chat pane header", () => {
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
+  it("renders a resolved owner avatar with the header attribution semantics", async () => {
+    const mounted = mount({
+      showOwnerChip: true,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+      ownerUser: {
+        id: "profile-ada",
+        name: "Ada",
+        avatarUrl: "/api/users/profile-ada/avatar",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mounted.container.querySelector("openclaw-session-owner-chip img")).not.toBeNull();
+    });
+    const chip = mounted.container.querySelector(".session-owner-chip--header");
+    expect(chip?.getAttribute("aria-label")).toBe("Created by Ada");
+    expect(chip?.getAttribute("title")).toBe("Created by Ada");
+  });
+
   it("routes Enter and Escape from the rename input", () => {
     const enter = mount({ editing: true, renameValue: "  Updated  " });
     const enterInput = enter.container.querySelector<HTMLInputElement>("input");
@@ -359,6 +378,14 @@ describe("chat pane header", () => {
     });
     const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
     expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
+    // wa-popup anchors to the first slot="trigger" element; a display:contents
+    // wrapper (like openclaw-tooltip) has a zero rect and pins the menu to the
+    // window's top-left corner, so the slotted trigger must be the button itself.
+    expect(
+      multiple.container
+        .querySelector('.chat-pane__branches-menu > [slot="trigger"]')
+        ?.classList.contains("chat-pane__branches-trigger"),
+    ).toBe(true);
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("Current work");
     expect(items[0]?.getAttribute("data-active")).toBe("true");

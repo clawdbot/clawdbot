@@ -5,13 +5,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../../config/sessions/legacy-sqlite-marker.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import { getRecentSessionContentFromEvents } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -28,6 +31,71 @@ const loggerMocks = vi.hoisted(() => ({
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
+
+async function readFileTranscript(filePath: string, messageCount = 15): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return getRecentSessionContentFromEvents(
+      content
+        .trim()
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as unknown];
+          } catch {
+            return [];
+          }
+        }),
+      messageCount,
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function getRecentSessionContentWithResetFallback(
+  filePath: string,
+  messageCount = 15,
+): Promise<string | null> {
+  const active = await readFileTranscript(filePath, messageCount);
+  if (active) {
+    return active;
+  }
+  const candidates = (await fs.readdir(path.dirname(filePath)))
+    .filter((name) => name.startsWith(`${path.basename(filePath)}.reset.`))
+    .toSorted();
+  const latest = candidates.at(-1);
+  return latest
+    ? await readFileTranscript(path.join(path.dirname(filePath), latest), messageCount)
+    : active;
+}
+
+async function findPreviousSessionFile(params: {
+  sessionsDir: string;
+  currentSessionFile?: string;
+  sessionId?: string;
+}): Promise<string | undefined> {
+  const files = await fs.readdir(params.sessionsDir);
+  const currentName = params.currentSessionFile
+    ? path.basename(params.currentSessionFile)
+    : undefined;
+  if (currentName?.includes(".reset.") && files.includes(currentName)) {
+    return path.join(params.sessionsDir, currentName);
+  }
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return undefined;
+  }
+  const activeName = `${sessionId}.jsonl`;
+  if (files.includes(activeName)) {
+    return path.join(params.sessionsDir, activeName);
+  }
+  const reset = files
+    .filter((name) => name.startsWith(`${activeName}.reset.`))
+    .toSorted()
+    .at(-1);
+  return reset ? path.join(params.sessionsDir, reset) : undefined;
+}
 
 let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
@@ -87,17 +155,55 @@ async function runNewWithPreviousSessionEntry(params: {
   workspaceDirOverride?: string;
   timestamp?: Date;
 }): Promise<{ files: string[]; memoryContent: string }> {
+  const baseConfig =
+    params.cfg ??
+    ({
+      agents: { defaults: { workspace: params.tempDir } },
+    } satisfies OpenClawConfig);
+  const legacySessionFile = params.previousSessionEntry.sessionFile;
+  const marker = parseSqliteSessionFileMarker(legacySessionFile);
+  const storePath =
+    marker?.storePath ?? baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
+  if (legacySessionFile && !marker) {
+    const content = await fs.readFile(legacySessionFile, "utf8").catch(() => "");
+    if (content) {
+      let parentId: string | null = null;
+      const events = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line, index) => {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          const id = typeof event.id === "string" ? event.id : `fixture-${index + 1}`;
+          const normalized = Object.assign(event, { id });
+          if (!Object.hasOwn(normalized, "parentId")) {
+            normalized.parentId = parentId;
+          }
+          parentId = id;
+          return normalized;
+        });
+      await replaceTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: params.previousSessionEntry.sessionId,
+          sessionKey: params.sessionKey ?? "agent:main:main",
+          storePath,
+        },
+        events,
+      );
+    }
+  }
+  const cfg = {
+    ...baseConfig,
+    session: { ...baseConfig.session, store: storePath },
+  } satisfies OpenClawConfig;
   const event = createHookEvent(
     "command",
     params.action ?? "new",
     params.sessionKey ?? "agent:main:main",
     {
-      cfg:
-        params.cfg ??
-        ({
-          agents: { defaults: { workspace: params.tempDir } },
-        } satisfies OpenClawConfig),
-      previousSessionEntry: params.previousSessionEntry,
+      cfg,
+      previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );
@@ -172,28 +278,23 @@ async function createSessionMemoryWorkspace(params?: {
   return { tempDir, sessionsDir, activeSessionFile };
 }
 
-async function writeSessionTranscript(params: {
-  name: string;
-  content: string;
-}): Promise<{ tempDir: string; sessionsDir: string; sessionFile: string }> {
-  const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
-  const sessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.name,
-    content: params.content,
-  });
-  return { tempDir, sessionsDir, sessionFile };
-}
-
 async function readSessionTranscript(params: {
   sessionContent: string;
   messageCount?: number;
 }): Promise<string | null> {
-  const { sessionFile } = await writeSessionTranscript({
-    name: "test-session.jsonl",
-    content: params.sessionContent,
-  });
-  return getRecentSessionContentWithResetFallback(sessionFile, params.messageCount);
+  return getRecentSessionContentFromEvents(
+    params.sessionContent
+      .trim()
+      .split("\n")
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as unknown];
+        } catch {
+          return [];
+        }
+      }),
+    params.messageCount,
+  );
 }
 
 function expectMemoryConversation(params: {
@@ -318,6 +419,65 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Stored in SQLite rows");
     expect(memoryContent).toContain("assistant: Loaded without JSONL fallback");
     expect(memoryContent).not.toContain("Inactive branch content");
+  });
+
+  it("fills the configured memory window past ineligible tail messages", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sqlite-filtered-tail";
+    const sessionKey = "agent:main:main";
+    const events: Array<Record<string, unknown>> = [
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: null,
+        message: { role: "user", content: "Keep this user context" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-user",
+        message: { role: "assistant", content: "Keep this assistant context" },
+      },
+    ];
+    let parentId = "kept-assistant";
+    for (let index = 0; index < 20; index += 1) {
+      const id = `tool-result-${index}`;
+      events.push({
+        type: "message",
+        id,
+        parentId,
+        message: { role: "toolResult", content: `ignored tool result ${index}` },
+      });
+      parentId = id;
+    }
+    events.push({
+      type: "message",
+      id: "no-reply-tail",
+      parentId,
+      message: { role: "assistant", content: "NO_REPLY" },
+    });
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, events);
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+        hooks: {
+          internal: {
+            entries: { "session-memory": { enabled: true, messages: 2 } },
+          },
+        },
+        session: { store: storePath },
+      },
+      previousSessionEntry: { sessionId },
+    });
+
+    expect(memoryContent).toContain("user: Keep this user context");
+    expect(memoryContent).toContain("assistant: Keep this assistant context");
+    expect(memoryContent).not.toContain("ignored tool result");
+    expect(memoryContent).not.toContain("NO_REPLY");
   });
 
   it("sanitizes model artifacts before writing session memory", async () => {

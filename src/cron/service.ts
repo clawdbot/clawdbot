@@ -5,7 +5,10 @@ import type {
   CronServiceRunResult,
 } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
-import * as ops from "./service/ops.js";
+import * as lifecycleOps from "./service/ops-lifecycle.js";
+import * as mutationOps from "./service/ops-mutations.js";
+import * as readOps from "./service/ops-read.js";
+import * as runOps from "./service/ops-run.js";
 import {
   type CronAddOptions,
   type CronServiceDeps,
@@ -62,9 +65,9 @@ export class CronService implements CronServiceContract {
     this.startInProgress += 1;
     this.state.schedulerStarted = false;
     try {
-      await ops.start(this.state);
+      await lifecycleOps.start(this.state);
       if (generation !== this.lifecycleGeneration) {
-        ops.stop(this.state);
+        lifecycleOps.stop(this.state);
         return;
       }
       this.state.schedulerStarted = !this.state.stopped;
@@ -75,15 +78,15 @@ export class CronService implements CronServiceContract {
 
   stop() {
     this.lifecycleGeneration += 1;
-    ops.stop(this.state);
+    lifecycleOps.stop(this.state);
   }
 
   pauseScheduling() {
-    ops.pauseScheduling(this.state);
+    lifecycleOps.pauseScheduling(this.state);
   }
 
   resumeScheduling() {
-    ops.resumeScheduling(this.state);
+    lifecycleOps.resumeScheduling(this.state);
   }
 
   getSuspensionBlockerCount() {
@@ -91,23 +94,23 @@ export class CronService implements CronServiceContract {
   }
 
   async status() {
-    return await ops.status(this.state);
+    return await readOps.status(this.state);
   }
 
   async list(opts?: { includeDisabled?: boolean }) {
-    return await ops.list(this.state, opts);
+    return await readOps.list(this.state, opts);
   }
 
   async listPage(opts?: CronListPageOptions) {
-    return await ops.listPage(this.state, opts);
+    return await readOps.listPage(this.state, opts);
   }
 
   async add(input: CronJobCreate, opts?: CronAddOptions) {
-    return await ops.add(this.state, input, opts);
+    return await mutationOps.add(this.state, input, opts);
   }
 
   async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
-    return await ops.update(this.state, id, patch, opts);
+    return await mutationOps.update(this.state, id, patch, opts);
   }
 
   async updateWithPrecondition(
@@ -116,15 +119,15 @@ export class CronService implements CronServiceContract {
     precondition: CronUpdatePrecondition,
     opts?: CronUpdateOptions,
   ) {
-    return await ops.updateWithPrecondition(this.state, id, patch, precondition, opts);
+    return await mutationOps.updateWithPrecondition(this.state, id, patch, precondition, opts);
   }
 
   async remove(id: string, opts?: { systemOwned?: boolean }) {
-    return await ops.remove(this.state, id, opts);
+    return await mutationOps.remove(this.state, id, opts);
   }
 
   async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
-    return await ops.removeAgentJobsTransactional(this.state, agentId, commit);
+    return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
   async run(
@@ -132,11 +135,11 @@ export class CronService implements CronServiceContract {
     mode?: "due" | "force",
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
-    return await ops.run(this.state, id, mode, opts);
+    return await runOps.run(this.state, id, mode, opts);
   }
 
   async enqueueRun(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {
-    const result = await ops.enqueueRun(this.state, id, mode);
+    const result = await runOps.enqueueRun(this.state, id, mode);
     if (result.ok && "runnable" in result) {
       // ops.enqueueRun resolves runnable dispositions before crossing the
       // public facade; leaking one would expose an internal scheduler detail.
@@ -155,18 +158,18 @@ export class CronService implements CronServiceContract {
   }
 
   async readJob(id: string): Promise<CronJob | undefined> {
-    return await ops.readJob(this.state, id);
+    return await readOps.readJob(this.state, id);
   }
 
   async readScratch(id: string) {
-    return await ops.readScratch(this.state, id);
+    return await readOps.readScratch(this.state, id);
   }
 
   async writeScratch(
     id: string,
     params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
   ) {
-    return await ops.writeScratch(this.state, id, params);
+    return await readOps.writeScratch(this.state, id, params);
   }
 
   async recordExternalFailure(
@@ -175,7 +178,7 @@ export class CronService implements CronServiceContract {
     statePatch: Partial<CronJob["state"]>,
     source?: { scheduleKey: string; identity: string },
   ): Promise<void> {
-    await ops.recordExternalFailure(this.state, id, error, statePatch, source);
+    await readOps.recordExternalFailure(this.state, id, error, statePatch, source);
   }
 
   async updateExternalState(
@@ -184,7 +187,7 @@ export class CronService implements CronServiceContract {
     streamSourceIdentity: string,
     statePatch: Partial<CronJob["state"]>,
   ): Promise<boolean> {
-    return await ops.updateExternalState(
+    return await readOps.updateExternalState(
       this.state,
       id,
       streamScheduleKey,
@@ -198,7 +201,7 @@ export class CronService implements CronServiceContract {
     streamScheduleKey: string,
     streamSourceIdentity: string,
   ): Promise<string | undefined> {
-    return await ops.retireExternalStreamSource(
+    return await readOps.retireExternalStreamSource(
       this.state,
       id,
       streamScheduleKey,
@@ -210,7 +213,7 @@ export class CronService implements CronServiceContract {
     id: string,
     counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
   ): Promise<void> {
-    await ops.updateExternalCounters(this.state, id, counters);
+    await readOps.updateExternalCounters(this.state, id, counters);
   }
 
   getDefaultAgentId(): string | undefined {
@@ -218,6 +221,6 @@ export class CronService implements CronServiceContract {
   }
 
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
-    return ops.wakeNow(this.state, opts);
+    return runOps.wakeNow(this.state, opts);
   }
 }

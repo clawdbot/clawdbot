@@ -622,8 +622,15 @@ describe("ModelRegistry models.json auth", () => {
             providers: {
               "google-vertex": {
                 baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+                api: "google-vertex",
                 apiKey: "GOOGLE_API_KEY",
-                models: [{ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" }],
+                models: [
+                  {
+                    id: "gemini-3.1-pro-preview",
+                    name: "Gemini 3.1 Pro",
+                    contextWindow: 0,
+                  },
+                ],
               },
             },
           },
@@ -653,11 +660,68 @@ describe("ModelRegistry models.json auth", () => {
     });
 
     expect(registry.getError()).toContain(
-      'Provider google-vertex, model gemini-3.1-pro-preview: no "api" specified',
+      "Provider google-vertex, model gemini-3.1-pro-preview: invalid contextWindow",
     );
     expect(registry.find("custom", "root-model")?.name).toBe("Root Model");
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
     expect(registry.find("google-vertex", "gemini-3.1-pro-preview")).toBeUndefined();
+  });
+
+  it("repairs missing-api generated rows before repeated registry loads", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalogs({
+      root: { providers: {} },
+      pluginCatalogs: [
+        {
+          pluginRelativePath: join("plugins", "nvidia", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              nvidia: {
+                baseUrl: "https://integrate.api.nvidia.com/v1",
+                apiKey: "NVIDIA_API_KEY",
+                models: [
+                  {
+                    id: "meta-llama/llama-3.3-70b-instruct",
+                    name: "Llama 3.3 70B Instruct",
+                  },
+                ],
+              },
+            },
+          },
+        },
+        {
+          pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              zai: {
+                baseUrl: "https://api.z.ai/api/paas/v4",
+                api: "openai-completions",
+                apiKey: "ZAI_API_KEY",
+                models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+              },
+            },
+          },
+        },
+      ],
+    });
+    const snapshot = pluginOwnerSnapshotEntries([
+      { providerId: "nvidia", pluginId: "nvidia" },
+      { providerId: "zai", pluginId: "zai" },
+    ]);
+    const before = listPersistedPluginModelCatalogs(dirname(modelsPath));
+
+    const errors = Array.from({ length: 3 }, () => {
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+        pluginMetadataSnapshot: snapshot,
+      });
+      expect(registry.find("nvidia", "meta-llama/llama-3.3-70b-instruct")).toBeUndefined();
+      expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+      return registry.getError();
+    });
+
+    expect(errors).toEqual([undefined, undefined, undefined]);
+    expect(listPersistedPluginModelCatalogs(dirname(modelsPath))).toEqual(before);
   });
 
   it("preserves model params from SQLite-cached plugin catalogs", () => {

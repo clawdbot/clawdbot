@@ -6,9 +6,11 @@
 // those answers live here rather than in the view module — importing the view
 // from search would pull lit, hub-tabs, and settings-ui into the startup chunk.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../app-route-paths.ts";
 
-export type MemoryTab = "overview" | "search" | "dreaming";
+export type MemoryTab = MemoryRouteTab;
 
 export type MemoryBackend = "builtin" | "qmd";
 
@@ -23,14 +25,82 @@ export type MemoryEngineSelection =
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
 
-/** Scroll target for `memory.backend`, which Overview curates out of the editor. */
+export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
+
+/** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 
-const MEMORY_TABS: readonly MemoryTab[] = ["overview", "search", "dreaming"];
+const MEMORY_TABS: readonly MemoryTab[] = ["overview", "memories", "dreams", "settings"];
 
 /** Reads a `?tab=` value from a settings-search destination or a shared link. */
-export function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
+function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
+  if (value === "search") {
+    return "settings";
+  }
+  if (value === "dreaming") {
+    return "dreams";
+  }
   return MEMORY_TABS.find((tab) => tab === value) ?? null;
+}
+
+/** Old settings-search URLs had a memory section/hash but no tab. */
+export function memoryTabForRoute(
+  route: {
+    pathname?: string;
+    tab?: string | null;
+    section?: string | null;
+    targetBlockId?: string | null;
+  },
+  basePath = "",
+): MemoryTab | null {
+  const pathTab = route.pathname ? memoryTabFromPath(route.pathname, basePath) : null;
+  if (pathTab && pathTab !== "overview") {
+    return pathTab;
+  }
+  const tab = normalizeMemoryTab(route.tab);
+  if (tab) {
+    return tab;
+  }
+  const target = route.targetBlockId ?? "";
+  if (
+    route.section === "memory" ||
+    target === MEMORY_BACKEND_ANCHOR_ID ||
+    target.startsWith("config-section-memory")
+  ) {
+    return "settings";
+  }
+  return pathTab;
+}
+
+export function canonicalMemoryRouteLocation(
+  route: {
+    pathname: string;
+    search: string;
+    hash: string;
+    tab?: string | null;
+    section?: string | null;
+    targetBlockId?: string | null;
+    advanced?: boolean;
+  },
+  basePath = "",
+): RouteLocation | null {
+  const params = new URLSearchParams(route.search);
+  const hadLegacyTab = params.has("tab");
+  const hadLegacySection = route.section === "memory" && params.has("section");
+  params.delete("tab");
+  if (hadLegacySection) {
+    params.delete("section");
+    params.delete("advanced");
+  }
+  const search = params.toString();
+  const canonical: RouteLocation = {
+    pathname: pathForMemoryTab(memoryTabForRoute(route, basePath) ?? "overview", basePath),
+    search: search ? `?${search}` : "",
+    hash: route.hash,
+  };
+  return hadLegacyTab || hadLegacySection || canonical.pathname !== route.pathname
+    ? canonical
+    : null;
 }
 
 /** The plugin that currently owns the slot, or null when nothing does. */
@@ -116,14 +186,7 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
 }
 
 /**
- * The `memory.*` children only the Search tab renders; every other child of the
- * section belongs to Overview. Settings search routes deep links through this so
- * a match cannot land on a tab whose editor omits the field it matched.
- */
-export const MEMORY_SEARCH_TAB_SCHEMA_KEYS: readonly string[] = ["search"];
-
-/**
- * The `memory.*` children Overview renders as curated rows instead of through
+ * The `memory.*` children Settings renders as curated rows instead of through
  * the embedded editor. They have no `#config-section-*` id, so settings search
  * routes their deep links to MEMORY_BACKEND_ANCHOR_ID.
  */
@@ -134,22 +197,22 @@ export function memorySchemaKeysForTab(
   tab: MemoryTab,
   backend: MemoryBackend | null,
 ): readonly string[] {
-  if (tab === "search") {
-    return MEMORY_SEARCH_TAB_SCHEMA_KEYS;
+  if (tab !== "settings") {
+    return [];
   }
-  // `backend` is a curated row above the editor; qmd's sub-config only matters
-  // once qmd is the selected backend.
-  return backend === "qmd" ? ["citations", "qmd"] : ["citations"];
+  // Keep the old Overview fields before the old Search slice while rendering
+  // one editor, which in turn keeps one autosave status and apply banner.
+  return backend === "qmd" ? ["citations", "qmd", "search"] : ["citations", "search"];
 }
 
 /**
- * Every `memory.*` child the page surfaces for a config: both editor slices plus
- * `backend`, which Overview renders as a curated row rather than through the
+ * Every `memory.*` child the page surfaces for a config: the merged editor plus
+ * `backend`, which Settings renders as a curated row rather than through the
  * editor. `qmd` and `backend` disappear with the backend/engine choice, so
  * settings search filters the section through this before matching — otherwise a
- * `memory.qmd` hit routes to an Overview whose editor omits it.
+ * `memory.qmd` hit routes to Settings while its editor omits the matched field.
  */
 export function memoryVisibleSchemaKeys(backend: MemoryBackend | null): readonly string[] {
-  const editor = [...MEMORY_SEARCH_TAB_SCHEMA_KEYS, ...memorySchemaKeysForTab("overview", backend)];
+  const editor = memorySchemaKeysForTab("settings", backend);
   return backend === null ? editor : [...editor, "backend"];
 }

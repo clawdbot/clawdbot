@@ -168,14 +168,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  buildCopilotIdeHeaders: () => ({
-    "Editor-Version": "vscode/1.107.0",
-    "User-Agent": "GitHubCopilotChat/0.35.0",
-  }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
-}));
-
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("../infra/net/fetch-guard.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
@@ -268,6 +260,12 @@ describe("describeImageWithModel", () => {
         ? {
             [API_KEY_FIELD]: "test-api-key",
             baseUrl: "https://api.githubcopilot.com",
+            request: {
+              headers: {
+                "Copilot-Integration-Id": "copilot-developer-cli",
+                "Openai-Organization": "github-copilot",
+              },
+            },
           }
         : undefined;
     });
@@ -763,6 +761,10 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
+        }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
@@ -841,6 +843,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
@@ -855,6 +858,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
       },
     );

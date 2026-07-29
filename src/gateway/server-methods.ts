@@ -53,6 +53,10 @@ const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
   (module) => module.agentHandlers,
 );
+const loadAgentIdentityHandlers = lazyHandlerModule(
+  () => import("./server-methods/agent-identity.js"),
+  (module) => module.agentIdentityHandlers,
+);
 const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
@@ -156,6 +160,10 @@ const loadHealthHandlers = lazyHandlerModule(
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
+);
+const loadMemorySearchHandlers = lazyHandlerModule(
+  () => import("./server-methods/memory-search.js"),
+  (module) => module.memorySearchHandlers,
 );
 const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
@@ -496,7 +504,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests.subscribe"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -852,8 +860,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadUsageHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["agent", "agent.identity.get", "agent.wait"],
+    methods: ["agent", "agent.wait"],
     loadHandlers: loadAgentHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["agent.identity.get"],
+    loadHandlers: loadAgentIdentityHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -870,6 +882,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["agents.workspace.list", "agents.workspace.get"],
     loadHandlers: loadAgentsWorkspaceHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["memory.search"],
+    loadHandlers: loadMemorySearchHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
@@ -939,7 +955,7 @@ function createRequestGatewayMethodRegistry(
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
-  const { req, respond, client, isWebchatConnect, context } = opts;
+  const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
   // attached snapshot does not own the method, rebuild from the gateway-pinned registry. Without
@@ -1087,6 +1103,7 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       respond,
       context,
+      ...(signal ? { signal } : {}),
       ...(sessionMutation.authorization
         ? { sessionMutationAuthorization: sessionMutation.authorization }
         : {}),

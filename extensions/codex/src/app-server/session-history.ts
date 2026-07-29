@@ -11,8 +11,9 @@ import {
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  listSessionEntries,
+  getSessionEntry,
   parseSqliteSessionFileMarker,
+  resolveTranscriptSessionKeyBySessionId,
   type SqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -105,20 +106,19 @@ function resolveSqliteMarkerSessionKey(
 ): string | undefined {
   const explicitSessionKey = target.sessionKey?.trim();
   if (explicitSessionKey) {
-    return explicitSessionKey;
+    // The SDK exact-entry accessor uses a read-only database handle.
+    const explicitEntry = getSessionEntry({
+      agentId: marker.agentId,
+      sessionKey: explicitSessionKey,
+      storePath: marker.storePath,
+    });
+    if (explicitEntry) {
+      return explicitEntry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
+    }
   }
-  const entries = listSessionEntries({
+  return resolveTranscriptSessionKeyBySessionId({
     agentId: marker.agentId,
-    readOnly: true,
+    sessionId: marker.sessionId,
     storePath: marker.storePath,
   });
-  const exactEntry = entries.find(({ entry }) => {
-    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
-  });
-  const sessionEntry =
-    exactEntry ??
-    entries.find(({ entry }) => {
-      return entry.sessionId === marker.sessionId;
-    });
-  return sessionEntry?.sessionKey;
 }

@@ -1,6 +1,7 @@
 // Subagent registry lifecycle tests cover completion, cleanup, announce retry,
 // detached task status, and resource retirement around child-run endings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -337,6 +338,67 @@ describe("subagent registry lifecycle hardening", () => {
     expect(emitSubagentProgressEndedForRun).toHaveBeenCalledWith(entry);
   });
 
+  it("publishes a recovered terminal session status exactly once", async () => {
+    const entry = createRunEntry();
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
+    const completion = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error" as const, error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+      recoverInterrupted: true,
+    } satisfies SubagentCompletionParams;
+
+    await controller.completeSubagentRun(completion);
+    await controller.completeSubagentRun(completion);
+
+    expect(lifecycleEventMocks.emitSessionLifecycleEvent).toHaveBeenCalledExactlyOnceWith({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-status",
+      parentSessionKey: entry.requesterSessionKey,
+      label: entry.label,
+    });
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
+  });
+
+  it("does not publish recovered terminal events for an ordinary completion", async () => {
+    const outcome = {
+      status: "error" as const,
+      error: "restart interrupted run",
+      startedAt: 2_000,
+      endedAt: 4_000,
+      elapsedMs: 2_000,
+    };
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      terminalOwner: "interrupted-recovery",
+      outcome,
+      execution: {
+        status: "terminal",
+        startedAt: 2_000,
+        endedAt: 4_000,
+        outcome,
+      },
+      completion: { required: false, resultText: null, capturedAt: 4_000 },
+    });
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+    });
+
+    expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+    expect(emitSubagentProgressEndedForRun).not.toHaveBeenCalled();
+  });
+
   it("keeps task finalization, resource retirement, and announce cleanup root-admitted", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     let releaseBrowserCleanup: (() => void) | undefined;
@@ -479,6 +541,35 @@ describe("subagent registry lifecycle hardening", () => {
       label: undefined,
     });
   });
+
+  it.each([
+    { identity: "ASCII", runId: "run-1234567890", expected: "run-…7890" },
+    { identity: "short ASCII", runId: "short", expected: "***" },
+    { identity: "astral prefix", runId: "abc😀" + "x".repeat(10), expected: "abc…xxxx" },
+    { identity: "astral suffix", runId: "x".repeat(10) + "😀abc", expected: "xxxx…abc" },
+    {
+      identity: "astral prefix and suffix",
+      runId: "abc😀" + "x".repeat(10) + "😀xyz",
+      expected: "abc…xyz",
+    },
+  ])(
+    "keeps $identity run IDs well-formed in actual completion warnings",
+    async ({ runId, expected }) => {
+      const warn = vi.fn();
+      const entry = createRunEntry({ runId });
+      taskExecutorMocks.completeTaskRunByRunId.mockImplementation(() => {
+        throw new Error("task store boom");
+      });
+
+      const controller = createLifecycleController({ entry, warn });
+      await expect(completeRun(controller, entry)).resolves.toBeUndefined();
+
+      const [, warningFields] = firstCall(warn);
+      const maskedRunId = (warningFields as { runId?: string }).runId;
+      expect(maskedRunId).toBe(expected);
+      expect(new TextDecoder().decode(new TextEncoder().encode(maskedRunId))).toBe(maskedRunId);
+    },
+  );
 
   it("restores the registry state when canonical completion persistence fails", async () => {
     const entry = createRunEntry();
@@ -2509,6 +2600,15 @@ describe("subagent registry lifecycle hardening", () => {
   it("does not wait for a completion reply when the run does not expect one", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,
+      execution: {
+        status: "running",
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+        },
+      },
     });
     const captureSubagentCompletionReply = vi.fn(async () => undefined);
 
@@ -2522,6 +2622,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
       waitForReply: false,
+      sessionTarget: entry.execution?.transcriptTarget,
       outcome: {
         status: "ok",
         startedAt: 2_000,
@@ -2529,6 +2630,54 @@ describe("subagent registry lifecycle hardening", () => {
         elapsedMs: 2_000,
       },
     });
+  });
+
+  it("scopes fallback completion capture to the incognito child store", async () => {
+    const childSessionKey = "agent:main:subagent:incognito-child";
+    const durableStorePath = "/tmp/durable-sessions.json";
+    const entry = createRunEntry({
+      childSessionKey,
+      expectsCompletionMessage: false,
+      execution: {
+        status: "running",
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "incognito-child-session",
+          sessionKey: childSessionKey,
+        },
+      },
+    });
+    const captureSubagentCompletionReply = vi.fn(async () => undefined);
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply,
+      getRuntimeConfig: () => ({ session: { store: durableStorePath } }),
+      runSubagentAnnounceFlow: vi.fn(async () => false),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expect(captureSubagentCompletionReply).toHaveBeenCalledWith(
+      childSessionKey,
+      expect.objectContaining({
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "incognito-child-session",
+          sessionKey: childSessionKey,
+          storePath: resolveSessionStorePathForScope({
+            agentId: "main",
+            sessionKey: childSessionKey,
+            storePath: durableStorePath,
+          }),
+        },
+      }),
+    );
   });
 
   it("does not freeze stale reply text for terminal error outcomes", async () => {

@@ -1,8 +1,15 @@
 import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
+  agentRouteFromPath,
+  INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_SESSION_PATH_PARAM,
+  INTERNAL_MEMORY_PATH_PARAM,
+  INTERNAL_PLUGINS_PATH_PARAM,
+  memoryTabFromPath,
+  pathForAgentPanel,
   pathForRoute,
+  pluginsHubTabFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
   workboardBoardIdFromPath,
@@ -23,6 +30,7 @@ import { page as custodianPage } from "./pages/custodian/route.ts";
 import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
+import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
@@ -65,6 +73,7 @@ const APP_ROUTE_TREE = [
   connectionPage,
   labsPage,
   aboutPage,
+  lobsterdexPage,
   ...configPages,
   modelSetupPage,
   modelProvidersPage,
@@ -91,8 +100,8 @@ export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard ids
-  // and session refs are runtime data, so the app owns those dynamic paths.
+  // The shared router intentionally matches exact paths only. Workboard ids,
+  // hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
     routeIdFromPath,
@@ -102,9 +111,21 @@ export function createApplicationRouter(): ApplicationRouter {
 type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
 
 function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  const agentRoute = agentRouteFromPath(pathname, basePath);
+  if (agentRoute) {
+    return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];
+  }
   const boardId = workboardBoardIdFromPath(pathname, basePath);
   if (boardId) {
     return ["workboard", "board", boardId];
+  }
+  const memoryTab = memoryTabFromPath(pathname, basePath);
+  if (memoryTab && memoryTab !== "overview") {
+    return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
+  }
+  const pluginsTab = pluginsHubTabFromPath(pathname, basePath);
+  if (pluginsTab === "discover") {
+    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
   return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
@@ -132,6 +153,14 @@ export async function startApplicationRouter(
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
   let location = history.location();
+  const initialAgentRoute = agentRouteFromPath(location.pathname, basePath);
+  if (initialAgentRoute?.invalidPanel) {
+    history.replace({
+      ...location,
+      pathname: pathForAgentPanel(initialAgentRoute.agentId, null, basePath),
+    });
+    location = history.location();
+  }
   // Unknown paths (including retired routes like /overview) land on chat, so
   // removed pages need no legacy aliases for stale bookmarks or history.
   if (routeIdFromPath(location.pathname, basePath) === null) {

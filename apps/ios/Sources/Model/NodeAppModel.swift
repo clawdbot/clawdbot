@@ -619,11 +619,20 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
+        let mediaArtifactLoader = IOSMediaArtifactLoader { [weak self] in
+            guard let config = self?.activeGatewayConnectConfig else { return nil }
+            return IOSMediaArtifactLoader.Connection(
+                config: config,
+                gatewayID: config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID,
+                customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
+                    gatewayStableID: config.effectiveStableID))
+        }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
-            outboxGatewayID: outboxGatewayID)
+            outboxGatewayID: outboxGatewayID,
+            mediaArtifactLoader: mediaArtifactLoader)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -5728,12 +5737,15 @@ extension NodeAppModel {
             transport: event.transport,
             messageKind: .quickReply)
         let needsReconnect = !self.isWatchMessageSendAvailable()
+        let routeGeneration = self.gatewayRouteGeneration
         await self.handleWatchMessage(message)
         guard needsReconnect else { return }
 
         let connected = await ensureOperatorApprovalConnectionForWatchReview(
             timeoutMs: 12000,
-            reason: "watch_reply")
+            reason: "watch_reply",
+            routeGeneration: routeGeneration,
+            gatewayStableID: gatewayStableID)
         guard connected,
               GatewayStableIdentifier.matches(
                   self.currentWatchChatGatewayStableID(),
@@ -6724,6 +6736,17 @@ extension NodeAppModel {
         event.messageKind ?? .chat
     }
 
+    nonisolated static func watchThinkingOverride(for messageKind: WatchMessageKind) -> String? {
+        // Free-form Watch chat has no one-turn thinking control, so it must not
+        // invent an override. Quick replies intentionally use a cheap level.
+        switch messageKind {
+        case .chat:
+            nil
+        case .quickReply:
+            "low"
+        }
+    }
+
     private func forwardWatchMessage(
         _ event: WatchAppCommandEvent,
         requeueOnFailure: Bool) async -> WatchMessageSendOutcome
@@ -6746,7 +6769,7 @@ extension NodeAppModel {
         if messageKind == .chat {
             self.focusChatSession(sessionKey)
         }
-        let thinking = messageKind == .quickReply ? "low" : "auto"
+        let thinkingOverride = Self.watchThinkingOverride(for: messageKind)
 
         do {
             let submittedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -6754,7 +6777,8 @@ extension NodeAppModel {
                 let response = try await appleReviewDemoChatTransport.sendMessage(
                     sessionKey: sessionKey,
                     message: text,
-                    thinking: thinking,
+                    // Demo mode has no Gateway session from which to resolve an omitted level.
+                    thinking: thinkingOverride ?? "auto",
                     idempotencyKey: event.commandId,
                     attachments: [])
                 if messageKind == .quickReply {
@@ -6798,7 +6822,7 @@ extension NodeAppModel {
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 message: text,
-                thinking: thinking,
+                thinking: thinkingOverride,
                 idempotencyKey: event.commandId,
                 attachments: [],
                 ifCurrentRoute: operatorRoute)
@@ -8859,7 +8883,9 @@ extension NodeAppModel {
         {
             await self.ensureOperatorApprovalConnectionForWatchReview(
                 timeoutMs: 12000,
-                reason: sourceReason)
+                reason: sourceReason,
+                routeGeneration: routeGeneration,
+                gatewayStableID: gatewayStableID)
         } else {
             await self.ensureOperatorApprovalConnection(timeoutMs: 12000)
         }
@@ -9795,10 +9821,23 @@ extension NodeAppModel {
             sessionBox: sessionBox)
     }
 
-    private func ensureOperatorApprovalConnectionForWatchReview(timeoutMs: Int, reason: String) async -> Bool {
+    private func ensureOperatorApprovalConnectionForWatchReview(
+        timeoutMs: Int,
+        reason: String,
+        routeGeneration: UInt64,
+        gatewayStableID: String) async -> Bool
+    {
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         let reconnectReason = normalizedReason.isEmpty ? "watch_request" : normalizedReason
         if await self.isOperatorConnected() {
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=already_connected")
@@ -9810,6 +9849,10 @@ extension NodeAppModel {
                 "watch exec approval: watch_request_reconnect_begin "
                     + "reason=\(reconnectReason) backgrounded=false strategy=default")
             let connected = await ensureOperatorApprovalConnection(timeoutMs: timeoutMs)
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                     + "reason=\(reconnectReason) phase=foreground_delegate")
@@ -9866,17 +9909,29 @@ extension NodeAppModel {
             pollMs: 200,
             owner: .operator)
         {
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=initial")
             return true
         }
 
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_restart reason=\(reconnectReason)")
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.stopGatewayHealthMonitor()
@@ -9899,6 +9954,10 @@ extension NodeAppModel {
             timeoutMs: remainingWaitMs,
             pollMs: 200,
             owner: .operator)
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                 + "reason=\(reconnectReason) phase=restart")

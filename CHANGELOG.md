@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
 - **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.
 - **Control UI update recovery:** the "A new version is available" Reload button now waits out the gateway restart that stranded the chunk and reloads as soon as it answers, instead of silently doing nothing and leaving a manual hard reload as the only way out.
 - **Control UI sender identity polish:** attributed user messages show the author's real avatar in an always-visible gutter on identity-resolving gateways, sender labels drop the opaque profile-UUID suffix (new and historical transcripts), and profile-id senders resolve avatars through the canonical gateway route.
@@ -51,6 +52,14 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.
+- **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
+- **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
+- **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.
+- **Dev-channel updates:** finish package-to-git switches in a fresh CLI process even when source SHA and version metadata are unchanged, preventing stale hashed chunks from loading after the global package root changes.
+- **Parallels release smoke:** preserve Windows installer reboot results across Parallels, wait for WSL MSI/default-version readiness, force explicit test-owned gateway stops, and reset Linux package, config, and cache state before install lanes, preventing false prerequisite, safety-gate, and stale-config failures.
+- **OpenAI Realtime Talk auth:** remove the non-public Codex OAuth realtime fallback and require an OpenAI Platform API key for Talk, Voice Call, and Discord realtime voice, preventing OAuth-only gateways from advertising a browser session that the live service rejects. Fixes #115021.
+- **Codex native subagent handoff:** tell Codex harness turns to use `sessions_yield` for later-turn child completion delivery, reserve `wait_agent` for immediately blocked same-turn steps, and omit the guidance when yielding is unavailable. Fixes #115443. Thanks @shakkernerd.
 - **Codex native controls:** stop misclassifying valid thinking/fast runtime controls as provider overrides so Codex routes keep their native controls, while provider-native objects and invalid values stay fail-closed. Thanks @VACInc. (#107588)
 - **State snapshot verification:** run SQLite snapshot verification in a separate process so worker-thread file closes no longer drop the Gateway's POSIX WAL locks, eliminating spurious WAL misses and I/O errors. Thanks @VACInc. (#114016)
 - **Reply latency with model policies:** reuse one immutable plugin-metadata snapshot per model-selection run instead of repeating plugin discovery, cutting reply delay when a model policy is configured. Thanks @VACInc. (#114117)
@@ -1173,7 +1182,7 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - Cloudflare 403 challenges on OpenAI or Codex OAuth requests now produce gateway-block guidance instead of incorrectly telling users their authentication failed. [#94440](https://github.com/openclaw/openclaw/pull/94440) Related [#94432](https://github.com/openclaw/openclaw/issues/94432). Thanks @lzyyzznl, @pbm9z95m6z-hue.
 - OpenAI authentication errors now point ChatGPT/Codex OAuth users to a model compatible with their existing sign-in instead of recommending an outdated default. [#100579](https://github.com/openclaw/openclaw/pull/100579) Thanks @zhangguiping-xydt.
 - For Codex-backed OpenAI models, `/status` now identifies ChatGPT login authentication as `oauth (codex-cli)` instead of incorrectly labeling it as an environment API key. [#91240](https://github.com/openclaw/openclaw/pull/91240) Related [#91099](https://github.com/openclaw/openclaw/issues/91099). Thanks @849261680, @ukstem.
-- OpenAI Realtime voice in Talk, Voice Call, and Discord can now use an existing Codex/OpenAI OAuth login when no explicit API key is configured. [#100671](https://github.com/openclaw/openclaw/pull/100671) Thanks @steipete-oai.
+- OpenAI Realtime voice in Talk, Voice Call, and Discord was announced with a Codex/OpenAI OAuth fallback in [#100671](https://github.com/openclaw/openclaw/pull/100671). Correction: public Codex OAuth accounts do not have a supported realtime transport, so current builds require an OpenAI Platform API key. Thanks @steipete-oai.
 
 ##### Google and Gemini
 
@@ -6877,7 +6886,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Agents/compaction: keep contributor diagnostics to a bounded top-three selection without sorting the full history. Thanks @shakkernerd.
 - Sessions/UI: avoid full-array sorting while selecting ACPX leases, Google Meet calendar events, and latest chat sessions. Thanks @shakkernerd.
 - Plugin SDK: mark direct `deliverOutboundPayloads` and legacy reply-dispatch bridges as deprecated compatibility substrate, enrich `sendDurableMessageBatch` with explicit durable send outcomes, migrate bundled send/turn paths off deprecated APIs, and enforce the split with `check:deprecated-api-usage`.
-- OpenAI/Talk: let browser realtime Talk, Gateway relay/Voice Call realtime bridges, and OpenAI realtime transcription use `openai-codex` OAuth when no direct API key is configured, make Google Meet `test_speech` honor `mode: "bidi"`, expose Control UI launch options for provider/model/voice/transport/VAD/reasoning, and update the default OpenAI realtime voice model to `gpt-realtime-2`. Thanks @Solvely-Colin.
+- OpenAI/Talk: add browser realtime Talk controls, Google Meet `test_speech` support for `mode: "bidi"`, and the `gpt-realtime-2` default. Correction: the announced `openai-codex` OAuth fallback does not have a supported public realtime transport; Talk, Gateway relay/Voice Call, and realtime transcription require OpenAI Platform credentials. Thanks @Solvely-Colin.
 - Telegram: preserve the channel-specific 10-option poll cap in the unified outbound adapter so over-limit polls are rejected before send. (#78762) Thanks @obviyus.
 - Telegram/streaming: continue over-limit draft previews in a new message instead of stopping when rendered preview text crosses Telegram's message limit. (#74508) Thanks @anagnorisis2peripeteia.
 - Slack: route handled top-level channel turns in implicit-conversation channels to thread-scoped sessions when Slack reply threading is enabled, keeping the root turn and later thread replies on one OpenClaw session. (#78522) Thanks @zeroth-blip.

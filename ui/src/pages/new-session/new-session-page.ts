@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
@@ -14,6 +15,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
@@ -22,11 +24,16 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
+import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
-import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
+import {
+  CLOUD_PROFILE_RETRY_DELAYS_MS,
+  discoverCloudProfiles,
+  selectProfiles,
+} from "./cloud-profile-discovery.ts";
 import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
 import {
@@ -48,7 +55,7 @@ import {
   readDraftNodes,
 } from "./discovery.ts";
 import { isMissingRestoredFolderError } from "./folder-validation.ts";
-import { GatewayNameDiscovery } from "./gateway-name-discovery.ts";
+import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
@@ -80,7 +87,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private gatewayName = "";
   @state() private execNode = "";
   @state() private cloudProfiles: DraftCloudProfile[] = [];
-  @state() private cloudProfilesHydrated = false;
+  @state() private cloudProfilesReady = false;
   @state() private cloudProfileId = "";
   @state() private message = "";
   @state() private submitting = false;
@@ -108,36 +115,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private worktreeSelectedByUser = false;
   private submitRequestToken = 0;
   private nodesRequestToken = 0;
-  private readonly gatewayNameDiscovery = new GatewayNameDiscovery(
-    () => this.context?.gateway.snapshot,
-    (name) => (this.gatewayName = name),
-  );
   private readonly pendingCloud = new PendingCloudRecoveryState();
-  private readonly cloudProfileDiscovery = new CloudProfileDiscovery({
-    snapshot: () => ({
-      connected: this.gatewayConnected,
-      client: this.gatewayClient,
-      admin: this.isAdmin(),
-      pendingCloud: Boolean(this.pendingCloud.sessionKey),
-      selectedId: this.cloudProfileId,
-    }),
-    update: ({ profiles, hydrated, clearSelection, selectionUnavailable }) => {
-      const recovery = selectProfiles(profiles, this.gatewayClient, this.gatewayRecoveryScope);
-      this.cloudProfiles = recovery.profiles;
-      this.cloudProfilesHydrated = hydrated;
-      if (clearSelection) {
-        this.cloudProfileId = "";
-        this.closeBrowser();
-      }
-      if (selectionUnavailable) {
-        this.error = t("newSession.catalogUnavailable");
-      } else if (recovery.unsupported) {
-        this.error = t("newSession.cloudSecureContextRequired");
-      } else if (this.error === t("newSession.cloudSecureContextRequired")) {
-        this.error = null;
-      }
-    },
-  });
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
@@ -158,6 +136,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private catalogRetryScope = "";
   private catalogRetryAttempt = 0;
   private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  private cloudProfileRetryAttempt = 0;
+  private cloudProfileRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
@@ -175,6 +155,90 @@ class NewSessionPage extends OpenClawLightDomElement {
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
     );
+
+  private readonly gatewayNameTask = new Task(this, {
+    args: () =>
+      [
+        this.isConnected && this.gatewayConnected ? this.gatewayClient : null,
+        this.context
+          ? isGatewayMethodAdvertised(this.context.gateway.snapshot, "system.info") === true
+          : false,
+        this.gatewayConnectionEpoch,
+      ] as const,
+    task: ([client, advertised, _connectionEpoch], { signal }) =>
+      discoverGatewayName(client, advertised, signal),
+    onComplete: (name) => {
+      this.gatewayName = name;
+    },
+  });
+
+  private readonly cloudProfileTask = new Task(this, {
+    args: () =>
+      [
+        this.isConnected && this.gatewayConnected ? this.gatewayClient : null,
+        this.gatewayConnectionEpoch,
+        this.isAdmin(),
+        this.gatewayRecoveryScope,
+      ] as const,
+    task: ([client, _connectionEpoch, admin]) =>
+      client ? discoverCloudProfiles(client, admin) : initialState,
+    onComplete: (profiles) => {
+      this.resetCloudProfileRetry();
+      this.applyCloudProfiles(profiles);
+      this.cloudProfilesReady = true;
+    },
+    onError: () => {
+      this.cloudProfiles = [];
+      this.cloudProfilesReady = false;
+      this.scheduleCloudProfileRetry();
+    },
+  });
+
+  private applyCloudProfiles(profiles: DraftCloudProfile[]) {
+    const recovery = selectProfiles(profiles, this.gatewayClient, this.gatewayRecoveryScope);
+    this.cloudProfiles = recovery.profiles;
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    if ((!this.gatewayConnected || !this.isAdmin()) && !pendingCloud) {
+      this.cloudProfileId = "";
+      this.closeBrowser();
+    }
+    const selectionUnavailable =
+      !pendingCloud &&
+      Boolean(this.cloudProfileId) &&
+      !profiles.some((profile) => profile.id === this.cloudProfileId);
+    if (selectionUnavailable) {
+      this.error = t("newSession.catalogUnavailable");
+    } else if (recovery.unsupported) {
+      this.error = t("newSession.cloudSecureContextRequired");
+    } else if (this.error === t("newSession.cloudSecureContextRequired")) {
+      this.error = null;
+    }
+  }
+
+  private resetCloudProfileRetry() {
+    globalThis.clearTimeout(this.cloudProfileRetryTimer);
+    this.cloudProfileRetryTimer = undefined;
+    this.cloudProfileRetryAttempt = 0;
+  }
+
+  private scheduleCloudProfileRetry() {
+    if (this.cloudProfileRetryTimer || !this.gatewayConnected || !this.gatewayClient) {
+      return;
+    }
+    if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
+      this.applyCloudProfiles([]);
+      this.cloudProfilesReady = true;
+      return;
+    }
+    const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];
+    this.cloudProfileRetryAttempt += 1;
+    this.cloudProfileRetryTimer = globalThis.setTimeout(() => {
+      this.cloudProfileRetryTimer = undefined;
+      if (this.gatewayConnected) {
+        void this.cloudProfileTask.run();
+      }
+    }, delayMs);
+  }
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const snapshot = gateway.snapshot;
@@ -227,17 +291,17 @@ class NewSessionPage extends OpenClawLightDomElement {
       if (becameConnected) {
         this.gatewayConnectionEpoch += 1;
         this.retryPendingCatalogTarget();
-        void this.gatewayNameDiscovery.load();
       }
-      void this.cloudProfileDiscovery.load();
     }
   }
 
   private invalidateGatewayDiscovery(resetHostSelection: boolean) {
     this.nodesRequestToken += 1;
     this.nodesHydrated = false;
-    this.gatewayNameDiscovery.invalidate();
-    this.cloudProfileDiscovery.invalidate();
+    this.gatewayName = "";
+    this.cloudProfiles = [];
+    this.cloudProfilesReady = false;
+    this.resetCloudProfileRetry();
     this.branchesRequestToken += 1;
     this.repository = { kind: "idle" };
     this.baseRef = ""; // Never carry a derived ref across a transport epoch.
@@ -370,7 +434,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.catalogRetryTimer = undefined;
     this.attachmentDraft.reset({ release: true });
     this.composerTextarea.disconnect();
-    this.cloudProfileDiscovery.stop();
+    void this.gatewayNameTask.run([null, false, -1]);
+    void this.cloudProfileTask.run([null, -1, false, ""]);
+    this.resetCloudProfileRetry();
     super.disconnectedCallback();
   }
 
@@ -876,6 +942,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const gateway = this.context?.gateway;
     if (
       this.submitting ||
+      this.requiresModelSetup() ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
       (!message && !hasAttachments) ||
@@ -923,7 +990,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       (!this.isAdmin() ||
         !gateway.snapshot.client.recoveryScope ||
         !gateway.snapshot.client.recoveryScopeReady ||
-        !this.cloudProfilesHydrated ||
+        !this.cloudProfilesReady ||
+        this.cloudProfileTask.status === TaskStatus.PENDING ||
         !this.worktree ||
         !this.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
         Boolean(this.cloudRuntimeUnsupportedReason()))
@@ -943,6 +1011,20 @@ class NewSessionPage extends OpenClawLightDomElement {
       return false;
     }
     return true;
+  }
+
+  private requiresModelSetup(): boolean {
+    const selectedAgent = this.selectedAgent();
+    return requiresChatModelSetup({
+      catalog:
+        catalog.isTarget(this.data) ||
+        Boolean(this.cloudProfileId) ||
+        Boolean(this.pendingCloud.sessionKey),
+      connected: this.gatewayConnected,
+      agentsLoaded: this.context?.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: selectedAgent?.model?.primary,
+    });
   }
 
   private async submit() {
@@ -1640,6 +1722,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       assistantAvatarUrl: identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
+      modelSetupRequired: this.requiresModelSetup(),
+      onModelSetup: () => this.context?.navigate("model-setup"),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.agentId || "main",

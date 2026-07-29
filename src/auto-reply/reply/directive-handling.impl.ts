@@ -10,6 +10,7 @@ import {
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -606,6 +607,18 @@ export async function handleDirectiveOnly(
           ? "Model change was not applied because the session changed. Retry."
           : "Session settings were not applied because the session changed. Retry.",
       };
+    }
+    if (
+      modelSelection &&
+      modelSelectionApplied &&
+      !modelSelection.isDefault &&
+      !params.persistenceState &&
+      params.canPersistStickyModelSelection === true
+    ) {
+      persistStickyModelSelectionBestEffort({
+        agentId: activeAgentId,
+        model: `${modelSelection.provider}/${modelSelection.model}`,
+      });
     }
     if (modelSelection && modelSelectionUpdated && modelSelectionApplied && sessionKey) {
       triggerSessionPatchHook({

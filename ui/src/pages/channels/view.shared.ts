@@ -162,8 +162,7 @@ export function renderChannelProbeRow(probe: {
 /** Trailing action row carrying a button cluster in the control slot. */
 export function renderChannelActionRow(actions: unknown) {
   return html`
-    <div class="settings-row">
-      <div class="settings-row__text"></div>
+    <div class="settings-row settings-row--actions">
       <div class="settings-row__control">${actions}</div>
     </div>
   `;
@@ -202,8 +201,10 @@ export function renderChannelAccountRow(params: {
 
 /**
  * One channel = one settings section: heading with optional account count,
- * a group holding the status facts, error/probe rows, extra content, the
- * config form, and a trailing action row.
+ * a group holding the status facts, error/probe rows, the config form,
+ * extra content, and a trailing action row. Extra content sits directly
+ * above the actions so action feedback (e.g. the WhatsApp QR) appears next
+ * to the button that triggered it instead of scrolled away above the form.
  */
 export function renderSingleAccountChannelCard(params: {
   title: string;
@@ -225,8 +226,9 @@ export function renderSingleAccountChannelCard(params: {
     html`
       ${renderChannelFacts(params.statusRows)}
       ${params.lastError ? renderChannelErrorRow(params.lastError) : nothing}
-      ${params.secondaryCallout ?? nothing} ${params.extraContent ?? nothing}
-      ${params.configSection} ${params.footer ? renderChannelActionRow(params.footer) : nothing}
+      ${params.secondaryCallout ?? nothing} ${params.configSection}
+      ${params.extraContent ?? nothing}
+      ${params.footer ? renderChannelActionRow(params.footer) : nothing}
     `,
   );
 }

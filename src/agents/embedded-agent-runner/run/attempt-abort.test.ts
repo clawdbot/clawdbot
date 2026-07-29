@@ -6,6 +6,7 @@ import {
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 const mocks = vi.hoisted(() => ({
   countActiveToolExecutions: vi.fn(() => 0),
@@ -160,6 +161,31 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
 });
 
 describe("createEmbeddedAttemptRunAbort", () => {
+  it("releases session ownership non-terminally for sessions_yield handoff", async () => {
+    const releaseHeldLockForAbort = vi.fn(async () => {});
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession: vi.fn(async () => {}),
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        runId: "run-yield",
+        sessionFile: "agent:main:main",
+        sessionId: "session-yield",
+        sessionKey: "agent:main:main",
+      },
+      getQueueHandle: () => undefined,
+      isProbeSession: false,
+      log: { warn: vi.fn() },
+      runAbortController: new AbortController(),
+      sessionLockController: { releaseHeldLockForAbort },
+      state: createAbortState().port,
+    });
+
+    abortRun(false, SESSIONS_YIELD_ABORT_REASON);
+    await vi.waitFor(() => {
+      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({ terminal: false });
+    });
+  });
+
   it("settles timeout state, session work, queue ownership, and the lock", async () => {
     const state = createAbortState();
     const timeoutReason = new Error("attempt deadline");

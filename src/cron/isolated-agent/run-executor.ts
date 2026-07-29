@@ -12,7 +12,6 @@ import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-pla
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
@@ -56,7 +55,6 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
-import { resolveFallbackCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
@@ -222,7 +220,7 @@ function createCronPromptExecutor(params: {
   resolvedDeliveryOk: boolean;
   messageToolPromptEnabled: boolean;
   deliveryRequested?: boolean;
-  sourceDelivery?: SourceDeliveryPlan;
+  sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -241,17 +239,7 @@ function createCronPromptExecutor(params: {
   ) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
 }) {
-  const sessionFile =
-    params.cronSession.sessionEntry.sessionFile?.trim() ||
-    formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId: params.cronSession.sessionEntry.sessionId,
-      storePath: params.cronSession.storePath,
-    });
-  // Fallback for callers that bypass prepareCronRunContext before persisting retries.
-  if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
-    params.cronSession.sessionEntry.sessionFile = sessionFile;
-  }
+  const sessionFile = params.runSessionKey;
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
     resolveCronFallbacksOverride({
@@ -279,14 +267,7 @@ function createCronPromptExecutor(params: {
     scheduledToolPolicy: params.job.scheduledToolPolicy,
     owner: params.job.owner,
   });
-  if (!params.sourceDelivery) {
-    logWarn(
-      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
-    );
-  }
-  const sourceDelivery =
-    params.sourceDelivery ??
-    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
+  const { sourceDelivery } = params;
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   // Cron prompts may intentionally have nothing to report; both runners must agree on silence.
@@ -647,7 +628,7 @@ export async function executeCronRun(params: {
   resolvedDeliveryOk: boolean;
   messageToolPromptEnabled: boolean;
   deliveryRequested?: boolean;
-  sourceDelivery?: SourceDeliveryPlan;
+  sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -686,14 +667,6 @@ export async function executeCronRun(params: {
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
-  if (!params.sourceDelivery) {
-    logWarn(
-      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
-    );
-  }
-  const sourceDelivery =
-    params.sourceDelivery ??
-    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
@@ -715,7 +688,7 @@ export async function executeCronRun(params: {
     resolvedDeliveryOk: params.resolvedDeliveryOk,
     messageToolPromptEnabled: params.messageToolPromptEnabled,
     deliveryRequested: params.deliveryRequested,
-    sourceDelivery,
+    sourceDelivery: params.sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,

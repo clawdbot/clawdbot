@@ -5,13 +5,16 @@ import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  countSessionToolOverrides,
+  sessionToolOverrideNames,
+} from "../../../lib/sessions/tool-overrides.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
-  renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import { renderChatPrimaryActions } from "./chat-composer-controls.ts";
@@ -21,6 +24,7 @@ import {
   observeQuestionDock,
 } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
+import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
@@ -116,6 +120,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       `
     : nothing;
   const showComposerInput = showComposer && props.disabledBanner?.kind !== "composer-replacement";
+  if (!props.capabilityMenu) {
+    state.capabilityMenuView = "root";
+  }
+  const overrideCount = countSessionToolOverrides(props.toolOverrides);
+  const overrideTooltip = sessionToolOverrideNames(
+    props.toolOverrides,
+    t("chat.composer.menu.webSearch"),
+  ).join(", ");
 
   return html`
     ${renderChatQueue({
@@ -182,7 +194,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   <div class="chat-reply-preview">
                     <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
                     <span class="chat-reply-preview__label"
-                      >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+                      >${t("chat.messages.replyingTo", {
+                        name: props.replyTarget.senderLabel ?? t("chat.messages.message"),
+                      })}</span
                     >
                     <span class="chat-reply-preview__text"
                       >${truncateUtf16Safe(props.replyTarget.text, 120)}${props.replyTarget.text
@@ -301,9 +315,45 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               : nothing}
 
             <div class="agent-chat__composer-input-row">
-              ${renderChatAttachmentMenu({
-                ...props,
+              ${renderChatComposerPlusMenu({
+                attachments: props,
+                showCapabilities: props.capabilityMenu !== undefined,
+                basePath: props.capabilityMenu?.basePath ?? "",
                 disabled: !canCompose || props.suggestionComposer === true,
+                open: state.capabilityMenuOpen,
+                view: state.capabilityMenuView,
+                toolOverrides: props.toolOverrides,
+                skills: props.capabilityMenu?.skills ?? null,
+                skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
+                skillsError: props.capabilityMenu?.skillsError ?? false,
+                mcpServers: props.capabilityMenu?.mcpServers ?? [],
+                toolsEffectiveResult: props.capabilityMenu?.toolsEffectiveResult ?? null,
+                toolsEffectiveLoading: props.capabilityMenu?.toolsEffectiveLoading ?? false,
+                toolsEffectiveError: props.capabilityMenu?.toolsEffectiveError ?? false,
+                toolAccessMutationBlockedReason:
+                  props.capabilityMenu?.toolAccessMutationBlockedReason ?? null,
+                webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
+                mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
+                canAdmin: props.capabilityMenu?.canAdmin ?? false,
+                adminBlockedReason: props.capabilityMenu?.adminBlockedReason ?? null,
+                addServerDialog: props.capabilityMenu?.addServerDialog,
+                onOpenChange: (open) => {
+                  state.capabilityMenuOpen = open;
+                  if (!open) {
+                    state.capabilityMenuView = "root";
+                  }
+                  requestUpdate();
+                },
+                onViewChange: (view) => {
+                  state.capabilityMenuView = view;
+                  requestUpdate();
+                },
+                onLoadSkills: props.capabilityMenu?.onLoadSkills ?? (() => {}),
+                onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
+                onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
+                onAddServer: props.capabilityMenu?.onAddServer,
+                onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
+                onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
               <div class="agent-chat__composer-combobox">
                 <textarea
@@ -376,6 +426,45 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                             <div class="agent-chat__composer-run-status">
                               ${renderChatRunStatusIndicator(composerRunStatus)}
                             </div>
+                          `
+                        : nothing}
+                      ${overrideCount > 0 && props.capabilityMenu
+                        ? html`
+                            <openclaw-tooltip .content=${overrideTooltip}>
+                              <span class="agent-chat__session-overrides-pill">
+                                <button
+                                  type="button"
+                                  class="agent-chat__session-overrides-open"
+                                  @click=${() => {
+                                    state.capabilityMenuView = "root";
+                                    state.capabilityMenuOpen = true;
+                                    requestUpdate();
+                                  }}
+                                >
+                                  ${t(
+                                    overrideCount === 1
+                                      ? "chat.composer.overrides.countOne"
+                                      : "chat.composer.overrides.count",
+                                    { count: String(overrideCount) },
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  class="agent-chat__session-overrides-clear"
+                                  aria-label=${t("chat.composer.overrides.clear")}
+                                  title=${props.capabilityMenu.mutationBlockedReason ?? ""}
+                                  ?disabled=${props.capabilityMenu.mutationBlockedReason !== null}
+                                  @click=${(event: MouseEvent) => {
+                                    event.stopPropagation();
+                                    if (!props.capabilityMenu?.mutationBlockedReason) {
+                                      props.capabilityMenu?.onPatchToolOverrides(null);
+                                    }
+                                  }}
+                                >
+                                  ${icons.x}
+                                </button>
+                              </span>
+                            </openclaw-tooltip>
                           `
                         : nothing}
                       ${composerControls}

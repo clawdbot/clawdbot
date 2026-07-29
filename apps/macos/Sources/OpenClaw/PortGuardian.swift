@@ -460,11 +460,17 @@ actor PortGuardian {
     }
 
     func isListening(port: Int, pid: Int32? = nil) async -> Bool {
-        let listeners = await self.listeners(on: port)
         if let pid {
-            return listeners.contains(where: { $0.pid == pid })
+            #if canImport(Darwin)
+            guard let port = UInt16(exactly: port) else { return false }
+            // Tunnel readiness polls this exact child every 100 ms. Inspect its
+            // sockets in-process so each poll does not launch lsof and ps.
+            return ProcessSocketListenerInspector.isListening(pid: pid, port: port)
+            #else
+            return false
+            #endif
         }
-        return !listeners.isEmpty
+        return await !(self.listeners(on: port)).isEmpty
     }
 
     private func listeners(on port: Int) async -> [Listener] {
