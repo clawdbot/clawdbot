@@ -44,7 +44,7 @@ import {
 } from "./group-policy.js";
 import { sanitizeOutboundText } from "./monitor/sanitize-outbound.js";
 import type { IMessageProbe } from "./probe.js";
-import { imessageSetupAdapter } from "./setup-core.js";
+import { imessageSetupAdapter, imessageSetupContract } from "./setup-core.js";
 import {
   createIMessagePluginBase,
   imessageSecurityAdapter,
@@ -282,6 +282,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       ...createIMessagePluginBase({
         setupWizard: imessageSetupWizard,
         setup: imessageSetupAdapter,
+        setupContract: imessageSetupContract,
       }),
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "imessage",

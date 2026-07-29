@@ -74,7 +74,7 @@ type CatalogPayload = {
   groups: CatalogGroup[];
 };
 
-function createInvokeParams(params: Record<string, unknown>) {
+function createInvokeParams(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
   const respond = vi.fn();
   return {
     respond,
@@ -85,7 +85,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       )({
         params,
         respond: respond as never,
-        context: { getRuntimeConfig: () => ({}) } as never,
+        context: { getRuntimeConfig: () => config } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.catalog" },
         isWebchatConnect: () => false,
@@ -152,6 +152,24 @@ describe("tools.catalog handler", () => {
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
+  });
+
+  it("omits agents_wait until Swarm is enabled for the catalog agent", async () => {
+    const disabled = createInvokeParams({ includePlugins: false });
+    await disabled.invoke();
+    expect(
+      expectCatalogPayload(disabled.respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      ),
+    ).not.toContain("agents_wait");
+
+    const enabled = createInvokeParams({ includePlugins: false }, { tools: { swarm: true } });
+    await enabled.invoke();
+    expect(
+      expectCatalogPayload(enabled.respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      ),
+    ).toContain("agents_wait");
   });
 
   it("includes plugin groups with plugin metadata", async () => {

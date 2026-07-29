@@ -35,7 +35,7 @@ function createGatewayStub() {
     }
     if (method === "question.resolve") {
       const resolved = params as {
-        answers?: { answers: Record<string, { answers: string[] }> };
+        answers?: { answers: Record<string, string[]> };
         cancel?: boolean;
       };
       const result = resolved.cancel
@@ -72,7 +72,10 @@ describe("Copilot user input bridge", () => {
       agentId: "main",
       timeoutMs: 75_000,
       questions: [
-        expect.objectContaining({ id: "answer", options: [{ label: "Fast" }, { label: "Deep" }] }),
+        expect.objectContaining({
+          questionId: "answer",
+          options: [{ label: "Fast" }, { label: "Deep" }],
+        }),
       ],
     });
     const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];

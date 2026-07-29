@@ -4,6 +4,7 @@ import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
+import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
@@ -53,6 +54,7 @@ describe("applyJobResult dynamic cadence", () => {
   it("keeps existing schedule math when no proposal was recorded", () => {
     const job = makePacedJob({ min: "15m", max: "4h" });
     job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
+    job.state.forcePreservedNextRunAtMs = job.state.nextRunAtMs;
 
     applyJobResult(makeState(), job, {
       status: "ok",
@@ -62,6 +64,120 @@ describe("applyJobResult dynamic cadence", () => {
 
     expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
+    expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
+  });
+
+  it("clears the consumed pacing override after a current quiet trigger", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
+    state.store = { version: 1, jobs: [job] };
+    const admittedJob = structuredClone(job);
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.pacedNextRunAtMs).toBeUndefined();
+  });
+
+  it.each([
+    ["without a force marker", undefined],
+    ["with an existing force marker", ENDED_AT + 15 * 60_000],
+  ] as const)("preserves an edited pacing override after a stale quiet trigger %s", (_, marker) => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const admittedJob = structuredClone(job);
+    const editedNextRunAtMs = ENDED_AT + 45 * 60_000;
+    job.schedule = { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: STARTED_AT };
+    job.state.nextRunAtMs = editedNextRunAtMs;
+    job.state.pacedNextRunAtMs = editedNextRunAtMs;
+    job.state.forcePreservedNextRunAtMs = marker;
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(editedNextRunAtMs);
+    expect(job.state.pacedNextRunAtMs).toBe(editedNextRunAtMs);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(marker);
+  });
+
+  it.each([
+    ["without a previous marker", undefined],
+    ["with a previous marker", ENDED_AT + 15 * 60_000],
+  ] as const)("marks the exact paced slot after a forced quiet trigger %s", (_, previousMarker) => {
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const pendingSlot = ENDED_AT + 45 * 60_000;
+    job.state.nextRunAtMs = pendingSlot;
+    job.state.pacedNextRunAtMs = pendingSlot;
+    job.state.forcePreservedNextRunAtMs = previousMarker;
+
+    applyTriggerNoFireResult(
+      makeState(),
+      job,
+      {
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        triggerEval: { fired: false, stateChanged: false },
+      },
+      { scheduleMode: "force-preserve" },
+    );
+
+    expect(job.state.nextRunAtMs).toBe(pendingSlot);
+    expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(pendingSlot);
+  });
+
+  it.each([
+    ["without a new proposal", undefined],
+    ["when the forced run records a new proposal", 2 * 60 * 60_000],
+  ] as const)("preserves the exact paced slot on a forced run %s", (_label, delayMs) => {
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const pendingSlot = ENDED_AT + 45 * 60_000;
+    job.state.nextRunAtMs = pendingSlot;
+    job.state.pacedNextRunAtMs = pendingSlot;
+
+    applyJobResult(
+      makeState(),
+      job,
+      {
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        ...(delayMs !== undefined ? { nextCheck: { delayMs } } : {}),
+      },
+      { scheduleMode: "preserve" },
+    );
+
+    expect(job.state.nextRunAtMs).toBe(pendingSlot);
+    expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
+  });
+
+  it("applies the built-in trigger floor after the job-local pacing clamp", () => {
+    const job = makePacedJob({ min: "1s", max: "2m" });
+    job.trigger = { script: "return true" };
+
+    applyJobResult(makeState(), job, {
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      nextCheck: { delayMs: 1_000 },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 30_000);
   });
 
   it("discards proposals on error so normal backoff wins", () => {

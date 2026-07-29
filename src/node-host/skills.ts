@@ -71,7 +71,7 @@ export function scanNodeHostedSkills(
   options: ScanNodeHostedSkillsOptions = {},
 ): NodeSkillDescriptor[] {
   const skillsDir = path.resolve(options.skillsDir ?? path.join(resolveConfigDir(), "skills"));
-  const warn = options.warn ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const warn = options.warn ?? ((message: string) => console.warn(message));
   const rootSkillFile = path.join(skillsDir, "SKILL.md");
   try {
     if (fs.statSync(rootSkillFile, { throwIfNoEntry: false })?.isFile()) {

@@ -185,6 +185,7 @@ internal enum class SettingsRoute {
   Usage,
   Skills,
   SkillWorkshop,
+  SystemAgent,
   NodesDevices,
   Channels,
   Dreaming,
@@ -219,6 +220,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -595,7 +597,7 @@ private fun ApprovalsSettingsScreen(
       rows =
         listOf(
           SettingsMetric(nativeString("Gateway Pending"), execApprovals.size.toString()),
-          SettingsMetric(nativeString("Session Activity"), pendingToolCalls.size.toString()),
+          SettingsMetric(nativeString("Thread Activity"), pendingToolCalls.size.toString()),
           SettingsMetric(nativeString("Issues"), issueCount.toString()),
           SettingsMetric(nativeString("Active Runs"), pendingRunCount.toString()),
         ),
@@ -637,8 +639,8 @@ private fun ApprovalsSettingsScreen(
       )
     }
     if (pendingToolCalls.isNotEmpty()) {
-      Text(text = nativeString("Session activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = nativeString("Chat tool calls waiting in the active session remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(text = nativeString("Thread activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = nativeString("Chat tool calls waiting in the active thread remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       SessionToolCallsPanel(toolCalls = pendingToolCalls)
     }
   }
@@ -1491,6 +1493,9 @@ private fun PhoneCapabilitiesScreen(
           SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
+    if (SensitiveFeatureConfig.accessibilityControlEnabled) {
+      FlavorPhoneCapabilitiesSettings(viewModel)
+    }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -1612,6 +1617,7 @@ private fun GatewaySettingsScreen(
   val manualTls by viewModel.manualTls.collectAsState()
   val pairedGateways by viewModel.pairedGateways.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  val connectedGatewayStableIds by viewModel.connectedGatewayStableIds.collectAsState()
   val discoveredGateways by viewModel.gateways.collectAsState()
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -1879,8 +1885,17 @@ private fun GatewaySettingsScreen(
                 }
               },
               trailing = {
-                TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
-                  Text(nativeString("Forget"))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Switch(
+                    checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
+                    onCheckedChange = { enabled ->
+                      viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
+                    },
+                    enabled = entry.stableId != activeGatewayStableId,
+                  )
+                  TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
+                    Text(nativeString("Forget"))
+                  }
                 }
               },
               onClick =
@@ -2325,7 +2340,7 @@ private fun AboutStatusRow(
 /** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
-    nativeString("OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.")
+    nativeString("OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.")
   } else {
     nativeString("A Gateway update is available. Run the update from the Web UI or CLI when you are ready.")
   }
@@ -2383,7 +2398,7 @@ internal fun SettingsDetailFrame(
 /**
  * Toggle row model reused by settings sections that render simple on/off controls.
  */
-private data class SettingsToggleRow(
+internal data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -2999,6 +3014,7 @@ private fun cronPayloadTextTitle(job: GatewayCronJobDetail): String =
     "systemEvent" -> nativeString("System Event Text")
     "agentTurn" -> nativeString("Agent Prompt")
     "command" -> nativeString("Command")
+    "script" -> nativeString("Script")
     else -> nativeString("Payload Text")
   }
 
@@ -3085,7 +3101,7 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 }
 
 @Composable
-private fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
+internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsToggleListRow(row)

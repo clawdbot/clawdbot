@@ -60,7 +60,10 @@ vi.mock("../agents/embedded-agent.js", () => ({
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: vi.fn(),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(),
 }));
 
 vi.mock("../agents/model-selection.js", () => {
@@ -104,8 +107,14 @@ vi.mock("../agents/model-selection.js", () => {
     if (allowedKeys.has(key)) {
       return true;
     }
-    const slash = key.indexOf("/");
-    return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+    let separator = key.indexOf("/");
+    while (separator > 0) {
+      if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
+        return true;
+      }
+      separator = key.indexOf("/", separator + 1);
+    }
+    return false;
   };
   const resolvePrimary = (cfg?: ConfigWithModels): string | undefined => {
     const primary = cfg?.agents?.defaults?.model;
@@ -175,24 +184,28 @@ vi.mock("../agents/model-selection.js", () => {
         const primary = resolveDefaultRef(cfg);
         refs.add(modelKey(primary.provider, primary.model));
         const allowAny = policyRefs.length === 0;
+        const wildcardModelKeys = new Set(
+          policyRefs.filter((key) => key.endsWith("/*")).map((key) => key.trim().toLowerCase()),
+        );
+        const wildcardProviders = new Set(
+          [...wildcardModelKeys].map((key) => key.slice(0, key.indexOf("/"))),
+        );
         const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
         return {
           allowAny,
           allowedKeys: refs,
           allowedCatalog: catalog,
           exactModelRefs: policyRefs.filter((key) => !key.endsWith("/*")),
-          providerWildcards: new Set(
-            policyRefs
-              .filter((key) => key.endsWith("/*"))
-              .map((key) => key.slice(0, -2).trim().toLowerCase()),
-          ),
+          providerWildcards: wildcardProviders,
           hasConfiguredEntries: policyRefs.length > 0,
-          hasProviderWildcards: policyRefs.some((key) => key.endsWith("/*")),
+          hasProviderWildcards: wildcardModelKeys.size > 0,
           allowConfigPath: policy.configPath,
           allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
           automaticFallbackKeys: new Set<string>(),
           allowsKey,
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
+          allowsByWildcard: ({ provider, model }: ModelRef) =>
+            isModelKeyAllowedBySet(wildcardModelKeys, modelKey(provider, model)),
           resolveSelection: ({ provider, model }: ModelRef) => {
             const key = modelKey(provider, model);
             if (allowsKey(key)) {

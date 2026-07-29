@@ -165,14 +165,224 @@ describe("LINE send helpers", () => {
     expect(quickReply.items).toHaveLength(13);
   });
 
-  it("truncates quick reply labels without leaving lone surrogates", () => {
+  it("counts quick reply labels in grapheme clusters", () => {
     const label = "1234567890123456789😀";
     const quickReply = sendModule.createQuickReplyItems([label]);
     const item = quickReply.items?.[0] as { action: { label: string; text: string } } | undefined;
 
-    expect(item?.action.label).toBe("1234567890123456789");
+    expect(item?.action.label).toBe(label);
     expect(item?.action.text).toBe(label);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
+  });
+
+  it("normalizes raw Flex actions at both outbound API boundaries", async () => {
+    const oversizedPostback = { type: "postback", label: "Open", data: "x".repeat(301) };
+    const oversizedUri = {
+      type: "uri",
+      label: "Open",
+      uri: `https://e.example/?q=${"x".repeat(1200)}`,
+    };
+    const message = {
+      type: "flex",
+      altText: "Raw Flex",
+      contents: {
+        type: "bubble",
+        action: oversizedPostback,
+        hero: {
+          type: "video",
+          url: "https://e.example/video.mp4",
+          previewUrl: "https://e.example/preview.jpg",
+          altContent: {
+            type: "image",
+            url: "https://e.example/preview.jpg",
+            size: "full",
+          },
+          action: oversizedUri,
+        },
+        body: {
+          type: "box",
+          layout: "vertical",
+          action: oversizedPostback,
+          contents: [
+            { type: "text", text: "Open", action: oversizedUri },
+            { type: "button", action: oversizedPostback },
+            {
+              type: "text",
+              text: "Still works",
+              action: { type: "message", label: "Unavailable", text: "keep" },
+            },
+          ],
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ contents: Record<string, unknown> }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ contents: Record<string, unknown> }>;
+    };
+    expect(pushed.messages[0]?.contents).toEqual(replied.messages[0]?.contents);
+
+    const contents = pushed.messages[0]?.contents as {
+      action?: unknown;
+      hero: { type: string; action?: unknown };
+      body: { action?: unknown; contents: Array<{ action?: unknown; text?: string }> };
+    };
+    const unavailableAction = {
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    };
+    expect(contents.action).toBeUndefined();
+    expect(contents.hero).toEqual({
+      type: "video",
+      url: "https://e.example/video.mp4",
+      previewUrl: "https://e.example/preview.jpg",
+      altContent: {
+        type: "image",
+        url: "https://e.example/preview.jpg",
+        size: "full",
+      },
+    });
+    expect(contents.body.action).toBeUndefined();
+    expect(contents.body.contents[0]?.action).toBeUndefined();
+    expect(contents.body.contents[1]?.action).toEqual(unavailableAction);
+    expect(contents.body.contents[2]?.action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "keep",
+    });
+    expect(contents.body.contents.slice(3).map((item) => item.text)).toEqual([
+      "Action unavailable: callback data exceeds LINE's limit.\nLink unavailable: URL exceeds LINE's limit.",
+    ]);
+    expect(message.contents.action).toBe(oversizedPostback);
+  });
+
+  it("normalizes raw imagemap actions at both outbound API boundaries", async () => {
+    const area = { x: 0, y: 0, width: 520, height: 1040 };
+    const videoArea = { x: 520, y: 0, width: 520, height: 1040 };
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [
+        {
+          type: "uri",
+          label: "Open",
+          linkUri: `https://e.example/?q=${"x".repeat(1200)}`,
+          area,
+        },
+        ...Array.from({ length: 49 }, (_, index) => ({
+          type: "message",
+          label: `Item ${index}`,
+          text: `item-${index}`,
+          area,
+        })),
+      ],
+      video: {
+        originalContentUrl: "https://e.example/video.mp4",
+        previewImageUrl: "https://e.example/preview.jpg",
+        area: videoArea,
+        externalLink: {
+          linkUri: `https://e.example/video?q=${"x".repeat(1200)}`,
+          label: "Open video",
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[]; video?: { externalLink?: unknown } }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
+    expect(pushed.messages[0]?.actions).toHaveLength(50);
+    expect(pushed.messages[0]?.actions[0]).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+      area,
+    });
+    expect(pushed.messages[0]?.actions[1]).toMatchObject({
+      type: "message",
+      text: "item-0",
+    });
+    expect(pushed.messages[0]?.actions[49]).toMatchObject({
+      type: "message",
+      text: "item-48",
+    });
+    expect(pushed.messages[0]?.video?.externalLink).toBeUndefined();
+    expect(message.actions[0]?.type).toBe("uri");
+  });
+
+  it("counts imagemap message text in UTF-16 units at both outbound API boundaries", async () => {
+    const area = { x: 0, y: 0, width: 1040, height: 1040 };
+    const exactText = "😀".repeat(200);
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [
+        { type: "message", label: "Exact", text: exactText, area },
+        { type: "message", label: "Too long", text: `${exactText}😀`, area },
+      ],
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
+    expect(pushed.messages[0]?.actions).toEqual([
+      { type: "message", label: "Exact", text: exactText, area },
+      {
+        type: "message",
+        label: "Unavailable",
+        text: "Action unavailable: message text exceeds LINE's limit.",
+        area,
+      },
+    ]);
+  });
+
+  it("counts imagemap video-link labels in UTF-16 units", async () => {
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [],
+      video: {
+        originalContentUrl: "https://e.example/video.mp4",
+        previewImageUrl: "https://e.example/preview.jpg",
+        area: { x: 0, y: 0, width: 1040, height: 1040 },
+        externalLink: {
+          linkUri: "https://e.example/video",
+          label: "😀".repeat(16),
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ video: { externalLink: { label: string } } }>;
+    };
+    expect(pushed.messages[0]?.video.externalLink.label).toBe("😀".repeat(15));
   });
 
   it("pushes images via normalized LINE target", async () => {

@@ -7,6 +7,8 @@ type GatewayBroadcastStateVersion = {
 
 /** Options for gateway websocket broadcasts. */
 export type GatewayBroadcastOpts = {
+  /** Agent scope for agent-relative keys such as `global`. */
+  agentId?: string;
   dropIfSlow?: boolean;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];

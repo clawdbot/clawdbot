@@ -30,6 +30,7 @@ import { stableStringify } from "../stable-stringify.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
@@ -511,6 +512,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
       const transportCopy = formatTransportErrorCopy(trimmed);
       if (transportCopy) {
         return transportCopy;
+      }
+      // finish_reason/stop-reason `error` is a completed provider failure, not a timeout (#109218).
+      if (isProviderCompletedErrorFinishReasonMessage(trimmed)) {
+        return formatRawAssistantErrorForUi(trimmed);
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";

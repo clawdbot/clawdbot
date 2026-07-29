@@ -5,7 +5,6 @@ import {
   fitCodexProjectedContextForTurnStart,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
@@ -391,31 +390,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 16_000 })).toBe(
       32_000,
     );
-  });
-
-  it("maps OpenClaw compaction reserve config onto Codex projection reserves", () => {
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: { agents: { defaults: { compaction: { reserveTokens: 12_000 } } } },
-      }),
-    ).toBe(20_000);
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: {
-          agents: { defaults: { compaction: { reserveTokens: 12_000, reserveTokensFloor: 0 } } },
-        },
-      }),
-    ).toBe(12_000);
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: { agents: { defaults: { compaction: { reserveTokens: 48_000 } } } },
-      }),
-    ).toBe(48_000);
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: { agents: { defaults: { compaction: { reserveTokensFloor: 0 } } } },
-      }),
-    ).toBe(0);
   });
 
   it("applies configured reserve tokens to the scaled projection cap", () => {

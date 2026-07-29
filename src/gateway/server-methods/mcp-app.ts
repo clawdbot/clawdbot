@@ -1,10 +1,17 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
 import {
   executeMcpAppOperation,
+  McpAppViewExpiredError,
   type McpAppOperation,
+  requireMcpAppInteraction,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
@@ -42,7 +49,17 @@ async function handle(
   try {
     respond(true, await operation());
   } catch (error) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        formatErrorMessage(error),
+        error instanceof McpAppViewExpiredError
+          ? { details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED } }
+          : undefined,
+      ),
+    );
   }
 }
 
@@ -54,9 +71,19 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         viewId: requireString(params, "viewId"),
         cfg: context.getRuntimeConfig(),
       });
-      return await withMcpAppActiveView(active, "read", () => {
+      return await withMcpAppActiveView(active, "read", async () => {
         const { view } = active;
-        const sandboxPort = context.getMcpAppSandboxPort?.();
+        let interactive = false;
+        try {
+          await requireMcpAppInteraction(view);
+          interactive = true;
+        } catch {
+          // Stale board leases remain renderable but lose every interactive capability.
+        }
+        const updateModelContextSupported =
+          interactive && active.runtime.mcpAppModelContextRevoked !== true;
+        const sandboxPort =
+          context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
@@ -87,8 +114,22 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
               }
             : {}),
           // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
-          messageSupported: view.allowedAppToolNames !== undefined && view.readOnly !== true,
+          messageSupported: interactive,
+          updateModelContextSupported,
         };
+      });
+    });
+  },
+  "mcp.app.updateModelContext": async ({ respond, params }) => {
+    await handle(respond, async () => {
+      const active = await resolveMcpAppActiveView({
+        sessionKey: requireString(params, "sessionKey"),
+        viewId: requireString(params, "viewId"),
+      });
+      return await withMcpAppActiveView(active, "read", async () => {
+        await requireMcpAppInteraction(active.view);
+        updateMcpAppModelContext(active.runtime, active.view, params);
+        return {};
       });
     });
   },

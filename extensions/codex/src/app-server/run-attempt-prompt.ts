@@ -181,9 +181,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
-      ...("beforeAgentStartResult" in params
-        ? { beforeAgentStartResult: params.beforeAgentStartResult }
-        : {}),
     });
   const resolveShiftedPromptInputRange = (
     prompt: string,
@@ -293,8 +290,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
         skillsCollaborationInstructions,
         memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-        heartbeatCollaborationInstructions:
-          workspaceBootstrapContext.heartbeatCollaborationInstructions,
       }).settings.developer_instructions ?? undefined,
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {

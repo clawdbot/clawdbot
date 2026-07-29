@@ -1,8 +1,12 @@
 /**
  * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, environment scrubbing, and watchdog defaults.
+ * MCP bundling, session handling, credential transport, and watchdog defaults.
  */
-import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
+import { createHmac, randomBytes } from "node:crypto";
+import type {
+  CliBackendPlugin,
+  CliBackendPreparedExecution,
+} from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
@@ -17,6 +21,96 @@ import {
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
+
+type ClaudeCliAuthCredential =
+  | { type: "oauth"; access: string; expires: number }
+  | { type: "token"; token: string }
+  | { type: "api_key"; key: string }
+  | { type: string };
+
+type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
+  secretInput: {
+    fd: 3;
+    fingerprint: string;
+    createData: () => Buffer;
+  };
+};
+
+const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
+
+function createClaudeCliAuthInput(params: {
+  envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
+  value: string;
+}): ClaudeCliPreparedExecution | undefined {
+  const trimmed = params.value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const source = Buffer.from(trimmed, "utf8");
+  let destroyed = false;
+  return {
+    env: { [params.envName]: "3" },
+    clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+    secretInput: {
+      fd: 3,
+      fingerprint: createHmac("sha256", CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY)
+        .update(source)
+        .digest("hex"),
+      createData: () => {
+        if (destroyed) {
+          throw new Error("Claude CLI credential input is no longer available");
+        }
+        return Buffer.from(source);
+      },
+    },
+    cleanup: async () => {
+      destroyed = true;
+      source.fill(0);
+    },
+  };
+}
+
+function resolveClaudeCliAuthInput(
+  credential: ClaudeCliAuthCredential | undefined,
+): ClaudeCliPreparedExecution | undefined {
+  // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
+  // OpenClaw-owned). Imported native `claude` logins are never forwarded —
+  // core runs those as identity-verified passthrough — so an expired token
+  // reaching this point is a real fault worth failing loudly, not refreshable
+  // state this plugin could repair.
+  if (credential?.type === "oauth" && "access" in credential) {
+    const expires = "expires" in credential ? credential.expires : undefined;
+    if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= Date.now()) {
+      throw new Error(
+        "Selected Claude CLI OAuth credential is expired or invalid. Re-authenticate the selected profile and retry. OpenClaw did not start the run.",
+      );
+    }
+    if (typeof credential.access !== "string") {
+      return undefined;
+    }
+    return createClaudeCliAuthInput({
+      envName: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+      value: credential.access,
+    });
+  }
+  if (
+    credential?.type === "token" &&
+    "token" in credential &&
+    typeof credential.token === "string"
+  ) {
+    return createClaudeCliAuthInput({
+      envName: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+      value: credential.token,
+    });
+  }
+  if (credential?.type === "api_key" && "key" in credential && typeof credential.key === "string") {
+    return createClaudeCliAuthInput({
+      envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      value: credential.key,
+    });
+  }
+  return undefined;
+}
 
 /** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(): CliBackendPlugin {
@@ -43,6 +137,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
@@ -81,6 +176,9 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "{sessionId}",
       ],
       forkArg: "--fork-session",
+      // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
+      // emits the matching transcript UUID on assistant records.
+      resumeAtArg: "--resume-session-at",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -88,7 +186,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       modelAliases: CLAUDE_CLI_MODEL_ALIASES,
       imageArg: "@",
       imagePathScope: "workspace",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always",
       reseedFromRawTranscriptWhenUncompacted: true,
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
@@ -105,10 +203,24 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
-    autoSelectAuthProfile: false,
-    prepareExecution: ({ contextTokenBudget }) => {
-      const env = resolveClaudeCliAutoCompactEnv(contextTokenBudget);
-      return env ? { env } : undefined;
+    authEpochMode: "profile-only",
+    prepareExecution: (context) => {
+      const credentialContext = context as typeof context & {
+        authCredential?: ClaudeCliAuthCredential;
+      };
+      const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+      const env = {
+        ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+        ...authInput?.env,
+      };
+      return Object.keys(env).length > 0
+        ? {
+            env,
+            ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+            ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+            ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+          }
+        : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };

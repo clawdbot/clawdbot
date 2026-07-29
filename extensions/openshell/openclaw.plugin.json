@@ -25,6 +25,12 @@
         "type": "string",
         "minLength": 1
       },
+      "workspace": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 19,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
       "from": {
         "type": "string",
         "minLength": 1
@@ -77,6 +83,10 @@
     "gatewayEndpoint": {
       "label": "Gateway Endpoint",
       "help": "Optional OpenShell gateway endpoint passed as --gateway-endpoint."
+    },
+    "workspace": {
+      "label": "OpenShell Workspace",
+      "help": "Existing OpenShell control-plane workspace for sandboxes, providers, policies, and inference routes. When unset, preserves the OpenShell CLI's ambient workspace selection."
     },
     "from": {
       "label": "Sandbox Source",

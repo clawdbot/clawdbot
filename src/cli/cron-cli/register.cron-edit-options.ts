@@ -124,25 +124,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
     opts.commandEnv !== undefined ||
     noOutputTimeoutSeconds !== undefined ||
     outputMaxBytes !== undefined;
-  let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
-  if (
-    hasTimeoutSeconds &&
-    !hasCommandSpecificPayloadField &&
-    typeof opts.message !== "string" &&
-    !model &&
-    typeof opts.fallbacks !== "string" &&
-    !opts.clearFallbacks &&
-    !thinking &&
-    !opts.clearThinking &&
-    typeof opts.lightContext !== "boolean" &&
-    typeof opts.tools !== "string" &&
-    !Array.isArray(opts.tools) &&
-    !opts.clearTools
-  ) {
-    const existing = await loadExistingJob();
-    timeoutOnlyPayloadKind = existing.payload.kind === "command" ? "command" : "agentTurn";
-  }
-  const hasAgentTurnPayloadField =
+  const hasToolsAllowPatch =
+    typeof opts.tools === "string" || Array.isArray(opts.tools) || Boolean(opts.clearTools);
+  const hasAgentTurnSpecificPayloadField =
     typeof opts.message === "string" ||
     Boolean(model) ||
     Boolean(opts.clearModel) ||
@@ -150,32 +134,64 @@ export async function resolveCronEditPayloadDeliveryPatch(
     Boolean(opts.clearFallbacks) ||
     Boolean(thinking) ||
     Boolean(opts.clearThinking) ||
+    typeof opts.lightContext === "boolean";
+  const hasScriptSpecificPayloadField =
+    Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
+  let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
+  if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
+    const existing = await loadExistingJob();
+    timeoutOnlyPayloadKind = existing.payload.kind === "command" ? "command" : "agentTurn";
+  }
+  let toolsOnlyPayloadKind: CronJob["payload"]["kind"] | undefined;
+  if (
+    hasToolsAllowPatch &&
+    !hasSystemEventPatch &&
+    !hasAgentTurnSpecificPayloadField &&
+    !hasCommandSpecificPayloadField &&
+    !hasScriptSpecificPayloadField &&
+    !hasTimeoutSeconds
+  ) {
+    // Tool grants are shared by every payload kind; a policy-only edit must
+    // preserve the stored execution kind instead of creating an agent turn.
+    toolsOnlyPayloadKind = (await loadExistingJob()).payload.kind;
+  }
+  const hasAgentTurnPayloadField =
+    hasAgentTurnSpecificPayloadField ||
     (hasTimeoutSeconds &&
       !hasCommandSpecificPayloadField &&
       timeoutOnlyPayloadKind !== "command") ||
-    typeof opts.lightContext === "boolean" ||
-    typeof opts.tools === "string" ||
-    Array.isArray(opts.tools) ||
-    opts.clearTools;
+    (hasToolsAllowPatch && toolsOnlyPayloadKind === "agentTurn");
   const hasCommandPayloadField =
     hasCommandSpecificPayloadField ||
-    (hasTimeoutSeconds && (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command"));
+    (hasTimeoutSeconds &&
+      (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command")) ||
+    toolsOnlyPayloadKind === "command";
   const hasAgentTurnPatch = hasAgentTurnPayloadField;
   const hasCommandPatch = hasCommandPayloadField;
-  const hasScriptPatch =
-    Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
+  const hasScriptPatch = hasScriptSpecificPayloadField || toolsOnlyPayloadKind === "script";
+  const hasSystemEventOrToolsPatch = hasSystemEventPatch || toolsOnlyPayloadKind === "systemEvent";
   if (
-    [hasSystemEventPatch, hasAgentTurnPatch, hasCommandPatch, hasScriptPatch].filter(Boolean)
+    [hasSystemEventOrToolsPatch, hasAgentTurnPatch, hasCommandPatch, hasScriptPatch].filter(Boolean)
       .length > 1
   ) {
     throw new Error("Choose at most one payload change");
   }
 
-  if (hasSystemEventPatch) {
-    patch.payload = {
-      kind: "systemEvent",
-      text: String(opts.systemEvent),
-    };
+  const assignToolsAllowPatch = (payload: Record<string, unknown>): void => {
+    if (opts.clearTools) {
+      // Clearing a restriction means an explicit unrestricted grant. Persisting
+      // a wildcard avoids creating a new capless legacy job at the upgrade boundary.
+      payload.toolsAllow = ["*"];
+    } else if (toolsAllow) {
+      payload.toolsAllow = toolsAllow;
+    }
+  };
+
+  if (hasSystemEventOrToolsPatch) {
+    const payload: Record<string, unknown> = { kind: "systemEvent" };
+    assignIf(payload, "text", String(opts.systemEvent), hasSystemEventPatch);
+    assignToolsAllowPatch(payload);
+    patch.payload = payload;
   } else if (hasAgentTurnPatch) {
     const payload: Record<string, unknown> = { kind: "agentTurn" };
     assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
@@ -193,11 +209,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
-    if (opts.clearTools) {
-      payload.toolsAllow = null;
-    } else if (toolsAllow) {
-      payload.toolsAllow = toolsAllow;
-    }
+    assignToolsAllowPatch(payload);
     patch.payload = payload;
   } else if (hasCommandPatch) {
     const payload: Record<string, unknown> = { kind: "command" };
@@ -219,6 +231,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
       noOutputTimeoutSeconds !== undefined,
     );
     assignIf(payload, "outputMaxBytes", outputMaxBytes, outputMaxBytes !== undefined);
+    assignToolsAllowPatch(payload);
     patch.payload = payload;
   } else if (hasScriptPatch) {
     const payload: Record<string, unknown> = { kind: "script" };
@@ -227,6 +240,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds, scriptTimeoutSeconds !== undefined);
     assignIf(payload, "toolBudget", scriptToolBudget, scriptToolBudget !== undefined);
+    assignToolsAllowPatch(payload);
     patch.payload = payload;
   }
 

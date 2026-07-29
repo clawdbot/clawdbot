@@ -1,7 +1,10 @@
 // Prompt navigation tests cover setup history replay and forward acceptance.
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
+import {
+  runWizardWithPromptNavigation,
+  runWizardWithPromptNavigationScope,
+} from "./navigation-prompter.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { WizardNavigationError } from "./prompts.js";
 
@@ -186,5 +189,69 @@ describe("runWizardWithPromptNavigation", () => {
       canGoBack: false,
       canGoForward: false,
     });
+  });
+});
+
+describe("runWizardWithPromptNavigationScope", () => {
+  it("returns a typed back outcome from the first prompt", async () => {
+    const select = vi.fn(async () => {
+      throw new WizardNavigationError("back");
+    }) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+
+    const outcome = await runWizardWithPromptNavigationScope(prompter, async (scopedPrompter) => {
+      await scopedPrompter.select({
+        message: "First channel prompt",
+        options: selectOptions(["continue"]),
+      });
+      return "completed";
+    });
+
+    expect(outcome).toEqual({ status: "back" });
+    expect(selectParamsAt(select as ReturnType<typeof vi.fn>, 0).navigation).toEqual({
+      canGoBack: true,
+      canGoForward: false,
+    });
+  });
+
+  it("creates a fresh scope inside an outer wizard whose back history is disabled", async () => {
+    const select = vi.fn(async () => {
+      throw new WizardNavigationError("back");
+    }) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+    let outcome: Awaited<ReturnType<typeof runWizardWithPromptNavigationScope<string>>> | undefined;
+
+    await runWizardWithPromptNavigation(prompter, async (outerPrompter) => {
+      outerPrompter.disableBackNavigation?.();
+      outcome = await runWizardWithPromptNavigationScope(outerPrompter, async (scopedPrompter) => {
+        await scopedPrompter.select({
+          message: "First channel prompt",
+          options: selectOptions(["continue"]),
+        });
+        return "completed";
+      });
+    });
+
+    expect(outcome).toEqual({ status: "back" });
+    expect(selectParamsAt(select as ReturnType<typeof vi.fn>, 0).navigation).toEqual({
+      canGoBack: true,
+      canGoForward: false,
+    });
+  });
+
+  it("preserves optional client actions inside a navigation scope", async () => {
+    const deviceCode = vi.fn(async () => undefined);
+    const openUrl = vi.fn(async () => undefined);
+    const prompter = createWizardPrompter({ deviceCode, openUrl });
+
+    const outcome = await runWizardWithPromptNavigationScope(prompter, async (scopedPrompter) => {
+      await scopedPrompter.deviceCode?.({ title: "Link device", code: "ABCD" });
+      await scopedPrompter.openUrl?.("https://example.com/link");
+      return "completed";
+    });
+
+    expect(outcome).toEqual({ status: "completed", value: "completed" });
+    expect(deviceCode).toHaveBeenCalledWith({ title: "Link device", code: "ABCD" });
+    expect(openUrl).toHaveBeenCalledWith("https://example.com/link");
   });
 });

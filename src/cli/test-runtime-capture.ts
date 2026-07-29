@@ -24,6 +24,12 @@ type MockCallsWithFirstArg = {
   };
 };
 
+type MockCalls = {
+  mock: {
+    calls: unknown[][];
+  };
+};
+
 function normalizeRuntimeStdout(value: string): string {
   return value.endsWith("\n") ? value.slice(0, -1) : value;
 }
@@ -94,4 +100,8 @@ export function spyRuntimeJson(runtime: Pick<OutputRuntimeEnv, "writeJson">) {
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets callers ascribe captured JSON shape.
 export function firstWrittenJsonArg<T>(writeJson: MockCallsWithFirstArg): T | null {
   return (writeJson.mock.calls.at(0)?.[0] ?? null) as T | null;
+}
+
+export function getMockCallOutput(mockFn: MockCalls): string {
+  return mockFn.mock.calls.map((call) => String(call[0])).join("\n");
 }

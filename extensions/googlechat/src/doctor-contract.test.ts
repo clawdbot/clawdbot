@@ -4,6 +4,23 @@ import { resolveGoogleChatAccount } from "./accounts.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 describe("googlechat doctor contract", () => {
+  it("removes retired reaction flags", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          googlechat: {
+            actions: { reactions: true },
+            accounts: { work: { actions: { reactions: false } } },
+          },
+        },
+      } as never,
+    });
+    expect(result.config.channels?.googlechat).toEqual({ accounts: { work: {} } });
+    expect(result.changes).toEqual([
+      "Removed channels.googlechat.actions.reactions (Google Chat does not support reactions).",
+      "Removed channels.googlechat.accounts.work.actions.reactions (Google Chat does not support reactions).",
+    ]);
+  });
   it("removes legacy streamMode keys", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {
@@ -81,6 +98,30 @@ describe("googlechat doctor contract", () => {
     );
     expect(rootRule?.match?.({ blockStreaming: true }, {})).toBe(true);
     expect(rootRule?.match?.({ streaming: { block: { enabled: true } } }, {})).toBe(false);
+  });
+
+  it("detects and promotes legacy nested DM access at root and account scope", () => {
+    const dmRules = legacyConfigRules.filter((rule) => rule.message.includes("dm.policy"));
+    expect(dmRules[0]?.match?.({ dm: { policy: "allowlist" } }, {})).toBe(true);
+    expect(dmRules[1]?.match?.({ work: { dm: { allowFrom: ["users/work"] } } }, {})).toBe(true);
+
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          googlechat: {
+            dm: { enabled: false, policy: "allowlist", allowFrom: ["users/root"] },
+            accounts: { work: { dm: { policy: "open", allowFrom: ["*"] } } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.googlechat).toEqual({
+      dm: { enabled: false },
+      dmPolicy: "allowlist",
+      allowFrom: ["users/root"],
+      accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
   });
 
   it("moves flat delivery aliases at root and account level with root seeding", () => {

@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
@@ -31,7 +32,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
-  rejectPluginRuntimeDeleteMismatch,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
@@ -42,7 +43,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionDeleteHandlers: GatewayRequestHandlers = {
-  "sessions.delete": async ({ req, params, respond, client, isWebchatConnect, context }) => {
+  "sessions.delete": async ({
+    req,
+    params,
+    respond,
+    client,
+    isWebchatConnect,
+    context,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -172,7 +181,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      rejectPluginRuntimeDeleteMismatch({
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "delete",
         client,
         key: target.canonicalKey ?? key,
         entry: initialDeleteEntry,
@@ -192,6 +202,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!chatAbort) {
       throw new Error("chat.abort handler is not registered");
     }
+    sessionMutationAuthorization?.assertCurrent();
     await chatAbort({
       req,
       params: {
@@ -204,6 +215,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       context,
       client,
       isWebchatConnect,
+      ...(sessionMutationAuthorization ? { sessionMutationAuthorization } : {}),
     });
     if (abortResult?.ok === false) {
       respond(false, undefined, abortResult.error);
@@ -223,6 +235,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       scope: storePath,
       identities: deleteLifecycleIdentities,
       prepare: async () => {
+        sessionMutationAuthorization?.assertCurrent();
         const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
         deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
           preparedEntry,
@@ -268,6 +281,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
+        sessionMutationAuthorization?.assertCurrent();
         const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
           agentId: requestedAgentId,
         });
@@ -291,7 +305,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (
-          rejectPluginRuntimeDeleteMismatch({
+          rejectPluginRuntimeSessionOwnershipMismatch({
+            action: "delete",
             client,
             key: canonicalKey ?? key,
             entry,
@@ -319,6 +334,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         });
         const postCleanupEntry = postCleanupTarget.entry;
+        sessionMutationAuthorization?.assertCurrent();
         if (
           !expectedLifecycleRevisionMatches(postCleanupEntry) ||
           !expectedSessionIdMatches(postCleanupEntry)
@@ -327,9 +343,12 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+        const incognito =
+          postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
         const deletionParams = {
           agentId: target.agentId,
-          archiveTranscript: deleteTranscript,
+          archiveTranscript: incognito ? false : deleteTranscript,
+          deleteTranscriptWithoutArchive: incognito,
           expectedEntry: postCleanupEntry,
           expectedLifecycleRevision,
           expectedSessionId,
@@ -428,6 +447,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         agentId: target.agentId,
         reason: "delete",
       });
+      emitSessionsChanged(context, { reason: "delete" });
     }
   },
 };

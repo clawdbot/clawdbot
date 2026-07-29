@@ -62,6 +62,8 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
+import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -124,6 +126,8 @@ const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session
 
 const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
 
+const getUserProfilesHttpModule = createLazyRuntimeModule(() => import("./user-profiles-http.js"));
+
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
 );
@@ -148,6 +152,7 @@ function isControlUiCatalogIconRequest(pathname: string, basePath: string): bool
     pathname.startsWith(`${normalizedBasePath}${prefix}/`),
   );
 }
+
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
   Promise<ReadonlySet<string>>
@@ -355,6 +360,30 @@ function parseGatewayRequestPath(rawUrl: string | undefined): string | undefined
   }
 }
 
+function headerValueContainsToken(
+  value: string | readonly string[] | undefined,
+  token: string,
+): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const expected = token.toLowerCase();
+  const values: readonly string[] = typeof value === "string" ? [value] : value;
+  return values.some((entry) =>
+    entry
+      .toLowerCase()
+      .split(",")
+      .some((part) => part.trim() === expected),
+  );
+}
+
+function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
+  return (
+    headerValueContainsToken(req.headers.upgrade, "websocket") &&
+    headerValueContainsToken(req.headers.connection, "upgrade")
+  );
+}
+
 type GatewayHttpRequestStage = {
   name: string;
   run: () => Promise<boolean> | boolean;
@@ -534,8 +563,15 @@ export function createGatewayHttpServer(opts: {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
 
-    // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
-    if ((req.headers.upgrade ?? "").toLowerCase() === "websocket") {
+    // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
+    if (isWebSocketUpgradeRequest(req)) {
+      return;
+    }
+    if (req.headers.upgrade !== undefined) {
+      res.statusCode = 400;
+      res.setHeader("Connection", "close");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Bad Request");
       return;
     }
 
@@ -579,8 +615,7 @@ export function createGatewayHttpServer(opts: {
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
           basePath: controlUiBasePath,
           config: configSnapshot,
-          terminalEnabled:
-            opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+          terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
           root: controlUiRoot,
           auth: resolvedAuthValue,
@@ -697,6 +732,25 @@ export function createGatewayHttpServer(opts: {
             ),
         });
       }
+      if (matchUserProfileAvatarPath(scopedRequestPath) !== undefined) {
+        requestStages.push({
+          name: "user-profile-avatar",
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
+                req,
+                res,
+                scopedRequestPath,
+                {
+                  auth: resolvedAuthValue,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                },
+              ),
+            ),
+        });
+      }
       if (openResponsesEnabled && isOpenResponsesPath(scopedRequestPath)) {
         requestStages.push({
           name: "openresponses",
@@ -809,7 +863,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               terminalEnabled:
-                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+                opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
               auth: resolvedAuthValue,

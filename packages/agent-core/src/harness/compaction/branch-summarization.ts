@@ -134,6 +134,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
     case "custom":
     case "label":
     case "session_info":
+    case "reset":
     case "leaf":
       return undefined;
   }

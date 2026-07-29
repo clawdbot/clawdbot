@@ -1,10 +1,6 @@
 // Openai tests cover GPT-Live (quicksilver) realtime voice gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isOpenAIGptLiveModel,
-  OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
-  OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE,
-} from "./realtime-quicksilver.js";
+import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mintSecretMock = vi.hoisted(() => vi.fn());
@@ -34,21 +30,10 @@ describe("openai gpt-live model detection", () => {
   });
 });
 
-describe("openai realtime voice provider with gpt-live models", () => {
+describe("openai realtime voice provider gpt-live transport routing", () => {
   beforeEach(() => {
     mintSecretMock.mockReset();
     mintSecretMock.mockResolvedValue({ value: "ek_test", expiresAt: 1234 });
-  });
-
-  it("fails closed for gpt-live browser sessions with guidance", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    await expect(
-      provider.createBrowserSession?.({
-        providerConfig: { apiKey: "test-key" },
-        model: "gpt-live-1",
-      }),
-    ).rejects.toThrow(OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE);
-    expect(mintSecretMock).not.toHaveBeenCalled();
   });
 
   it("keeps GA realtime browser sessions working", async () => {
@@ -56,6 +41,7 @@ describe("openai realtime voice provider with gpt-live models", () => {
     const session = await provider.createBrowserSession?.({
       providerConfig: { apiKey: "test-key" },
       model: "gpt-realtime-2.1",
+      instructions: "Keep GA behavior unchanged.",
     });
     expect(session).toMatchObject({
       transport: "webrtc",
@@ -64,26 +50,43 @@ describe("openai realtime voice provider with gpt-live models", () => {
     expect(mintSecretMock.mock.calls[0]?.[0]?.session).toMatchObject({
       type: "realtime",
       model: "gpt-realtime-2.1",
+      instructions: "Keep GA behavior unchanged.",
     });
   });
 
-  it("rejects gpt-live models on the realtime WebSocket bridge", () => {
+  it("routes gpt-live models to a backend WebSocket bridge", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const callbacks = {
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     };
-    expect(() =>
+    expect(
       provider.createBridge({
         ...callbacks,
-        providerConfig: { apiKey: "test-key", model: "gpt-live-1" },
+        providerConfig: { apiKey: "test-key", model: "gpt-live-1-codex" },
       }),
-    ).toThrow(OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE);
+    ).toMatchObject({ supportsToolResultContinuation: true });
     expect(() =>
       provider.createBridge({
         ...callbacks,
         providerConfig: { apiKey: "test-key", model: "gpt-realtime-2.1" },
       }),
     ).not.toThrow();
+  });
+
+  it("rejects Azure credentials before creating a Platform GPT-Live bridge", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    expect(() =>
+      provider.createBridge({
+        providerConfig: {
+          apiKey: "azure-test-key",
+          model: "gpt-live-1-codex",
+          azureEndpoint: "https://example.openai.azure.com",
+          azureDeployment: "realtime",
+        },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      }),
+    ).toThrow("GPT-Live backend WebSocket sessions do not support Azure");
   });
 });

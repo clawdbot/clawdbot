@@ -911,7 +911,8 @@ describe("handleDiscordMessagingAction", () => {
               qa: {
                 token: "token",
                 groupPolicy: "open",
-                dm: { enabled: false, policy: "disabled" },
+                dm: { enabled: false },
+                dmPolicy: "disabled",
                 guilds: {
                   "111": {
                     channels: {
@@ -936,7 +937,8 @@ describe("handleDiscordMessagingAction", () => {
           discord: {
             token: "token",
             groupPolicy: "open",
-            dm: { enabled: true, policy: "pairing", groupEnabled: false },
+            dm: { enabled: true, groupEnabled: false },
+            dmPolicy: "pairing",
           },
         },
       } as OpenClawConfig,
@@ -953,9 +955,9 @@ describe("handleDiscordMessagingAction", () => {
           discord: {
             token: "token",
             groupPolicy: "open",
+            dmPolicy: "pairing",
             dm: {
               enabled: true,
-              policy: "pairing",
               groupEnabled: true,
               groupChannels: ["allowed-group"],
             },
@@ -995,9 +997,9 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "disabled",
+          dmPolicy: "disabled",
           dm: {
             enabled: false,
-            policy: "disabled",
             groupEnabled: true,
             groupChannels: ["allowed-group"],
           },
@@ -1027,7 +1029,8 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "disabled",
-          dm: { enabled: true, policy: "pairing" },
+          dm: { enabled: true },
+          dmPolicy: "pairing",
         },
       },
     } as OpenClawConfig;
@@ -1051,9 +1054,9 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "open",
+          dmPolicy: "pairing",
           dm: {
             enabled: true,
-            policy: "pairing",
             groupEnabled: false,
           },
         },
@@ -1079,7 +1082,8 @@ describe("handleDiscordMessagingAction", () => {
         discord: {
           token: "token",
           groupPolicy: "open",
-          dm: { enabled: true, policy: "pairing" },
+          dm: { enabled: true },
+          dmPolicy: "pairing",
           guilds: {
             "111": {
               channels: {

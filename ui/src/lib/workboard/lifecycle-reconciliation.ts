@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { replaceCard, staleSessionState } from "./card-state.ts";
+import { isActiveWorkboardCard, replaceCard, staleSessionState } from "./card-state.ts";
 import {
   executionStatusForLifecycle,
   getLifecycleSyncKeys,
@@ -265,6 +265,9 @@ export async function syncWorkboardLifecycle(params: {
   const syncKeys = getLifecycleSyncKeys(params.host);
   let lifecycleWriteStarted = false;
   for (const card of state.cards) {
+    if (!isActiveWorkboardCard(card)) {
+      continue;
+    }
     if (
       !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
       workboardLifecycleSyncBlocked(params.host, state)

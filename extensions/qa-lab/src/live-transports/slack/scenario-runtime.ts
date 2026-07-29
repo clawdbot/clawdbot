@@ -21,81 +21,91 @@ async function runSlackMessageScenario(params: {
   scenarioTitle: string;
   timeoutMs: number;
 }) {
-  const beforeRunResult = await params.run.beforeRun?.(params.environment.context);
-  const beforeRunDetails =
-    typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
-  const observedMessageStartIndex = params.environment.observedMessages.length;
-  const requestStartedAt = new Date();
-  const sent = await sendSlackChannelMessage({
-    channelId: params.environment.channelId,
-    client: params.environment.context.driverClient,
-    text: params.run.input,
-    threadTs: typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
-  });
-  const requestThreadTs =
-    (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ?? sent.ts;
-  if (!params.run.expectReply) {
-    await waitForSlackNoReply({
-      channelId: params.environment.channelId,
+  let scenarioContext = params.environment.context;
+  try {
+    const beforeRunResult = await params.run.beforeRun?.(params.environment.context);
+    const beforeRunDetails =
+      typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
+    const channelId =
+      typeof beforeRunResult === "object" && beforeRunResult.inputChannelId?.trim()
+        ? beforeRunResult.inputChannelId.trim()
+        : params.environment.channelId;
+    scenarioContext = { ...params.environment.context, channelId };
+    const observedMessageStartIndex = params.environment.observedMessages.length;
+    const requestStartedAt = new Date();
+    const sent = await sendSlackChannelMessage({
+      channelId,
+      client: params.environment.context.driverClient,
+      text: params.run.input,
+      threadTs: typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
+    });
+    const requestThreadTs =
+      (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ?? sent.ts;
+    if (!params.run.expectReply) {
+      await waitForSlackNoReply({
+        channelId,
+        client: params.environment.context.sutReadClient,
+        matchText: params.run.matchText,
+        observedMessages: params.environment.observedMessages,
+        observationScenarioId: params.scenarioId,
+        observationScenarioTitle: params.scenarioTitle,
+        sentTs: sent.ts,
+        sutIdentity: params.environment.sutIdentity,
+        timeoutMs: params.timeoutMs,
+      });
+      const afterNoReplyDetails = await params.run.afterNoReply?.({
+        ...scenarioContext,
+        sentTs: sent.ts,
+      });
+      return {
+        details: ["no reply", beforeRunDetails, afterNoReplyDetails].filter(Boolean).join("; "),
+      };
+    }
+    const reply = await waitForSlackScenarioReply({
+      channelId,
       client: params.environment.context.sutReadClient,
       matchText: params.run.matchText,
       observedMessages: params.environment.observedMessages,
       observationScenarioId: params.scenarioId,
       observationScenarioTitle: params.scenarioTitle,
       sentTs: sent.ts,
-      sutIdentity: params.environment.sutIdentity,
-      timeoutMs: params.timeoutMs,
-    });
-    const afterNoReplyDetails = await params.run.afterNoReply?.({
-      ...params.environment.context,
-      sentTs: sent.ts,
-    });
-    return {
-      details: ["no reply", beforeRunDetails, afterNoReplyDetails].filter(Boolean).join("; "),
-    };
-  }
-  const reply = await waitForSlackScenarioReply({
-    channelId: params.environment.channelId,
-    client: params.environment.context.sutReadClient,
-    matchText: params.run.matchText,
-    observedMessages: params.environment.observedMessages,
-    observationScenarioId: params.scenarioId,
-    observationScenarioTitle: params.scenarioTitle,
-    sentTs: sent.ts,
-    threadTs: requestThreadTs,
-    sutIdentity: params.environment.sutIdentity,
-    timeoutMs: params.timeoutMs,
-  });
-  params.run.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
-  if (params.run.settleObservedMs) {
-    await observeSlackScenarioMessages({
-      channelId: params.environment.channelId,
-      client: params.environment.context.sutReadClient,
-      matchText: params.run.matchText,
-      observedMessages: params.environment.observedMessages,
-      observationScenarioId: params.scenarioId,
-      observationScenarioTitle: params.scenarioTitle,
-      sentTs: sent.ts,
-      settleMs: params.run.settleObservedMs,
       sutIdentity: params.environment.sutIdentity,
       threadTs: requestThreadTs,
+      timeoutMs: params.timeoutMs,
     });
+    params.run.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
+    if (params.run.settleObservedMs) {
+      await observeSlackScenarioMessages({
+        channelId,
+        client: params.environment.context.sutReadClient,
+        matchText: params.run.matchText,
+        observedMessages: params.environment.observedMessages,
+        observationScenarioId: params.scenarioId,
+        observationScenarioTitle: params.scenarioTitle,
+        sentTs: sent.ts,
+        settleMs: params.run.settleObservedMs,
+        sutIdentity: params.environment.sutIdentity,
+        threadTs: requestThreadTs,
+      });
+    }
+    const observedDetails = params.run.verifyObserved?.({
+      finalMessage: reply.message,
+      messages: params.environment.observedMessages.slice(observedMessageStartIndex),
+    });
+    const afterReplyDetails = await params.run.afterReply?.(reply.message, {
+      ...scenarioContext,
+      sentTs: sent.ts,
+    });
+    const responseObservedAt = new Date(reply.observedAt);
+    const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
+    return {
+      details: [`reply matched in ${rttMs}ms`, beforeRunDetails, observedDetails, afterReplyDetails]
+        .filter(Boolean)
+        .join("; "),
+    };
+  } finally {
+    await params.run.cleanup?.(scenarioContext);
   }
-  const observedDetails = params.run.verifyObserved?.({
-    finalMessage: reply.message,
-    messages: params.environment.observedMessages.slice(observedMessageStartIndex),
-  });
-  const afterReplyDetails = await params.run.afterReply?.(reply.message, {
-    ...params.environment.context,
-    sentTs: sent.ts,
-  });
-  const responseObservedAt = new Date(reply.observedAt);
-  const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
-  return {
-    details: [`reply matched in ${rttMs}ms`, beforeRunDetails, observedDetails, afterReplyDetails]
-      .filter(Boolean)
-      .join("; "),
-  };
 }
 
 async function runSlackScenario(environment: SlackQaScenarioEnvironment, scenarioId: string) {
@@ -173,6 +183,8 @@ export const runSlackCanaryScenario = (context: SlackQaScenarioEnvironment) =>
   runSlackScenario(context, "slack-canary");
 export const runSlackMentionGatingScenario = (context: SlackQaScenarioEnvironment) =>
   runSlackScenario(context, "slack-mention-gating");
+export const runSlackMpimAppMentionDedupeScenario = (context: SlackQaScenarioEnvironment) =>
+  runSlackScenario(context, "slack-mpim-app-mention-dedupe");
 export const runSlackAllowlistBlockScenario = (context: SlackQaScenarioEnvironment) =>
   runSlackScenario(context, "slack-allowlist-block");
 export const runSlackChannelDisabledWarningScenario = (context: SlackQaScenarioEnvironment) =>
