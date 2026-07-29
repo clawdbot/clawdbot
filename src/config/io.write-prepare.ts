@@ -1,6 +1,5 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
-import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasAgentRosterProperty,
@@ -14,7 +13,7 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
-import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
+import { normalizeAgentModelRefForConfig } from "./model-input.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -51,16 +50,6 @@ function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void 
     normalizedIds.add(agentId);
   }
 }
-
-type ManifestModelIdNormalizationProvider = {
-  aliases?: Record<string, string>;
-  stripPrefixes?: string[];
-  prefixWhenBare?: string;
-  prefixWhenBareAfterAliasStartsWith?: {
-    modelPrefix: string;
-    prefix: string;
-  }[];
-};
 
 // Clone config fragments before patching so mutation preparation never aliases callers.
 function cloneUnknown<T>(value: T): T {
@@ -416,176 +405,6 @@ function preserveAuthoredAgentParams(params: {
     });
   }
   return next;
-}
-
-function normalizeAgentModelConfigForWrite(value: unknown): unknown {
-  if (typeof value === "string") {
-    const normalized = normalizeAgentModelRefForConfig(value);
-    return normalized === value ? value : normalized;
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  let mutated = false;
-  const next: Record<string, unknown> = { ...value };
-  if (typeof value.primary === "string") {
-    const primary = normalizeAgentModelRefForConfig(value.primary);
-    if (primary !== value.primary) {
-      next.primary = primary;
-      mutated = true;
-    }
-  }
-  if (Array.isArray(value.fallbacks)) {
-    const fallbacks = value.fallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-    if (!isDeepStrictEqual(fallbacks, value.fallbacks)) {
-      next.fallbacks = fallbacks;
-      mutated = true;
-    }
-  }
-  return mutated ? next : value;
-}
-
-const AGENT_MODEL_CONFIG_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
-
-function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
-  const value = getPathValue(config, path);
-  if (value === undefined) {
-    return config;
-  }
-  const normalizedModel = normalizeAgentModelConfigForWrite(value);
-  return normalizedModel !== value ? setPathValue(config, path, normalizedModel) : config;
-}
-
-function normalizeModelStringPathForWrite(config: unknown, path: string[]): unknown {
-  const value = getPathValue(config, path);
-  if (typeof value !== "string") {
-    return config;
-  }
-  const normalized = normalizeAgentModelRefForConfig(value);
-  return normalized !== value ? setPathValue(config, path, normalized) : config;
-}
-
-function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]): unknown {
-  const agent = getPathValue(config, path);
-  if (!isRecord(agent)) {
-    return config;
-  }
-
-  let next = config;
-  for (const key of AGENT_MODEL_CONFIG_KEYS) {
-    next = normalizeModelConfigPathForWrite(next, [...path, key]);
-  }
-  for (const key of ["image", "video", "music"] as const) {
-    next = normalizeModelConfigPathForWrite(next, [...path, "mediaModels", key]);
-  }
-  next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
-  next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "memoryFlush", "model"]);
-
-  const models = getPathValue(next, [...path, "models"]);
-  if (isRecord(models)) {
-    const normalizedModels = normalizeAgentModelMapForConfig(models);
-    if (normalizedModels !== models) {
-      next = setPathValue(next, [...path, "models"], normalizedModels);
-    }
-  }
-  return next;
-}
-
-function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
-  const entries = getPathValue(config, ["agents", "entries"]);
-  if (!isRecord(entries)) {
-    return config;
-  }
-
-  let mutated = false;
-  const nextEntries = Object.fromEntries(
-    Object.entries(entries).map(([agentId, agent]) => {
-      if (!isRecord(agent)) {
-        return [agentId, agent];
-      }
-
-      const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
-        agent: unknown;
-      };
-      if (normalized.agent !== agent) {
-        mutated = true;
-        return [agentId, normalized.agent];
-      }
-      return [agentId, agent];
-    }),
-  );
-
-  return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
-}
-
-function normalizeToolsModelRefsForWrite(config: unknown): unknown {
-  return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
-}
-
-function normalizeModelProviderCatalogRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
-  const providers = getPathValue(config, ["models", "providers"]);
-  if (!isRecord(providers)) {
-    return config;
-  }
-
-  let mutated = false;
-  const nextProviders: Record<string, unknown> = { ...providers };
-  for (const [provider, providerConfig] of Object.entries(providers)) {
-    if (!isRecord(providerConfig) || !Array.isArray(providerConfig.models)) {
-      continue;
-    }
-
-    let providerMutated = false;
-    const models = providerConfig.models.map((model) => {
-      if (!isRecord(model) || typeof model.id !== "string") {
-        return model;
-      }
-      const trimmed = model.id.trim();
-      if (!trimmed) {
-        return model;
-      }
-      const id = normalizeConfiguredProviderCatalogModelId(
-        provider,
-        trimmed,
-        modelIdNormalizationPolicies,
-      );
-      if (id === model.id) {
-        return model;
-      }
-      providerMutated = true;
-      return { ...model, id };
-    });
-
-    if (providerMutated) {
-      nextProviders[provider] = { ...providerConfig, models };
-      mutated = true;
-    }
-  }
-
-  return mutated ? setPathValue(config, ["models", "providers"], nextProviders) : config;
-}
-
-function normalizeModelRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
-  return normalizeModelProviderCatalogRefsForWrite(
-    normalizeToolsModelRefsForWrite(
-      normalizeAgentListModelRefsForWrite(
-        normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
-      ),
-    ),
-    modelIdNormalizationPolicies,
-  );
 }
 
 type IncludeSiblingProjection =
@@ -1581,7 +1400,6 @@ export function resolvePersistCandidateForWrite(params: {
   explicitSetValueSource?: unknown;
   allowedAgentRosterRemovals?: readonly string[];
   allowIncludeAncestorExplicitSetPaths?: boolean;
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
@@ -1686,7 +1504,7 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
-  return normalizeModelRefsForWrite(withAuthoredParams, params.modelIdNormalizationPolicies);
+  return withAuthoredParams;
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

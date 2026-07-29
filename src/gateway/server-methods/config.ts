@@ -15,6 +15,7 @@ import {
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
+import { resolveModelIdNormalizationPolicies } from "../../config/io.context.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -29,6 +30,7 @@ import {
   createMergePatch,
   isMergePatchObjectKeyAllowed,
 } from "../../config/merge-patch.js";
+import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
@@ -486,6 +488,7 @@ function parseValidateConfigFromRawOrRespond(
   requestName: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
+  modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
 ): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
   if (!rawValue) {
@@ -513,10 +516,13 @@ function parseValidateConfigFromRawOrRespond(
         createMergePatch(snapshot.config, restored.result),
       )
     : restored.result;
-  const validationCandidate = stripBundledProviderRuntimeDefaults({
-    candidate: projectedValidationCandidate,
-    sourceConfig: snapshot.sourceConfig,
-  });
+  const validationCandidate = normalizeSubmittedConfigModelRefs(
+    stripBundledProviderRuntimeDefaults({
+      candidate: projectedValidationCandidate,
+      sourceConfig: snapshot.sourceConfig,
+    }) as OpenClawConfig,
+    modelIdNormalizationPolicies,
+  );
   const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
   if (!sourceValidated.ok) {
     respond(
@@ -882,7 +888,13 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
+    const parsed = parseValidateConfigFromRawOrRespond(
+      params,
+      "config.set",
+      snapshot,
+      respond,
+      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+    );
     if (!parsed) {
       return;
     }
@@ -943,6 +955,9 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
+    const modelIdNormalizationPolicies = resolveModelIdNormalizationPolicies(
+      writeOptions.basePluginMetadataSnapshot,
+    );
     if (!snapshot.valid) {
       respond(
         false,
@@ -980,7 +995,11 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (hashlessPatch && !hasHashlessPatchLwwStructure(parsedRes.parsed)) {
+    const normalizedPatch = normalizeSubmittedConfigModelRefs(
+      parsedRes.parsed as OpenClawConfig,
+      modelIdNormalizationPolicies,
+    );
+    if (hashlessPatch && !hasHashlessPatchLwwStructure(normalizedPatch)) {
       respond(
         false,
         undefined,
@@ -994,7 +1013,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const replacePaths = readConfigPatchReplacePaths(params);
     try {
       assertNoDuplicateConfigPatchIds({
-        patch: parsedRes.parsed,
+        patch: normalizedPatch,
         current: snapshot.config,
         replacePaths,
       });
@@ -1002,7 +1021,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
       return;
     }
-    const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+    const merged = applyMergePatch(snapshot.config, normalizedPatch, {
       // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
@@ -1024,7 +1043,7 @@ export const configHandlers: GatewayRequestHandlers = {
       rejectDestructiveArrayPatchWithoutIntent({
         currentConfig: snapshot.config,
         mergedConfig: restoredMerge.result,
-        patch: parsedRes.parsed,
+        patch: normalizedPatch,
         replacePaths,
         respond,
       })
@@ -1055,10 +1074,13 @@ export const configHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const validationCandidate = stripBundledProviderRuntimeDefaults({
-      candidate: restoredMerge.result,
-      sourceConfig: snapshot.sourceConfig,
-    });
+    const validationCandidate = normalizeSubmittedConfigModelRefs(
+      stripBundledProviderRuntimeDefaults({
+        candidate: restoredMerge.result,
+        sourceConfig: snapshot.sourceConfig,
+      }) as OpenClawConfig,
+      modelIdNormalizationPolicies,
+    );
     const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
     if (!sourceValidated.ok) {
       respond(
@@ -1155,7 +1177,13 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
+    const parsed = parseValidateConfigFromRawOrRespond(
+      params,
+      "config.apply",
+      snapshot,
+      respond,
+      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+    );
     if (!parsed) {
       return;
     }
