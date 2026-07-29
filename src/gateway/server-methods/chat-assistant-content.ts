@@ -9,15 +9,14 @@ import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import {
-  cleanupManagedOutgoingImageRecords,
-  createManagedOutgoingImageBlocks,
+  cleanupManagedOutgoingMediaRecords,
+  createManagedOutgoingMediaBlocks,
 } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
-import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
-const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
+const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
+const chatHistoryManagedMediaCleanupState = new Map<string, Promise<void>>();
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
 
@@ -120,11 +119,10 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   sessionKey: string;
   agentId?: string;
   payloads: ReplyPayload[];
-  managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
+  managedMediaLocalRoots?: Parameters<typeof createManagedOutgoingMediaBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
   includeSensitiveDisplay?: boolean;
-  onLocalAudioAccessDenied?: (message: string) => void;
-  onManagedImagePrepareError?: (message: string) => void;
+  onManagedMediaPrepareError?: (message: string) => void;
   onSensitiveDisplayPrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
@@ -170,34 +168,31 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
     }
-    const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
-      localRoots: Array.isArray(params.managedImageLocalRoots)
-        ? params.managedImageLocalRoots
-        : undefined,
-      onLocalAudioAccessDenied: (err) => {
-        params.onLocalAudioAccessDenied?.(formatForLog(err));
-      },
-    });
-    content.push(...audioBlocks);
-
     const mediaUrls = Array.from(
       new Set([
         ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
         ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
       ]),
     );
-    const imageBlocks = await createManagedOutgoingImageBlocks({
+    const mediaBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey: params.sessionKey,
       ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
       mediaUrls,
-      localRoots: params.managedImageLocalRoots,
+      localRoots: params.managedMediaLocalRoots,
+      allowLocalNonImage: payload.trustedLocalMedia === true,
       continueOnPrepareError: true,
       onPrepareError: (error) => {
-        params.onManagedImagePrepareError?.(error.message);
+        params.onManagedMediaPrepareError?.(error.message);
       },
     });
-    if (imageBlocks.length > 0) {
-      content.push(...imageBlocks);
+    if (mediaBlocks.length > 0) {
+      content.push(
+        ...mediaBlocks.map((block) =>
+          payload.audioAsVoice === true && block.type === "audio"
+            ? { ...block, isVoiceNote: true }
+            : block,
+        ),
+      );
     }
   }
 
@@ -248,13 +243,13 @@ export function replaceAssistantContentTextBlocks(
   return merged;
 }
 
-function isManagedOutgoingImageUrl(value: unknown): boolean {
+function isManagedOutgoingMediaUrl(value: unknown): boolean {
   if (typeof value !== "string" || !value.trim()) {
     return false;
   }
   try {
     const parsed = new URL(value, "http://localhost");
-    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_MEDIA_PATH_PREFIX);
   } catch {
     return false;
   }
@@ -267,10 +262,10 @@ export function stripManagedOutgoingAssistantContentBlocks(
     return undefined;
   }
   const filtered = content.filter((block) => {
-    if (block?.type !== "image") {
+    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
       return true;
     }
-    return !(isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl));
+    return !(isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl));
   });
   return filtered.length > 0 ? filtered : undefined;
 }
@@ -323,13 +318,13 @@ export function hasManagedOutgoingAssistantContent(
   return Boolean(
     content?.some(
       (block) =>
-        block?.type === "image" &&
-        (isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl)),
+        (block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
+        (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl)),
     ),
   );
 }
 
-export function scheduleChatHistoryManagedImageCleanup(params: {
+export function scheduleChatHistoryManagedMediaCleanup(params: {
   sessionKey: string;
   agentId?: string;
   context: Pick<GatewayRequestContext, "logGateway">;
@@ -338,23 +333,23 @@ export function scheduleChatHistoryManagedImageCleanup(params: {
     params.sessionKey === "global" && params.agentId
       ? `agent:${params.agentId}:global`
       : params.sessionKey;
-  if (chatHistoryManagedImageCleanupState.has(cleanupKey)) {
+  if (chatHistoryManagedMediaCleanupState.has(cleanupKey)) {
     return;
   }
-  const pending = cleanupManagedOutgoingImageRecords({
+  const pending = cleanupManagedOutgoingMediaRecords({
     sessionKey: params.sessionKey,
     ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
   })
     .then(() => undefined)
     .catch((error: unknown) => {
       params.context.logGateway.debug(
-        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
+        `chat.history managed media cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
       );
     })
     .finally(() => {
-      if (chatHistoryManagedImageCleanupState.get(cleanupKey) === pending) {
-        chatHistoryManagedImageCleanupState.delete(cleanupKey);
+      if (chatHistoryManagedMediaCleanupState.get(cleanupKey) === pending) {
+        chatHistoryManagedMediaCleanupState.delete(cleanupKey);
       }
     });
-  chatHistoryManagedImageCleanupState.set(cleanupKey, pending);
+  chatHistoryManagedMediaCleanupState.set(cleanupKey, pending);
 }

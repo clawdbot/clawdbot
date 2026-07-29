@@ -10,7 +10,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
+import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
+import { buildAssistantDisplayContentFromReplyPayloads } from "./chat-assistant-content.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 
 const PNG_BYTES = Buffer.from(
@@ -216,6 +217,47 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.audioAsVoice).toBe(true);
     await expectOutboundMediaMissing(stateDir);
   });
+
+  it.each([
+    {
+      kind: "audio" as const,
+      fileName: "generated-theme.mp3",
+      bytes: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+      mimeType: "audio/mpeg",
+    },
+    {
+      kind: "video" as const,
+      fileName: "generated-clip.mp4",
+      bytes: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
+      mimeType: "video/mp4",
+    },
+  ])(
+    "projects generated $kind into a managed history block",
+    async ({ kind, fileName, bytes, mimeType }) => {
+      const { workspaceDir } = createMediaTestContext({ allowRead: true });
+      const sourcePath = path.join(workspaceDir, fileName);
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, bytes);
+
+      const content = await buildAssistantDisplayContentFromReplyPayloads({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads: [{ text: "Generated media", mediaUrls: [sourcePath], trustedLocalMedia: true }],
+        managedMediaLocalRoots: [workspaceDir],
+      });
+
+      expect(content).toEqual([
+        { type: "text", text: "Generated media" },
+        expect.objectContaining({
+          type: kind,
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          fileName,
+          mimeType,
+        }),
+      ]);
+      expect(JSON.stringify(content)).not.toContain(sourcePath);
+    },
+  );
 
   it("does not preserve untrusted local audio paths before display normalization", async () => {
     const { stateDir, cfg } = createMediaTestContext({ allowRead: false });
