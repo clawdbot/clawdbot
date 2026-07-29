@@ -56,6 +56,7 @@ import {
 } from "../skills/workshop/service.js";
 import type {
   SkillProposalApplyResult,
+  SkillProposalEvaluateResult,
   SkillProposalManifest,
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
@@ -122,6 +123,7 @@ type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 10_000;
+const GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS = 150_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
@@ -313,6 +315,33 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
     .join("\n");
 }
 
+function formatSkillProposalEvaluation(result: SkillProposalEvaluateResult): string {
+  const lines = [
+    `Proposal: ${result.record.id}`,
+    `Proposed version: ${result.evaluation.proposedVersion}`,
+    `Revision hash: ${result.evaluation.revisionHash}`,
+    `Evaluators: ${result.evaluation.outcomes.length}`,
+  ];
+  for (const outcome of result.evaluation.outcomes) {
+    const plugin = outcome.pluginVersion
+      ? `${outcome.pluginId}@${outcome.pluginVersion}`
+      : outcome.pluginId;
+    const prefix = `${outcome.evaluatorId} (${plugin})`;
+    if (outcome.status === "completed") {
+      const decision = outcome.result.decision ? ` ${outcome.result.decision}` : "";
+      const summary = outcome.result.summary ? `: ${outcome.result.summary}` : "";
+      lines.push(`${prefix}  completed${decision}${summary}`);
+      continue;
+    }
+    if (outcome.status === "error") {
+      lines.push(`${prefix}  error: ${outcome.error}`);
+      continue;
+    }
+    lines.push(`${prefix}  skipped`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   const timestamp = (value: number | null) =>
     value === null ? "never" : new Date(value).toISOString();
@@ -437,6 +466,35 @@ async function runSkillProposalApply(
     method: "skills.proposals.apply",
     params: { agentId: resolved.agentId, proposalId },
     timeoutMs: GATEWAY_SKILLS_MUTATION_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
+}
+
+async function runSkillProposalEvaluate(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+  correlationId?: string,
+): Promise<SkillProposalEvaluateResult> {
+  const { callGateway } = await import("../gateway/call.js");
+  const proposal = await callGateway<SkillProposalReadResult>({
+    config: resolved.config,
+    method: "skills.proposals.inspect",
+    params: { agentId: resolved.agentId, proposalId },
+    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
+  return await callGateway<SkillProposalEvaluateResult>({
+    config: resolved.config,
+    method: "skills.proposals.evaluate",
+    params: {
+      agentId: resolved.agentId,
+      proposalId,
+      expectedRevisionHash: proposal.revisionHash,
+      ...(correlationId ? { correlationId } : {}),
+    },
+    timeoutMs: GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   });
@@ -1071,6 +1129,37 @@ export function registerSkillsCli(program: Command) {
           defaultRuntime.writeStdout(
             `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
           );
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("evaluate")
+    .description("Evaluate the exact current skill proposal through Gateway plugins")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--correlation-id <id>", "External run or experiment correlation id")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        proposalId: string,
+        opts: { correlationId?: string; json?: boolean; agent?: string },
+        command: Command,
+      ) => {
+        try {
+          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const evaluated = await runSkillProposalEvaluate(
+            resolved,
+            proposalId,
+            normalizeOptionalString(opts.correlationId),
+          );
+          if (opts.json) {
+            defaultRuntime.writeJson(evaluated);
+            return;
+          }
+          defaultRuntime.writeStdout(formatSkillProposalEvaluation(evaluated));
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);
