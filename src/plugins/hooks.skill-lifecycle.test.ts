@@ -17,7 +17,7 @@ const evaluationEvent: PluginHookSkillProposalEvaluateEvent = {
     id: "proposal-1",
     kind: "update",
     revision: "v2",
-    draftSha256: "sha256:draft",
+    revisionSha256: "sha256:revision",
     targetCurrentSha256: "sha256:current",
   },
   skill: {

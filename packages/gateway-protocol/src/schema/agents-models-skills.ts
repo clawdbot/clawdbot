@@ -645,7 +645,7 @@ const SkillProposalEvaluationOutcomeSchema = Type.Union([
 export const SkillProposalEvaluationSchema = closedObject({
   id: NonEmptyString,
   proposedVersion: NonEmptyString,
-  draftHash: Sha256String,
+  revisionHash: Sha256String,
   trigger: Type.Union([Type.Literal("manual"), Type.Literal("apply")]),
   startedAt: NonEmptyString,
   completedAt: NonEmptyString,
@@ -716,6 +716,7 @@ export const SkillsProposalInspectParamsSchema = closedObject({
 /** Full proposal inspection result used before apply/revise decisions. */
 export const SkillsProposalInspectResultSchema = closedObject({
   record: SkillProposalRecordSchema,
+  revisionHash: Sha256String,
   content: Type.String(),
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
 });
@@ -746,9 +747,9 @@ export const SkillsProposalUpdateParamsSchema = closedObject({
 export const SkillsProposalReviseParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedDraftHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Type.Optional(Sha256String),
   correlationId: Type.Optional(NonEmptyString),
-  content: SkillProposalContentString,
+  content: Type.Optional(SkillProposalContentString),
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
   description: Type.Optional(NonEmptyString),
   goal: Type.Optional(Type.String()),
@@ -760,7 +761,7 @@ export const SkillsProposalRequestRevisionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   targetAgentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedDraftHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Type.Optional(Sha256String),
   instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
   sessionKey: NonEmptyString,
   sessionId: Type.Optional(NonEmptyString),
@@ -786,7 +787,7 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
 export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedDraftHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Type.Optional(Sha256String),
   correlationId: Type.Optional(NonEmptyString),
   reason: Type.Optional(Type.String()),
 });
@@ -795,7 +796,7 @@ export const SkillsProposalActionParamsSchema = closedObject({
 export const SkillsProposalEvaluateParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedDraftHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Type.Optional(Sha256String),
   correlationId: Type.Optional(NonEmptyString),
 });
 
@@ -840,7 +841,7 @@ export const SkillProposalLifecycleEventSchema = closedObject({
   eventId: NonEmptyString,
   proposalId: NonEmptyString,
   proposedVersion: NonEmptyString,
-  draftHash: Sha256String,
+  revisionHash: Sha256String,
   type: SkillProposalLifecycleEventTypeSchema,
   occurredAt: NonEmptyString,
   actor: SkillProposalLifecycleEventActorSchema,

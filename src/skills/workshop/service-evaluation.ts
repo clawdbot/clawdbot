@@ -13,9 +13,11 @@ import {
 import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
 import { readRequiredProposal } from "./service-query.js";
 import {
+  hashSkillProposalContent,
   readProposalSupportFiles,
   readSkillProposalEvents,
   recordSkillProposalEvaluation,
+  withSkillProposalTargetLock,
 } from "./store.js";
 import type {
   SkillProposalEvaluateInput,
@@ -31,23 +33,42 @@ const MAX_EVALUATION_METRICS = 64;
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
 ): Promise<SkillProposalEvaluateResult> {
-  const read = await readRequiredProposal(
+  const initial = await readRequiredProposal(
     input.proposalId,
     input.workspaceDir,
     input.env,
     input.agentId,
   );
-  if (read.record.status !== "pending") {
-    throw new Error(
-      `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
-    );
-  }
-  assertExpectedDraftHash(read.record.draftHash, input.expectedDraftHash);
-  const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
-  const bundles = await buildSkillProposalEvaluationBundles({
-    proposal: read,
-    supportFiles,
-  });
+  const snapshot = await withSkillProposalTargetLock(
+    initial.record,
+    async () => {
+      const read = await readRequiredProposal(
+        input.proposalId,
+        input.workspaceDir,
+        input.env,
+        input.agentId,
+      );
+      if (read.record.status !== "pending") {
+        throw new Error(
+          `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
+        );
+      }
+      assertExpectedRevisionHash(read.revisionHash, input.expectedRevisionHash);
+      if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
+        throw new Error("Proposal draft changed without updating proposal metadata.");
+      }
+      const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
+      return {
+        read,
+        bundles: await buildSkillProposalEvaluationBundles({
+          proposal: read,
+          supportFiles,
+        }),
+      };
+    },
+    storeOptions(input.env),
+  );
+  const { read, bundles } = snapshot;
   const startedAt = new Date().toISOString();
   const correlationId = normalizeOptionalString(input.correlationId);
   const rawOutcomes = await runSkillProposalEvaluators(
@@ -56,7 +77,7 @@ export async function evaluateSkillProposal(
         id: read.record.id,
         kind: read.record.kind,
         revision: read.record.proposedVersion,
-        draftSha256: read.record.draftHash,
+        revisionSha256: read.revisionHash,
         ...(read.record.target.currentContentHash
           ? { targetCurrentSha256: read.record.target.currentContentHash }
           : {}),
@@ -80,7 +101,7 @@ export async function evaluateSkillProposal(
   const evaluation = {
     id: randomUUID(),
     proposedVersion: read.record.proposedVersion,
-    draftHash: read.record.draftHash,
+    revisionHash: read.revisionHash,
     trigger: input.trigger ?? ("manual" as const),
     startedAt,
     completedAt,
@@ -100,14 +121,39 @@ export async function evaluateSkillProposal(
       outcomeCount: evaluation.outcomes.length,
     },
   });
-  const stored = recordSkillProposalEvaluation({
-    proposalId: read.record.id,
-    expectedProposedVersion: read.record.proposedVersion,
-    expectedDraftHash: read.record.draftHash,
-    evaluation,
-    event: eventInput,
-    store: storeOptions(input.env),
-  });
+  const stored = await withSkillProposalTargetLock(
+    read.record,
+    async () => {
+      const current = await readRequiredProposal(
+        input.proposalId,
+        input.workspaceDir,
+        input.env,
+        input.agentId,
+      );
+      if (
+        current.record.status !== "pending" ||
+        current.record.proposedVersion !== read.record.proposedVersion ||
+        current.revisionHash !== read.revisionHash ||
+        hashSkillProposalContent(current.content) !== current.record.draftHash
+      ) {
+        throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+      }
+      try {
+        await readProposalSupportFiles(current.record, storeOptions(input.env));
+      } catch {
+        throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
+      }
+      return recordSkillProposalEvaluation({
+        proposalId: read.record.id,
+        expectedProposedVersion: read.record.proposedVersion,
+        expectedRevisionHash: read.revisionHash,
+        evaluation,
+        event: eventInput,
+        store: storeOptions(input.env),
+      });
+    },
+    storeOptions(input.env),
+  );
   await dispatchSkillProposalChanged({
     event: stored.event,
     record: stored.record,
@@ -124,11 +170,11 @@ export function listSkillProposalEvents(
   return readSkillProposalEvents(input, storeOptions(input.env));
 }
 
-export function assertExpectedDraftHash(actual: string, expected?: string): void {
+export function assertExpectedRevisionHash(actual: string, expected?: string): void {
   const normalized = normalizeOptionalString(expected);
   if (normalized && normalized !== actual) {
     throw new Error(
-      `Skill proposal draft changed (expected ${normalized}, current ${actual}); reload and retry.`,
+      `Skill proposal revision changed (expected ${normalized}, current ${actual}); reload and retry.`,
     );
   }
 }

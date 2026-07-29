@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposal_events (
   event_id TEXT NOT NULL UNIQUE,
   proposal_id TEXT NOT NULL,
   proposed_version TEXT NOT NULL,
-  draft_hash TEXT NOT NULL,
+  revision_hash TEXT NOT NULL,
   event_type TEXT NOT NULL CHECK (event_type IN (
     'created',
     'revised',

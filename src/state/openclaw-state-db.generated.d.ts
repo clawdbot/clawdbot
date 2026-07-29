@@ -1143,13 +1143,13 @@ export interface SkillUsage {
 export interface SkillWorkshopProposalEvents {
   actor_json: string;
   correlation_id: string | null;
-  draft_hash: string;
   event_id: string;
   event_type: string;
   occurred_at: string;
   payload_json: string | null;
   proposal_id: string;
   proposed_version: string;
+  revision_hash: string;
   sequence: Generated<number>;
 }
 

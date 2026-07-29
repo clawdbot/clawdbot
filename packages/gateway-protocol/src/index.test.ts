@@ -419,7 +419,7 @@ describe("lazy protocol validators", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
-        expectedDraftHash: "a".repeat(64),
+        expectedRevisionHash: "a".repeat(64),
         targetAgentId: "writer",
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
@@ -445,18 +445,28 @@ describe("lazy protocol validators", () => {
     ).toBe(false);
   });
 
+  it("accepts support-file-only Skill Workshop revisions", () => {
+    expect(
+      protocol.validateSkillsProposalReviseParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
+        supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
+      }),
+    ).toBe(true);
+  });
+
   it("validates Skill Workshop evaluation and event replay params", () => {
     expect(
       protocol.validateSkillsProposalEvaluateParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
-        expectedDraftHash: "b".repeat(64),
+        expectedRevisionHash: "b".repeat(64),
         correlationId: "evaluation-1",
       }),
     ).toBe(true);
     expect(
       protocol.validateSkillsProposalEvaluateParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
-        expectedDraftHash: "stale",
+        expectedRevisionHash: "stale",
       }),
     ).toBe(false);
     expect(

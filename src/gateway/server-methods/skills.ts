@@ -136,7 +136,7 @@ function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): stri
 
 function buildRevisionAgentInstruction(
   proposal: Awaited<ReturnType<typeof inspectSkillProposal>>,
-  expectedDraftHash: string,
+  expectedRevisionHash: string,
 ) {
   if (!proposal) {
     return "";
@@ -145,7 +145,7 @@ function buildRevisionAgentInstruction(
     `Revise Skill Workshop proposal \`${proposal.record.id}\` (${proposal.record.target.skillKey}).`,
     "",
     "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
-    `Pass \`expected_draft_hash=${expectedDraftHash}\` to reject stale draft revisions.`,
+    `Pass \`expected_revision_hash=${expectedRevisionHash}\` to reject stale proposal revisions.`,
     "Do not apply, approve, reject, quarantine, or install the proposal.",
     "",
     "Requested changes:",
@@ -159,7 +159,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     idempotencyKey: string;
     instructions: string;
     proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
-    expectedDraftHash: string;
+    expectedRevisionHash: string;
     sessionId?: string;
     sessionKey: string;
     targetAgentId?: string;
@@ -178,7 +178,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     deliver: false,
     systemProvenanceReceipt: buildRevisionAgentInstruction(
       params.proposal,
-      params.expectedDraftHash,
+      params.expectedRevisionHash,
     ),
     suppressCommandInterpretation: true,
     idempotencyKey: params.idempotencyKey,
@@ -441,7 +441,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
-          expectedDraftHash: parsedParams.expectedDraftHash,
+          expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           trigger: "manual",
         }),
@@ -504,7 +504,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentId: resolved.agentId,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
-          expectedDraftHash: parsedParams.expectedDraftHash,
+          expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           content: parsedParams.content,
           supportFiles: parsedParams.supportFiles,
@@ -550,22 +550,22 @@ export const skillsHandlers: GatewayRequestHandlers = {
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
         if (
-          parsedParams.expectedDraftHash &&
-          parsedParams.expectedDraftHash !== proposal.record.draftHash
+          parsedParams.expectedRevisionHash &&
+          parsedParams.expectedRevisionHash !== proposal.revisionHash
         ) {
           respond(
             false,
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `Skill proposal draft changed: ${parsedParams.proposalId}`,
+              `Skill proposal revision changed: ${parsedParams.proposalId}`,
             ),
           );
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
         await forwardSkillWorkshopRevisionToChatSend(opts, {
           agentId: resolved.agentId,
-          expectedDraftHash: parsedParams.expectedDraftHash ?? proposal.record.draftHash,
+          expectedRevisionHash: parsedParams.expectedRevisionHash ?? proposal.revisionHash,
           idempotencyKey: parsedParams.idempotencyKey,
           instructions: parsedParams.instructions,
           proposal,
@@ -592,7 +592,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentId: resolved.agentId,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
-          expectedDraftHash: parsedParams.expectedDraftHash,
+          expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
         }),
@@ -610,7 +610,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
-          expectedDraftHash: parsedParams.expectedDraftHash,
+          expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
         }),
@@ -628,7 +628,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
-          expectedDraftHash: parsedParams.expectedDraftHash,
+          expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
         }),

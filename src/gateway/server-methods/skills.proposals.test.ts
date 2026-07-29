@@ -256,10 +256,10 @@ describe("skills proposal gateway handlers", () => {
   });
 
   it("passes evaluation and lifecycle replay arguments to the workshop service", async () => {
-    const draftHash = "a".repeat(64);
+    const revisionHash = "a".repeat(64);
     const evaluate = await callHandler("skills.proposals.evaluate", {
       proposalId: "proposal-1",
-      expectedDraftHash: draftHash,
+      expectedRevisionHash: revisionHash,
       correlationId: "correlation-1",
     });
     expect(evaluate).toMatchObject({
@@ -270,7 +270,7 @@ describe("skills proposal gateway handlers", () => {
       workspaceDir: mocks.workspaceDir,
       agentId: "main",
       proposalId: "proposal-1",
-      expectedDraftHash: draftHash,
+      expectedRevisionHash: revisionHash,
       correlationId: "correlation-1",
       trigger: "manual",
     });
@@ -293,34 +293,38 @@ describe("skills proposal gateway handlers", () => {
     });
   });
 
-  it("passes expected draft hashes through proposal mutations", async () => {
-    const expectedDraftHash = "e".repeat(64);
+  it("passes expected revision hashes through proposal mutations", async () => {
+    const expectedRevisionHash = "e".repeat(64);
     const correlationId = "correlation-mutation-1";
-    const record = { id: "proposal-1", draftHash: expectedDraftHash };
-    mocks.reviseSkillProposal.mockResolvedValueOnce({ record, content: "# Revised\n" });
+    const record = { id: "proposal-1", draftHash: "d".repeat(64) };
+    mocks.reviseSkillProposal.mockResolvedValueOnce({
+      record,
+      revisionHash: expectedRevisionHash,
+      content: "# Revised\n",
+    });
     mocks.applySkillProposal.mockResolvedValueOnce({ record, targetSkillFile: "/tmp/SKILL.md" });
     mocks.rejectSkillProposal.mockResolvedValueOnce(record);
     mocks.quarantineSkillProposal.mockResolvedValueOnce(record);
 
     await callHandler("skills.proposals.revise", {
       proposalId: "proposal-1",
-      expectedDraftHash,
+      expectedRevisionHash,
       correlationId,
-      content: "# Revised\n",
+      supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
     });
     await callHandler("skills.proposals.apply", {
       proposalId: "proposal-1",
-      expectedDraftHash,
+      expectedRevisionHash,
       correlationId,
     });
     await callHandler("skills.proposals.reject", {
       proposalId: "proposal-1",
-      expectedDraftHash,
+      expectedRevisionHash,
       correlationId,
     });
     await callHandler("skills.proposals.quarantine", {
       proposalId: "proposal-1",
-      expectedDraftHash,
+      expectedRevisionHash,
       correlationId,
     });
 
@@ -331,7 +335,7 @@ describe("skills proposal gateway handlers", () => {
       mocks.quarantineSkillProposal,
     ]) {
       expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({ proposalId: "proposal-1", expectedDraftHash, correlationId }),
+        expect.objectContaining({ proposalId: "proposal-1", expectedRevisionHash, correlationId }),
       );
     }
   });
@@ -366,12 +370,11 @@ describe("skills proposal gateway handlers", () => {
     const inspected = await callHandler("skills.proposals.inspect", {
       proposalId: created.record.id,
     });
-    const expectedDraftHash = (inspected.response as { record: { draftHash: string } }).record
-      .draftHash;
+    const expectedRevisionHash = (inspected.response as { revisionHash: string }).revisionHash;
 
     const result = await callHandler("skills.proposals.requestRevision", {
       proposalId: created.record.id,
-      expectedDraftHash,
+      expectedRevisionHash,
       instructions: "Make the support files 5",
       sessionKey: "agent:main:session:skill-workshop",
       targetAgentId: "revision-target",
@@ -403,14 +406,14 @@ describe("skills proposal gateway handlers", () => {
       "Use `skill_workshop` with `action=inspect` first, then `action=revise`",
     );
     expect(String(forwarded.params?.systemProvenanceReceipt)).toContain(
-      `expected_draft_hash=${expectedDraftHash}`,
+      `expected_revision_hash=${expectedRevisionHash}`,
     );
     expect(String(forwarded.params?.systemProvenanceReceipt)).not.toContain(
       "Make the support files 5",
     );
   });
 
-  it("does not start revision chat turns from a stale draft hash", async () => {
+  it("does not start revision chat turns from a stale revision hash", async () => {
     const create = await callHandler("skills.proposals.create", {
       name: "Stale Revision Sampler",
       description: "Rejects stale revision requests",
@@ -421,7 +424,7 @@ describe("skills proposal gateway handlers", () => {
 
     const result = await callHandler("skills.proposals.requestRevision", {
       proposalId: created.record.id,
-      expectedDraftHash: "f".repeat(64),
+      expectedRevisionHash: "f".repeat(64),
       instructions: "Revise this draft",
       sessionKey: "agent:main:session:skill-workshop",
       idempotencyKey: "revision-run-stale",
@@ -429,7 +432,7 @@ describe("skills proposal gateway handlers", () => {
 
     expect(result.ok).toBe(false);
     expect((result.error as { message?: string }).message).toContain(
-      "Skill proposal draft changed",
+      "Skill proposal revision changed",
     );
     expect(mocks.chatSend).not.toHaveBeenCalled();
   });

@@ -21,6 +21,7 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertProposalId,
   MAX_PROPOSAL_SUPPORT_FILES,
@@ -210,7 +211,11 @@ export async function readSkillProposal(
       symlinks: "reject",
     },
   );
-  return { record: stored.record, content: draft.buffer.toString("utf8") };
+  return {
+    record: stored.record,
+    revisionHash: hashSkillProposalRevision(stored.record),
+    content: draft.buffer.toString("utf8"),
+  };
 }
 
 export async function readSkillProposalRecord(
@@ -375,7 +380,7 @@ export async function updateSkillProposalRecord(params: {
 export function recordSkillProposalEvaluation(params: {
   proposalId: string;
   expectedProposedVersion: string;
-  expectedDraftHash: string;
+  expectedRevisionHash: string;
   evaluation: SkillProposalEvaluation;
   event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
@@ -399,7 +404,7 @@ export function recordSkillProposalEvaluation(params: {
       if (
         record.status !== "pending" ||
         record.proposedVersion !== params.expectedProposedVersion ||
-        record.draftHash !== params.expectedDraftHash
+        hashSkillProposalRevision(record) !== params.expectedRevisionHash
       ) {
         throw new Error(
           "Skill proposal changed while evaluation was running; discard the stale evaluation and retry.",
@@ -582,7 +587,7 @@ async function reconcileInterruptedApply(
         eventId: crypto.randomUUID(),
         proposalId,
         proposedVersion: record.proposedVersion,
-        draftHash: record.draftHash,
+        revisionHash: hashSkillProposalRevision(record),
         type: "applied",
         occurredAt: now,
         actor: { type: "system" },

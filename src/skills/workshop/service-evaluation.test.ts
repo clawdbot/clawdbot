@@ -84,13 +84,13 @@ describe("Skill Workshop proposal evaluation", () => {
       workspaceDir,
       agentId: "main",
       proposalId: proposal.record.id,
-      expectedDraftHash: proposal.record.draftHash,
+      expectedRevisionHash: proposal.revisionHash,
       correlationId: "optimization-run-1",
     });
 
     expect(evaluated.evaluation).toMatchObject({
       proposedVersion: "v1",
-      draftHash: proposal.record.draftHash,
+      revisionHash: proposal.revisionHash,
       trigger: "manual",
       correlationId: "optimization-run-1",
       outcomes: [
@@ -112,7 +112,7 @@ describe("Skill Workshop proposal evaluation", () => {
       proposal: {
         id: proposal.record.id,
         revision: "v1",
-        draftSha256: proposal.record.draftHash,
+        revisionSha256: proposal.revisionHash,
       },
       candidate: {
         skillMd: { path: "SKILL.md", encoding: "utf8" },
@@ -135,7 +135,7 @@ describe("Skill Workshop proposal evaluation", () => {
       workspaceDir,
       agentId: "main",
       proposalId: proposal.record.id,
-      expectedDraftHash: proposal.record.draftHash,
+      expectedRevisionHash: proposal.revisionHash,
       content: "# Evaluation Demo\n\nImproved.\n",
     });
     expect(revised.record.evaluation).toBeUndefined();
@@ -187,14 +187,14 @@ describe("Skill Workshop proposal evaluation", () => {
       workspaceDir,
       agentId: "main",
       proposalId: proposal.record.id,
-      expectedDraftHash: proposal.record.draftHash,
+      expectedRevisionHash: proposal.revisionHash,
     });
     await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
     await reviseSkillProposal({
       workspaceDir,
       agentId: "main",
       proposalId: proposal.record.id,
-      expectedDraftHash: proposal.record.draftHash,
+      expectedRevisionHash: proposal.revisionHash,
       content: "# Existing\n\nConcurrent revision.\n",
     });
     release?.();
@@ -208,5 +208,146 @@ describe("Skill Workshop proposal evaluation", () => {
     expect(
       (await inspectSkillProposal(proposal.record.id, { workspaceDir }))?.record.evaluation,
     ).toBe(undefined);
+  });
+
+  it("rejects a draft file that no longer matches its persisted revision", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-drift-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Evaluation Drift",
+      description: "Reject mixed proposal snapshots",
+      content: "# Evaluation Drift\n",
+    });
+    await fs.writeFile(
+      path.join(
+        testState.stateDir,
+        "skill-workshop",
+        "proposals",
+        proposal.record.id,
+        "PROPOSAL.md",
+      ),
+      "# Evaluation Drift\n\nUncommitted replacement.\n",
+    );
+
+    await expect(
+      evaluateSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("draft changed without updating proposal metadata");
+    expect(hookMocks.evaluate).not.toHaveBeenCalled();
+
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+        supportFiles: [{ path: "references/input.txt", content: "replacement\n" }],
+      }),
+    ).rejects.toThrow("draft changed without updating proposal metadata");
+  });
+
+  it("discards evaluator results when the on-disk draft changes during evaluation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-concurrent-drift-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Concurrent Drift",
+      description: "Reject evaluator results for replaced candidate bytes",
+      content: "# Concurrent Drift\n",
+    });
+    let release: (() => void) | undefined;
+    hookMocks.evaluate.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [];
+    });
+
+    const evaluating = evaluateSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
+    await fs.writeFile(
+      path.join(
+        testState.stateDir,
+        "skill-workshop",
+        "proposals",
+        proposal.record.id,
+        "PROPOSAL.md",
+      ),
+      "# Concurrent Drift\n\nReplaced while evaluating.\n",
+    );
+    release?.();
+
+    await expect(evaluating).rejects.toThrow("changed while evaluation was running");
+    expect(
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+    ).toBeUndefined();
+  });
+
+  it("rejects stale guards after a support-file-only revision", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-support-revision-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Support Revision",
+      description: "Exercise whole-candidate revision guards",
+      content: "# Support Revision\n",
+      supportFiles: [{ path: "references/input.txt", content: "before\n" }],
+    });
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+      supportFiles: [{ path: "references/input.txt", content: "after\n" }],
+    });
+
+    expect(revised.revisionHash).not.toBe(proposal.revisionHash);
+    expect(revised.record.supportFiles).toEqual([
+      expect.objectContaining({ path: "references/input.txt" }),
+    ]);
+    await expect(
+      evaluateSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("proposal revision changed");
+    expect(hookMocks.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty revisions without advancing lifecycle state", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-empty-revision-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Empty Revision",
+      description: "Reject no-op revision requests",
+      content: "# Empty Revision\n",
+    });
+
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("requires at least one changed field");
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
+        (event) => event.type,
+      ),
+    ).toEqual(["created"]);
   });
 });

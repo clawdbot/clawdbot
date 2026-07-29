@@ -75,6 +75,13 @@ const SKILL_PROPOSAL_STATUSES = [
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
 
+function requireProposalContent(content: string | undefined): string {
+  if (content === undefined) {
+    throw new ToolInputError("proposal_content required");
+  }
+  return content;
+}
+
 function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion: boolean) {
   const proposalActions = supportsCompletion
     ? SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS
@@ -125,8 +132,8 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       proposal_content: Type.Optional(
         Type.String({
           description: proposalOnly
-            ? "Complete final skill body for action=create or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
-            : "Complete final skill body for action=create, action=update, or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+            ? "Complete final skill body for action=create, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body, or preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
+            : "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
         }),
       ),
       support_files: Type.Optional(
@@ -151,10 +158,10 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
           description: "Optional reason for action=apply, action=reject, or action=quarantine.",
         }),
       ),
-      expected_draft_hash: Type.Optional(
+      expected_revision_hash: Type.Optional(
         Type.String({
           description:
-            "Optional exact proposal draft hash for evaluate/apply/reject/quarantine. The action fails if the draft changed.",
+            "Optional exact proposal revision hash for evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
         }),
       ),
       correlation_id: Type.Optional(
@@ -276,7 +283,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
           correlationId: readStringParam(params, "correlation_id"),
         });
         return {
@@ -289,7 +296,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           details: {
             id: evaluated.record.id,
             proposedVersion: evaluated.evaluation.proposedVersion,
-            draftHash: evaluated.evaluation.draftHash,
+            revisionHash: evaluated.evaluation.revisionHash,
             evaluation: evaluated.evaluation,
           },
         };
@@ -302,7 +309,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
           correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
@@ -318,7 +325,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
           correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
@@ -333,7 +340,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
           correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
@@ -343,11 +350,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       const proposalContent = readStringParam(params, "proposal_content", {
-        required: true,
+        required: action !== "revise",
         label: "proposal_content",
         trim: false,
       });
-      if (proposalContent.trim().length === 0) {
+      if (proposalContent !== undefined && proposalContent.trim().length === 0) {
         throw new ToolInputError("proposal_content required");
       }
       const supportFiles = readSupportFilesParam(params);
@@ -382,7 +389,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             env: options.env,
             name: readStringParam(params, "name", { required: true }),
             description: readStringParam(params, "description", { required: true }),
-            content: proposalContent,
+            content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
             ...(options.origin ? { origin: options.origin } : {}),
@@ -401,7 +408,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               label: "skill_name",
             }),
             description: readStringParam(params, "description"),
-            content: proposalContent,
+            content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
             ...(options.origin ? { origin: options.origin } : {}),
@@ -425,7 +432,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             config: options.config,
             env: options.env,
             proposalId: pendingProposal.record.id,
-            expectedDraftHash: pendingProposal.record.draftHash,
+            expectedRevisionHash:
+              readStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash,
             correlationId: readStringParam(params, "correlation_id"),
             content: proposalContent,
             supportFiles,

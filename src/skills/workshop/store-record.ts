@@ -68,8 +68,8 @@ function isValidEvaluation(value: SkillProposalRecord["evaluation"]): boolean {
     value.id.length > 0 &&
     value.id.length <= 128 &&
     typeof value.proposedVersion === "string" &&
-    typeof value.draftHash === "string" &&
-    /^[a-f0-9]{64}$/i.test(value.draftHash) &&
+    typeof value.revisionHash === "string" &&
+    /^[a-f0-9]{64}$/i.test(value.revisionHash) &&
     (value.trigger === "manual" || value.trigger === "apply") &&
     typeof value.startedAt === "string" &&
     typeof value.completedAt === "string" &&

@@ -27,7 +27,7 @@ export type SkillProposalEventType =
 export type SkillProposalEvaluation = {
   id: string;
   proposedVersion: string;
-  draftHash: string;
+  revisionHash: string;
   trigger: SkillProposalEvaluationTrigger;
   startedAt: string;
   completedAt: string;
@@ -45,7 +45,7 @@ export type SkillProposalEvent = {
   eventId: string;
   proposalId: string;
   proposedVersion: string;
-  draftHash: string;
+  revisionHash: string;
   type: SkillProposalEventType;
   occurredAt: string;
   actor: SkillProposalEventActor;
@@ -231,9 +231,9 @@ export type SkillProposalReviseInput = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
-  expectedDraftHash?: string;
+  expectedRevisionHash?: string;
   correlationId?: string;
-  content: string;
+  content?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   description?: string;
   origin?: SkillProposalOrigin;
@@ -247,7 +247,7 @@ export type SkillProposalActionInput = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
-  expectedDraftHash?: string;
+  expectedRevisionHash?: string;
   correlationId?: string;
   reason?: string;
 };
@@ -257,7 +257,7 @@ export type SkillProposalEvaluateInput = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
-  expectedDraftHash?: string;
+  expectedRevisionHash?: string;
   correlationId?: string;
   trigger?: SkillProposalEvaluationTrigger;
 };
@@ -278,6 +278,7 @@ export type SkillProposalEventsListResult = {
 
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;
+  revisionHash: string;
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
 };

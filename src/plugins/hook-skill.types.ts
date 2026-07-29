@@ -19,7 +19,7 @@ export type PluginHookSkillProposalEvaluateEvent = {
     id: string;
     kind: PluginHookSkillProposalKind;
     revision: string;
-    draftSha256: string;
+    revisionSha256: string;
     targetCurrentSha256?: string;
   };
   skill: {
@@ -96,7 +96,7 @@ export type PluginHookSkillChangedEvent = {
   proposal?: {
     id: string;
     revision: string;
-    draftSha256: string;
+    revisionSha256: string;
   };
 };
 
@@ -118,7 +118,7 @@ export type PluginHookSkillProposalChangedEvent = {
     kind: PluginHookSkillProposalKind;
     status: "pending" | "applied" | "rejected" | "quarantined" | "stale";
     revision: string;
-    draftSha256: string;
+    revisionSha256: string;
     skillName: string;
     skillKey: string;
     skillFile: string;

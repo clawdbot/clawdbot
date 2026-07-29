@@ -294,7 +294,7 @@ describe("SkillsProposalInspectResultSchema", () => {
         evaluation: {
           id: "evaluation-1",
           proposedVersion: "v1",
-          draftHash: "a".repeat(64),
+          revisionHash: "a".repeat(64),
           trigger: "manual",
           startedAt: "2026-05-30T00:01:00.000Z",
           completedAt: "2026-05-30T00:01:01.000Z",
@@ -327,6 +327,7 @@ describe("SkillsProposalInspectResultSchema", () => {
           },
         ],
       },
+      revisionHash: "a".repeat(64),
       content: "# Weather Helper\n",
       supportFiles: [
         {
@@ -344,7 +345,7 @@ describe("SkillProposalEvaluationSchema", () => {
   const evaluation = {
     id: "evaluation-1",
     proposedVersion: "v2",
-    draftHash: "b".repeat(64),
+    revisionHash: "b".repeat(64),
     trigger: "apply",
     startedAt: "2026-05-30T00:01:00.000Z",
     completedAt: "2026-05-30T00:01:01.000Z",
@@ -461,7 +462,7 @@ describe("skill proposal evaluation and event replay params", () => {
       Value.Check(SkillsProposalEvaluateParamsSchema, {
         agentId: "main",
         proposalId: "proposal-1",
-        expectedDraftHash: "c".repeat(64),
+        expectedRevisionHash: "c".repeat(64),
         correlationId: "correlation-1",
       }),
     ).toBe(true);
@@ -481,7 +482,7 @@ describe("skill proposal evaluation and event replay params", () => {
       eventId: "event-11",
       proposalId: "proposal-1",
       proposedVersion: "v2",
-      draftHash: "d".repeat(64),
+      revisionHash: "d".repeat(64),
       type: "evaluation_completed",
       occurredAt: "2026-05-30T00:01:01.000Z",
       actor: { type: "plugin", id: "quality-plugin" },

@@ -57,19 +57,19 @@ describe("skill_workshop tool", () => {
       description: "Exercise the explicit evaluation primitive",
       proposal_content: "# Evaluated Skill\n",
     });
-    const details = created.details as { id: string; draftHash: string };
+    const details = created.details as { id: string; revisionHash: string };
 
     await expect(
       tool.execute("call-evaluate", {
         action: "evaluate",
         proposal_id: details.id,
-        expected_draft_hash: details.draftHash,
+        expected_revision_hash: details.revisionHash,
         correlation_id: "optimization-run-1",
       }),
     ).resolves.toMatchObject({
       details: {
         id: details.id,
-        draftHash: details.draftHash,
+        revisionHash: details.revisionHash,
         evaluation: {
           trigger: "manual",
           correlationId: "optimization-run-1",
@@ -308,6 +308,43 @@ describe("skill_workshop tool", () => {
     await expect(tool.execute("call-list-after-complete", { action: "list" })).rejects.toThrow(
       "review is already completing or complete",
     );
+  });
+
+  it("revises support files without requiring the proposal body again", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-support-revise-");
+    const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main" });
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Support Revision",
+      description: "Exercise support-file-only revisions",
+      proposal_content: "# Support Revision\n",
+      support_files: [{ path: "references/input.txt", content: "before\n" }],
+    });
+    const details = created.details as { id: string; revisionHash: string };
+
+    await expect(
+      tool.execute("call-revise", {
+        action: "revise",
+        proposal_id: details.id,
+        expected_revision_hash: details.revisionHash,
+        support_files: [{ path: "references/input.txt", content: "after\n" }],
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        id: details.id,
+        revisionHash: expect.not.stringMatching(details.revisionHash),
+        supportFileCount: 1,
+      },
+    });
+
+    await expect(
+      tool.execute("call-revise-stale", {
+        action: "revise",
+        proposal_id: details.id,
+        expected_revision_hash: details.revisionHash,
+        support_files: [{ path: "references/input.txt", content: "stale\n" }],
+      }),
+    ).rejects.toThrow("proposal revision changed");
   });
 
   it("honors a larger internal review mutation budget", async () => {

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
-  PluginHookSkillChangedEvent,
   PluginHookSkillProposalEvaluateEvent,
   PluginHookSkillProposalEvaluationOutcome,
 } from "../../plugins/hook-types.js";
+import { hashSkillProposalRevision } from "./revision-hash.js";
 import type { NewSkillProposalEvent } from "./store-sqlite-event.js";
 import type {
   SkillProposalEvent,
@@ -25,7 +25,7 @@ export function createSkillProposalEvent(params: {
     eventId: randomUUID(),
     proposalId: params.record.id,
     proposedVersion: params.record.proposedVersion,
-    draftHash: params.record.draftHash,
+    revisionHash: hashSkillProposalRevision(params.record),
     type: params.type,
     occurredAt: params.occurredAt ?? new Date().toISOString(),
     actor: params.actor ?? { type: "system" },
@@ -68,7 +68,7 @@ export async function dispatchSkillProposalChanged(params: {
         kind: params.record.kind,
         status: params.record.status,
         revision: params.record.proposedVersion,
-        draftSha256: params.record.draftHash,
+        revisionSha256: params.event.revisionHash,
         skillName: params.record.target.skillName,
         skillKey: params.record.target.skillKey,
         skillFile: params.record.target.skillFile,
@@ -81,19 +81,4 @@ export async function dispatchSkillProposalChanged(params: {
       ...(params.agentId ? { agentId: params.agentId } : {}),
     },
   );
-}
-
-export async function dispatchSkillChanged(params: {
-  event: PluginHookSkillChangedEvent;
-  workspaceDir: string;
-  agentId?: string;
-}): Promise<void> {
-  const runner = getGlobalHookRunner();
-  if (!runner?.hasHooks("skill_changed")) {
-    return;
-  }
-  await runner.runSkillChanged(params.event, {
-    workspaceDir: params.workspaceDir,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
 }
