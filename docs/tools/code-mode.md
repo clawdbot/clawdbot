@@ -1002,7 +1002,9 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
   tool surface (Copilot) report their resolved gate, so
   `codeModeEngaged: false` with `tools.codeMode.enabled=true` makes a silent
   no-op observable. Harnesses that run their own native tool surface (Codex)
-  never engage OpenClaw code mode and omit the field entirely.
+  never engage OpenClaw code mode, so they always read `false`; an attempt that
+  reports nothing is normalized to `false` for the same reason. Codex's own
+  `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
   (`{ search, describe, call }`). These calls never reach the provider;
