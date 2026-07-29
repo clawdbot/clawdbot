@@ -356,7 +356,7 @@ function mockSingleBrowserProxyNode() {
       displayName: "Browser Node",
       connected: true,
       caps: ["browser"],
-      commands: ["browser.proxy"],
+      commands: ["browser.proxy", "browser.proxy.upload.v1"],
     },
   ]);
 }
@@ -3521,70 +3521,35 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
       }),
     ).rejects.toThrow("path outside allowed directories");
   });
-});
 
-describe("browser tool upload on remote browser nodes (#115251)", () => {
-  beforeEach(resetBrowserToolMocks);
-  afterEach(() => vi.restoreAllMocks());
-
-  it("forwards requested upload paths without gateway-local path resolution", async () => {
-    mockSingleBrowserProxyNode();
-    gatewayMocks.callGatewayTool.mockResolvedValue({
-      ok: true,
-      payload: { result: { ok: true, targetId: "t1" }, files: [] },
-    });
-
-    const tool = createBrowserTool();
-    await tool.execute?.("call-upload-node-1", {
-      action: "upload",
-      target: "node",
-      paths: ["/home/node-user/uploads/report.pdf"],
-      ref: "file-input-1",
-    });
-
-    // The node-side /hooks/file-chooser route resolves paths against the
-    // node's own filesystem; resolving on the Gateway would pin paths to a
-    // host the browser node cannot see.
-    expect(pathValidationMocks.resolveExistingUploadPaths).not.toHaveBeenCalled();
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          method: "POST",
-          path: "/hooks/file-chooser",
-          body: expect.objectContaining({
-            paths: ["/home/node-user/uploads/report.pdf"],
-            ref: "file-input-1",
-          }),
-        }),
-      }),
-      expect.objectContaining({ scopes: ["operator.admin"] }),
-    );
-  });
-
-  it("does not reject node-local files missing from the Gateway filesystem", async () => {
-    mockSingleBrowserProxyNode();
+  it("surfaces pending remote-upload approval from the selected node", async () => {
+    const inboundPath = "/home/user/.openclaw/media/inbound/report.pdf";
     pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
-      ok: false as const,
-      error: "file does not exist in uploads directory",
-    });
-    gatewayMocks.callGatewayTool.mockResolvedValue({
       ok: true,
-      payload: { result: { ok: true, targetId: "t1" }, files: [] },
+      paths: [inboundPath],
     });
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+        approvalState: "pending-reapproval",
+        pendingDeclaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
+      },
+    ]);
 
     const tool = createBrowserTool();
-    const result = await tool.execute?.("call-upload-node-2", {
-      action: "upload",
-      target: "node",
-      paths: ["media://inbound/node-only-file.pdf"],
-      ref: "file-input-1",
-    });
-
-    expect(pathValidationMocks.resolveExistingUploadPaths).not.toHaveBeenCalled();
-    expect(result?.content[0]).toHaveProperty("type", "text");
+    await expect(
+      tool.execute?.("call-upload-pending", {
+        action: "upload",
+        target: "node",
+        paths: [inboundPath],
+        ref: "file-input-1",
+      }),
+    ).rejects.toThrow("remote upload transfer is pending approval");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

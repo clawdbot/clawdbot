@@ -1,3 +1,4 @@
+import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
 /**
  * Browser agent tool registration.
  *
@@ -213,12 +214,14 @@ function readActRequestParam(params: Record<string, unknown>) {
 type BrowserNodeTarget = {
   nodeId: string;
   label?: string;
+  commands: string[];
+  pendingDeclaredCommands: string[];
 };
 
 function isBrowserNode(node: NodeListNode) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
-  return caps.includes("browser") || commands.includes("browser.proxy");
+  return caps.includes("browser") || commands.includes(BROWSER_PROXY_COMMAND);
 }
 
 async function resolveBrowserNodeTarget(params: {
@@ -268,7 +271,14 @@ async function resolveBrowserNodeTarget(params: {
       allowCompactDisplayName: true,
     });
     const node = browserNodes.find((entry) => entry.nodeId === nodeId);
-    return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
+    return {
+      nodeId,
+      label: node?.displayName ?? node?.remoteIp ?? nodeId,
+      commands: Array.isArray(node?.commands) ? node.commands : [],
+      pendingDeclaredCommands: Array.isArray(node?.pendingDeclaredCommands)
+        ? node.pendingDeclaredCommands
+        : [],
+    };
   }
 
   const selected = selectDefaultNodeFromList(browserNodes, {
@@ -281,6 +291,10 @@ async function resolveBrowserNodeTarget(params: {
       return {
         nodeId: selected.nodeId,
         label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+        commands: Array.isArray(selected.commands) ? selected.commands : [],
+        pendingDeclaredCommands: Array.isArray(selected.pendingDeclaredCommands)
+          ? selected.pendingDeclaredCommands
+          : [],
       };
     }
     throw new Error(
@@ -296,6 +310,10 @@ async function resolveBrowserNodeTarget(params: {
     return {
       nodeId: selected.nodeId,
       label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+      commands: Array.isArray(selected.commands) ? selected.commands : [],
+      pendingDeclaredCommands: Array.isArray(selected.pendingDeclaredCommands)
+        ? selected.pendingDeclaredCommands
+        : [],
     };
   }
   return null;
@@ -977,21 +995,11 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          // When a remote browser node owns the session, upload paths must
-          // resolve against the node's filesystem, not the Gateway's. The
-          // node-side /hooks/file-chooser route re-resolves them locally, so
-          // forward the requested paths as-is. Resolving here would pin them
-          // to Gateway-local paths the node cannot see (#115251). The same
-          // applies when the proxy falls back to the host control server,
-          // which also resolves paths at the route boundary.
-          let normalizedPaths = paths;
-          if (!proxyRequest) {
-            const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
-            if (!resolvedResult.ok) {
-              throw new Error(resolvedResult.error);
-            }
-            normalizedPaths = resolvedResult.paths;
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            throw new Error(resolvedResult.error);
           }
+          const normalizedPaths = resolvedResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
