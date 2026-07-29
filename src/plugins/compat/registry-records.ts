@@ -20,7 +20,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-07-29",
     removeAfter: "2026-08-12",
     replacement:
-      "context engines declare `ContextEngineInfo.acceptedHostParams`; undeclared engines receive all current host parameters after the window",
+      "declare `ContextEngineInfo.acceptedHostParams`; full host params after the window",
     docsPath: "/concepts/context-engine#the-contextengine-interface",
     surfaces: ["ContextEngineInfo.acceptedHostParams and undeclared-engine default projection"],
     diagnostics: ["plugin compatibility registry and dated runtime removal TODO"],
