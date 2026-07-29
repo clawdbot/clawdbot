@@ -107,7 +107,9 @@ function splitReplyMediaByTrust(
     group.sourceIndexes.push(index);
     groups.set(trusted, group);
   }
-  return [...groups].map(([trustedLocalMedia, group]) => ({ ...group, trustedLocalMedia }));
+  return [...groups].map(([trustedLocalMedia, group]) =>
+    Object.assign(group, { trustedLocalMedia }),
+  );
 }
 
 /** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
@@ -276,18 +278,21 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
             params.onManagedMediaPrepareError?.(error.message);
           },
         });
+        if (payload.audioAsVoice === true) {
+          for (const block of mediaBlocks) {
+            if (block.type === "audio") {
+              block.isVoiceNote = true;
+            }
+          }
+        }
         preparedMedia.push({
           sourceIndex: mediaGroup.sourceIndexes[groupIndex] ?? groupIndex,
-          blocks: mediaBlocks.map((block) =>
-            payload.audioAsVoice === true && block.type === "audio"
-              ? { ...block, isVoiceNote: true }
-              : block,
-          ),
+          blocks: mediaBlocks,
         });
       }
     }
     preparedMedia.sort((left, right) => left.sourceIndex - right.sourceIndex);
-    content.push(...preparedMedia.flatMap((entry) => entry.blocks));
+    content.push(...preparedMedia.flatMap((preparedEntry) => preparedEntry.blocks));
   }
 
   if (content.length > 0) {

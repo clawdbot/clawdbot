@@ -57,6 +57,7 @@ function createAttachments(
       mediaRef: string;
       id: string;
       path: string;
+      kind: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
       mimeType: string;
       label: string;
       sizeBytes: number;

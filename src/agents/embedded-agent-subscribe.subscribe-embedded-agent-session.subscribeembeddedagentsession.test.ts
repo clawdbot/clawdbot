@@ -191,9 +191,11 @@ describe("subscribeEmbeddedAgentSession", () => {
   function findBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
     text: string,
-  ): { mediaUrls?: unknown } | undefined {
+  ): { mediaUrls?: unknown; trustedLocalMedia?: unknown } | undefined {
     return onBlockReply.mock.calls
-      .map((call) => call[0] as { text?: unknown; mediaUrls?: unknown })
+      .map(
+        (call) => call[0] as { text?: unknown; mediaUrls?: unknown; trustedLocalMedia?: unknown },
+      )
       .find((payload) => payload.text === text);
   }
 
@@ -211,7 +213,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
   function expectBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
-    expected: { text: string; mediaUrls?: string[] },
+    expected: { text: string; mediaUrls?: string[]; trustedLocalMedia?: boolean },
   ): void {
     const payload = findBlockReplyPayload(onBlockReply, expected.text);
     if (!payload) {
@@ -220,6 +222,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     if (expected.mediaUrls !== undefined) {
       expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
     }
+    expect(payload.trustedLocalMedia).toBe(expected.trustedLocalMedia);
   }
 
   function expectLifecyclePayload(

@@ -5,9 +5,9 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import {
+  __testing,
   handleAgentEnd,
   handleAgentStart,
-  resolveTerminalToolMediaTrust,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
@@ -27,6 +27,7 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
   stopHookActive: false,
   lastAssistantMessage: "done",
 };
+const { resolveTerminalToolMediaTrust } = __testing;
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: emitAgentEventMock,

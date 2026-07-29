@@ -403,7 +403,7 @@ export function handleAgentEnd(
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }
-export function resolveTerminalToolMediaTrust(params: {
+function resolveTerminalToolMediaTrust(params: {
   pendingMediaUrls: readonly string[];
   pendingTrustByUrl: ReadonlyMap<string, boolean>;
   deferredReplies: readonly { mediaUrls?: string[]; trustedLocalMedia?: boolean }[];
@@ -416,3 +416,6 @@ export function resolveTerminalToolMediaTrust(params: {
   ];
   return trust.length > 0 && trust.every(Boolean);
 }
+
+const testing = { resolveTerminalToolMediaTrust };
+export { testing as __testing };
