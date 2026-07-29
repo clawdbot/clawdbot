@@ -10356,6 +10356,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/mcp
 - Headings:
   - H2: Add a server from Settings
+  - H2: Add a server from the composer
   - H2: Add a server from the CLI
   - H2: Configure a server directly
   - H2: Troubleshooting
@@ -10915,6 +10916,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Browser panel
+  - H2: Composer capability menu
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push
