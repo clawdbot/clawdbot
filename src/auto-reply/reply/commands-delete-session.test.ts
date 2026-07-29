@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayTransportError } from "../../gateway/call.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -15,14 +16,15 @@ import {
 } from "./commands-delete-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const DELETE_CALL_TIMEOUT_MS = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000;
+const DELETE_CALL_TIMEOUT_MS = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 45_000;
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const admissionHandoffMock = vi.hoisted(() =>
   vi.fn((_params: { scope: string; identities: string[] }): string | undefined => undefined),
 );
 
-vi.mock("../../gateway/call.js", () => ({
+vi.mock("../../gateway/call.js", async () => ({
+  ...(await vi.importActual<typeof import("../../gateway/call.js")>("../../gateway/call.js")),
   callGateway: (params: unknown) => callGatewayMock(params),
 }));
 
@@ -154,6 +156,51 @@ describe("delete session command", () => {
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
       { sessionKey, reason: "command-metadata" },
     ]);
+  });
+
+  it("reports honest uncertainty when the gateway deletion call times out", async () => {
+    // sessions.delete commits the lifecycle mutation before the worktree cleanup that
+    // delays its response, so an expired client budget does not mean the close failed.
+    // The reply must say so instead of claiming an error, and the local store entry
+    // must survive untouched because the outcome is unconfirmed.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "delete-me", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildDeleteParams("/close", storePath);
+    params.sessionStore = {
+      [sessionKey]: { sessionId: "delete-me", updatedAt: 1, totalTokens: 0 },
+    } as never;
+    callGatewayMock.mockRejectedValue(
+      new GatewayTransportError({
+        kind: "timeout",
+        timeoutMs: DELETE_CALL_TIMEOUT_MS,
+        connectionDetails: { url: "ws://127.0.0.1:19001" } as never,
+        message: "gateway request timed out",
+      }),
+    );
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Closing this session is taking longer than expected. The deletion may have completed with its cleanup still running; check the session list before retrying.",
+      },
+    });
+    expect(params.sessionStore?.[sessionKey]).toBeDefined();
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
+  });
+
+  it("rethrows non-timeout gateway failures from the deletion call", async () => {
+    // Only the bounded-budget expiry gets the uncertainty reply; transport closures
+    // and server errors keep propagating so callers surface them as real failures.
+    const storePath = await createStorePath();
+    const params = buildDeleteParams("/close", storePath);
+    callGatewayMock.mockRejectedValue(new Error("gateway exploded"));
+
+    await expect(handleDeleteSessionCommand(params, true)).rejects.toThrow("gateway exploded");
   });
 
   it("warns when the deleted session's worktree could not be removed", async () => {

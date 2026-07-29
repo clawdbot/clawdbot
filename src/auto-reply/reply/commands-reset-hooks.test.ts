@@ -9,6 +9,7 @@ import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/sess
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -1383,6 +1384,152 @@ describe("handleCommands reset hooks", () => {
       expect(result).toBeNull();
       expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).toHaveBeenCalled();
       expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
+  });
+
+  it("classifies a bare cold plugin model id from manifest facts without a catalog load", async () => {
+    // Plugin manifests declare their model catalog statically, so a manifest-declared id
+    // (acme/widget) is a prepared fact even while the runtime catalog snapshot is still
+    // cold. A bare `/new widget …` tail has no provider/model shape, so the slash-gated
+    // on-demand escalation never fires for it; classification must instead resolve it
+    // from the manifest facts alone — without any catalog load — or the tail would be
+    // frozen as a session name cold and switch to a model directive once warm.
+    const cfg = {
+      commands: { text: true },
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "acme-models",
+            origin: "bundled",
+            modelCatalog: {
+              providers: { acme: { models: [{ id: "widget", name: "Widget" }] } },
+            },
+          },
+        ],
+      } as never,
+      { config: cfg },
+    );
+    try {
+      preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams("/new widget summarize this", cfg, {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "widget summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      });
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toBeNull();
+      expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
+  });
+
+  it("keeps naming the session when the first word is not a manifest model id while cold", async () => {
+    // Guard the other direction of the manifest-facts fallback: a published manifest
+    // catalog must only reclassify declared model ids. An unrelated multi-word title
+    // still names the session while cold, and no on-demand catalog load happens for it.
+    const cfg = {
+      commands: { text: true },
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "acme-models",
+            origin: "bundled",
+            modelCatalog: {
+              providers: { acme: { models: [{ id: "widget", name: "Widget" }] } },
+            },
+          },
+        ],
+      } as never,
+      { config: cfg },
+    );
+    try {
+      preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams("/new Roadmap planning", cfg, {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "Roadmap planning" } },
+        Provider: "discord",
+        Surface: "discord",
+      });
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: "✅ New session started as “Roadmap planning”." },
+      });
+      expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+        "Roadmap planning",
+      );
     } finally {
       clearCurrentPluginMetadataSnapshot();
     }

@@ -1,6 +1,6 @@
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store-entry.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, isGatewayTransportError } from "../../gateway/call.js";
 import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   createSessionWorkAdmissionHandoffForCurrent,
@@ -16,6 +16,12 @@ import type {
 } from "./commands-types.js";
 
 const DELETE_SESSION_COMMANDS = new Set(["/close", "/delete"]);
+
+// sessions.delete responds only after the post-mutation worktree cleanup so it can
+// report a preserved worktree honestly. That cleanup runs git operations that are
+// individually time-bounded but can far outlast the admission drain window, so the
+// RPC budget grants a bounded cleanup allowance on top of the drain contract.
+const DELETE_SESSION_CLEANUP_ALLOWANCE_MS = 45_000;
 
 export function parseDeleteSessionCommand(
   raw: string,
@@ -146,32 +152,48 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   // client would surface an "aborted" state instead of the deletion success reply.
   // Pass the initiating run id so the server skips it during the session-wide abort.
   const exemptChatRunId = params.opts?.runId;
-  const deletion = await callGateway<{
+  type SessionDeletionResult = {
     deleted?: boolean;
     archived?: string[];
     worktreePreserved?: { id: string; branch: string; path: string };
-  }>({
-    method: "sessions.delete",
-    // The gateway may still drain OTHER competing admitted work for up to
-    // SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS before returning success or its
-    // canonical "still active" response. Allow more than that full contract so the
-    // client does not time out (default 10s) before the lifecycle mutation reports back.
-    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000,
-    params: {
-      key: rpcSessionKey,
-      deleteTranscript: true,
-      // Bind the deletion to the incarnation the user closed: if a concurrent /new,
-      // reset, or rollover rotates this key first, the gateway returns "session
-      // changed" instead of deleting the replacement session. updatedAt is NOT part
-      // of that binding: label edits, pinned-state changes, or any metadata touch
-      // bump it without rotating the session, and binding to it would make /close
-      // spuriously fail for the very session the user is looking at.
-      expectedSessionId: targetEntry?.sessionId,
-      expectedLifecycleRevision: targetEntry?.lifecycleRevision,
-      ...(admissionHandoffId ? { admissionHandoffId } : {}),
-      ...(exemptChatRunId ? { exemptChatRunId } : {}),
-    },
-  });
+  };
+  let deletion: SessionDeletionResult | undefined;
+  try {
+    deletion = await callGateway<SessionDeletionResult>({
+      method: "sessions.delete",
+      // The gateway may drain OTHER competing admitted work for up to
+      // SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS and afterwards runs the worktree
+      // cleanup before it reports back, so the budget covers both phases instead
+      // of only the drain contract (the previous 20s budget timed out during any
+      // slow post-mutation cleanup even though the deletion had committed).
+      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + DELETE_SESSION_CLEANUP_ALLOWANCE_MS,
+      params: {
+        key: rpcSessionKey,
+        deleteTranscript: true,
+        // Bind the deletion to the incarnation the user closed: if a concurrent /new,
+        // reset, or rollover rotates this key first, the gateway returns "session
+        // changed" instead of deleting the replacement session. updatedAt is NOT part
+        // of that binding: label edits, pinned-state changes, or any metadata touch
+        // bump it without rotating the session, and binding to it would make /close
+        // spuriously fail for the very session the user is looking at.
+        expectedSessionId: targetEntry?.sessionId,
+        expectedLifecycleRevision: targetEntry?.lifecycleRevision,
+        ...(admissionHandoffId ? { admissionHandoffId } : {}),
+        ...(exemptChatRunId ? { exemptChatRunId } : {}),
+      },
+    });
+  } catch (err) {
+    // The RPC deletes the session before the worktree cleanup that delays the
+    // response, so an expired budget does NOT mean the close failed. Report the
+    // uncertainty honestly instead of an error and leave the local store entry
+    // untouched; the next sync reconciles it if the deletion committed.
+    if (isGatewayTransportError(err) && err.kind === "timeout") {
+      return deleteSessionReply(
+        "Closing this session is taking longer than expected. The deletion may have completed with its cleanup still running; check the session list before retrying.",
+      );
+    }
+    throw err;
+  }
   if (!deletion?.deleted) {
     return deleteSessionReply("No active session was found to delete.");
   }
