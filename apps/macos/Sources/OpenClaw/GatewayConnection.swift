@@ -47,10 +47,10 @@ actor GatewayConnection {
     struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
         fileprivate let authority: UInt64?
-        fileprivate let url: URL
+        let url: URL
         fileprivate let token: String?
         fileprivate let password: String?
-        fileprivate let tls: GatewayTLSRoute?
+        let tls: GatewayTLSRoute?
         fileprivate let deviceAuthGatewayID: String?
         let activationOwnershipFingerprint: String?
 
@@ -67,7 +67,9 @@ actor GatewayConnection {
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
     struct ServerLease: Sendable {
-        fileprivate let route: Route
+        // Managed-image HTTP reuses this captured route from its focused extension file.
+        // Carrying the snapshot forward prevents endpoint or TLS rediscovery after suspension.
+        let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
     }
@@ -409,7 +411,11 @@ actor GatewayConnection {
             }
             throw CancellationError()
         }
-        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        guard await self.isCurrentRoute(route), self.client === client else {
+            throw CancellationError()
+        }
+        return data
     }
 
     /// Server-bound requests never reconfigure, reconnect, or cross onto a
@@ -424,11 +430,15 @@ actor GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         do {
-            return try await lease.client.request(
+            let data = try await lease.client.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
+            guard await self.isCurrentServerLease(lease) else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            return data
         } catch is CancellationError {
             if Task.isCancelled {
                 throw CancellationError()
@@ -762,6 +772,18 @@ extension GatewayConnection {
               let snapshot = lastSnapshot
         else { return nil }
         return snapshot.supportsServerCapability(capability)
+    }
+
+    func supportsServerMethod(
+        _ method: String,
+        ifCurrentServerLease lease: ServerLease) async -> Bool?
+    {
+        guard await self.isCurrentServerLease(lease),
+              self.serverLeaseMatchesCurrentState(lease),
+              let snapshot = lastSnapshot
+        else { return nil }
+        let methods = snapshot.features["methods"]?.value as? [AnyCodable] ?? []
+        return methods.contains { ($0.value as? String) == method }
     }
 
     func isCurrentServerLease(_ lease: ServerLease) async -> Bool {

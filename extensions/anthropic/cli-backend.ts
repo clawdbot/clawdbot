@@ -20,7 +20,6 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
-  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
@@ -128,6 +127,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
@@ -166,6 +166,9 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "{sessionId}",
       ],
       forkArg: "--fork-session",
+      // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
+      // emits the matching transcript UUID on assistant records.
+      resumeAtArg: "--resume-session-at",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -210,6 +213,5 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
-    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
   };
 }

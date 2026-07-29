@@ -38,7 +38,7 @@ export interface RollupPage {
 }
 
 export interface RollupClassification {
-  verdict: "GREEN" | "FAILING" | "PENDING" | "STALE-CANCELLED";
+  verdict: "GREEN" | "FAILING" | "PENDING";
   pendingCount: number;
   failingNames: string[];
   supersededCount: number;

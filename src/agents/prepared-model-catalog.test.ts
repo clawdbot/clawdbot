@@ -50,6 +50,7 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalogSnapshot,
+  loadResolvedPublishedModelCatalogOwner,
   loadPublishedPreparedModelCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
@@ -146,12 +147,9 @@ describe("prepared model catalog access", () => {
       };
       mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
 
-      await expect(
-        loadPublishedPreparedModelCatalogOwnerSnapshot({ readOnly }),
-      ).resolves.toMatchObject({
-        ...committedSnapshot,
-        agentId: "main",
-      });
+      await expect(loadPublishedPreparedModelCatalogOwnerSnapshot({ readOnly })).resolves.toBe(
+        committedSnapshot,
+      );
       expect(mocks.loadSnapshot).not.toHaveBeenCalled();
       expect(mocks.activateSnapshot).not.toHaveBeenCalled();
       expect(mocks.acquireSnapshot).not.toHaveBeenCalled();
@@ -167,8 +165,27 @@ describe("prepared model catalog access", () => {
     mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
 
     await expect(
-      loadPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "MAIN", readOnly: true }),
+      loadResolvedPublishedModelCatalogOwner({ agentId: "MAIN", readOnly: true }),
     ).resolves.toMatchObject({ agentId: "main", agentDir: committedSnapshot.agentDir });
+  });
+
+  it("resolves a complete published owner for runtime consumers", async () => {
+    const committedSnapshot = {
+      ...fullSnapshot,
+      agentDir: "/tmp/prepared-model-catalog-agent",
+      config: { agents: { list: [{ id: "main", default: true }] } },
+    };
+    mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+    await expect(
+      loadResolvedPublishedModelCatalogOwner({ agentId: "MAIN", readOnly: true }),
+    ).resolves.toEqual({
+      agentId: "main",
+      agentDir: "/tmp/prepared-model-catalog-agent",
+      workspaceDir: "/tmp/prepared-model-catalog-workspace",
+      config: committedSnapshot.config,
+      modelCatalog: committedSnapshot.modelCatalog,
+    });
   });
 
   it("keeps a shared-directory published replacement owner ambiguous", async () => {
@@ -185,6 +202,9 @@ describe("prepared model catalog access", () => {
     await expect(
       loadPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "worker", readOnly: true }),
     ).resolves.not.toHaveProperty("agentId");
+    await expect(
+      loadResolvedPublishedModelCatalogOwner({ agentId: "worker", readOnly: true }),
+    ).rejects.toThrow("did not identify one configured agent");
   });
 
   it("projects published replacement entries for runtime callers", async () => {

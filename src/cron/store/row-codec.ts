@@ -2,10 +2,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
+import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
@@ -271,12 +273,18 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
 }
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
+  const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+  const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
+  const ownerAccountId = normalizeOptionalAccountId(
+    typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
+  );
   const schedule = scheduleFromRow(row);
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
   const pacing = pacingFromRow(row);
+  const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
   if (!schedule || !payload) {
     return null;
   }
@@ -285,14 +293,16 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     id: row.job_id,
     ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
-    ...(row.owner_agent_id || row.owner_session_key
+    ...(row.owner_agent_id || row.owner_session_key || ownerAccountId
       ? {
           owner: {
             ...(row.owner_agent_id ? { agentId: row.owner_agent_id } : {}),
             ...(row.owner_session_key ? { sessionKey: row.owner_session_key } : {}),
+            ...(ownerAccountId ? { accountId: ownerAccountId } : {}),
           },
         }
       : {}),
+    ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
     enabled: row.enabled !== 0,

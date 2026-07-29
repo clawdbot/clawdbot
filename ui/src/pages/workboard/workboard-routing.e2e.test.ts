@@ -7,6 +7,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  waitForControlUiRoute,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -147,7 +148,11 @@ describeControlUiE2e("Control UI Workboard routing", () => {
       });
 
       await page.goto(`${server.baseUrl}workboard?board=ops&agent=main`);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+      await waitForControlUiRoute(page, {
+        pathname: "/workboard/ops",
+        routeId: "workboard",
+        search: "?agent=main",
+      });
       expect(new URL(page.url()).searchParams.get("board")).toBeNull();
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
 
@@ -160,11 +165,118 @@ describeControlUiE2e("Control UI Workboard routing", () => {
       });
 
       await page.goto(`${server.baseUrl}workboard/deleted?agent=main`);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+      await waitForControlUiRoute(page, {
+        pathname: "/workboard",
+        routeId: "workboard",
+        search: "?agent=main",
+      });
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
       await page.locator(".workboard-page-title", { hasText: "Workboard" }).waitFor();
     } finally {
       await closeRecordedPage(recorded, "routing");
+    }
+  });
+
+  it("creates cards for the selected named agent without hiding them", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1600, height: 1000 },
+    });
+    const page = await context.newPage();
+    const createdCard = {
+      id: "writer-card",
+      title: "Keep the writer task visible",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      agentId: "writer",
+      position: 1000,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    try {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "writer", name: "Writer" },
+            ],
+          },
+          "config.get": configSnapshot(true),
+          "sessions.list": sessionsListResponse(),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.boards.list": { boards },
+          "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
+        },
+      });
+      await page.goto(`${server.baseUrl}workboard`);
+      await gateway.waitForRequest("agents.list");
+
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await expect
+        .poll(() =>
+          agentScope
+            .locator("wa-dropdown-item[data-agent-option]")
+            .filter({ hasText: "Main" })
+            .evaluate((option) => option === document.activeElement),
+        )
+        .toBe(true);
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "Writer" })
+        .click();
+      await expect
+        .poll(() =>
+          agentScope.evaluate((select) => (select as HTMLElement & { value: string }).value),
+        )
+        .toBe("writer");
+      await expect
+        .poll(
+          () =>
+            agentScope.locator("wa-dropdown").evaluate((dropdown) => {
+              const popup = dropdown.shadowRoot?.querySelector("wa-popup");
+              return {
+                open: (dropdown as HTMLElement & { open: boolean }).open,
+                popupActive: Boolean((popup as (HTMLElement & { active: boolean }) | null)?.active),
+              };
+            }),
+          { timeout: 5_000 },
+        )
+        .toEqual({ open: false, popupActive: false });
+
+      await gateway.deferNext("workboard.cards.create");
+      await page.getByRole("button", { name: /New card/u }).click();
+
+      const createForm = page.locator('openclaw-modal-dialog[label="New card"]');
+      await expect
+        .poll(() =>
+          createForm
+            .locator(".workboard-agent-select")
+            .evaluate((select) => (select as HTMLElement & { value: string }).value),
+        )
+        .toBe("writer");
+      await createForm.getByLabel("Title").fill(createdCard.title);
+      await createForm.getByRole("button", { name: /^Create$/u }).click();
+
+      const createRequest = await gateway.waitForRequest("workboard.cards.create");
+      expect(createRequest.params).toMatchObject({
+        agentId: "writer",
+        title: createdCard.title,
+      });
+      await gateway.resolveDeferred("workboard.cards.create", { card: createdCard });
+
+      await page.locator(".workboard-card", { hasText: createdCard.title }).waitFor({
+        state: "visible",
+      });
+    } finally {
+      await context.close();
     }
   });
 

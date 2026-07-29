@@ -3,7 +3,7 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordApiError, fetchDiscord } from "./api.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -129,7 +129,10 @@ async function readDiscordProbeGetMeJson(
       new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response exceeds ${maxBytes} bytes`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as { id?: string; username?: string };
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+      id?: string;
+      username?: string;
+    };
   } catch (cause) {
     throw new Error(`${DISCORD_PROBE_GET_ME_LABEL}: malformed JSON response`, { cause });
   }
@@ -140,72 +143,67 @@ export async function probeDiscord(
   timeoutMs: number,
   opts?: { fetcher?: typeof fetch; includeApplication?: boolean },
 ): Promise<DiscordProbe> {
-  const started = Date.now();
-  const fetcher = opts?.fetcher ?? fetch;
-  const includeApplication = opts?.includeApplication === true;
-  const normalized = normalizeDiscordToken(token, "channels.discord.token");
-  const result: DiscordProbe = {
-    ok: false,
-    status: null,
-    error: null,
-    elapsedMs: 0,
-  };
-  if (!normalized) {
-    return {
-      ...result,
-      error: "missing token",
-      elapsedMs: Date.now() - started,
-    };
-  }
-  let res: Response | undefined;
-  try {
-    const getMeUrl = `${DISCORD_API_BASE}/users/@me`;
-    const getMeDeadlineMs = Date.now() + timeoutMs;
-    res = await fetchWithTimeout(
-      getMeUrl,
-      { headers: { Authorization: `Bot ${normalized}` } },
-      timeoutMs,
-      getResolvedFetch(fetcher),
-    );
-    if (!res.ok) {
-      result.status = res.status;
-      result.error = `getMe failed (${res.status})`;
-      return { ...result, elapsedMs: Date.now() - started };
-    }
-    const json = await readDiscordProbeGetMeJson(res, timeoutMs, getMeDeadlineMs);
-    result.ok = true;
-    result.bot = {
-      id: json.id ?? null,
-      username: json.username ?? null,
-    };
-    if (includeApplication) {
-      // Application metadata is optional. Keep its deadline inside the outer status budget so a
-      // stalled secondary response cannot discard the already-resolved bot identity.
-      const elapsedMs = Math.max(0, Date.now() - started);
-      const completionReserveMs = Math.min(
-        DISCORD_PROBE_COMPLETION_RESERVE_MAX_MS,
-        Math.max(1, Math.floor(timeoutMs / 10)),
-      );
-      const applicationTimeoutMs = Math.floor(timeoutMs - elapsedMs - completionReserveMs);
-      if (applicationTimeoutMs > 0) {
-        result.application =
-          (await fetchDiscordApplicationSummary(normalized, applicationTimeoutMs, fetcher)) ??
-          undefined;
+  return await runChannelProbe(
+    undefined,
+    async ({ startedAt }) => {
+      const fetcher = opts?.fetcher ?? fetch;
+      const includeApplication = opts?.includeApplication === true;
+      const normalized = normalizeDiscordToken(token, "channels.discord.token");
+      const result: Omit<DiscordProbe, "elapsedMs"> = {
+        ok: false,
+        status: null,
+        error: null,
+      };
+      if (!normalized) {
+        return { ...result, error: "missing token" };
       }
-    }
-    return { ...result, elapsedMs: Date.now() - started };
-  } catch (err) {
-    return {
-      ...result,
-      status: err instanceof Response ? err.status : result.status,
-      error: formatErrorMessage(err),
-      elapsedMs: Date.now() - started,
-    };
-  } finally {
-    if (res?.bodyUsed !== true) {
-      await res?.body?.cancel().catch(() => undefined);
-    }
-  }
+      let res: Response | undefined;
+      try {
+        const getMeUrl = `${DISCORD_API_BASE}/users/@me`;
+        const getMeDeadlineMs = Date.now() + timeoutMs;
+        res = await fetchWithTimeout(
+          getMeUrl,
+          { headers: { Authorization: `Bot ${normalized}` } },
+          timeoutMs,
+          getResolvedFetch(fetcher),
+        );
+        if (!res.ok) {
+          return { ...result, status: res.status, error: `getMe failed (${res.status})` };
+        }
+        const json = await readDiscordProbeGetMeJson(res, timeoutMs, getMeDeadlineMs);
+        result.ok = true;
+        result.bot = {
+          id: json.id ?? null,
+          username: json.username ?? null,
+        };
+        if (includeApplication) {
+          // Application metadata is optional. Keep its deadline inside the outer status budget so a
+          // stalled secondary response cannot discard the already-resolved bot identity.
+          const elapsedMs = Math.max(0, Date.now() - startedAt);
+          const completionReserveMs = Math.min(
+            DISCORD_PROBE_COMPLETION_RESERVE_MAX_MS,
+            Math.max(1, Math.floor(timeoutMs / 10)),
+          );
+          const applicationTimeoutMs = Math.floor(timeoutMs - elapsedMs - completionReserveMs);
+          if (applicationTimeoutMs > 0) {
+            result.application =
+              (await fetchDiscordApplicationSummary(normalized, applicationTimeoutMs, fetcher)) ??
+              undefined;
+          }
+        }
+        return result;
+      } finally {
+        if (res?.bodyUsed !== true) {
+          await res?.body?.cancel().catch(() => undefined);
+        }
+      }
+    },
+    (error) => ({
+      ok: false,
+      status: error instanceof Response ? error.status : null,
+      error: formatErrorMessage(error),
+    }),
+  );
 }
 
 /**

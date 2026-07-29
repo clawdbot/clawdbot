@@ -32,6 +32,7 @@ import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -269,6 +270,7 @@ fun ChatScreen(
   val questions by viewModel.chatQuestions.collectAsState()
   val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
   val sessionBranches by viewModel.chatSessionBranches.collectAsState()
   val sessionBranchesLoading by viewModel.chatSessionBranchesLoading.collectAsState()
   val sessionBranchSwitching by viewModel.chatSessionBranchSwitching.collectAsState()
@@ -539,8 +541,12 @@ fun ChatScreen(
         owner = composerOwner,
         mainSessionKey = mainSessionKey,
       ) ?: return@LaunchedEffect
-    inputDrafts[composerOwner] =
+    val merged =
       mergeChatDraft(draft = claimed, currentInput = input, currentOwner = composerOwner) ?: return@LaunchedEffect
+    inputDrafts[composerOwner] = merged
+    // Rewind/fork replace the composer wholesale; an attachment staged during the
+    // in-flight round-trip is accepted collateral rather than a draft revision field.
+    claimed.attachments?.let { composerState.replaceAttachments(composerOwner, it) }
   }
 
   LaunchedEffect(composerOwner, pendingSendAdmissionIds) {
@@ -708,23 +714,25 @@ fun ChatScreen(
               owner = composerOwner,
               expectedExistingText = expectedInput,
               acceptsEmptyText = true,
+              attachments = result.editorAttachments.toPendingAttachments(),
             ),
           )
         }
       },
       onForkMessage = { entryId ->
         scope.launch {
-          val (newKey, editorText) = viewModel.forkChatAtEntry(entryId) ?: return@launch
-          val newOwner = composerOwner.copy(sessionKey = newKey)
+          val result = viewModel.forkChatAtEntry(entryId) ?: return@launch
+          val newOwner = composerOwner.copy(sessionKey = result.sessionKey)
           val expectedInput = inputDrafts[newOwner].orEmpty()
-          viewModel.switchChatSession(newKey, composerOwner.agentId)
+          viewModel.switchChatSession(result.sessionKey, composerOwner.agentId)
           viewModel.setChatDraft(
             ChatDraft(
-              text = editorText.orEmpty(),
+              text = result.editorText.orEmpty(),
               placement = ChatDraftPlacement.Replace,
               owner = newOwner,
               expectedExistingText = expectedInput,
               acceptsEmptyText = true,
+              attachments = result.editorAttachments.toPendingAttachments(),
             ),
           )
         }
@@ -732,12 +740,15 @@ fun ChatScreen(
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
+      loadImageArtifact = viewModel::loadChatImageArtifact,
       modifier = Modifier.weight(1f),
     )
 
     if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
       PlanChecklistPill(steps = planSteps)
     }
+
+    ChatSwarmProgress(groups = swarmGroups)
 
     ChatComposer(
       value = input,
@@ -1246,6 +1257,7 @@ private fun ChatMessageList(
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
+  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
@@ -1314,6 +1326,7 @@ private fun ChatMessageList(
               onToggleListen = onToggleListen,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
+              loadImageArtifact = loadImageArtifact,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -1357,6 +1370,7 @@ private fun ChatMessageList(
               onToggleListen = onToggleListen,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
+              loadImageArtifact = loadImageArtifact,
             )
           ChatTimelineItem.Thinking -> {
             val run = workingRun
@@ -1607,18 +1621,26 @@ private fun ChatBubble(
   onToggleListen: (String, String) -> Unit,
   inlineWidgetResolverReady: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
+  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank()
+        "image" -> {
+          val displayable = !part.base64.isNullOrBlank() || !part.artifactId.isNullOrBlank()
+          val visible = displayable && visibleImageCount < 4
+          if (displayable) visibleImageCount += 1
+          visible
+        }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
         else -> part.isAudioAttachment()
       }
     }
+  val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
@@ -1683,10 +1705,19 @@ private fun ChatBubble(
               part.type == "text" -> Unit
               part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
               part.type == "image" ->
-                ChatBase64Image(
-                  base64 = checkNotNull(part.base64),
-                  mimeType = part.mimeType,
-                )
+                if (!part.base64.isNullOrBlank()) {
+                  ChatBase64Image(
+                    base64 = part.base64,
+                    mimeType = part.mimeType,
+                  )
+                } else {
+                  ChatManagedImage(
+                    artifactId = checkNotNull(part.artifactId),
+                    label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
+                    resolverReady = inlineWidgetResolverReady,
+                    loadImage = loadImageArtifact,
+                  )
+                }
               part.type == "canvas" && normalizedRole == "assistant" ->
                 ChatInlineWidget(
                   preview = checkNotNull(part.widget),
@@ -1695,6 +1726,13 @@ private fun ChatBubble(
                 )
               else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
+          }
+          if (omittedImageCount > 0) {
+            Text(
+              text = nativeString("Additional images hidden: \${omittedImageCount}", omittedImageCount),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
           }
           if (messageId != null) {
             ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent)

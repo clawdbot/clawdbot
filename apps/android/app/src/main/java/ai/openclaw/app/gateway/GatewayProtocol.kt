@@ -23,6 +23,7 @@ data class GatewayRequestFrame(
   val id: String,
   val method: String,
   val params: JsonElement? = null,
+  val traceparent: String? = null,
 )
 
 @Serializable
@@ -101,6 +102,7 @@ data class QuestionRecord(
   val questions: List<Question>,
   val agentId: String? = null,
   val sessionKey: String? = null,
+  val runId: String? = null,
   val createdAtMs: Long,
   val expiresAtMs: Long,
   val status: String,
@@ -127,6 +129,7 @@ data class SessionObserverPlanProgress(
 @Serializable
 data class SessionObserverDigest(
   val sessionKey: String,
+  val agentId: String? = null,
   val runId: String? = null,
   val revision: Long,
   val updatedAt: Long,
@@ -485,7 +488,6 @@ enum class GatewayMethod(
   BoardPromptAuthorize("board.prompt.authorize"),
   BoardDataRead("board.data.read"),
   BoardAction("board.action"),
-  SessionsObserverAsk("sessions.observer.ask"),
   SessionsObserverVisibility("sessions.observer.visibility"),
   SessionVisibilitySet("session.visibility.set"),
   SessionMembersList("session.members.list"),
@@ -495,6 +497,10 @@ enum class GatewayMethod(
   SessionSuggestionsList("session.suggestions.list"),
   SessionSuggestionsResolve("session.suggestions.resolve"),
   SessionTyping("session.typing"),
+  SessionsCompanionAsk("sessions.companion.ask"),
+  SessionsCompanionState("sessions.companion.state"),
+  SessionsCompanionReset("sessions.companion.reset"),
+  MemorySearch("memory.search"),
 }
 
 enum class GatewayEvent(
@@ -531,6 +537,7 @@ enum class GatewayEvent(
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),
+  SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

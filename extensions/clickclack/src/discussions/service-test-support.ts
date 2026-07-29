@@ -1,5 +1,5 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
@@ -67,8 +67,21 @@ export function discussionConfig(): CoreConfig {
 }
 
 export function createHarness(
-  entry: { sessionId?: string; label?: string; category?: string; archivedAt?: number } | undefined,
-  options: { bindingGenerationFactory?: () => string } = {},
+  entry:
+    | {
+        sessionId?: string;
+        label?: string;
+        displayName?: string;
+        subject?: string;
+        category?: string;
+        archivedAt?: number;
+      }
+    | undefined,
+  options: {
+    bindingGenerationFactory?: () => string;
+    gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
+    startTimer?: boolean;
+  } = {},
 ) {
   let sessionEntry = entry;
   const config = discussionConfig();
@@ -115,9 +128,9 @@ export function createHarness(
       kind: "public",
       external_managed: patch.external_managed ?? true,
       external_ref: patch.external_ref ?? "agent:main:main",
-      external_url:
-        patch.external_url ?? "https://control.example/control/chat?session=agent%3Amain%3Amain",
+      external_url: patch.external_url ?? "https://control.example/control/chat/main",
       sidebar_section: patch.sidebar_section ?? "Projects",
+      ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
       archived: patch.archived ?? false,
       created_at: "2026-07-19T00:00:00.000Z",
     }),
@@ -158,7 +171,8 @@ export function createHarness(
     clientFactory: () => client,
     installationId: TEST_INSTALLATION_ID,
     bindingGenerationFactory: options.bindingGenerationFactory ?? (() => TEST_BINDING_GENERATION),
-    startTimer: false,
+    startTimer: options.startTimer ?? false,
+    ...(options.gatewayEvents ? { gatewayEvents: options.gatewayEvents } : {}),
   });
   return {
     runtime,

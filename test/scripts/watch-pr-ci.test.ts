@@ -194,7 +194,7 @@ describe("watch-pr-ci", () => {
   });
 
   it.each(["FAILURE", "ERROR"])(
-    "classifies stale same-name cancellations for aggregate %s",
+    "keeps identity-less same-name cancellations failing for aggregate %s",
     (state) => {
       expect(
         classifyRollup({
@@ -214,7 +214,7 @@ describe("watch-pr-ci", () => {
           },
         }),
       ).toEqual({
-        verdict: "STALE-CANCELLED",
+        verdict: "FAILING",
         pendingCount: 0,
         failingNames: ["unit"],
         supersededCount: 0,
@@ -222,7 +222,7 @@ describe("watch-pr-ci", () => {
     },
   );
 
-  it("does not soften a truncated failing rollup to stale-cancelled", () => {
+  it("keeps a truncated failing rollup failing", () => {
     expect(
       classifyRollup({
         state: "FAILURE",

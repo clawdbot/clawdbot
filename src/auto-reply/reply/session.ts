@@ -85,7 +85,12 @@ import {
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type {
@@ -343,6 +348,7 @@ export function resolveReplySessionPreprocessingState(
     ),
   });
   const sessionEntry = loadReplySessionInitializationSnapshot({
+    agentId: attemptContext.agentId,
     storePath: attemptContext.storePath,
     sessionKey,
   }).currentEntry;
@@ -358,6 +364,22 @@ export function resolveReplySessionPreprocessingState(
 }
 
 /** Initializes or reuses the reply session state for one inbound turn. */
+type SessionModelOverrideSelection = Pick<
+  SessionEntry,
+  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelOverrideRouteResolution"
+>;
+
+function selectSessionModelOverride(
+  entry: Partial<SessionModelOverrideSelection>,
+): SessionModelOverrideSelection {
+  return {
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+  };
+}
+
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
@@ -477,9 +499,7 @@ async function initSessionStateAttemptLocked(
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedResponseUsage: SessionEntry["responseUsage"];
-  let persistedModelOverride: string | undefined;
-  let persistedProviderOverride: string | undefined;
-  let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
+  let persistedModelSelection: SessionModelOverrideSelection | undefined;
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
@@ -561,12 +581,10 @@ async function initSessionStateAttemptLocked(
   }
 
   // Canonicalize so the written key matches what all read paths produce.
-  // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
-  // agent may differ, causing key mismatch and orphaned sessions (#29683).
   const sessionKey: string = canonicalizeMainSessionAlias({
     cfg,
     agentId,
-    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
+    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
   });
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
@@ -574,6 +592,7 @@ async function initSessionStateAttemptLocked(
   // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const initializationSnapshot = loadReplySessionInitializationSnapshot({
+    agentId,
     storePath,
     sessionKey,
   });
@@ -659,6 +678,7 @@ async function initSessionStateAttemptLocked(
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
+    sessionKey,
     storePath,
   });
   const entryFreshness = entry
@@ -771,9 +791,7 @@ async function initSessionStateAttemptLocked(
     persistedReasoning = reusableEntry.reasoningLevel;
     persistedTtsAuto = reusableEntry.ttsAuto;
     persistedResponseUsage = reusableEntry.responseUsage;
-    persistedModelOverride = reusableEntry.modelOverride;
-    persistedProviderOverride = reusableEntry.providerOverride;
-    persistedModelOverrideSource = reusableEntry.modelOverrideSource;
+    persistedModelSelection = selectSessionModelOverride(reusableEntry);
     persistedAuthProfileOverride = reusableEntry.authProfileOverride;
     persistedAuthProfileOverrideSource = reusableEntry.authProfileOverrideSource;
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
@@ -799,9 +817,7 @@ async function initSessionStateAttemptLocked(
     // despite the `Model set to ... for this session` ack (#90119, #69301).
     if (entry) {
       const preservedSelection = resolveResetPreservedSelection({ entry });
-      persistedModelOverride = preservedSelection.modelOverride;
-      persistedProviderOverride = preservedSelection.providerOverride;
-      persistedModelOverrideSource = preservedSelection.modelOverrideSource;
+      persistedModelSelection = selectSessionModelOverride(preservedSelection);
       persistedAuthProfileOverride = preservedSelection.authProfileOverride;
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
@@ -838,6 +854,8 @@ async function initSessionStateAttemptLocked(
   }
 
   const baseEntry = !isNewSession && effectiveFreshEntry ? reusableEntry : undefined;
+  const modelSelection =
+    persistedModelSelection ?? (baseEntry ? selectSessionModelOverride(baseEntry) : undefined);
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
@@ -858,66 +876,61 @@ async function initSessionStateAttemptLocked(
   // Otherwise a heartbeat target like "group:..." or a synthetic sender like
   // "heartbeat" leaks into the shared session and later user replies route to
   // the wrong chat.
+  const baseDeliveryContext = deliveryContextFromSession(baseEntry);
+  const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
+  const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
   const lastChannelRaw = isSystemEvent
-    ? baseEntry?.lastChannel
+    ? baseDeliveryContext?.channel
     : resolveLastChannelRaw({
         originatingChannelRaw,
-        persistedLastChannel: baseEntry?.lastChannel,
+        persistedLastChannel: baseDeliveryContext?.channel,
         sessionKey,
         isInterSession,
       });
   const lastToRaw = isSystemEvent
-    ? baseEntry?.lastTo
+    ? baseDeliveryContext?.to
     : resolveLastToRaw({
         originatingChannelRaw,
         originatingToRaw: ctx.OriginatingTo,
         toRaw: ctx.To,
-        persistedLastTo: baseEntry?.lastTo,
-        persistedLastChannel: baseEntry?.lastChannel,
+        persistedLastTo: baseDeliveryContext?.to,
+        persistedLastChannel: baseDeliveryContext?.channel,
         sessionKey,
         isInterSession,
       });
   const lastAccountIdRaw = isSystemEvent
-    ? baseEntry?.lastAccountId
+    ? baseDeliveryContext?.accountId
     : resolveSessionDefaultAccountId({
         cfg,
         channelRaw: lastChannelRaw,
         accountIdRaw: ctx.AccountId,
-        persistedLastAccountId: baseEntry?.lastAccountId,
+        persistedLastAccountId: baseDeliveryContext?.accountId,
       });
   // Only fall back to persisted threadId for thread sessions. Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
   const lastThreadIdRaw = isSystemEvent
-    ? baseEntry?.lastThreadId
+    ? baseDeliveryContext?.threadId
     : (ctx.MessageThreadId ??
       ctx.TransportThreadId ??
-      (isThread ? baseEntry?.lastThreadId : undefined));
-  const deliveryFields = isSystemEvent
-    ? normalizeSessionDeliveryFields({
-        route: isThread ? baseEntry?.route : stripThreadFromSessionRoute(baseEntry?.route),
-        channel: baseEntry?.channel,
-        lastChannel: baseEntry?.lastChannel,
-        lastTo: baseEntry?.lastTo,
-        lastAccountId: baseEntry?.lastAccountId,
-        lastThreadId:
-          baseEntry?.lastThreadId ??
-          baseEntry?.deliveryContext?.threadId ??
-          baseEntry?.origin?.threadId,
-        deliveryContext: baseEntry?.deliveryContext,
+      (isThread ? baseDeliveryContext?.threadId : undefined));
+  const delivery = isSystemEvent
+    ? normalizeSessionDeliveryState({
+        route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
+        context: isThread
+          ? baseDeliveryContext
+          : stripThreadIdFromDeliveryContext(baseDeliveryContext),
+        origin: isThread ? baseDeliveryOrigin : stripThreadIdFromOrigin(baseDeliveryOrigin),
       })
-    : normalizeSessionDeliveryFields({
-        deliveryContext: {
+    : normalizeSessionDeliveryState({
+        context: {
           channel: lastChannelRaw,
           to: lastToRaw,
           accountId: lastAccountIdRaw,
           threadId: lastThreadIdRaw,
         },
+        origin: baseDeliveryOrigin,
       });
-  const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
-  const lastTo = deliveryFields.lastTo ?? lastToRaw;
-  const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
-  const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
   const creationStamp =
     !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
   sessionEntry = {
@@ -943,9 +956,10 @@ async function initSessionStateAttemptLocked(
     usageFamilyKey,
     usageFamilySessionIds,
     previousSessionId: baseEntry?.previousSessionId,
-    modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
-    providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
-    modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
+    modelOverride: modelSelection?.modelOverride,
+    providerOverride: modelSelection?.providerOverride,
+    modelOverrideSource: modelSelection?.modelOverrideSource,
+    modelOverrideRouteResolution: modelSelection?.modelOverrideRouteResolution,
     authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
     authProfileOverrideSource:
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
@@ -974,20 +988,13 @@ async function initSessionStateAttemptLocked(
     queueDrop: baseEntry?.queueDrop,
     displayName: persistedDisplayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
-    channel: baseEntry?.channel,
+    delivery,
     groupId: baseEntry?.groupId,
     subject: baseEntry?.subject,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
     groupActivation: entry?.groupActivation,
     groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
-    route: deliveryFields.route,
-    deliveryContext: deliveryFields.deliveryContext,
-    // Track originating channel for subagent announce routing.
-    lastChannel,
-    lastTo,
-    lastAccountId,
-    lastThreadId,
   };
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,
@@ -1002,10 +1009,11 @@ async function initSessionStateAttemptLocked(
   if (isSystemEvent && !isThread) {
     sessionEntry = {
       ...sessionEntry,
-      route: stripThreadFromSessionRoute(sessionEntry.route),
-      lastThreadId: undefined,
-      deliveryContext: stripThreadIdFromDeliveryContext(sessionEntry.deliveryContext),
-      origin: stripThreadIdFromOrigin(sessionEntry.origin),
+      delivery: normalizeSessionDeliveryState({
+        route: stripThreadFromSessionRoute(sessionDeliveryRoute(sessionEntry)),
+        context: stripThreadIdFromDeliveryContext(deliveryContextFromSession(sessionEntry)),
+        origin: stripThreadIdFromOrigin(sessionDeliveryOrigin(sessionEntry)),
+      }),
     };
   }
   if (!sessionEntry.chatType) {
@@ -1022,23 +1030,14 @@ async function initSessionStateAttemptLocked(
   }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
-    sessionEntry.memoryFlushCompactionCount = undefined;
-    sessionEntry.memoryFlushAt = undefined;
+    sessionEntry.memoryFlush = undefined;
     // Runtime model fields are persisted last-run cache, not user selection.
     // Reset must drop them so the next turn resolves current defaults or the
     // explicit providerOverride/modelOverride values preserved above.
     sessionEntry.modelProvider = undefined;
     sessionEntry.model = undefined;
-    sessionEntry.fallbackNoticeSelectedModel = undefined;
-    sessionEntry.fallbackNoticeActiveModel = undefined;
-    sessionEntry.fallbackNoticeReason = undefined;
+    sessionEntry.fallbackNotice = undefined;
     sessionEntry.systemPromptReport = undefined;
-    sessionEntry.memoryFlushFailureCount = undefined;
-    sessionEntry.memoryFlushLastFailedAt = undefined;
-    sessionEntry.memoryFlushLastFailureError = undefined;
-    // Clear stale context hash so the first flush in the new session is not
-    // incorrectly skipped due to a hash match with the old transcript (#30115).
-    sessionEntry.memoryFlushContextHash = undefined;
     sessionEntry.startedAt = undefined;
     sessionEntry.endedAt = undefined;
     sessionEntry.runtimeMs = undefined;
@@ -1168,7 +1167,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
+      sessionFile: sessionKey,
       reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
@@ -1232,7 +1231,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         sessionId: effectiveSessionId,
         storePath,
-        sessionFile: sessionEntry?.sessionFile,
+        sessionFile: sessionKey,
         agentId,
       });
     }

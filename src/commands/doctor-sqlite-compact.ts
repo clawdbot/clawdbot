@@ -1,7 +1,7 @@
 /** Shared doctor-only SQLite compaction mechanics. */
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
@@ -37,8 +37,7 @@ type DoctorSqliteCompactOptions = {
 export function compactDoctorSqliteFile(
   options: DoctorSqliteCompactOptions,
 ): DoctorSqliteCompactResult {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(options.sqlitePath);
+  const database = openNodeSqliteDatabase(options.sqlitePath);
   let operationError: unknown;
   let result: DoctorSqliteCompactResult | undefined;
   try {

@@ -422,7 +422,9 @@ describe("verified OpenClaw inference binding", () => {
 
   it("accepts and revalidates an opaque CLI owner emitted after a successful turn", async () => {
     const cliConfig = {
-      agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
+      agents: {
+        entries: { ops: { default: true, model: "claude-cli/claude-opus-5" } },
+      },
     } satisfies OpenClawConfig;
     const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
     if (!route || route.runner !== "cli") {
@@ -449,6 +451,7 @@ describe("verified OpenClaw inference binding", () => {
       authFingerprint: "opaque-cli-owner",
       proofKind: "runtime-owner",
     });
+    expect(resolveOwner).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
     await expect(
       resolveSystemAgentVerifiedInferenceRoute(binding, {
         readConfigFileSnapshot: vi.fn(async () => ({

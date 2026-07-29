@@ -3998,9 +3998,12 @@ describe("collectCodexRouteWarnings", () => {
         authProfileOverride: "openai-codex:default",
         authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: 2,
-        fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
-        fallbackNoticeActiveModel: "openai-codex/gpt-5.4",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "openai-codex/gpt-5.5",
+          activeModel: "openai-codex/gpt-5.4",
+          reason: "rate-limit",
+        },
       },
       other: {
         sessionId: "s2",
@@ -4021,6 +4024,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").providerOverride).toBe("openai");
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.4");
     expect(expectDefined(store.main, "store.main test invariant").modelOverrideSource).toBe("auto");
+    expect(
+      expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
+    ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
       "openai-codex:default",
     );
@@ -4034,15 +4040,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").agentRuntimeOverride).toBe(
       "codex",
     );
-    expect(
-      expectDefined(store.main, "store.main test invariant").fallbackNoticeSelectedModel,
-    ).toBeUndefined();
-    expect(
-      expectDefined(store.main, "store.main test invariant").fallbackNoticeActiveModel,
-    ).toBeUndefined();
-    expect(
-      expectDefined(store.main, "store.main test invariant").fallbackNoticeReason,
-    ).toBeUndefined();
+    expect(expectDefined(store.main, "store.main test invariant").fallbackNotice).toBeUndefined();
     expect(expectDefined(store.other, "store.other test invariant").updatedAt).toBe(2);
     expect(expectDefined(store.other, "store.other test invariant").agentHarnessId).toBe("codex");
   });
@@ -4058,7 +4056,11 @@ describe("collectCodexRouteWarnings", () => {
         modelOverride: "codex/gpt-5.6-sol",
         authProfileOverride: "codex:default",
         authProfileOverrideSource: "auto",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+        },
         agentRuntimeOverride: "codex",
       },
     };
@@ -4074,7 +4076,7 @@ describe("collectCodexRouteWarnings", () => {
       authProfileOverride: "codex:default",
       updatedAt: 123,
     });
-    expect(store.main?.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(store.main?.fallbackNotice).toBeUndefined();
     expect(store.main?.agentRuntimeOverride).toBe("codex");
   });
 
@@ -4175,18 +4177,19 @@ describe("collectCodexRouteWarnings", () => {
         updatedAt: 1,
         modelProvider: "openai",
         model: "gpt-5.6-sol",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-        fallbackNoticeActiveModel: "openai/gpt-5.6-sol",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+          reason: "rate-limit",
+        },
       },
     };
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(store.main?.fallbackNoticeActiveModel).toBeUndefined();
-    expect(store.main?.fallbackNoticeReason).toBeUndefined();
+    expect(store.main?.fallbackNotice).toBeUndefined();
   });
 
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
@@ -4196,9 +4199,12 @@ describe("collectCodexRouteWarnings", () => {
         updatedAt: 1,
         modelProvider: "openai",
         model: "gpt-5.6-sol",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-        fallbackNoticeActiveModel: "openai/gpt-5.6-sol",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+          reason: "rate-limit",
+        },
       },
     };
     // Build the blocked identity through the production plan so the test
@@ -4224,9 +4230,12 @@ describe("collectCodexRouteWarnings", () => {
     expect(result).toEqual({ changed: false, sessionKeys: [] });
     expect(store.main).toMatchObject({
       updatedAt: 1,
-      fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-      fallbackNoticeActiveModel: "openai/gpt-5.6-sol",
-      fallbackNoticeReason: "rate-limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "codex/gpt-5.6-sol",
+        activeModel: "openai/gpt-5.6-sol",
+        reason: "rate-limit",
+      },
     });
   });
 
@@ -4237,16 +4246,19 @@ describe("collectCodexRouteWarnings", () => {
         updatedAt: 1,
         modelProvider: "openai",
         model: "gpt-5.6-sol",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+          reason: "rate-limit",
+        },
       },
     };
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(store.main?.fallbackNoticeReason).toBeUndefined();
+    expect(store.main?.fallbackNotice).toBeUndefined();
     expect(store.main?.agentRuntimeOverride).toBeUndefined();
     expect(store.main?.agentHarnessId).toBeUndefined();
   });
@@ -4264,7 +4276,11 @@ describe("collectCodexRouteWarnings", () => {
       model: "gpt-5.5",
       providerOverride: "openai-codex",
       modelOverride: "openai-codex/gpt-5.4",
-      fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai-codex/gpt-5.5",
+        activeModel: "openai-codex/gpt-5.4",
+      },
     };
     const store: Record<string, SessionEntry> = {
       [supervisedKey]: lockedEntry,
@@ -4422,6 +4438,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(entry.providerOverride).toBe("openai");
     expect(entry.modelOverride).toBe("gpt-5.5");
     expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
     expect(entry.authProfileOverride).toBe("openai:work");
     expect(entry.authProfileOverrideSource).toBe("auto");
     expect(entry.agentHarnessId).toBeUndefined();
@@ -4472,6 +4489,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").providerOverride).toBe("openai");
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.5");
     expect(expectDefined(store.main, "store.main test invariant").modelOverrideSource).toBe("auto");
+    expect(
+      expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
+    ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
       "openai-codex:default",
     );

@@ -37,6 +37,8 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
 actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
 
+    static let didChangeNotification = Notification.Name("openclaw.gateway-profiles.did-change")
+
     struct StoredProfile: Codable, Equatable {
         var profile: MacGatewayProfile
         var credentials: Credentials
@@ -53,9 +55,25 @@ actor MacGatewayProfileStore {
         var password: String?
     }
 
+    // Dev builds carry a different code signature; creating the release item
+    // would poison its Keychain ACL and make the shipped app demand the login
+    // keychain password on every read. DEBUG is a config heuristic, not a
+    // signing check: it covers swift build/Xcode dev runs, the observed
+    // poisoning path. Release-config ad-hoc builds stay out of scope; running
+    // those against saved Keychain items is already unsupported.
+    #if DEBUG
+    private static let service = "ai.openclaw.gateway-profiles.debug"
+    #else
     private static let service = "ai.openclaw.gateway-profiles"
+    #endif
     private static let registryAccount = "registry-v1"
     private static let currentLegacyPrimaryMigrationVersion = 1
+
+    /// Registry reads are prompt-bearing: when this binary is missing from the
+    /// item's ACL, every SecItemCopyMatching raises a login-keychain dialog, and
+    /// catalog refreshes fire per control-channel state change. Cache the one
+    /// registry for the process lifetime; saves keep it coherent.
+    private var cachedRegistry: Registry?
 
     static func migratingLegacyPrimaryConnection(
         root: [String: Any],
@@ -106,11 +124,21 @@ actor MacGatewayProfileStore {
         // Metadata and secrets share one Keychain value, so the profile becomes
         // reachable only when the complete record commits.
         try self.saveRegistry(registry)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         return profile
     }
 
     func profiles() throws -> [MacGatewayProfile] {
         try Self.sortedProfiles(self.loadRegistryMigratingLegacyPrimary().profiles.map(\.profile))
+    }
+
+    func catalogProfiles() throws -> [MacGatewayCatalogProfile] {
+        let stored = try self.loadRegistryMigratingLegacyPrimary().profiles
+        return Self.sortedProfiles(stored.map(\.profile)).compactMap { profile in
+            guard let item = stored.first(where: { $0.profile.id == profile.id }) else { return nil }
+            let token = item.credentials.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return MacGatewayCatalogProfile(profile: profile, canPromote: token?.isEmpty == false)
+        }
     }
 
     func remove(profileID: String) throws {
@@ -120,6 +148,7 @@ actor MacGatewayProfileStore {
         }
         registry.profiles.removeAll { $0.profile.id == profileID }
         try self.saveRegistry(registry)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
@@ -139,8 +168,14 @@ actor MacGatewayProfileStore {
     }
 
     private func loadRegistry() throws -> Registry {
-        guard let data = try Self.load(account: Self.registryAccount) else { return Registry() }
-        return try Self.decodeRegistry(data)
+        if let cachedRegistry { return cachedRegistry }
+        let registry: Registry = if let data = try Self.load(account: Self.registryAccount) {
+            try Self.decodeRegistry(data)
+        } else {
+            Registry()
+        }
+        self.cachedRegistry = registry
+        return registry
     }
 
     private func loadRegistryMigratingLegacyPrimary() throws -> Registry {
@@ -160,6 +195,7 @@ actor MacGatewayProfileStore {
 
     private func saveRegistry(_ registry: Registry) throws {
         try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+        self.cachedRegistry = registry
     }
 
     private static func decodeRegistry(_ data: Data) throws -> Registry {

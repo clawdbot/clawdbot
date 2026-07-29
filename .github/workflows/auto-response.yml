@@ -25,7 +25,7 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -37,6 +37,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           permission-issues: write
           permission-members: read
+          permission-metadata: read
           permission-pull-requests: write
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
@@ -46,6 +47,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-issues: write
           permission-members: read
+          permission-metadata: read
           permission-pull-requests: write
       - name: Run Barnacle auto-response
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

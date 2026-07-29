@@ -575,17 +575,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     appHomeSlashCommandName,
     trackEvent,
   });
-  durableIngress.start();
-  presenceMonitor?.start();
-  if (slackMode === "http" && slackHttpHandler) {
-    unregisterHttpHandler = registerSlackHttpHandler({
-      path: slackWebhookPath,
-      handler: slackHttpHandler,
-      log: runtime.log,
-      accountId: account.accountId,
-    });
-  }
-
   if (resolveToken && installationIdentity.kind !== "enterprise") {
     void (async () => {
       if (opts.abortSignal?.aborted) {
@@ -727,6 +716,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
 
   try {
+    durableIngress.start();
+    presenceMonitor?.start();
+    if (slackMode === "http" && slackHttpHandler) {
+      unregisterHttpHandler = registerSlackHttpHandler({
+        path: slackWebhookPath,
+        handler: slackHttpHandler,
+        log: runtime.log,
+        accountId: account.accountId,
+      });
+    }
+
     if (slackMode === "socket") {
       let reconnectAttempts = 0;
       let hasLoggedSocketConnected = false;

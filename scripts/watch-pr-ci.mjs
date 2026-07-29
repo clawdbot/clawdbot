@@ -79,8 +79,6 @@ export function parseArgs(argv) {
 const checkName = (check) => (check.kind === "StatusContext" ? check.context : check.name);
 export const sanitizeCheckName = (name) =>
   name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
-const isSuccess = (check) =>
-  check.kind === "StatusContext" ? check.state === "SUCCESS" : check.conclusion === "SUCCESS";
 const isAutoResponse = (check) =>
   checkName(check)
     ?.toLowerCase()
@@ -159,7 +157,6 @@ export function classifyRollup(rollup) {
     return true;
   });
   const checks = nodes.filter((check) => !isAutoResponse(check));
-  const successfulNames = new Set(checks.filter(isSuccess).map(checkName));
   const pendingCount = checks.filter((check) =>
     check.kind === "StatusContext"
       ? check.state === "PENDING" || check.state === "EXPECTED"
@@ -182,19 +179,6 @@ export function classifyRollup(rollup) {
   }
   if (rollup?.state === "ERROR" || rollup?.state === "FAILURE") {
     if (failingChecks.length > 0) {
-      const staleCancelled =
-        hiddenContextCount === 0 &&
-        pendingCount === 0 &&
-        failingChecks.every(
-          (check) =>
-            check.kind === "CheckRun" &&
-            check.conclusion === "CANCELLED" &&
-            Boolean(check.name) &&
-            successfulNames.has(check.name),
-        );
-      if (staleCancelled) {
-        return { verdict: "STALE-CANCELLED", pendingCount, failingNames, supersededCount };
-      }
       return {
         verdict: "FAILING",
         pendingCount,
@@ -445,12 +429,6 @@ async function main(argv = process.argv.slice(2)) {
         console.log(
           `STATUS state=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
         );
-        if (result.verdict === "STALE-CANCELLED") {
-          return emit(
-            'STALE-CANCELLED hint="aggregate FAILURE but every failing context is a CANCELLED check run with a same-name SUCCESS — likely stale attempts; verify manually"',
-            17,
-          );
-        }
         if (result.verdict === "FAILING") {
           return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
         }

@@ -343,11 +343,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       requireExplicitMessageTarget: true,
       cliToolAvailability: {
         native: [],
-        mcp: [
-          "mcp__openclaw__memory_search",
-          "mcp__openclaw__memory_get",
-          "mcp__openclaw__notes_retrieve_context",
-        ],
+        openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],
       },
     });
     // Embedded toolsAllow must never reach the CLI runner: it fails closed.

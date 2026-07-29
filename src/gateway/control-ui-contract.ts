@@ -137,7 +137,7 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
-  assistantAgentId: string;
+  assistantAgentId?: string;
   serverVersion?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for

@@ -21,6 +21,37 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
+  it("promotes shipped nested DM access at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            dm: { enabled: false, policy: "allowlist", allowFrom: ["123"] },
+            accounts: {
+              work: {
+                dm: { groupEnabled: true, policy: "open", allowFrom: ["*"] },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      dm: { enabled: false },
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      accounts: {
+        work: {
+          dm: { groupEnabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+  });
+
   it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
     const normalize = getDiscordCompatibilityNormalizer();
     const result = normalize({

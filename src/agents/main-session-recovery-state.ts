@@ -159,12 +159,22 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
 // clears. With no active delivery or aggregate, those fences no longer own work.
 function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
   return (
-    entry.status === "running" &&
-    entry.abortedLastRun !== true &&
-    entry.restartRecoveryRuns !== undefined &&
-    entry.mainRestartRecovery === undefined &&
-    entry.restartRecoveryDeliveryRunId === undefined &&
-    isMainRestartRecoveryCandidate(entry, sessionKey)
+    (entry.status === "running" &&
+      entry.abortedLastRun !== true &&
+      entry.restartRecoveryRuns !== undefined &&
+      entry.mainRestartRecovery === undefined &&
+      entry.restartRecoveryDeliveryRunId === undefined &&
+      isMainRestartRecoveryCandidate(entry, sessionKey)) ||
+    // Sessions that are not running were permanently unadmittable while holding
+    // recovery residue, returning "changed while starting work" forever
+    // (production incident 2026-07-26). A row whose status is absent never
+    // reached an active run either, so it carries residue the same way a
+    // terminal row does. A pending delivery claim may coexist with the residue,
+    // so it must not gate the cleanup the way it does for the running case above.
+    (entry.status !== "running" &&
+      entry.mainRestartRecovery === undefined &&
+      isMainRestartRecoveryCandidate(entry, sessionKey) &&
+      (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
   );
 }
 
@@ -414,14 +424,10 @@ export function transitionMainSessionRecovery(
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
       });
-      if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
-        const pendingText = sanitizePendingFinalDeliveryText(entry.pendingFinalDeliveryText ?? "");
+      if (entry.pendingFinalDelivery?.kind === "replayable") {
+        const pendingText = sanitizePendingFinalDeliveryText(entry.pendingFinalDelivery.text);
         if (pendingText) {
-          entry.pendingFinalDeliveryLastAttemptAt = command.now;
-          entry.pendingFinalDeliveryAttemptCount =
-            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-          entry.pendingFinalDeliveryLastError = null;
-          entry.pendingFinalDeliveryText = pendingText;
+          entry.pendingFinalDelivery = { ...entry.pendingFinalDelivery, text: pendingText };
         } else {
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }

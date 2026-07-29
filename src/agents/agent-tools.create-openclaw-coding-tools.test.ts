@@ -535,6 +535,35 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
+  it("keeps restricted spawn inheritance in the caller-owned runtime snapshot", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toBe(
+      inheritedToolAllowlistRef,
+    );
+    expectListIncludes(inheritedToolAllowlistRef, ["read", "sessions_spawn"]);
+    expect(inheritedToolAllowlistRef).not.toContain("exec");
+  });
+
+  it("does not snapshot additive alsoAllow policies for spawn inheritance", () => {
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["read"], deny: ["exec"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(inheritedToolAllowlistRef).toEqual([]);
+    expect(latestCreateOpenClawToolsOptions().inheritedToolDenylist).toContain("exec");
+  });
+
   it("preserves runtime-allowed message through restrictive profiles", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { profile: "minimal" } },
@@ -908,7 +937,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("wraps plugin-only tools with trusted caller routing context", async () => {
+  it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
     let observedIdentity: unknown;
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -934,6 +963,12 @@ describe("createOpenClawCodingTools", () => {
         messageChannel: "discord",
         messageTo: "channel:123",
         agentAccountId: "work",
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "creator",
+        },
         messageThreadId: "42",
         includeCoreTools: false,
         runtimeToolAllowlist: ["file_fetch"],
@@ -952,7 +987,7 @@ describe("createOpenClawCodingTools", () => {
         sessionKey: "agent:main:telegram:direct:alice",
         turnSourceChannel: "discord",
         turnSourceTo: "channel:123",
-        turnSourceAccountId: "work",
+        turnSourceAccountId: "creator",
         turnSourceThreadId: "42",
       });
     } finally {
@@ -1003,6 +1038,27 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
       "turn-capability-1",
     );
+  });
+
+  it("separates scheduled Gateway authority from the live delivery account", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      agentAccountId: "delivery",
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "creator",
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+    });
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {

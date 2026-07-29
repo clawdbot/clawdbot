@@ -1,14 +1,6 @@
-import { html, nothing, type ReactiveControllerHost } from "lit";
+import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import {
-  DEFAULT_SIDEBAR_ENTRIES,
-  serializeSidebarEntry,
-  type NavigationRouteId,
-  type SidebarZoneEntry,
-} from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
-import type { ThemeMode } from "../app/theme.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
@@ -22,108 +14,18 @@ import {
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import {
+  renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import type { SessionMenuAction } from "./session-menu.ts";
+import { resolveSessionOwnerUser } from "./session-owner-identity.ts";
 import type {
-  SidebarRecentSession,
-  SidebarSessionGroupMenuState,
-  SidebarSessionMenuState,
-  SidebarSessionSortMode,
-} from "./app-sidebar-session-types.ts";
-import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
-import type { SessionCreatorOption } from "./session-owner-chip.ts";
+  SidebarMenusController,
+  SidebarMenusControllerHost,
+} from "./sidebar-menus-controller.ts";
 
-type SidebarMenuAgent = {
-  id: string;
-  name?: string;
-  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
-};
-
-interface SidebarMenusRenderHost extends ReactiveControllerHost, SessionOrganizerControllerHost {
-  readonly activeRouteId?: NavigationRouteId;
-  readonly activeWorkboardBoardId: string;
-  readonly basePath: string;
-  readonly canPairDevice: boolean;
-  readonly connected: boolean;
-  readonly offline: boolean;
-  readonly gatewayVersion: string | null;
-  readonly onNavigate?: (
-    routeId: NavigationRouteId,
-    options?: ApplicationNavigationOptions,
-  ) => void;
-  readonly onPairMobile?: () => void;
-  readonly onRetryConnect?: () => void;
-  readonly pinnedAgentIds: readonly string[];
-  readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
-    Pick<
-      SessionDataController,
-      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
-    >;
-  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
-  readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
-  readonly sessionCreatorOptions: readonly SessionCreatorOption[];
-  readonly sessionOwnershipVisible: boolean;
-  readonly sidebarEntries: readonly string[];
-  sessionSortMode: SidebarSessionSortMode;
-  readonly themeMode: ThemeMode;
-  readonly workboardBoards: readonly SidebarWorkboardBoard[];
-  readonly workboardRenderers?: SidebarWorkboardRenderers;
-  activeChipAgent(): {
-    activeId: string;
-    agent: SidebarMenuAgent | undefined;
-    agents: readonly SidebarMenuAgent[];
-  };
-  agentUnreadCount(agentId: string): number;
-  askAgentCapabilities(agentId: string): void;
-  onUpdateSidebarEntries?(entries: readonly string[]): void;
-  reconciledSidebarZone(): {
-    entries: readonly SidebarZoneEntry[];
-    sidebarEntries: readonly string[];
-  };
-  selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(agentId: string): void;
-}
-
-interface SidebarMenusRenderController {
-  readonly host: SidebarMenusRenderHost;
-  readonly agentMenuFilter: string;
-  readonly agentMenuPosition: { x: number; bottom: number } | null;
-  readonly agentMenuTrigger: HTMLElement | null;
-  readonly customizeMenuPosition: { x: number; y: number } | null;
-  readonly customizeMenuTrigger: HTMLElement | null;
-  readonly identityMenuPosition: { x: number; bottom: number; width: number } | null;
-  readonly identityMenuTrigger: HTMLElement | null;
-  readonly moreMenuPosition: { x: number; y: number } | null;
-  readonly moreMenuTrigger: HTMLElement | null;
-  readonly sessionGroupMenu: SidebarSessionGroupMenuState | null;
-  readonly sessionGroupMenuTrigger: HTMLElement | null;
-  readonly sessionMenu: SidebarSessionMenuState | null;
-  readonly sessionMenuTrigger: HTMLElement | null;
-  readonly sessionMenuWork: SessionMenuWork | null;
-  readonly sessionSortMenuPosition: { x: number; y: number } | null;
-  readonly sessionSortMenuTrigger: HTMLElement | null;
-  cancelPreload(event: Event): void;
-  closeAgentMenu(options?: { restoreFocus?: boolean }): void;
-  closeCustomizeMenu(options?: { restoreFocus?: boolean }): void;
-  closeIdentityMenu(options?: { restoreFocus?: boolean }): void;
-  closeMoreMenu(options?: { restoreFocus?: boolean }): void;
-  closeSessionGroupMenu(options?: { restoreFocus?: boolean }): void;
-  closeSessionMenu(): void;
-  closeSessionSortMenu(options?: { restoreFocus?: boolean }): void;
-  isRouteEnabled(routeId: NavigationRouteId): boolean;
-  openCustomizeMenu(x: number, y: number, trigger?: HTMLElement | null): void;
-  preloadRoute(routeId: NavigationRouteId, event: Event, immediate?: boolean): void;
-  setAgentMenuFilter(next: string): void;
-}
-
-export function renderSidebarCustomizeMenuForController(controller: SidebarMenusRenderController) {
+export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.customizeMenuPosition;
   const trigger = controller.customizeMenuTrigger;
@@ -168,16 +70,17 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
   });
 }
 
-export function renderSidebarAgentMenuForController(controller: SidebarMenusRenderController) {
+export function renderSidebarAgentMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.agentMenuPosition;
   const trigger = controller.agentMenuTrigger;
-  const { activeId, agent, agents } = host.activeChipAgent();
+  const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
     position,
     activeId,
-    activeName: agent ? normalizeAgentLabel(agent) : activeId,
+    activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
     agents,
+    identities,
     filter: controller.agentMenuFilter,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,
@@ -198,7 +101,7 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusRend
   });
 }
 
-export function renderSidebarIdentityMenuForController(controller: SidebarMenusRenderController) {
+export function renderSidebarIdentityMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.identityMenuPosition;
   const trigger = controller.identityMenuTrigger;
@@ -230,7 +133,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusR
   });
 }
 
-export function renderSidebarSessionMenuForController(controller: SidebarMenusRenderController) {
+export function renderSidebarSessionMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const menu = controller.sessionMenu;
   if (!menu) {
@@ -347,9 +250,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusRe
   );
 }
 
-export function renderSidebarSessionGroupMenuForController(
-  controller: SidebarMenusRenderController,
-) {
+export function renderSidebarSessionGroupMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const menu = controller.sessionGroupMenu;
   return renderSidebarSessionGroupMenu({
@@ -379,9 +280,7 @@ export function renderSidebarSessionGroupMenuForController(
   });
 }
 
-export function renderSidebarSessionSortMenuForController(
-  controller: SidebarMenusRenderController,
-) {
+export function renderSidebarSessionSortMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.sessionSortMenuPosition;
   return renderSidebarSessionSortMenu({
@@ -393,6 +292,7 @@ export function renderSidebarSessionSortMenuForController(
     showCron: host.sessionsShowCron,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    resolveCreatorUser: (creatorId) => resolveSessionOwnerUser(host, creatorId),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -423,7 +323,35 @@ export function renderSidebarSessionSortMenuForController(
   });
 }
 
-export function renderSidebarMoreMenuForController(controller: SidebarMenusRenderController) {
+export function renderSidebarCatalogViewMenuForController(controller: SidebarMenusController) {
+  const { host } = controller;
+  const position = controller.catalogViewMenuPosition;
+  return renderSidebarCatalogViewMenu({
+    position,
+    trigger: controller.catalogViewMenuTrigger,
+    grouping: host.catalogProjectGrouping,
+    creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
+    creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    resolveCreatorUser: (creatorId) => resolveSessionOwnerUser(host, creatorId),
+    onGroupingChange: (grouping) => {
+      host.setCatalogProjectGrouping(grouping);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onCreatorFilterChange: (creatorId) => {
+      host.sessionCreatorFilterId = creatorId;
+      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onClose: (restoreFocus) => {
+      if (controller.catalogViewMenuPosition !== position) {
+        return;
+      }
+      controller.closeCatalogViewMenu({ restoreFocus });
+    },
+  });
+}
+
+export function renderSidebarMoreMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.moreMenuPosition;
   const trigger = controller.moreMenuTrigger;
@@ -457,7 +385,7 @@ export function renderSidebarMoreMenuForController(controller: SidebarMenusRende
   });
 }
 
-function activeWorkboardBoardIsPinned(host: SidebarMenusRenderHost): boolean {
+function activeWorkboardBoardIsPinned(host: SidebarMenusControllerHost): boolean {
   return Boolean(
     host.activeWorkboardBoardId &&
     host

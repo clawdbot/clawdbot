@@ -1,9 +1,13 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import type { BoardFace } from "./lib/board/settings.ts";
+export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
+  dashboard: { path: "/dashboard" },
+  dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
@@ -15,12 +19,15 @@ const APP_ROUTE_DEFINITIONS = {
   profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  lobsterdex: { path: "/settings/lobsterdex", aliases: ["/lobsterdex"] },
   notifications: { path: "/settings/notifications" },
   security: { path: "/settings/security" },
   advanced: { path: "/settings/advanced" },
   approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
+  memory: { path: "/settings/memory" },
+  talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
   about: { path: "/settings/about" },
@@ -52,6 +59,18 @@ export function isRouteId(routeId: string): routeId is RouteId {
   return routeId in APP_ROUTE_DEFINITIONS;
 }
 
+// Single source for page definitions: ui/src/pages/*/route.ts spreads this
+// into definePage so router matching can never drift from the table that
+// drives routeIdFromPath and base-path inference.
+export function routePageSpec<Id extends RouteId>(
+  routeId: Id,
+): { id: Id; path: string; aliases?: readonly string[] } {
+  const definition = APP_ROUTE_DEFINITIONS[routeId];
+  return "aliases" in definition
+    ? { id: routeId, path: definition.path, aliases: definition.aliases }
+    : { id: routeId, path: definition.path };
+}
+
 export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
 }
@@ -72,6 +91,28 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   }
   const encodedBoardId = encodeURIComponent(boardId).replaceAll(".", "%2E");
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
+}
+
+export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
+  return routeId === "chat" || routeId === "dashboard";
+}
+
+export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): BoardFace | null {
+  const normalizedPath = normalizePath(pathname);
+  const normalizedBasePath = normalizeBasePath(basePath);
+  if (
+    normalizedBasePath &&
+    normalizedPath !== normalizedBasePath &&
+    !normalizedPath.startsWith(`${normalizedBasePath}/`)
+  ) {
+    return null;
+  }
+  const routePath = normalizedPath.slice(normalizedBasePath.length);
+  return routePath.startsWith("/chat/")
+    ? "chat"
+    : routePath.startsWith("/dashboard/")
+      ? "dashboard"
+      : null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
@@ -109,6 +150,10 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
     return "workboard";
   }
+  const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
+  if (sessionNamespace) {
+    return sessionNamespace;
+  }
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
     const paths: readonly string[] =
@@ -118,6 +163,40 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
     }
   }
   return null;
+}
+
+function collectRoutePaths(): string[] {
+  return APP_ROUTE_IDS.flatMap((routeId) => {
+    const definition = APP_ROUTE_DEFINITIONS[routeId];
+    const paths: string[] = [definition.path];
+    if ("aliases" in definition) {
+      paths.push(...definition.aliases);
+    }
+    return paths;
+  });
+}
+
+// A candidate mount base that is a registered route ("/custodian"), or that
+// sits at or below a multi-segment route namespace ("/settings", including
+// "/settings/other"), is really a root-mounted deep link whose suffix happens
+// to match a route path or alias. Descendants of leaf routes stay valid mount
+// directories so "/apps/openclaw" keeps working. Inference is a last-resort
+// fallback for pages served without the injected base path (vite dev, static
+// hosting); accepted tradeoff: namespaces nested under a real mount prefix
+// ("/ui/settings/other/config") are not rescued here.
+function isRouteOwnedBasePath(basePath: string): boolean {
+  const routePaths = collectRoutePaths().map((path) => normalizePath(path));
+  if (routePaths.includes(basePath)) {
+    return true;
+  }
+  const segments = basePath.split("/").filter(Boolean);
+  for (let count = 1; count <= segments.length; count += 1) {
+    const ancestor = `/${segments.slice(0, count).join("/")}`;
+    if (routePaths.some((path) => path.startsWith(`${ancestor}/`))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -130,19 +209,13 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   const segments = normalizedPath.split("/").filter(Boolean);
-  const routePaths = APP_ROUTE_IDS.flatMap((routeId) => {
-    const definition = APP_ROUTE_DEFINITIONS[routeId];
-    const paths: string[] = [definition.path];
-    if ("aliases" in definition) {
-      paths.push(...definition.aliases);
-    }
-    return paths;
-  });
+  const routePaths = collectRoutePaths();
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
-    if (!routePath && !dynamicWorkboardRoute) {
+    const dynamicSessionRoute = sessionRouteNamespaceFromPath(candidate) !== null;
+    if (!routePath && !dynamicWorkboardRoute && !dynamicSessionRoute) {
       continue;
     }
     const previousSegment = segments[index - 1];
@@ -152,13 +225,24 @@ export function inferBasePathFromPathname(pathname: string): string {
     if (
       index > 0 &&
       previousSegment === firstRouteSegment &&
-      (candidate === routePath || dynamicWorkboardRoute)
+      (candidate === routePath || dynamicWorkboardRoute || dynamicSessionRoute)
     ) {
       return "";
     }
-    return index ? `/${segments.slice(0, index).join("/")}` : "";
+    if (index === 0) {
+      return "";
+    }
+    const basePath = `/${segments.slice(0, index).join("/")}`;
+    // Mis-inferring a route-owned base ("/settings/config" -> "/settings" via
+    // the "/config" alias) rescopes stored gateway settings and asset URLs, so
+    // a connected browser deep-links straight into the login gate.
+    return isRouteOwnedBasePath(basePath) ? "" : basePath;
   }
-  return isMountRoot && segments.length ? `/${segments.join("/")}` : "";
+  if (!isMountRoot || segments.length === 0) {
+    return "";
+  }
+  const mountRootBase = `/${segments.join("/")}`;
+  return isRouteOwnedBasePath(mountRootBase) ? "" : mountRootBase;
 }
 
 export function locationForRoute(routeId: RouteId, basePath: string): RouteLocation {

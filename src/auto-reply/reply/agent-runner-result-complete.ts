@@ -6,8 +6,10 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
@@ -17,7 +19,7 @@ import {
   resolveSourceReplyPolicy,
 } from "./agent-runner-core.js";
 import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
-import type { accountReplyAgentRun } from "./agent-runner-result-accounting.js";
+import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import {
   accumulateSessionUsageFromTranscript,
@@ -35,17 +37,14 @@ import {
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { buildPendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
-import {
-  shouldWarnAboutPrivateMessageToolFinal,
-  warnPrivateMessageToolFinal,
-} from "./private-message-tool-final.js";
+import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
 import { incrementRunCompactionCount } from "./session-run-accounting.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
-  buildStrandedReplyRetryFollowupRun,
+  resolveStrandedReplyRecovery,
 } from "./stranded-reply-recovery.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountReplyAgentRun>>;
+type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
 type PreparedReplyAgentPayloads = {
   kind: "continue";
   activeSessionEntry: SessionEntry | undefined;
@@ -64,6 +63,7 @@ export async function completeReplyAgentRun(input: {
     activeIsNewSession,
     activeSessionStore,
     cfg,
+    execution,
     followupRun,
     isHeartbeat,
     opts,
@@ -105,6 +105,7 @@ export async function completeReplyAgentRun(input: {
   if (autoCompactionCount > 0) {
     const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
     const count = await incrementRunCompactionCount({
+      agentId: followupRun.run.agentId,
       cfg,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -115,7 +116,6 @@ export async function completeReplyAgentRun(input: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       contextTokensUsed,
       newSessionId: runResult.meta?.agentMeta?.sessionId,
-      newSessionFile: runResult.meta?.agentMeta?.sessionFile,
     });
     const refreshedSessionEntry =
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
@@ -125,7 +125,7 @@ export async function completeReplyAgentRun(input: {
         key: queueKey,
         previousSessionId,
         nextSessionId: refreshedSessionEntry.sessionId,
-        nextSessionFile: refreshedSessionEntry.sessionFile,
+        nextSessionFile: queueKey,
       });
     }
 
@@ -149,6 +149,9 @@ export async function completeReplyAgentRun(input: {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
+  }
+  if (execution.abortReason) {
+    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
   const prefixPayloads = [...prefixNotices];
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
@@ -238,7 +241,9 @@ export async function completeReplyAgentRun(input: {
   const sessionUsage =
     traceAuthorized && activeSessionEntry?.traceLevel === "raw"
       ? await accumulateSessionUsageFromTranscript({
+          agentId: followupRun.run.agentId,
           sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
+          sessionKey: followupRun.run.sessionKey,
           storePath,
           sessionFile: followupRun.run.sessionFile,
         })
@@ -314,55 +319,42 @@ export async function completeReplyAgentRun(input: {
         ? runResult.meta.finalAssistantVisibleText
         : (rawAssistantText ?? ""),
     );
-    const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
     // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
     // recovering here would duplicate that message.
-    const isStrandedReply =
-      !isHeartbeat &&
-      !isRoomEvent &&
-      shouldWarnAboutPrivateMessageToolFinal({
-        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-        sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-        successfulSourceReplyDelivery: completedSourceReplyDelivery,
-        finalText: assistantFinalText,
-      });
-    const retryMissingSourceDelivery =
-      isStrandedReplyRetryRun &&
-      !isHeartbeat &&
-      !isRoomEvent &&
-      sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
-      !sourceReplyPolicy.sendPolicyDenied &&
-      !completedSourceReplyDelivery;
-    if (isStrandedReply) {
+    const recovery = resolveStrandedReplyRecovery({
+      base: followupRun,
+      finalText: assistantFinalText,
+      sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+      sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+      successfulSourceReplyDelivery: completedSourceReplyDelivery,
+      isHeartbeat,
+      isRoomEvent: sessionCtx.InboundEventKind === "room_event",
+    });
+    if (recovery.kind === "retry" || (recovery.kind === "diagnostic" && recovery.warn)) {
       warnPrivateMessageToolFinal({
         sessionKey,
         channel:
           sessionCtx.OriginatingChannel ??
           sessionCtx.Surface ??
           sessionCtx.Provider ??
-          activeSessionEntry?.channel,
+          sessionDeliveryChannel(activeSessionEntry),
         finalTextLength: assistantFinalText.trim().length,
       });
     }
-    if (isStrandedReply || retryMissingSourceDelivery) {
-      if (isStrandedReplyRetryRun) {
+    if (recovery.kind === "diagnostic") {
+      finalPayloads = [...finalPayloads, recovery.payload];
+    } else if (recovery.kind === "retry") {
+      const retryEnqueued = enqueueFollowupRun(
+        queueKey,
+        recovery.run,
+        resolvedQueue,
+        "none",
+        runFollowupTurn,
+        false,
+        { position: "front" },
+      );
+      if (!retryEnqueued) {
         finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
-      } else {
-        const retryEnqueued = enqueueFollowupRun(
-          queueKey,
-          buildStrandedReplyRetryFollowupRun(followupRun, {
-            finalText: assistantFinalText,
-            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-          }),
-          resolvedQueue,
-          "none",
-          runFollowupTurn,
-          false,
-          { position: "front" },
-        );
-        if (!retryEnqueued) {
-          finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
-        }
       }
     }
     const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
@@ -395,21 +387,36 @@ export async function completeReplyAgentRun(input: {
         runtimePolicySessionKey,
         opts,
       });
-      await updateSessionEntry(
+      const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
+      // A reset can rebind the key while the model runs; its replacement must
+      // never inherit the old run's final or advertise an uncommitted intent.
+      const persistedPendingFinalDelivery = await updateSessionEntry(
         { storePath, sessionKey },
-        () => ({
-          pendingFinalDelivery: true,
-          pendingFinalDeliveryText: resolvedPendingText,
-          pendingFinalDeliveryIntentId,
-          pendingFinalDeliveryContext,
-          pendingFinalDeliveryCreatedAt: Date.now(),
-          updatedAt: Date.now(),
-        }),
+        (entry) =>
+          entry.sessionId === expectedSessionId
+            ? {
+                pendingFinalDelivery: {
+                  kind: "replayable" as const,
+                  text: resolvedPendingText,
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: pendingFinalDeliveryContext,
+                  createdAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              }
+            : null,
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
         },
       );
+      if (
+        persistedPendingFinalDelivery?.sessionId !== expectedSessionId ||
+        persistedPendingFinalDelivery.pendingFinalDelivery?.intentId !==
+          pendingFinalDeliveryIntentId
+      ) {
+        throw new Error("pending final delivery session changed or was deleted");
+      }
     }
   }
   const result = returnWithQueuedFollowupDrain(

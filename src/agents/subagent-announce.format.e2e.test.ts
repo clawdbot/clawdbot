@@ -14,6 +14,7 @@ import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -62,7 +63,13 @@ type MockSubagentRun = {
     error?: string;
   };
 };
-type SessionEntryFixture = Omit<SessionEntry, "updatedAt"> & { updatedAt?: number };
+type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
+  updatedAt?: number;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
 type SessionStoreFixture = Record<string, SessionEntryFixture | undefined>;
 
 function visibleAgentResponse(runId = "run-main") {
@@ -292,18 +299,15 @@ function setMessageToolGroupReplyConfig(): void {
   });
 }
 
-function toSessionEntry(
-  sessionKey: string,
-  entry?: Partial<SessionEntry>,
-): SessionEntry | undefined {
+function toSessionEntry(sessionKey: string, entry?: SessionEntryFixture): SessionEntry | undefined {
   if (!entry) {
     return undefined;
   }
-  return {
+  return normalizeLegacySessionEntryDelivery({
+    ...entry,
     sessionId: entry.sessionId ?? sessionKey,
     updatedAt: entry.updatedAt ?? Date.now(),
-    ...entry,
-  };
+  } as SessionEntry);
 }
 
 function loadSessionStoreFixture(): Record<string, SessionEntry> {
@@ -383,9 +387,6 @@ describe("subagent announce formatting", () => {
       }
       if (typed.method === "chat.history") {
         return await chatHistoryMock(typed.params?.sessionKey);
-      }
-      if (typed.method === "sessions.patch") {
-        return {};
       }
       if (typed.method === "sessions.delete") {
         sessionsDeleteSpy(typed);
@@ -597,7 +598,7 @@ describe("subagent announce formatting", () => {
           ],
         };
       }
-      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+      if (typed.method === "sessions.delete") {
         return {};
       }
       return {};

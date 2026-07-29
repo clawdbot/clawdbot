@@ -20,7 +20,6 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
-  const memory = "session-memory";
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
@@ -51,6 +50,19 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("marks live transport modules as live-driver-only", () => {
+    for (const scenarioId of [
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-mxid-prefixed-command-block",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+    ]) {
+      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
+        "live",
+      );
+    }
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
@@ -59,51 +71,34 @@ describe("qa scenario catalog channel contracts", () => {
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
-  it("settles subagent completions before reading the SQLite session store", () => {
+  it("uses durable subagent completion evidence before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
-    const completionWaits = [...flow.matchAll(/expectedChildCompletionMarkers/gu)].map(
-      (match) => match.index,
-    );
+    const completionWait = flow.indexOf('"items":{"expr":"config.expectedChildCompletionMarkers"}');
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
-    expect(completionWaits).toHaveLength(2);
+    expect(flow).toContain("readSessionTranscriptSummary(env, sessionKey)");
+    expect(flow).not.toContain("waitForAgentHistoryReply");
+    expect(
+      flow.split("String(candidate.text ?? '').trim() === childCompletionMarker").length - 1,
+    ).toBe(1);
+    expect(flow).toContain(
+      "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && timeoutSpawnRequests.length >= 2",
+    );
+    expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
+    expect(flow).toContain('saveAs":"timeoutEvidence');
+    expect(flow).toContain("Promise.all([readSessionTranscriptSummary");
+    expect(completionWait).toBeGreaterThan(-1);
     expect(storeReads).toHaveLength(2);
-    expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
+    expect(completionWait).toBeLessThan(storeReads[0] ?? -1);
   });
 
-  it("adds a dreaming shadow trial report scenario", () => {
-    const scenario = readQaScenarioById("dreaming-shadow-trial-report");
-    const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
-      | {
-          prompt?: string;
-          reportName?: string;
-          expectedReportAll?: string[];
-          forbiddenReplyNeedles?: string[];
-          seededMemory?: string;
-        }
-      | undefined;
-    const flow = JSON.stringify(scenario.execution.flow);
+  it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-message-flows"));
 
-    expect(scenario.coverage?.primary).toEqual([`${memory}.memory-files-dreaming`]);
-    expect(scenario.coverage?.secondary).toEqual([
-      `${memory}.memory-files-promotion`,
-      `${memory}.memory-files-artifact-safety`,
-    ]);
-    expect(config?.expectedReportAll).toContain("verdict: helpful");
-    expect(config?.expectedReportAll).toContain("exact verification commands and remaining risk");
-    expect(config?.expectedReportAll).toContain("omits the exact command and remaining risk");
-    expect(config?.expectedReportAll).toContain("calls out the remaining review risk");
-    expect(config?.forbiddenReplyNeedles).toContain("candidate was promoted to MEMORY.md");
-    expect(flow).toContain("plannedToolName === 'write'");
-    expect(flow).toContain("readIndices[1] < firstWrite");
-    expect(flow).toContain("String(memoryAfter) === config.seededMemory");
-  });
-
-  it("enables Telegram previews for channel streaming evidence", () => {
-    const scenario = readQaScenarioById("channel-message-flows");
-
-    expect(scenario.coverage?.primary).toEqual([`${agentRuntime}.streaming-replies`]);
+    expect(scenario.execution.channel).toBeUndefined();
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       channels: { telegram: { streaming: { mode: "partial" } } },

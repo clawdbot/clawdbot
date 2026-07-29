@@ -355,6 +355,11 @@ export class CodexAppServerClient {
     return this.runtimeIdentity ? { ...this.runtimeIdentity } : undefined;
   }
 
+  /** Returns a bounded, redacted stderr diagnostic from the app-server process. */
+  getStderrDiagnostic(): string | undefined {
+    return redactCodexAppServerLinePreview(this.stderrTail) || undefined;
+  }
+
   /** Stable generation id for this exact physical client instance. */
   getInstanceId(): string {
     return this.instanceId;

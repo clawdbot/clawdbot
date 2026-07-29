@@ -10,6 +10,7 @@ import {
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
+import { applyPreparedRuntimeAuthToModel } from "../agents/provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../agents/provider-secret-egress.js";
 import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
 import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
@@ -184,10 +185,7 @@ async function prepareResolvedImageRuntime(
     }),
   });
   apiKey = preparedAuth?.apiKey?.trim() || apiKey;
-  const runtimeBaseUrl = preparedAuth?.baseUrl?.trim();
-  if (runtimeBaseUrl) {
-    model = { ...model, baseUrl: runtimeBaseUrl };
-  }
+  model = applyPreparedRuntimeAuthToModel(model, preparedAuth);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return bindResolvedImageRuntime(
     params,

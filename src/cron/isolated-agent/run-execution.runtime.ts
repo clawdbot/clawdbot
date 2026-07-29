@@ -7,7 +7,7 @@ export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 export { resolveCronAgentLane } from "../../agents/lanes.js";
 export { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-export { runWithModelFallback } from "../../agents/model-fallback.js";
+export { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 export { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 export {
   classifyEmbeddedAgentRunResultForModelFallback,

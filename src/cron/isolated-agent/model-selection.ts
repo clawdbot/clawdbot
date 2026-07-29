@@ -2,21 +2,21 @@ import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob } from "../types.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getModelRefStatus,
-  loadPreparedModelCatalogOwnerSnapshot,
+  loadResolvedPublishedModelCatalogOwner,
   normalizeModelSelection,
+  publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
-  resolveAgentWorkspaceDir,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveSubagentModelConfigSelectionResult,
+  type ResolvedPublishedModelCatalogOwner,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -26,20 +26,9 @@ type CronSessionModelOverrides = {
 
 type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
 
-/** Inputs used to resolve the model for one isolated cron run. */
-type CronModelSelectionOwner = {
-  config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  catalog: Awaited<
-    ReturnType<typeof loadPreparedModelCatalogOwnerSnapshot>
-  >["modelCatalog"]["entries"];
-};
-
 type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
-  owner?: CronModelSelectionOwner;
+  owner?: ResolvedPublishedModelCatalogOwner;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
@@ -57,7 +46,7 @@ type ResolveCronModelSelectionResult =
       model: string;
       modelSource: CronModelSelectionSource;
       cfgWithAgentDefaults: OpenClawConfig;
-      owner: CronModelSelectionOwner;
+      owner: ResolvedPublishedModelCatalogOwner;
     }
   | {
       ok: false;
@@ -94,32 +83,23 @@ export async function resolveCronModelSelectionOwner(params: {
   requiredAgentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-}): Promise<CronModelSelectionOwner> {
-  const owner = await loadPreparedModelCatalogOwnerSnapshot({
+}): Promise<ResolvedPublishedModelCatalogOwner> {
+  const owner = await loadResolvedPublishedModelCatalogOwner({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     readOnly: true,
   });
-  if (!owner.agentId) {
-    throw new Error(`cron model catalog owner did not identify an agent (${owner.agentDir})`);
-  }
   if (
     params.requiredAgentId &&
-    normalizeAgentId(owner.agentId) !== normalizeAgentId(params.requiredAgentId)
+    !publishedModelCatalogOwnerMatchesAgent(owner, params.requiredAgentId)
   ) {
     throw new Error(
-      `cron model catalog owner changed from ${normalizeAgentId(params.requiredAgentId)} to ${normalizeAgentId(owner.agentId)}`,
+      `cron model catalog owner changed from ${params.requiredAgentId} to ${owner.agentId}`,
     );
   }
-  return {
-    config: owner.config,
-    agentId: owner.agentId,
-    agentDir: owner.agentDir,
-    workspaceDir: owner.workspaceDir ?? resolveAgentWorkspaceDir(owner.config, owner.agentId),
-    catalog: owner.modelCatalog.entries,
-  };
+  return owner;
 }
 
 /** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */
@@ -153,7 +133,7 @@ export async function resolveCronModelSelection(
     ...owner.config,
     agents: Object.assign({}, owner.config.agents, { defaults: ownerAgentDefaults }),
   };
-  const catalog = owner.catalog;
+  const catalog = owner.modelCatalog.entries;
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,

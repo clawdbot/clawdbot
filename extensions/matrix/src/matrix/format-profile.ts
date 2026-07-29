@@ -2,7 +2,7 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   convertMarkdownTables,
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
 
@@ -33,29 +33,14 @@ export function createMatrixPrivateMarkers(
   return { open: markers[0] ?? "", close: markers[1] ?? "", padding: markers[2] ?? "" };
 }
 
-export const MATRIX_FORMAT_PROFILE = {
+export const MATRIX_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "html",
   constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
     taskList: "fallback",
-    table: "native",
-    blockquote: "native",
     image: "fallback",
-    mention: "native",
   },
   chunk: { limit: 4_000, unit: "chars" },
-} satisfies FormatCapabilityProfile;
+});
 
 export function isMarkdownEscaped(markdown: string, index: number): boolean {
   let slashCount = 0;

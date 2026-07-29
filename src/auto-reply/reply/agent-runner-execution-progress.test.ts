@@ -3,7 +3,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   requireRecord,
@@ -19,7 +19,7 @@ import type {
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: lifecycle progress", () => {
+describe("executeAgentTurn: lifecycle progress", () => {
   it("forwards item lifecycle events to reply options", async () => {
     const onItemEvent = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -38,10 +38,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const pendingToolTasks = new Set<Promise<void>>();
     const typingSignals = createMockTypingSignaler();
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -110,8 +110,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           onItemEvent,
@@ -161,8 +161,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           onItemEvent,
@@ -237,8 +237,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
       }),
@@ -272,8 +272,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           onToolStart,
@@ -317,8 +317,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           onToolStart,
@@ -373,8 +373,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           preserveProgressCallbackStartOrder: true,
@@ -421,9 +421,9 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
     const typingSignals = createMockTypingSignaler();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         opts: {
           preserveProgressCallbackStartOrder: true,
@@ -454,8 +454,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -499,8 +499,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -579,8 +579,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -633,8 +633,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       throw new Error("rebound failure");
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -694,8 +694,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -747,11 +747,11 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       meta: {},
     }));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "ok do it",
       followupRun,
       sessionCtx: {
@@ -807,11 +807,11 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       meta: {},
     }));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "explain in detail what changed",
       followupRun,
       sessionCtx: {

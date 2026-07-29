@@ -13,6 +13,7 @@ import type { ExecuteDispatchReadyState } from "./dispatch-from-config.execute.j
 import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
+  NO_VISIBLE_REPLY_FALLBACK_TEXT,
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
@@ -44,11 +45,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     markInboundDedupeReplayUnsafe,
     maybeApplyTtsWithFinalizationLease,
     normalizeReplyMediaPayload,
+    noVisibleReplyFallbackDirected,
     preserveProgressCallbackStartOrder,
     reasoningPayloadsEnabled,
     recordAgentDispatchCompleted,
     recordProcessed,
     replyResult,
+    replyOperationRunState,
     replyRoute,
     routeReplyToOriginating,
     sendFinalPayload,
@@ -57,9 +60,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sessionKey,
     sessionStoreEntry,
     sessionTtsAuto,
+    sourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     throwIfDispatchOperationAborted,
+    turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
@@ -141,8 +146,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    attemptedFinalDelivery = true;
     const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    if (finalReply.dedupedAgainstBlock) {
+      // The delivering block already settled into the turn ledger.
+      continue;
+    }
+    attemptedFinalDelivery = true;
     queuedFinal = finalReply.queuedFinal || queuedFinal;
     routedFinalCount += finalReply.routedFinalCount;
     if (finalReply.queuedFinal) {
@@ -255,8 +264,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           } else {
             throwIfDispatchOperationAborted();
             markInboundDedupeReplayUnsafe();
-            const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
-            queuedFinal = didQueue || queuedFinal;
+            queuedFinal =
+              turnLedger.sendQueued("final", normalizedTtsOnlyPayload).queued || queuedFinal;
           }
         }
       } catch (err) {
@@ -271,7 +280,87 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
-  const counts = dispatcher.getQueuedCounts();
+  // Observed delivery is plugin-attested visibility, a trust level the transport
+  // ledger intentionally does not own. Directedness gates both the fallback and
+  // eligibility: only a turn that positively addressed the bot may surface a
+  // visible failure notice.
+  const replyAcceptedByActiveRun = replyOperationRunState.admission?.status === "accepted";
+  const noVisibleReplyFallbackAllowed = () =>
+    noVisibleReplyFallbackDirected &&
+    !suppressDelivery &&
+    !sendPolicyDenied &&
+    sourceReplyDeliveryMode !== "message_tool_only" &&
+    !emptyFinalAllowedAsSilent &&
+    !getObservedReplyDelivery() &&
+    !replyAcceptedByActiveRun &&
+    !turnLedger.hasVisibleDelivery() &&
+    !turnLedger.hasForeignQueuedAdmissions();
+  let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
+  if (noVisibleReplyFallbackAllowed()) {
+    // Only a turn that still looks empty pays for settlement: pending admissions
+    // must resolve (beforeDeliver cancellation, pre-transport failure) before the
+    // silence verdict. Turns with settled visibility or a policy-suppressed
+    // fallback skip the wait, so deliveries that legitimately outlive the turn
+    // (queued same-session mirroring) cannot deadlock the gate on themselves.
+    queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
+  }
+  let counts = dispatcher.getQueuedCounts();
+  let noVisibleReplyFallbackDelivered = false;
+  // Visible agent turns must never end silently: empty model completions get a
+  // core fallback final. emptyFinalAllowedAsSilent is the only sanctioned silence.
+  // An aborted or timed-out settle leaves delivery state unknown; admission
+  // then keeps its legacy trust and the turn ends without a fallback.
+  if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
+    try {
+      throwIfDispatchOperationAborted();
+      const fallbackPayload: ReplyPayload = { text: NO_VISIBLE_REPLY_FALLBACK_TEXT };
+      const result = await routeReplyToOriginating(fallbackPayload, {
+        abortSignal: getDispatchAbortSignal(),
+        kind: "final",
+      });
+      if (result) {
+        // Hook-suppressed results (ok + suppressed) stay undelivered so the
+        // eligibility flag survives for channel-level fallbacks.
+        if (isRoutedReplyDelivered(result)) {
+          queuedFinal = true;
+          noVisibleReplyFallbackDelivered = true;
+          routedFinalCount += 1;
+        } else if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (no-visible-reply fallback) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else {
+        throwIfDispatchOperationAborted();
+        markInboundDedupeReplayUnsafe();
+        const fallbackSend = turnLedger.sendQueued("final", fallbackPayload);
+        if (fallbackSend.queued) {
+          // Settlement decides the flag: a beforeDeliver hook can still cancel
+          // the admitted fallback, and a cancelled fallback must keep the
+          // eligibility flag alive for channel-level recovery. The bounded
+          // abort-aware wait keeps a wedged transport from blocking
+          // finalization; on abort/timeout (and for untracked dispatchers)
+          // admission stays the strongest fact so channels cannot double-send.
+          const fallbackSettle = await turnLedger.settleQueued(getDispatchAbortSignal());
+          throwIfDispatchOperationAborted();
+          if (fallbackSettle !== "settled" || turnLedger.hasVisibleDelivery()) {
+            queuedFinal = true;
+            noVisibleReplyFallbackDelivered = true;
+            // Re-snapshot so the delivered fallback is reflected in reported counts,
+            // matching the TTS-only path which enqueues before the snapshot.
+            counts = dispatcher.getQueuedCounts();
+          }
+        }
+      }
+    } catch (err) {
+      if (isDispatchReplyOperationAbortedError(err)) {
+        throw err;
+      }
+      logVerbose(
+        `dispatch-from-config: no-visible-reply fallback failed: ${formatErrorMessage(err)}`,
+      );
+    }
+  }
   counts.final += routedFinalCount;
   commitInboundDedupeIfClaimed();
   recordAgentDispatchCompleted("completed");
@@ -290,9 +379,21 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         ? { sessionMetadataChanges: state.sessionMetadataChangesForResult }
         : {}),
       ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
-      ...(!queuedFinal && !getObservedReplyDelivery() && !emptyFinalAllowedAsSilent
+      // Eligibility keys off settled visible delivery: a suppressed or cancelled
+      // final (including the core fallback itself) leaves channel-level recovery
+      // eligible, while any settled visible delivery clears it. An aborted or
+      // timed-out settle leaves delivery unresolved, and a fallback reported as
+      // delivered must not stay recoverable — either could double-send.
+      ...(noVisibleReplyFallbackDirected &&
+      queuedSettleResult === "settled" &&
+      !turnLedger.hasVisibleDelivery() &&
+      !noVisibleReplyFallbackDelivered &&
+      !getObservedReplyDelivery() &&
+      !replyAcceptedByActiveRun &&
+      !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
+      ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     }),
   };

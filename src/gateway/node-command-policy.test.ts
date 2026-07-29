@@ -537,27 +537,23 @@ describe("gateway/node-command-policy", () => {
     ["windows", "Windows"],
     ["linux", "Linux"],
   ])(
-    "keeps computer.act out of the %s runtime allowlist until explicitly allowed",
+    "allows node-enabled and paired computer.act on %s without a persistent allow",
     (platform, deviceFamily) => {
       const desktopNode = {
         platform,
         deviceFamily,
         commands: ["computer.act", "screen.snapshot"],
+        approvedCommands: ["computer.act", "screen.snapshot"],
       };
-      const unarmed = resolveNodeCommandAllowlist({} as OpenClawConfig, desktopNode);
-      expect(unarmed.has("computer.act")).toBe(false);
+      const enabled = resolveNodeCommandAllowlist({} as OpenClawConfig, desktopNode);
+      expect(enabled.has("computer.act")).toBe(true);
       expect(
-        resolveNodeCommandAllowlist({} as OpenClawConfig, {
-          ...desktopNode,
-          approvedCommands: ["computer.act"],
-        }).has("computer.act"),
-      ).toBe(false);
-
-      const armed = resolveNodeCommandAllowlist(
-        { gateway: { nodes: { commands: { allow: ["computer.act"] } } } } as OpenClawConfig,
-        desktopNode,
-      );
-      expect(armed.has("computer.act")).toBe(true);
+        isNodeCommandAllowed({
+          command: "computer.act",
+          declaredCommands: desktopNode.commands,
+          allowlist: enabled,
+        }),
+      ).toEqual({ ok: true });
 
       const denied = resolveNodeCommandAllowlist(
         {
@@ -607,52 +603,32 @@ describe("gateway/node-command-policy", () => {
     expect(windowsPairing.has("screen.record")).toBe(false);
   });
 
-  it("keeps computer.act declarable at pairing even when fresh-setup commands.deny blocks it", () => {
-    // Fresh gateway setup seeds commands.deny from DEFAULT_DANGEROUS_NODE_COMMANDS,
-    // which includes computer.act. The pairing surface must still retain it so
-    // the node can be armed later; invoke-time policy still blocks it at runtime.
+  it("applies an operator-authored computer.act deny at pairing and invocation", () => {
     const cfg = {
       gateway: {
-        nodes: { commands: { deny: ["computer.act", "screen.record", "camera.snap"] } },
+        nodes: { commands: { deny: ["computer.act"] } },
       },
     } as OpenClawConfig;
     const macNode = { platform: "macos", deviceFamily: "Mac", commands: ["computer.act"] };
-    expect(resolveNodePairingCommandAllowlist(cfg, macNode).has("computer.act")).toBe(true);
-    // Runtime allowlist still gates it until armed via commands.allow.
+    expect(resolveNodePairingCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
     expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
-    // Arming (commands.allow opt-in) makes it runtime-invocable.
-    const armedCfg = {
-      gateway: { nodes: { commands: { allow: ["computer.act"] } } },
-    } as OpenClawConfig;
-    expect(resolveNodeCommandAllowlist(armedCfg, macNode).has("computer.act")).toBe(true);
   });
 
-  it("keeps mobile UI commands dangerous until Android operators explicitly arm them", () => {
+  it("allows node-enabled and paired mobile UI without a persistent allow", () => {
     const node = {
       platform: "android",
       deviceFamily: "Android",
       commands: ["mobile.ui.observe", "mobile.ui.act"],
       approvedCommands: ["mobile.ui.observe", "mobile.ui.act"],
     };
-    const unarmed = resolveNodeCommandAllowlist({} as OpenClawConfig, node);
-    expect(unarmed.has("mobile.ui.observe")).toBe(false);
-    expect(unarmed.has("mobile.ui.act")).toBe(false);
-
-    const armed = resolveNodeCommandAllowlist(
-      {
-        gateway: {
-          nodes: { commands: { allow: ["mobile.ui.observe", "mobile.ui.act"] } },
-        },
-      } as OpenClawConfig,
-      node,
-    );
-    expect(armed.has("mobile.ui.observe")).toBe(true);
-    expect(armed.has("mobile.ui.act")).toBe(true);
+    const enabled = resolveNodeCommandAllowlist({} as OpenClawConfig, node);
+    expect(enabled.has("mobile.ui.observe")).toBe(true);
+    expect(enabled.has("mobile.ui.act")).toBe(true);
     expect(
       isNodeCommandAllowed({
         command: "mobile.ui.act",
         declaredCommands: node.commands,
-        allowlist: armed,
+        allowlist: enabled,
       }),
     ).toEqual({ ok: true });
 
@@ -706,11 +682,11 @@ describe("gateway/node-command-policy", () => {
       false,
     );
 
-    const armed = {
+    const enabled = {
       gateway: { nodes: { commands: { allow: ["health.summary"] } } },
     } as OpenClawConfig;
-    expect(resolveNodePairingCommandAllowlist(armed, node).has("health.summary")).toBe(true);
-    expect(resolveNodeCommandAllowlist(armed, node).has("health.summary")).toBe(true);
+    expect(resolveNodePairingCommandAllowlist(enabled, node).has("health.summary")).toBe(true);
+    expect(resolveNodeCommandAllowlist(enabled, node).has("health.summary")).toBe(true);
 
     const denied = {
       gateway: {
@@ -720,6 +696,28 @@ describe("gateway/node-command-policy", () => {
       },
     } as OpenClawConfig;
     expect(resolveNodeCommandAllowlist(denied, node).has("health.summary")).toBe(false);
+  });
+
+  it("requires a persistent allow for sms.send and keeps deny-wins semantics", () => {
+    const node = {
+      platform: "android",
+      deviceFamily: "Android",
+      commands: ["sms.send"],
+      approvedCommands: ["sms.send"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("sms.send")).toBe(false);
+
+    const enabled = {
+      gateway: { nodes: { commands: { allow: ["sms.send"] } } },
+    } as OpenClawConfig;
+    expect(resolveNodeCommandAllowlist(enabled, node).has("sms.send")).toBe(true);
+
+    const denied = {
+      gateway: {
+        nodes: { commands: { allow: ["sms.send"], deny: ["sms.send"] } },
+      },
+    } as OpenClawConfig;
+    expect(resolveNodeCommandAllowlist(denied, node).has("sms.send")).toBe(false);
   });
 
   it("reads foreground restriction metadata from plugin node policies", () => {

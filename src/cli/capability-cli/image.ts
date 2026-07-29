@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { runWithImageModelFallback } from "../../agents/model-fallback.js";
+import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import {
@@ -64,6 +64,7 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
+  requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),

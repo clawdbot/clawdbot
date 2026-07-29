@@ -3,6 +3,8 @@ import { normalizeMediaReferenceForComparison } from "../../media/media-referenc
  * Extracts visible delivery evidence from embedded-agent run results.
  */
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
+export { hasVisibleAgentPayload } from "./message-visibility.js";
 
 /**
  * Helpers for deciding whether an embedded run produced user-visible or outbound effects.
@@ -10,22 +12,6 @@ import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
  * Fallback and retry code uses these checks to avoid rerunning a model after messages, media,
  * cron entries, or spawned sessions have already been delivered.
  */
-type AgentPayloadLike = {
-  text?: unknown;
-  mediaUrl?: unknown;
-  mediaUrls?: unknown;
-  presentation?: unknown;
-  interactive?: unknown;
-  channelData?: unknown;
-  attachments?: unknown;
-  isError?: unknown;
-  isReasoning?: unknown;
-  /** Durable terminal evidence can retain visibility without persisting text. */
-  visible?: unknown;
-  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
-  isCommentary?: unknown;
-};
-
 export type AgentDeliveryEvidence = {
   payloads?: unknown;
   /** Durable recovery evidence sets this when its bounded payload projection omitted entries. */
@@ -123,6 +109,18 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
+function collectStringValues(value: unknown, output: Set<string>) {
+  if (typeof value === "string" && value.trim()) {
+    output.add(value.trim());
+  } else if (Array.isArray(value)) {
+    value.filter(hasNonEmptyString).forEach((entry) => output.add(entry.trim()));
+  }
+}
+
+function normalizeEvidenceStatus(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined;
+}
+
 function hasVisibleMessagingToolTarget(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -147,62 +145,6 @@ function hasVisibleMessagingToolTarget(value: unknown): boolean {
     );
   }
   return true;
-}
-
-function hasVisibleAttachmentReference(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  const urls = new Set<string>();
-  for (const attachment of value) {
-    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
-    }
-  }
-  return urls.size > 0;
-}
-
-function collectStringValues(value: unknown, output: Set<string>) {
-  if (typeof value === "string" && value.trim()) {
-    output.add(value.trim());
-    return;
-  }
-  if (!Array.isArray(value)) {
-    return;
-  }
-  for (const entry of value) {
-    if (typeof entry === "string" && entry.trim()) {
-      output.add(entry.trim());
-    }
-  }
-}
-
-function collectMediaUrlsFromRecord(
-  record: Record<string, unknown>,
-  output: Set<string>,
-  // Payloads arrive as in-process `unknown` objects, so a malformed
-  // self-referential `attachments` chain would recurse until the stack
-  // overflows. Track visited records to bound the descent, matching
-  // redactStringsDeep in embedded-agent-subscribe.tools.ts.
-  seen = new WeakSet<object>(),
-) {
-  if (seen.has(record)) {
-    return;
-  }
-  seen.add(record);
-  collectStringValues(record.mediaUrl, output);
-  collectStringValues(record.mediaUrls, output);
-  collectStringValues(record.path, output);
-  collectStringValues(record.url, output);
-  collectStringValues(record.filePath, output);
-  const attachments = record.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
-      }
-    }
-  }
 }
 
 /** Collects media URLs from agent payloads and committed messaging-tool delivery metadata. */
@@ -237,14 +179,27 @@ export function collectMessagingToolDeliveredMediaUrls(
   return Array.from(urls);
 }
 
+function getPayloadDeliveryStatusRecord(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
+): Record<string, unknown> | undefined {
+  return result.deliveryStatus && typeof result.deliveryStatus === "object"
+    ? (result.deliveryStatus as Record<string, unknown>)
+    : undefined;
+}
+
+function getPayloadDeliveryOutcomes(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
+): unknown[] | undefined {
+  const outcomes = getPayloadDeliveryStatusRecord(result)?.payloadOutcomes;
+  return Array.isArray(outcomes) ? outcomes : undefined;
+}
+
 function collectPayloadOutcomeMediaUrls(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
   statuses: (outcome: Record<string, unknown>) => boolean,
 ): string[] {
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = Array.isArray(result.deliveryStatus?.payloadOutcomes)
-    ? result.deliveryStatus.payloadOutcomes
-    : [];
+  const outcomes = getPayloadDeliveryOutcomes(result) ?? [];
   const urls = new Set<string>();
   for (const outcome of outcomes) {
     if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
@@ -269,7 +224,7 @@ function collectPayloadOutcomeMediaUrls(
 
 function hasDeliverableAgentPayload(payload: unknown): boolean {
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const visible = (payload as AgentPayloadLike).visible;
+    const visible = (payload as { visible?: unknown }).visible;
     if (visible === false) {
       return false;
     }
@@ -299,14 +254,29 @@ function collectDeliverablePayloadMediaUrls(payloads: unknown): string[] {
 /** Collect automatic-delivery media proven sent by aggregate or per-payload evidence. */
 export function collectAutomaticDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
+  options: {
+    includeAmbiguousSinglePayloadFailure?: boolean;
+    includeSuppressedOutcomes?: boolean;
+  } = {},
 ): string[] {
-  if (Array.isArray(result.deliveryStatus?.payloadOutcomes)) {
+  const outcomes = getPayloadDeliveryOutcomes(result);
+  if (outcomes) {
+    const payloads = Array.isArray(result.payloads) ? result.payloads : [];
     return collectPayloadOutcomeMediaUrls(
       result,
-      (outcome) => outcome.status === "sent" || outcome.status === "suppressed",
+      (outcome) =>
+        normalizeEvidenceStatus(outcome.status) === "sent" ||
+        (options.includeSuppressedOutcomes !== false &&
+          normalizeEvidenceStatus(outcome.status) === "suppressed") ||
+        (options.includeAmbiguousSinglePayloadFailure === true &&
+          normalizeEvidenceStatus(outcome.status) === "failed" &&
+          outcome.sentBeforeError === true &&
+          outcomes.length === 1 &&
+          payloads.length === 1),
     );
   }
-  return result.deliveryStatus?.status === "sent" || result.deliveryStatus?.status === "suppressed"
+  const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
+  return status === "sent" || status === "suppressed"
     ? collectDeliverablePayloadMediaUrls(result.payloads)
     : [];
 }
@@ -317,7 +287,8 @@ export function collectAmbiguousAutomaticMediaUrls(
 ): string[] {
   return collectPayloadOutcomeMediaUrls(
     result,
-    (outcome) => outcome.status === "failed" && outcome.sentBeforeError === true,
+    (outcome) =>
+      normalizeEvidenceStatus(outcome.status) === "failed" && outcome.sentBeforeError === true,
   );
 }
 
@@ -349,10 +320,11 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
       record.index < payloads.length
         ? record.index
         : undefined;
+    const status = normalizeEvidenceStatus(record.status);
     const classified =
-      record.status === "sent" ||
-      record.status === "suppressed" ||
-      (record.status === "failed" && typeof record.sentBeforeError === "boolean");
+      status === "sent" ||
+      status === "suppressed" ||
+      (status === "failed" && typeof record.sentBeforeError === "boolean");
     if (index !== undefined && classified) {
       classifiedIndexes.add(index);
     }
@@ -364,6 +336,86 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
     );
     return !containsExpectedMedia || classifiedIndexes.has(index);
   });
+}
+
+/** Returns whether per-payload automatic delivery evidence is present. */
+export function hasPayloadDeliveryOutcomes(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
+): boolean {
+  return getPayloadDeliveryOutcomes(result) !== undefined;
+}
+
+/** Returns whether any automatic payload was sent or may have committed before failure. */
+export function hasPayloadOutcomeSendEvidence(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
+): boolean {
+  return (
+    getPayloadDeliveryOutcomes(result)?.some((outcome) => {
+      if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+        return false;
+      }
+      const record = outcome as Record<string, unknown>;
+      return normalizeEvidenceStatus(record.status) === "sent" || record.sentBeforeError === true;
+    }) === true
+  );
+}
+
+/** Returns whether a failed payload may have committed before reporting its error. */
+export function hasAmbiguousPayloadSendBeforeError(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
+): boolean {
+  return (
+    getPayloadDeliveryOutcomes(result)?.some(
+      (outcome) =>
+        Boolean(outcome && typeof outcome === "object" && !Array.isArray(outcome)) &&
+        normalizeEvidenceStatus((outcome as Record<string, unknown>).status) === "failed" &&
+        (outcome as Record<string, unknown>).sentBeforeError === true,
+    ) === true
+  );
+}
+
+/** Returns whether a partial send lacks one valid outcome for every payload. */
+export function hasIncompletePartialPayloadOutcomeEvidence(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
+): boolean {
+  const deliveryStatus = getPayloadDeliveryStatusRecord(result);
+  if (normalizeEvidenceStatus(deliveryStatus?.status) !== "partial_failed") {
+    return false;
+  }
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  const outcomes = getPayloadDeliveryOutcomes(result);
+  if (!outcomes || payloads.length === 0 || outcomes.length !== payloads.length) {
+    return true;
+  }
+  const seenIndexes = new Set<number>();
+  for (const outcome of outcomes) {
+    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+      return true;
+    }
+    const record = outcome as Record<string, unknown>;
+    const index =
+      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
+    const status = normalizeEvidenceStatus(record.status);
+    if (
+      index === undefined ||
+      index < 0 ||
+      index >= payloads.length ||
+      seenIndexes.has(index) ||
+      (status !== "sent" && status !== "suppressed" && status !== "failed") ||
+      (status === "failed" && typeof record.sentBeforeError !== "boolean")
+    ) {
+      return true;
+    }
+    seenIndexes.add(index);
+  }
+  return seenIndexes.size !== payloads.length;
+}
+
+/** Returns whether aggregate automatic delivery was intentionally suppressed. */
+export function hasSuppressedPayloadDeliveryStatus(
+  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
+): boolean {
+  return normalizeEvidenceStatus(getPayloadDeliveryStatusRecord(result)?.status) === "suppressed";
 }
 
 function hasPositiveNumber(value: unknown): boolean {
@@ -396,39 +448,6 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
     "successfulCronAdds" in value ||
     "meta" in value
   );
-}
-
-/** Returns whether payload metadata contains visible text, media, presentation, or channel data. */
-export function hasVisibleAgentPayload(
-  result: Pick<AgentDeliveryEvidence, "payloads">,
-  options: { includeErrorPayloads?: boolean; includeReasoningPayloads?: boolean } = {},
-): boolean {
-  const payloads = result.payloads;
-  if (!Array.isArray(payloads)) {
-    return false;
-  }
-  return payloads.some((payload) => {
-    if (!payload || typeof payload !== "object") {
-      return false;
-    }
-    const record = payload as AgentPayloadLike;
-    if (options.includeErrorPayloads === false && record.isError === true) {
-      return false;
-    }
-    if (options.includeReasoningPayloads === false && record.isReasoning === true) {
-      return false;
-    }
-    return Boolean(
-      hasNonEmptyString(record.text) ||
-      hasNonEmptyString(record.mediaUrl) ||
-      hasNonEmptyStringArray(record.mediaUrls) ||
-      hasVisibleAttachmentReference(record.attachments) ||
-      record.visible === true ||
-      record.presentation ||
-      record.interactive ||
-      record.channelData,
-    );
-  });
 }
 
 /** Returns whether the messaging tool attempted or committed an outbound delivery. */
@@ -585,7 +604,7 @@ export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): bool
 
 /** Formats an agent-command delivery failure message from delivery status metadata. */
 export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
-  const status = result.deliveryStatus?.status;
+  const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
   if (status !== "failed" && status !== "partial_failed") {
     return undefined;
   }

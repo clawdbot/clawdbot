@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mapLegacyAudioTranscription, mergeMissing } from "./legacy.shared.js";
 
 describe("legacy audio transcription migration", () => {
-  it("migrates deprecated input placeholders to the documented singular media path", () => {
+  it("migrates deprecated input placeholders to the documented attachment path", () => {
     expect(
       mapLegacyAudioTranscription({
         command: ["whisper", "--file", "{input}", "--label={input}"],
@@ -11,7 +11,7 @@ describe("legacy audio transcription migration", () => {
     ).toEqual({
       type: "cli",
       command: "whisper",
-      args: ["--file", "{{MediaPath}}", "--label={{MediaPath}}"],
+      args: ["--file", "{{AttachmentPath}}", "--label={{AttachmentPath}}"],
     });
   });
 });

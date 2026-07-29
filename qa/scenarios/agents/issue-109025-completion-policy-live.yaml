@@ -126,7 +126,7 @@ flow:
             - lambda:
                 async: true
                 expr: "fs.readFile(proofPath, 'utf8').then((text) => { const marker = text.trim(); return marker.startsWith(`${config.completionPrefix}:`) && readGatewayLogs().includes(marker) ? marker : undefined; }).catch(() => undefined)"
-            - 60000
+            - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - call: readSessionTranscriptSummary
           saveAs: parentTranscript

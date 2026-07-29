@@ -169,7 +169,12 @@ type GatewaySessionThinkingProjectionParams = {
 export function resolveGatewaySessionThinkingProjectionInternal(
   params: GatewaySessionThinkingProjectionParams,
 ) {
-  const acpMeta = readAcpSessionMeta({ sessionKey: params.sessionKey });
+  const cachedAcpMeta = params.rowContext?.acpSessionMetaByEntry;
+  const acpMeta =
+    params.entry?.acp ??
+    (params.entry && cachedAcpMeta?.has(params.entry)
+      ? cachedAcpMeta.get(params.entry)
+      : readAcpSessionMeta({ sessionKey: params.sessionKey }));
   const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,
