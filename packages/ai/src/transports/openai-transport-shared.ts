@@ -2,6 +2,7 @@ import type { Api, Model, OpenAICompletionsCompat, Usage } from "@openclaw/llm-c
 import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 
@@ -96,18 +97,6 @@ export function createModelStreamCooperativeScheduler(
       throwIfModelStreamAborted(signal);
     },
   };
-}
-
-export function resolveCacheRetention(
-  cacheRetention: string | undefined,
-): "short" | "long" | "none" {
-  if (cacheRetention === "short" || cacheRetention === "long" || cacheRetention === "none") {
-    return cacheRetention;
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
 }
 
 export function resolvePromptCacheKey(
