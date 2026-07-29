@@ -129,12 +129,14 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       releaseBackground = resolve;
     });
     let scheduled: Promise<void> | undefined;
-    const staleWriteLock = vi.fn(async <T>(operation: () => Promise<T> | T) => {
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
       return await operation();
-    });
+    };
     const freshTranscriptWrite = vi.fn(async () => {});
     const wakeTaskCompletion = vi.fn(async () => {
       await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
@@ -157,7 +159,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     }));
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: staleWriteLock },
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
       async () => {
         scheduleMediaGenerationTaskCompletion({
           lifecycle,
