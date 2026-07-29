@@ -54,6 +54,7 @@ import {
 } from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -247,6 +248,7 @@ async function deliverTextReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  recordMessageId: (messageId: number) => void;
   quoteOnlyOnFirstChunk?: boolean;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
@@ -288,6 +290,7 @@ async function deliverTextReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
+      params.recordMessageId(messageId);
       await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
     },
   });
@@ -396,6 +399,7 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  recordMessageId: (messageId: number) => void;
   textMode?: "html";
 }): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
@@ -424,6 +428,7 @@ async function deliverMediaReply(params: {
       thread: params.thread,
     });
     firstDeliveredMessageId ??= message.message_id;
+    params.recordMessageId(message.message_id);
     await recordPromptContextMessage(message, options.text);
     markDelivered(params.progress);
   };
@@ -571,6 +576,7 @@ async function deliverMediaReply(params: {
               replyQuoteText: params.replyQuoteText,
               replyToMode: params.replyToMode,
               progress: createVoiceFallbackProgress(),
+              recordMessageId: params.recordMessageId,
               quoteOnlyOnFirstChunk: true,
             });
             if (firstDeliveredMessageId == null) {
@@ -606,6 +612,7 @@ async function deliverMediaReply(params: {
                 replyMarkup: params.replyMarkup,
                 replyToMode: "first",
                 progress: createVoiceFallbackProgress(),
+                recordMessageId: params.recordMessageId,
                 quoteOnlyOnFirstChunk: true,
               });
               visibleFallbackText = fallbackText;
@@ -652,6 +659,7 @@ async function deliverMediaReply(params: {
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
+        recordMessageId: params.recordMessageId,
       });
       pendingFollowUpText = undefined;
     }
@@ -812,6 +820,8 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
+  const recordMessageId = (messageId: number) =>
+    recordSentMessage(params.chatId, messageId, params.cfg);
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
@@ -980,6 +990,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          recordMessageId,
         });
       } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
@@ -1006,6 +1017,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          recordMessageId,
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;

@@ -171,6 +171,7 @@ export function createTelegramDeliveryController(params: {
       }
     : undefined;
   const deliveryBaseOptions = {
+    cfg: params.cfg,
     chatId: String(context.chatId),
     accountId: context.route.accountId,
     sessionKeyForInternalHooks: sessionKey,
