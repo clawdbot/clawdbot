@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import nodePath from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
@@ -57,6 +59,16 @@ function cronRunCall(index = 0): {
 function mockRunsOk(): void {
   cronIsolatedRun.mockClear();
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+}
+
+async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  const transformsDir = nodePath.join(nodePath.dirname(configPath), "hooks", "transforms");
+  await fs.mkdir(transformsDir, { recursive: true });
+  await fs.writeFile(nodePath.join(transformsDir, moduleName), source, "utf-8");
 }
 
 describe("gateway hook session mode", () => {
@@ -173,6 +185,7 @@ describe("gateway hook session mode", () => {
     });
 
     cronIsolatedRun.mockClear();
+    await writeHookTransformModule("mapped-missing-key.mjs", "export default () => ({});");
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
@@ -182,6 +195,7 @@ describe("gateway hook session mode", () => {
           action: "agent",
           messageTemplate: "Missing",
           sessionMode: "persistent",
+          transform: { module: "mapped-missing-key.mjs" },
         },
       ],
     };
