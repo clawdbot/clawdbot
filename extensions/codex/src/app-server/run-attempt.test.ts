@@ -5277,7 +5277,9 @@ describe("runCodexAppServerAttempt", () => {
       const expectedGeneration = index + 1;
       await vi.waitFor(() => {
         if (startupError) {
-          throw startupError;
+          throw startupError instanceof Error
+            ? startupError
+            : new Error("Codex attempt failed.", { cause: startupError });
         }
         expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
           expectedGeneration,
