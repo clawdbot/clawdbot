@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatAudioPlayer, formatChatMediaTime } from "./chat-audio-player.ts";
+import "./chat-audio-player.ts";
+
+type ChatAudioPlayer = HTMLElementTagNameMap["openclaw-chat-audio-player"];
 
 function setMediaNumber(
   media: HTMLMediaElement,
@@ -27,11 +29,25 @@ afterEach(() => {
 });
 
 describe("ChatAudioPlayer", () => {
-  it("formats elapsed and total media time", () => {
-    expect(formatChatMediaTime(Number.NaN)).toBe("0:00");
-    expect(formatChatMediaTime(0)).toBe("0:00");
-    expect(formatChatMediaTime(65.9)).toBe("1:05");
-    expect(formatChatMediaTime(3_665)).toBe("61:05");
+  it("formats elapsed and total media time", async () => {
+    const player = await createPlayer("timing");
+    expect(
+      Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["0:00", "0:00"]);
+
+    const media = player.querySelector("audio")!;
+    setMediaNumber(media, "currentTime", 65.9);
+    setMediaNumber(media, "duration", 3_665);
+    media.dispatchEvent(new Event("loadedmetadata"));
+    await player.updateComplete;
+
+    expect(
+      Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["1:05", "61:05"]);
   });
 
   it("drives play, pause, seek, and keyboard state through the hidden audio element", async () => {

@@ -15,7 +15,7 @@ import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 const SEEK_STEP_SECONDS = 5;
 
-export function formatChatMediaTime(seconds: number): string {
+function formatChatMediaTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) {
     return "0:00";
   }
@@ -25,7 +25,7 @@ export function formatChatMediaTime(seconds: number): string {
   return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
-export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
+class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @property() src = "";
   @property() sourceIdentity = "";
   @property() label = "";
@@ -134,15 +134,15 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
               ? html`<!-- The download attribute is ignored for cross-origin URLs (rare here — attachment
                   hrefs are same-origin gateway routes); those open in a new tab instead. -->
                   <a
-                  class="chat-assistant-attachment-card__download"
-                  href=${downloadHref}
-                  download=${this.label}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
-                  title=${t("chat.mediaPlayer.download", { filename: this.label })}
-                  >${icons.download}</a
-                >`
+                    class="chat-assistant-attachment-card__download"
+                    href=${downloadHref}
+                    download=${this.label}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
+                    title=${t("chat.mediaPlayer.download", { filename: this.label })}
+                    >${icons.download}</a
+                  >`
               : null}
           </span>
         </div>
