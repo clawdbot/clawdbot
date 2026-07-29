@@ -84,7 +84,15 @@ export interface AuthRateLimiter {
   check(ip: string | undefined, scope?: string): RateLimitCheckResult;
   /** Record a failed authentication attempt for `ip`. */
   recordFailure(ip: string | undefined, scope?: string): void;
-  /** Record a failed attempt and await any loopback penalty delay. */
+  /**
+   * Record a failed attempt and await any loopback penalty delay.
+   *
+   * Deliberately post-verification: it prices repeated guessing from one loopback
+   * source without ever gating a request before its credentials are checked.
+   * Gating earlier would stop parallel fan-out, but would also let a bad local
+   * peer stall the operator's own correct-credential CLI, which loopback must
+   * never do. Fan-out from loopback is out of scope for this limiter by design.
+   */
   recordFailureAndDelay(ip: string | undefined, scope?: string): Promise<void>;
   /** Reset the rate-limit state for `ip` (e.g. after a successful login). */
   reset(ip: string | undefined, scope?: string): void;
