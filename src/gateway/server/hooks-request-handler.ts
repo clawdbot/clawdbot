@@ -13,20 +13,18 @@ import { applyHookMappings } from "../hooks-mapping.js";
 import {
   extractHookToken,
   getHookAgentPolicyError,
-  getHookChannelError,
   getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
   isHookAgentAllowed,
   isSessionKeyAllowedByPrefix,
   normalizeAgentPayload,
+  normalizeHookAgentDelivery,
   normalizeHookDispatchSessionKey,
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
   resolveEffectiveHookTargetAgentId,
-  resolveHookChannel,
-  resolveHookDeliver,
   resolveHookIdempotencyKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
@@ -361,9 +359,13 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
           }
-          const channel = resolveHookChannel(mapped.action.channel);
-          if (!channel) {
-            sendJson(res, 400, { ok: false, error: getHookChannelError() });
+          const delivery = normalizeHookAgentDelivery({
+            deliver: mapped.action.deliver,
+            channel: mapped.action.channel,
+            to: mapped.action.to,
+          });
+          if (!delivery.ok) {
+            sendJson(res, 400, { ok: false, error: delivery.error });
             return true;
           }
           if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
@@ -403,9 +405,9 @@ export function createHooksRequestHandler(
               message: mapped.action.message,
               name: mapped.action.name ?? "Hook",
               wakeMode: mapped.action.wakeMode,
-              deliver: resolveHookDeliver(mapped.action.deliver),
-              channel,
-              to: mapped.action.to ?? null,
+              deliver: delivery.value.deliver,
+              channel: delivery.value.channel,
+              to: delivery.value.to ?? null,
               model: mapped.action.model ?? null,
               thinking: mapped.action.thinking ?? null,
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
@@ -424,9 +426,7 @@ export function createHooksRequestHandler(
             wakeMode: mapped.action.wakeMode,
             sessionKey: dispatchSessionKey,
             sourcePath: `${basePath}/${subPath}`,
-            deliver: resolveHookDeliver(mapped.action.deliver),
-            channel,
-            to: mapped.action.to,
+            ...delivery.value,
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,

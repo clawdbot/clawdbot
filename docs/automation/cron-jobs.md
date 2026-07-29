@@ -534,6 +534,13 @@ Query-string tokens are rejected.
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
 
+    Hook delivery is bound before the isolated run is scheduled:
+
+    - Omit both `channel` and `to` to run completion-only; the result is surfaced through the hook completion event.
+    - Supplying only `to` is also completion-only. OpenClaw does not infer a channel or inherit the main session's `last` recipient.
+    - Supplying a concrete `channel` without `to` fails the request with `400` and schedules no run.
+    - Supplying both a concrete `channel` and `to` enables direct announce delivery.
+
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms.
