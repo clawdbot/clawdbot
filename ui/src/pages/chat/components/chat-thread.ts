@@ -1357,12 +1357,9 @@ function latestTranscriptAnnouncement(
   return null;
 }
 
-function chatRenderItemGuardDependencies(
-  item: ChatRenderItem,
-  runOutputTokens: number | null | undefined,
-): readonly unknown[] {
+function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "stream-run") {
-    return [item.key, ...item.parts, runOutputTokens];
+    return [item.key, ...item.parts];
   }
   if (item.kind === "work-group") {
     return [item.key, item.durationMs, item.hasError, ...item.groups];

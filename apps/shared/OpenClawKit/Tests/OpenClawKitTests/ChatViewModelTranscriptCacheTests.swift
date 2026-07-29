@@ -414,6 +414,8 @@ struct ChatViewModelTranscriptCacheTests {
 
         #expect(await MainActor.run { vm.sessions[0].key == "global" })
         #expect(await MainActor.run { vm.sessions[0].observerDigest == nil })
+    }
+
     @Test func `session cache strips active markers and preserves terminal recap`() {
         var active = cachedSessionEntry(key: "active", updatedAt: 2000)
         active.status = "running"

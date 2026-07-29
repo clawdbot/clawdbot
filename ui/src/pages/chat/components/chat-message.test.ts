@@ -1610,7 +1610,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
     expect(container.querySelector(".chat-working-indicator")).toBeNull();
     expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
-      "Done in 5s",
+      "Done in 5 seconds",
     );
     expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
   });
