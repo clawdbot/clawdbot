@@ -691,6 +691,8 @@ async function processDiscordMessageInner(
             { kind: "block" },
             { allowProgressBlock: true },
           ),
+        (error) =>
+          logVerbose(`discord: failed to finalize adopted thread progress (${String(error)})`),
       );
       markUserFacingFinalDelivered();
     }

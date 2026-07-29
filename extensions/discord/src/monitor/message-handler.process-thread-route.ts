@@ -12,13 +12,18 @@ export async function finalizeDiscordAdoptedThreadProgressReceipt(
   receipt: string,
   finalizeDraft: (receiptLine: string) => Promise<boolean>,
   deliverReceipt: (receiptLine: string) => Promise<unknown>,
+  onFinalizeError?: (error: unknown) => void,
 ) {
   const receiptLine = receipt.trim();
   if (!hasProgressDraft || !receiptLine) {
     return;
   }
-  if (await finalizeDraft(receiptLine)) {
-    return;
+  try {
+    if (await finalizeDraft(receiptLine)) {
+      return;
+    }
+  } catch (error) {
+    onFinalizeError?.(error);
   }
   // Draft creation can fail independently from the model-owned thread reply.
   // Preserve the terminal activity record as a normal message in that thread.

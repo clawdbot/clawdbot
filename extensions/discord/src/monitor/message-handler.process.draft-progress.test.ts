@@ -150,6 +150,49 @@ describe("processDiscordMessage draft streaming progress", () => {
     );
   });
 
+  it("sends the adopted-thread receipt when draft finalization rejects", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+    draftStream.stop.mockRejectedValueOnce(new Error("draft stop failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await elapseProgressDraftStartDelay();
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: String(params?.ctx?.SessionKey),
+        accountId: "default",
+        sourceChannelId: "c1",
+        sourceMessageId: "m1",
+        threadId: "thread-1",
+      });
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey: String(params?.ctx?.SessionKey),
+        accountId: "default",
+        threadId: "thread-1",
+      });
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Investigating" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "channel:thread-1",
+        kind: "block",
+        replies: [
+          expect.objectContaining({
+            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 5s$/),
+          }),
+        ],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {
     const draftStream = createMockDraftStreamForTest();
 
