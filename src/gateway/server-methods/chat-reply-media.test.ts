@@ -316,7 +316,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
   });
 
-  it("projects a selectively trusted generated URL from a mixed pending batch", async () => {
+  it("splits a mixed pending batch so only trusted local media reaches managed history", async () => {
     const { workspaceDir } = createMediaTestContext({ allowRead: true });
     const trustedPath = path.join(workspaceDir, "trusted.mp3");
     const untrustedPath = path.join(workspaceDir, "untrusted.mp3");
@@ -332,7 +332,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         ]),
         pendingToolAudioAsVoice: false,
       },
-      { mediaUrls: [trustedPath] },
+      {},
     );
 
     const content = await buildAssistantDisplayContentFromReplyPayloads({
@@ -343,6 +343,33 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     });
 
     expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+  });
+
+  it("preserves media order across interleaved trust classes", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const firstPath = path.join(workspaceDir, "first.mp3");
+    const thirdPath = path.join(workspaceDir, "third.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await fs.writeFile(thirdPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [
+        {
+          mediaUrls: [firstPath, dataImageUrl(), thirdPath],
+          attachments: [
+            { type: "audio", path: firstPath, trustedLocalMedia: true },
+            { type: "image" },
+            { type: "audio", path: thirdPath, trustedLocalMedia: true },
+          ],
+        },
+      ],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content?.map((block) => block.type)).toEqual(["audio", "image", "audio"]);
   });
 
   it("does not preserve untrusted local audio paths before display normalization", async () => {

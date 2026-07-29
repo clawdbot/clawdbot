@@ -1155,7 +1155,13 @@ describe("consumePendingToolMediaIntoReply", () => {
       text: "done",
       mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       attachments: [
-        { type: "image", path: "/tmp/a.png", width: 640, height: 480 },
+        {
+          type: "image",
+          path: "/tmp/a.png",
+          width: 640,
+          height: 480,
+          trustedLocalMedia: true,
+        },
         { type: "image", path: "/tmp/b.png", width: 800, height: 600 },
       ],
       audioAsVoice: undefined,
@@ -1208,7 +1214,14 @@ describe("consumePendingToolMediaIntoReply", () => {
     ).toEqual({
       text: "done",
       mediaUrls: [" /tmp/generated.mp3 "],
-      attachments: [{ type: "audio", path: "/tmp/generated.mp3", durationMs: 2_000 }],
+      attachments: [
+        {
+          type: "audio",
+          path: "/tmp/generated.mp3",
+          durationMs: 2_000,
+          trustedLocalMedia: true,
+        },
+      ],
       trustedLocalMedia: true,
     });
     expect(state.pendingToolMediaAttachments).toStrictEqual([]);
@@ -1217,6 +1230,14 @@ describe("consumePendingToolMediaIntoReply", () => {
   it("does not trust an explicitly selected untrusted pending URL", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/generated.mp3", "/tmp/untrusted.mp3"],
+      pendingToolMediaAttachments: [
+        { type: "audio" as const, path: "/tmp/generated.mp3" },
+        {
+          type: "audio" as const,
+          path: "/tmp/untrusted.mp3",
+          trustedLocalMedia: true,
+        },
+      ],
       pendingToolMediaTrustByUrl: new Map([
         ["/tmp/generated.mp3", true],
         ["/tmp/untrusted.mp3", false],
@@ -1229,7 +1250,11 @@ describe("consumePendingToolMediaIntoReply", () => {
         text: "done",
         mediaUrls: ["/tmp/untrusted.mp3"],
       }),
-    ).toEqual({ text: "done", mediaUrls: ["/tmp/untrusted.mp3"] });
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/untrusted.mp3"],
+      attachments: [{ type: "audio", path: "/tmp/untrusted.mp3" }],
+    });
   });
 
   it("does not append queued voice media when the reply already names media", () => {

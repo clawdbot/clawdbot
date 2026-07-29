@@ -19,6 +19,8 @@ export type ReplyMediaAttachment = {
   durationMs?: number;
   width?: number;
   height?: number;
+  /** Internal per-URL trust carried until mixed media is split for history projection. */
+  trustedLocalMedia?: boolean;
 };
 
 /** Channel-agnostic assistant reply payload. */

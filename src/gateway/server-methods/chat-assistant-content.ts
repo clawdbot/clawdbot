@@ -84,6 +84,32 @@ function resolveAlignedReplyMedia(
   return { mediaUrls, ...(hasMetadata ? { attachments } : {}) };
 }
 
+function splitReplyMediaByTrust(
+  media: ReturnType<typeof resolveAlignedReplyMedia>,
+  payloadTrusted: boolean,
+) {
+  // One payload per trust class is the authorization boundary. Class order follows
+  // first occurrence; interleaved entries are intentionally coalesced within their class.
+  const groups = new Map<
+    boolean,
+    {
+      mediaUrls: string[];
+      attachments: NonNullable<ReplyPayload["attachments"]>;
+      sourceIndexes: number[];
+    }
+  >();
+  for (const [index, url] of media.mediaUrls.entries()) {
+    const attachment = media.attachments?.[index] ?? {};
+    const trusted = attachment.trustedLocalMedia ?? payloadTrusted;
+    const group = groups.get(trusted) ?? { mediaUrls: [], attachments: [], sourceIndexes: [] };
+    group.mediaUrls.push(url);
+    group.attachments.push(attachment);
+    group.sourceIndexes.push(index);
+    groups.set(trusted, group);
+  }
+  return [...groups].map(([trustedLocalMedia, group]) => ({ ...group, trustedLocalMedia }));
+}
+
 /** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
 export function combineNonStreamingReplyParts(parts: readonly string[]): string {
   let combined = "";
@@ -234,27 +260,34 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       continue;
     }
     const media = resolveAlignedReplyMedia(payload, params.payloads[entry.sourceIndex] ?? payload);
-    const mediaBlocks = await createManagedOutgoingMediaBlocks({
-      sessionKey: params.sessionKey,
-      ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
-      mediaUrls: media.mediaUrls,
-      attachments: media.attachments,
-      localRoots: params.managedMediaLocalRoots,
-      allowLocalNonImage: payload.trustedLocalMedia === true,
-      continueOnPrepareError: true,
-      onPrepareError: (error) => {
-        params.onManagedMediaPrepareError?.(error.message);
-      },
-    });
-    if (mediaBlocks.length > 0) {
-      content.push(
-        ...mediaBlocks.map((block) =>
-          payload.audioAsVoice === true && block.type === "audio"
-            ? { ...block, isVoiceNote: true }
-            : block,
-        ),
-      );
+    const preparedMedia: Array<{ sourceIndex: number; blocks: AssistantDisplayContentBlock[] }> =
+      [];
+    for (const mediaGroup of splitReplyMediaByTrust(media, payload.trustedLocalMedia === true)) {
+      for (const [groupIndex, mediaUrl] of mediaGroup.mediaUrls.entries()) {
+        const mediaBlocks = await createManagedOutgoingMediaBlocks({
+          sessionKey: params.sessionKey,
+          ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+          mediaUrls: [mediaUrl],
+          attachments: [mediaGroup.attachments[groupIndex] ?? {}],
+          localRoots: params.managedMediaLocalRoots,
+          allowLocalNonImage: mediaGroup.trustedLocalMedia,
+          continueOnPrepareError: true,
+          onPrepareError: (error) => {
+            params.onManagedMediaPrepareError?.(error.message);
+          },
+        });
+        preparedMedia.push({
+          sourceIndex: mediaGroup.sourceIndexes[groupIndex] ?? groupIndex,
+          blocks: mediaBlocks.map((block) =>
+            payload.audioAsVoice === true && block.type === "audio"
+              ? { ...block, isVoiceNote: true }
+              : block,
+          ),
+        });
+      }
     }
+    preparedMedia.sort((left, right) => left.sourceIndex - right.sourceIndex);
+    content.push(...preparedMedia.flatMap((entry) => entry.blocks));
   }
 
   if (content.length > 0) {
