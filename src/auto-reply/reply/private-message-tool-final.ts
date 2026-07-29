@@ -8,7 +8,9 @@ const privateFinalReplyLogger = createSubsystemLogger("source-reply/private-fina
 const LONG_PRIVATE_FINAL_MIN_CHARS = 280;
 const MULTI_SENTENCE_PRIVATE_FINAL_MIN_CHARS = 120;
 const MULTI_SENTENCE_TERMINATOR_MIN_COUNT = 2;
-const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)/g;
+// CJK sentence terminators are full-width and are not followed by whitespace,
+// so they need their own alternative rather than the ASCII trailing-space rule.
+const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)|[。！？]+/g;
 
 /**
  * `message_tool_only` allows the model to stay silent by simply not calling the
