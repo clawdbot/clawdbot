@@ -63,6 +63,8 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
             { id: randomUUID(), body: reason, createdAt: Date.now() },
           ].slice(-MAX_CARD_COMMENTS)
         : existing.metadata?.comments;
+      const dependencyOverride =
+        input.force === true ? { grantedAt: Date.now(), ...(reason ? { reason } : {}) } : undefined;
       return await this.updateCard(
         id,
         {
@@ -70,6 +72,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
           metadata: {
             ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
             comments,
+            dependencyOverride,
             stale: null,
           },
         },

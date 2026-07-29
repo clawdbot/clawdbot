@@ -1583,6 +1583,74 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("keeps an explicitly force-promoted dependency child claimable", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Blocked parent", status: "blocked" });
+    const child = await store.create({ title: "Independent recovery child", parents: [parent.id] });
+
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+    await store.promote(child.id, {
+      force: true,
+      reason: "Parent is blocked but this lane is explicitly independent.",
+    });
+
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        dependencyOverride: {
+          reason: "Parent is blocked but this lane is explicitly independent.",
+        },
+      },
+    });
+    await expect(store.claim(child.id, { ownerId: "main" })).resolves.toMatchObject({
+      card: { status: "running" },
+    });
+  });
+
+  it("inherits a dependency override through unrelated card updates", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Blocked parent", status: "blocked" });
+    const child = await store.create({ title: "Independent child", parents: [parent.id] });
+
+    await store.promote(child.id, { force: true, reason: "Independent lane." });
+    const updated = await store.update(child.id, { title: "Renamed independent child" });
+
+    expect(updated).toMatchObject({
+      title: "Renamed independent child",
+      metadata: { dependencyOverride: { reason: "Independent lane." } },
+    });
+  });
+
+  it("clears a dependency override when the dependency reaches done", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Pending parent", status: "todo" });
+    const child = await store.create({ title: "Independent child", parents: [parent.id] });
+
+    await store.promote(child.id, { force: true, reason: "Proceed independently." });
+    await store.complete(parent.id, { summary: "Parent finished." });
+    await store.promoteReady();
+
+    await expect(store.get(child.id)).resolves.toMatchObject({ status: "ready" });
+    await expect(store.get(child.id)).resolves.not.toMatchObject({
+      metadata: { dependencyOverride: expect.anything() },
+    });
+  });
+
+  it("does not persist a dependency override for normal promotion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Incomplete parent", status: "todo" });
+    const child = await store.create({ title: "Dependent child", parents: [parent.id] });
+
+    await expect(store.promote(child.id)).rejects.toThrow("card dependencies are not done.");
+
+    await expect(store.get(child.id)).resolves.toMatchObject({ status: "todo" });
+    await expect(store.get(child.id)).resolves.not.toMatchObject({
+      metadata: { dependencyOverride: expect.anything() },
+    });
+  });
+
   it("preserves scheduled and retry-budget errors when a claim is active", async () => {
     vi.useFakeTimers();
     try {

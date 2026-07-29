@@ -967,6 +967,27 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   };
 }
 
+function normalizeDependencyOverride(
+  value: unknown,
+  fallback: WorkboardMetadata["dependencyOverride"],
+): WorkboardMetadata["dependencyOverride"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const grantedAt = normalizeTimestamp(record.grantedAt, 0);
+  if (!grantedAt) {
+    return fallback;
+  }
+  const reason = normalizeBoundedString(
+    record.reason,
+    undefined,
+    1000,
+    "dependency override reason",
+  );
+  return { grantedAt, ...(reason ? { reason } : {}) };
+}
+
 export function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
   const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
   const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
@@ -1140,6 +1161,11 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
+    dependencyOverride: Object.hasOwn(record, "dependencyOverride")
+      ? record.dependencyOverride
+        ? normalizeDependencyOverride(record.dependencyOverride, fallback.dependencyOverride)
+        : undefined
+      : fallback.dependencyOverride,
   };
   return trimMetadataToBudget(normalized, options);
 }
@@ -1257,6 +1283,7 @@ export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): Work
     "stale",
     "lifecycleStatusSourceUpdatedAt",
     "failureCount",
+    "dependencyOverride",
   ] as const) {
     const value = next[key];
     if (

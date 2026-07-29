@@ -815,6 +815,11 @@ export class WorkboardCoreStore {
       }
       return card.status === "scheduled" ? "ready" : card.status;
     }
+    // A force promotion is an explicit operator recovery action. Keep the recorded ready
+    // state stable across claim/dispatch preflights until a normal promotion clears it.
+    if (card.status === "ready" && card.metadata?.dependencyOverride) {
+      return "ready";
+    }
     const parentCards = await Promise.all(parents.map((parentId) => this.get(parentId)));
     const parentsDone = parentCards.every((parent) => parent?.status === "done");
     if (
@@ -922,6 +927,16 @@ export class WorkboardCoreStore {
     }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {
+      if (card.metadata?.dependencyOverride && cardParentIds(card).length > 0) {
+        const parentCards = await Promise.all(
+          cardParentIds(card).map((parentId) => this.get(parentId)),
+        );
+        if (parentCards.every((parent) => parent?.status === "done")) {
+          return await this.updateCard(card.id, {
+            metadata: { ...card.metadata, dependencyOverride: undefined },
+          });
+        }
+      }
       return card;
     }
     return await this.updateCard(card.id, { status: target });

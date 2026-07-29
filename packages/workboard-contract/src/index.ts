@@ -336,6 +336,13 @@ export type WorkboardMetadata = {
   stale?: WorkboardStaleState;
   lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
+  /** Explicit operator override recorded by force-promotion for dependency recovery. */
+  dependencyOverride?: WorkboardDependencyOverride;
+};
+
+export type WorkboardDependencyOverride = {
+  grantedAt: number;
+  reason?: string;
 };
 
 export type WorkboardCard = {
