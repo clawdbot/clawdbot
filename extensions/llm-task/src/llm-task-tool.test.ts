@@ -14,6 +14,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
+import { withGatewayToolCallerIdentity } from "openclaw/plugin-sdk/agent-runtime";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
 type LlmTaskApi = Parameters<typeof createLlmTaskTool>[0];
@@ -435,6 +436,22 @@ describe("llm-task tool (json-only)", () => {
       temperature: 0.2,
       maxTokens: 512,
     });
+  });
+
+  it("propagates trusted gateway caller identity to the embedded run scope", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(fakeApi());
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "developer", sessionKey: "agent:developer:main" },
+      async () => {
+        await tool.execute("id", { prompt: "x" });
+      },
+    );
+
+    const call = firstEmbeddedRunCall();
+    expect(call.agentId).toBe("developer");
+    expect(call.sessionKey).toBe("agent:developer:main");
   });
 
   it("normalizes numeric string run options before dispatch", async () => {

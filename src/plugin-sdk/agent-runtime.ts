@@ -34,6 +34,10 @@ export { resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
 export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };
+export {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 
 type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   /** @deprecated Lifecycle publication owns refreshes; retained for source compatibility. */

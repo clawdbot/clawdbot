@@ -136,6 +136,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
     await updateSessionEntry(
       {
         storePath,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         sessionKey: params.sessionKey,
       },
       async () => ({

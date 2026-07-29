@@ -1,6 +1,10 @@
 // Llm Task plugin module implements llm task tool behavior.
 import path from "node:path";
-import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  buildModelAliasIndex,
+  getGatewayToolCallerIdentity,
+  resolveModelRefFromString,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
@@ -274,10 +278,16 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       return await withTempWorkspace(
         { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-llm-task-" },
         async ({ dir: tmpDir }) => {
+          const gatewayCaller = getGatewayToolCallerIdentity();
+          const embeddedAgentId = normalizeOptionalString(gatewayCaller?.agentId) ?? "main";
+          const embeddedSessionKey =
+            normalizeOptionalString(gatewayCaller?.sessionKey) ?? `agent:${embeddedAgentId}:main`;
           const sessionId = `llm-task-${Date.now()}`;
           const sessionFile = path.join(tmpDir, "session.json");
 
           const result = await api.runtime.agent.runEmbeddedAgent({
+            agentId: embeddedAgentId,
+            sessionKey: embeddedSessionKey,
             sessionId,
             sessionFile,
             workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
