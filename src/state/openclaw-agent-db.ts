@@ -2,10 +2,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  enableNodeSqliteKyselyStatementCache,
-} from "../infra/kysely-sync.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
@@ -343,7 +340,6 @@ export function openOpenClawAgentDatabase(
         return maintenance;
       } catch (err) {
         maintenance?.close();
-        clearNodeSqliteKyselyCacheForDatabase(db);
         db.close();
         if (
           err instanceof Error &&
@@ -487,7 +483,6 @@ function closeCachedOpenClawAgentDatabase(
   // Eviction must stay cheap: PASSIVE skips waiting on concurrent readers,
   // whose drained TRUNCATE checkpoints blocked the event loop for seconds.
   database.walMaintenance.close(options.eviction ? { checkpointMode: "PASSIVE" } : undefined);
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
   if (database.db.isOpen) {
     database.db.close();
   }

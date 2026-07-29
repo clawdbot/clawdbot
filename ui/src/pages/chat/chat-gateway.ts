@@ -1,6 +1,5 @@
 import {
   hasSessionProjectionAcceptedFinal,
-  reduceSessionProjection,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -17,7 +16,12 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  setChatSessionProjection,
+} from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import { retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
@@ -230,21 +234,15 @@ function handleChatEvent(
     }
     return null;
   }
-  const scope = {
-    sessionKey: state.sessionKey,
-    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-    ...(state.chatDisplayedLeafEntryId !== undefined
-      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId }
-      : {}),
-  };
+  const scope = readChatSessionProjectionScope(state);
   const publishVisibleFinal = (
     message: Record<string, unknown>,
     visibleMessages: unknown[],
     runId: string | null | undefined,
   ): void => {
     const event = payload as ChatEventPayload & { messageId?: unknown; messageSeq?: unknown };
-    const projection = reduceSessionProjection(
-      getChatSessionProjection(state, visibleMessages.slice(0, -1), scope),
+    reduceChatSessionProjection(
+      state,
       {
         type: "messagePersisted",
         message,
@@ -253,11 +251,9 @@ function handleChatEvent(
           ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
           ...(event.messageSeq === undefined ? {} : { messageSeq: event.messageSeq }),
         },
-        scope,
       },
+      { scope, messages: visibleMessages.slice(0, -1) },
     );
-    setChatSessionProjection(state, projection);
-    state.chatMessages = [...projection.messages];
   };
   const projectedRun =
     payload.runId && payload.state !== "status"

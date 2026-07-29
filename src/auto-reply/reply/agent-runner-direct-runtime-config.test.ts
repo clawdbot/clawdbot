@@ -9,6 +9,10 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -604,9 +608,13 @@ describe("runReplyAgent runtime config", () => {
       shouldFollowup: true,
       isActive: true,
     });
+    const runState: ReplyOperationRunState = {};
+    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+    enqueueFollowupRunMock.mockReturnValueOnce(true);
 
     await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
 
+    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
     const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);

@@ -1,15 +1,7 @@
-import type { ToolSearchCatalogEntry, ToolSearchConfig, ToolSearchRuntime } from "./tool-search.js";
+import type { ToolSearchConfig, ToolSearchRuntime } from "./tool-search.js";
 import "./tool-search.js";
 
-type ToolSearchCatalogSession = {
-  entries: ToolSearchCatalogEntry[];
-  searchCount: number;
-  describeCount: number;
-  callCount: number;
-};
-
 type ToolSearchTestApi = {
-  sessionCatalogs: Map<string, ToolSearchCatalogSession>;
   maxToolSchemaDirectoryPromptChars: number;
   setToolSearchCodeModeSupportedForTest(value: boolean | undefined): void;
   setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void;
@@ -31,9 +23,6 @@ function getTestApi(): ToolSearchTestApi {
 }
 
 export const testing: ToolSearchTestApi = {
-  get sessionCatalogs() {
-    return getTestApi().sessionCatalogs;
-  },
   get maxToolSchemaDirectoryPromptChars() {
     return getTestApi().maxToolSchemaDirectoryPromptChars;
   },

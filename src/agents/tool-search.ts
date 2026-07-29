@@ -9,9 +9,7 @@ import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
-  reusableCatalogSnapshots,
   resolveCatalog,
-  sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
   appendToolSearchCodeStderrTail,
@@ -226,8 +224,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  sessionCatalogs,
-  reusableCatalogSnapshots,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,

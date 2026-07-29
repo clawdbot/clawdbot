@@ -329,13 +329,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected override beginSyncProviderGeneration(): void {
+  protected override beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void {
     if (this.syncProviderGeneration) {
       this.syncProviderGenerationOwners += 1;
       return;
     }
-    const provider = this.provider;
-    const runtime = this.providerRuntime;
+    const provider = options?.forceFtsOnly ? null : this.provider;
+    const runtime = provider ? this.providerRuntime : undefined;
     const identities = resolveMemoryIndexProviderIdentities({
       provider,
       cacheKeyData: runtime?.cacheKeyData,

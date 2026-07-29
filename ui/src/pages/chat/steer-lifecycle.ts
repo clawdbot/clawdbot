@@ -1,7 +1,3 @@
-import {
-  reduceSessionProjection,
-  type SessionProjectionScope,
-} from "@openclaw/gateway-client/browser";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
@@ -27,7 +23,7 @@ import {
   type ChatSendAck,
   type TerminalFailureChatSendAck,
 } from "./chat-send-ack.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -157,22 +153,17 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   };
   if (visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
-      const scope: SessionProjectionScope = {
+      const scope = readChatSessionProjectionScope(state, {
         sessionKey,
-        ...(item.agentId ? { agentId: item.agentId } : {}),
-        ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-        ...(Object.hasOwn(state, "chatDisplayedLeafEntryId")
-          ? { activeLeafEntryId: state.chatDisplayedLeafEntryId ?? null }
-          : {}),
-      };
+        agentId: item.agentId,
+      });
       // Steer retirement and history recovery must retain the same pending
       // entry; rendering a separate row loses it during a concurrent snapshot.
-      const projection = reduceSessionProjection(
-        getChatSessionProjection(state, state.chatMessages, scope),
-        { type: "sendPending", runId, message: userMessage, scope },
+      reduceChatSessionProjection(
+        state,
+        { type: "sendPending", runId, message: userMessage },
+        { scope },
       );
-      setChatSessionProjection(state, projection);
-      state.chatMessages = [...projection.messages];
     }
     return;
   }

@@ -447,6 +447,17 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
+  ...[
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ].map((sourcePath) => [
+    sourcePath,
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+      "src/commands/onboard-guided.inference.e2e.test.ts",
+    ],
+  ]),
   [
     "src/plugins/contracts/tts-contract-suites.ts",
     [

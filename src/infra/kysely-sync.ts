@@ -7,8 +7,8 @@ import { InsertQueryNode, Kysely as KyselyInstance, SqliteDialect } from "kysely
 // going through Kysely's async driver path.
 
 const kyselyByDatabase = new WeakMap<DatabaseSync, Kysely<unknown>>();
-// Cached statements retain their database. Every enabled owner must clear before
-// close or drop; this required lifecycle pairing is not enforced automatically.
+// Cached statements retain their database. Per-instance lifecycle wrappers clear
+// both caches before the native database handle closes.
 const statementCacheSymbol = Symbol("openclaw.kyselySyncStatementCache");
 const statementInvalidationSymbol = Symbol("openclaw.kyselySyncStatementInvalidation");
 const statementCacheEnabledSymbol = Symbol("openclaw.kyselySyncStatementCacheEnabled");
@@ -85,6 +85,28 @@ function installStatementInvalidation(owner: StatementCacheOwner): void {
           // including failed attempts, so no cached object remains usable.
           delete this[statementCacheSymbol];
         }
+      },
+    });
+  }
+  if (typeof owner.close === "function") {
+    const close = owner.close.bind(owner);
+    Object.defineProperty(owner, "close", {
+      configurable: true,
+      writable: true,
+      value(this: StatementCacheOwner): void {
+        clearNodeSqliteKyselyCacheForDatabase(this);
+        return close();
+      },
+    });
+  }
+  if (typeof owner[Symbol.dispose] === "function") {
+    const dispose = owner[Symbol.dispose].bind(owner);
+    Object.defineProperty(owner, Symbol.dispose, {
+      configurable: true,
+      writable: true,
+      value(this: StatementCacheOwner): void {
+        clearNodeSqliteKyselyCacheForDatabase(this);
+        return dispose();
       },
     });
   }
@@ -259,7 +281,7 @@ export function executeSqliteQueryTakeFirstSync<Row>(
   return executeSqliteQuerySync<Row>(db, query).rows[0];
 }
 
-/** Drop cached Kysely state for a DatabaseSync before close/test reset. */
+/** Drop cached Kysely state for a DatabaseSync. */
 export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
   // Delete the database-owned cache before close so statements release their
   // native database backreferences instead of recreating the WeakMap leak.

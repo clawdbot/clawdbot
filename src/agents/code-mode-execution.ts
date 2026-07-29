@@ -93,7 +93,7 @@ export async function runExec(params: {
     params.assistantTurnId,
   );
   const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
-  const apiFiles = createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled);
+  const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
   try {
     const source = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),

@@ -690,6 +690,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Targets for outbound delivery
   - H2: DM channel retry
   - H2: Preview streaming
+  - H2: Read channel history (message tool)
   - H2: Reactions (message tool)
   - H2: Interactive buttons (message tool)
   - H3: Direct API integration (external scripts)
