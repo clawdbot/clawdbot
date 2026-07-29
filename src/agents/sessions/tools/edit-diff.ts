@@ -5,7 +5,7 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import { type Change, createPatch, diffLines, FILE_HEADERS_ONLY, structuredPatch } from "diff";
+import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { detectLineEnding, normalizeToLF } from "../../line-endings.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -82,6 +82,12 @@ interface LineSpan {
   end: number;
 }
 
+interface ReplacementGroup {
+  startLine: number;
+  endLine: number;
+  replacements: TextReplacement[];
+}
+
 function splitLinesWithEndings(content: string): string[] {
   return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
 }
@@ -131,6 +137,26 @@ function applyReplacements(content: string, replacements: TextReplacement[], off
   return result;
 }
 
+function groupReplacementsByLine(
+  baseContent: string,
+  replacements: TextReplacement[],
+): { lines: LineSpan[]; groups: ReplacementGroup[] } {
+  const lines = getLineSpans(baseContent);
+  const groups: ReplacementGroup[] = [];
+  const sortedReplacements = replacements.toSorted((a, b) => a.matchIndex - b.matchIndex);
+  for (const replacement of sortedReplacements) {
+    const range = getReplacementLineRange(lines, replacement);
+    const current = groups.at(-1);
+    if (current && range.startLine < current.endLine) {
+      current.endLine = Math.max(current.endLine, range.endLine);
+      current.replacements.push(replacement);
+    } else {
+      groups.push({ ...range, replacements: [replacement] });
+    }
+  }
+  return { lines, groups };
+}
+
 /**
  * Rewrite only lines touched by fuzzy replacements. Untouched lines retain
  * their original bytes even though matching used normalized content.
@@ -141,28 +167,11 @@ function applyReplacementsPreservingUnchangedLines(
   replacements: TextReplacement[],
 ): string {
   const originalLines = splitLinesWithEndings(originalContent);
-  const baseLines = getLineSpans(baseContent);
+  const { lines: baseLines, groups } = groupReplacementsByLine(baseContent, replacements);
   if (originalLines.length !== baseLines.length) {
     throw new Error(
       "Cannot preserve unchanged lines because the base content has a different line count.",
     );
-  }
-
-  const groups: Array<{
-    startLine: number;
-    endLine: number;
-    replacements: TextReplacement[];
-  }> = [];
-  const sortedReplacements = replacements.toSorted((a, b) => a.matchIndex - b.matchIndex);
-  for (const replacement of sortedReplacements) {
-    const range = getReplacementLineRange(baseLines, replacement);
-    const current = groups.at(-1);
-    if (current && range.startLine < current.endLine) {
-      current.endLine = Math.max(current.endLine, range.endLine);
-      current.replacements.push(replacement);
-    } else {
-      groups.push({ ...range, replacements: [replacement] });
-    }
   }
 
   let originalLineIndex = 0;
@@ -184,6 +193,13 @@ function applyReplacementsPreservingUnchangedLines(
     originalLineIndex = group.endLine;
   }
   return result + originalLines.slice(originalLineIndex).join("");
+}
+
+interface AppliedEdits {
+  baseContent: string;
+  newContent: string;
+  replacementBaseContent: string;
+  replacements: MatchedEdit[];
 }
 
 /**
@@ -444,11 +460,11 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
  * then applied in reverse order so offsets remain stable. If any edit needs
  * fuzzy matching, only touched lines are rewritten from normalized content.
  */
-export function applyEditsToNormalizedContent(
+function applyEdits(
   normalizedContent: string,
   edits: Edit[],
   path: string,
-): { baseContent: string; newContent: string } {
+): AppliedEdits {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -520,6 +536,20 @@ export function applyEditsToNormalizedContent(
     throw getNoChangeError(path, normalizedEdits.length);
   }
 
+  return {
+    baseContent,
+    newContent,
+    replacementBaseContent,
+    replacements: matchedEdits,
+  };
+}
+
+export function applyEditsToNormalizedContent(
+  normalizedContent: string,
+  edits: Edit[],
+  path: string,
+): { baseContent: string; newContent: string } {
+  const { baseContent, newContent } = applyEdits(normalizedContent, edits, path);
   return { baseContent, newContent };
 }
 
@@ -542,60 +572,125 @@ function getLineTerminator(line: string | undefined): LineTerminator | undefined
   return line.endsWith("\r") ? "\r" : undefined;
 }
 
-function getRemovedLineCount(part: Change | undefined): number {
-  return part?.removed ? (part.count ?? 0) : 0;
-}
-
-function restoreReplacedLineEndings(
-  addedText: string,
-  replacedLines: string[],
+function restoreNormalizedLineEndings(
+  normalizedContent: string,
+  sourceLines: string[],
   fallback: LineTerminator,
 ): string {
-  const addedLines = splitLinesWithTerminators(addedText);
-  // Align from the end so the boundary before untouched content keeps the
-  // terminator of the last replaced line when replacements collapse lines.
-  const sourceOffset = Math.max(0, replacedLines.length - addedLines.length);
-  let result = "";
-  for (const [index, line] of addedLines.entries()) {
-    if (!line.endsWith("\n")) {
-      result += line;
-      continue;
-    }
-    const source = replacedLines[sourceOffset + index] ?? replacedLines.at(-1);
-    result += line.replace(/\r?\n$/, "") + (getLineTerminator(source) ?? fallback);
-  }
-  return result;
+  let sourceIndex = 0;
+  return normalizedContent.replace(/\n/g, () => {
+    const source = sourceLines[sourceIndex] ?? sourceLines.at(-1);
+    sourceIndex++;
+    return getLineTerminator(source) ?? fallback;
+  });
 }
 
-export function restoreOriginalLineEndings(
+function countLineBreaks(content: string): number {
+  return content.match(/\n/g)?.length ?? 0;
+}
+
+function applyReplacementsPreservingLineEndings(
   originalContent: string,
-  updatedContent: string,
+  baseContent: string,
+  replacements: TextReplacement[],
 ): string {
   const originalLines = splitLinesWithTerminators(originalContent);
-  const normalizedContent = originalLines.map((line) => line.replace(/\r\n?$/, "\n")).join("");
-  const parts = diffLines(normalizedContent, updatedContent);
-  let ending: LineTerminator =
-    getLineTerminator(originalLines[0]) ?? detectLineEnding(originalContent);
+  const { lines: baseLines, groups } = groupReplacementsByLine(baseContent, replacements);
+  if (originalLines.length !== baseLines.length) {
+    throw new Error(
+      "Cannot preserve original line endings because the base content has a different line count.",
+    );
+  }
+
+  const fileFallback = detectLineEnding(originalContent);
   let originalIndex = 0;
   let result = "";
-  for (const [index, part] of parts.entries()) {
-    if (part.added) {
-      const removedBefore = getRemovedLineCount(parts[index - 1]);
-      const removedAfter = getRemovedLineCount(parts[index + 1]);
-      const replacedLines = removedBefore
-        ? originalLines.slice(originalIndex - removedBefore, originalIndex)
-        : originalLines.slice(originalIndex, originalIndex + Math.max(removedAfter, 1));
-      result += restoreReplacedLineEndings(part.value, replacedLines, ending);
-      continue;
+  for (const group of groups) {
+    result += originalLines.slice(originalIndex, group.startLine).join("");
+    const firstLine = baseLines.at(group.startLine);
+    const lastLine = baseLines.at(group.endLine - 1);
+    if (!firstLine || !lastLine) {
+      throw new Error("Replacement group is outside the base content.");
     }
-    const lines = originalLines.slice(originalIndex, originalIndex + (part.count ?? 0));
-    if (!part.removed) {
-      result += lines.join("");
-    }
-    ending = getLineTerminator(lines.at(-1)) ?? ending;
-    originalIndex += lines.length;
+
+    const groupStartOffset = firstLine.start;
+    const normalizedGroup = baseContent.slice(groupStartOffset, lastLine.end);
+    const sourceGroup = originalLines.slice(group.startLine, group.endLine);
+    const groupFallback =
+      getLineTerminator(sourceGroup[0]) ??
+      getLineTerminator(originalLines[group.startLine - 1]) ??
+      fileFallback;
+    const restoredGroup = restoreNormalizedLineEndings(
+      normalizedGroup,
+      sourceGroup,
+      groupFallback,
+    );
+    const restoredReplacements = group.replacements.map((replacement) => {
+      const relativeStart = replacement.matchIndex - groupStartOffset;
+      const relativeEnd = relativeStart + replacement.matchLength;
+      const restoredStart = restoreNormalizedLineEndings(
+        normalizedGroup.slice(0, relativeStart),
+        sourceGroup,
+        groupFallback,
+      ).length;
+      const restoredEnd = restoreNormalizedLineEndings(
+        normalizedGroup.slice(0, relativeEnd),
+        sourceGroup,
+        groupFallback,
+      ).length;
+      const range = getReplacementLineRange(baseLines, replacement);
+      const replacementSource = originalLines.slice(range.startLine, range.endLine);
+      const replacementFallback =
+        getLineTerminator(replacementSource[0]) ??
+        getLineTerminator(originalLines[range.startLine - 1]) ??
+        fileFallback;
+      const consumedTerminatorCount = countLineBreaks(
+        normalizedGroup.slice(relativeStart, relativeEnd),
+      );
+      const replacementTerminatorCount = countLineBreaks(replacement.newText);
+      const terminatorSources =
+        consumedTerminatorCount > 0
+          ? replacementSource.slice(0, consumedTerminatorCount)
+          : replacementSource.slice(0, 1);
+      const sourceOffset = Math.max(
+        0,
+        terminatorSources.length - replacementTerminatorCount,
+      );
+      return {
+        matchIndex: restoredStart,
+        matchLength: restoredEnd - restoredStart,
+        newText: restoreNormalizedLineEndings(
+          replacement.newText,
+          terminatorSources.slice(sourceOffset),
+          replacementFallback,
+        ),
+      };
+    });
+    result += applyReplacements(restoredGroup, restoredReplacements);
+    originalIndex = group.endLine;
   }
-  return result;
+  return result + originalLines.slice(originalIndex).join("");
+}
+
+export function applyEditsPreservingLineEndings(
+  originalContent: string,
+  edits: Edit[],
+  path: string,
+): { baseContent: string; newContent: string; finalContent: string } {
+  const applied = applyEdits(normalizeToLF(originalContent), edits, path);
+  const finalContent = applyReplacementsPreservingLineEndings(
+    originalContent,
+    applied.replacementBaseContent,
+    applied.replacements,
+  );
+  if (normalizeToLF(finalContent) !== applied.newContent) {
+    throw new Error("Line-ending restoration changed the normalized edit result.");
+  }
+  return {
+    baseContent: applied.baseContent,
+    newContent: applied.newContent,
+    finalContent,
+  };
 }
 
 /** Generate a standard unified patch. */

@@ -739,10 +739,34 @@ describe("edit tool", () => {
       expected: "alpha\r\nprefix\nbeta\ngamma\n",
     },
     {
+      name: "uses the edited target terminator for an appended line",
+      original: "alpha\r\nbeta\n",
+      edits: [{ oldText: "alpha", newText: "alpha\nsuffix" }],
+      expected: "alpha\r\nsuffix\r\nbeta\n",
+    },
+    {
+      name: "keeps neighboring duplicate line terminators unchanged",
+      original: "A\r\nB\nC\r",
+      edits: [{ oldText: "A", newText: "B" }],
+      expected: "B\r\nB\nC\r",
+    },
+    {
+      name: "preserves mixed terminators during a fuzzy multi-line edit",
+      original: "keep\r\ntarget   \nafter\r\n",
+      edits: [{ oldText: "target\nafter", newText: "TARGET\nAFTER" }],
+      expected: "keep\r\nTARGET\nAFTER\r\n",
+    },
+    {
       name: "keeps the trailing boundary when replacement collapses mixed lines",
       original: "alpha\r\nbeta\ngamma\n",
       edits: [{ oldText: "alpha\nbeta", newText: "merged" }],
       expected: "merged\ngamma\n",
+    },
+    {
+      name: "uses the last consumed terminator when collapsing complete lines",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "alpha\nbeta\n", newText: "combined\n" }],
+      expected: "combined\ngamma\n",
     },
     {
       name: "aligns an unterminated replacement at end of file",

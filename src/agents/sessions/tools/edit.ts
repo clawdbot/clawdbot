@@ -19,7 +19,7 @@ import { textResult } from "../../tools/common.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
-  applyEditsToNormalizedContent,
+  applyEditsPreservingLineEndings,
   computeEditsDiff,
   EditNoChangeError,
   type Edit,
@@ -27,7 +27,6 @@ import {
   type EditDiffResult,
   generateDiffString,
   generateUnifiedPatch,
-  restoreOriginalLineEndings,
   splitNoOpEdits,
   stripBom,
   validateNoOpEditTargets,
@@ -458,13 +457,12 @@ export function createEditToolDefinition(
               terminate: true,
             };
           }
-          const { baseContent, newContent } = applyEditsToNormalizedContent(
-            normalizedContent,
+          const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
+            content,
             realEdits,
             path,
           );
-          const finalContent = bom + restoreOriginalLineEndings(content, newContent);
-          await ops.writeFile(absolutePath, finalContent);
+          await ops.writeFile(absolutePath, bom + finalContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
