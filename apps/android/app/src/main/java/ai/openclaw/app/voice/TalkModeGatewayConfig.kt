@@ -1,5 +1,6 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.isAndroidRealtimeRelayModelSupported
 import ai.openclaw.app.normalizeMainKey
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -13,18 +14,27 @@ internal data class TalkModeGatewayConfigState(
   val speechLocale: String?,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
+  val realtimeRelayModelSupported: Boolean,
 )
 
 internal object TalkModeGatewayConfigParser {
   /** Reads gateway talk/session config into the runtime state TalkMode needs. */
   fun parse(config: JsonObject?): TalkModeGatewayConfigState {
     val talk = config?.get("talk").asObjectOrNull()
+    // talk.config promotes the selected provider's model/default into this canonical field.
+    val realtimeModel =
+      talk
+        ?.get("realtime")
+        .asObjectOrNull()
+        ?.get("model")
+        .asStringOrNull()
     val sessionCfg = config?.get("session").asObjectOrNull()
     return TalkModeGatewayConfigState(
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
       speechLocale = normalizeSpeechLocaleTag(talk?.get("speechLocale").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
+      realtimeRelayModelSupported = isAndroidRealtimeRelayModelSupported(realtimeModel),
     )
   }
 
