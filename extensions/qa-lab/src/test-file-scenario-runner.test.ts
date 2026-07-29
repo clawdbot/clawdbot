@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 import { dockerE2eLaneName } from "./test-file-scenario-docker-batch.js";
 import {
   qaTestFileScenarioRunnerTesting,
@@ -781,7 +782,7 @@ describe("qa test file scenario runner", () => {
 
     beforeAll(async () => {
       const tempRoot = await makeTempDir("qa-script-timeout-");
-      const scriptPath = path.join(tempRoot, "hanging-producer.ts");
+      const scriptPath = path.join(tempRoot, "hanging-producer.mjs");
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       const descendantScript = [
         "process.on('SIGTERM', () => {});",
@@ -812,9 +813,23 @@ describe("qa test file scenario runner", () => {
         primaryModel: "mock-openai/gpt-5.6-luna",
         scenarios: [makeTestFileScenario("script", scriptPath)],
         commandTimeoutMs,
+        // Exercise the real process-group lifecycle without spending its
+        // bounded startup budget on an unrelated cold tsx import.
+        runCommand: (execution) =>
+          runQaScenarioCommandLifecycle({ ...execution, args: [scriptPath] }),
       });
-      descendantPid = await readPid(descendantPidPath, commandTimeoutMs);
-      result = await run;
+      const [pidResult, runResult] = await Promise.allSettled([
+        readPid(descendantPidPath, commandTimeoutMs),
+        run,
+      ]);
+      if (pidResult.status === "rejected") {
+        throw pidResult.reason;
+      }
+      if (runResult.status === "rejected") {
+        throw runResult.reason;
+      }
+      descendantPid = pidResult.value;
+      result = runResult.value;
       await waitForDead(descendantPid, 2_000);
     });
 
