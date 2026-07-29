@@ -235,7 +235,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() =>
           settingsSidebar
-            .getByRole("link", { name: "General" })
+            .getByRole("link", { name: "Appearance" })
             .first()
             .getAttribute("aria-current"),
         )

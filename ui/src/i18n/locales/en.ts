@@ -1218,10 +1218,9 @@ export const en: TranslationMap = {
     },
   },
   // Historical namespace from the pre-restructure "quick settings" page; its
-  // keys now serve Models, General, Privacy & Security, Appearance, and Profile.
+  // keys now serve Models, Privacy & Security, Appearance, and Profile.
   // Renaming would force retranslation of every key, so the name stays.
   quickSettings: {
-    intro: "Settings sync to your Gateway configuration file.",
     language: "Language",
     model: {
       title: "Model & Thinking",
@@ -1748,7 +1747,6 @@ export const en: TranslationMap = {
     forward: "Forward",
     chat: "Chat",
     settings: "Settings",
-    settingsGeneral: "General",
     askOpenClaw: "Ask OpenClaw",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
@@ -1932,7 +1930,7 @@ export const en: TranslationMap = {
     chat: "Gateway chat for quick interventions.",
     dashboards: "Threads that open on their dashboard face.",
     custodian: "System setup and care.",
-    config: "Language and shortcuts to core settings.",
+    config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
     communications: "Messages and text-to-speech settings.",
     appearance: "Theme, UI, and setup wizard settings.",

@@ -68,7 +68,7 @@ describe("settings sidebar search", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
-        activeRouteId: "config",
+        activeRouteId: "appearance",
         offline: false,
         lastError: null,
         version: "",
@@ -98,7 +98,7 @@ describe("settings sidebar search", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
-        activeRouteId: "config",
+        activeRouteId: "appearance",
         offline: false,
         lastError: null,
         version: "",
@@ -136,7 +136,7 @@ describe("settings sidebar search", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
-        activeRouteId: "config",
+        activeRouteId: "appearance",
         offline: false,
         lastError: null,
         version: "",
@@ -146,9 +146,10 @@ describe("settings sidebar search", () => {
         searchQuery: "mcp",
         searchBlockMatches: [
           {
-            routeId: "config",
-            label: "Automations",
-            hash: "#settings-general-automations",
+            routeId: "appearance",
+            label: "Language",
+            search: "?section=__appearance__",
+            hash: "#settings-language",
           },
           {
             routeId: "mcp",
@@ -172,15 +173,16 @@ describe("settings sidebar search", () => {
         ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
       ),
     ].map((item) => item.textContent?.trim());
-    expect(resultLabels).toEqual(["MCP", "General", "Automations"]);
+    expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
     expect(container.querySelector(".settings-sidebar__item--active")).toBeNull();
 
-    const automations = container.querySelector<HTMLAnchorElement>(
-      '.settings-sidebar__subitem[href="/settings/general#settings-general-automations"]',
+    const language = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',
     );
-    automations?.click();
-    expect(onNavigate).toHaveBeenCalledWith("config", {
-      hash: "#settings-general-automations",
+    language?.click();
+    expect(onNavigate).toHaveBeenCalledWith("appearance", {
+      search: "?section=__appearance__",
+      hash: "#settings-language",
     });
   });
 
@@ -189,7 +191,7 @@ describe("settings sidebar search", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
-        activeRouteId: "config",
+        activeRouteId: "appearance",
         offline: false,
         lastError: null,
         version: "",
@@ -285,7 +287,7 @@ describe("settings sidebar search", () => {
       render(
         renderSettingsSidebar({
           basePath: "",
-          activeRouteId: "config",
+          activeRouteId: "appearance",
           offline: false,
           lastError: null,
           version: "",
@@ -366,7 +368,7 @@ describe("settings sidebar search", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
-        activeRouteId: "config",
+        activeRouteId: "appearance",
         offline: false,
         lastError: null,
         version: "",
@@ -397,7 +399,7 @@ describe("settings sidebar search", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
-        activeRouteId: "config",
+        activeRouteId: "appearance",
         offline: false,
         lastError: null,
         version: "1.0.0",
@@ -434,7 +436,7 @@ describe("settings sidebar search", () => {
       render(
         renderSettingsSidebar({
           basePath: "",
-          activeRouteId: "config",
+          activeRouteId: "appearance",
           offline,
           queuedOutboxCount,
           lastError,

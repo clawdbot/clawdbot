@@ -178,7 +178,7 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "config", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
     routes: ["connection", "channels", "communications", "talk", "nodes"],
@@ -406,15 +406,7 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-/**
- * Sidebar item label inside the settings takeover. The config route is titled
- * "Settings" globally (gear tooltip, palette) but reads "General" next to its
- * sibling sections.
- */
 export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
-  if (routeId === "config") {
-    return t("nav.settingsGeneral");
-  }
   if (routeId === "custodian") {
     return t("nav.askOpenClaw");
   }
