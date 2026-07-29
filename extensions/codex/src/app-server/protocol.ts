@@ -72,6 +72,42 @@ export type CodexInitializeResponse = {
   platformOs?: string;
 };
 
+/** Bounded, sandboxed argv execution over the existing app-server connection. */
+export type CodexCommandExecParams = {
+  command: string[];
+  env?: Record<string, string | null>;
+  outputBytesCap?: number;
+  timeoutMs?: number;
+};
+
+export type CodexCommandExecResponse = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+/** Native app-server filesystem read over the existing JSON-RPC transport. */
+export type CodexFsReadFileParams = {
+  path: string;
+};
+
+export type CodexFsReadFileResponse = {
+  dataBase64: string;
+};
+
+/** Constant-size remote file revision returned by the native metadata RPC. */
+export type CodexFsGetMetadataParams = {
+  path: string;
+};
+
+export type CodexFsGetMetadataResponse = {
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymlink: boolean;
+  createdAtMs: number;
+  modifiedAtMs: number;
+};
+
 export type CodexUserInput =
   | {
       type: "text";
@@ -728,7 +764,10 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "command/exec": CodexCommandExecParams;
   "environment/add": { environmentId: string; execServerUrl: string };
+  "fs/getMetadata": CodexFsGetMetadataParams;
+  "fs/readFile": CodexFsReadFileParams;
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
@@ -752,6 +791,7 @@ type CodexAppServerRequestResultMap = {
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
+  "command/exec": CodexCommandExecResponse;
   "config/mcpServer/reload": JsonValue;
   "config/read": CodexConfigReadResponse;
   "configRequirements/read": CodexConfigRequirementsReadResponse;
@@ -759,6 +799,8 @@ type CodexAppServerRequestResultMap = {
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
+  "fs/getMetadata": CodexFsGetMetadataResponse;
+  "fs/readFile": CodexFsReadFileResponse;
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;

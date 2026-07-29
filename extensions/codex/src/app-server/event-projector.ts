@@ -55,6 +55,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
@@ -81,6 +82,9 @@ type CodexAppServerEventProjectorOptions = {
   prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
+  remoteWorkspaceRoot?: string;
+  readRemoteWorkspaceFile?: CodexRemoteWorkspaceFileReader;
+  remoteWorkspaceRequestTimeoutMs?: number;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
   onContextCompacted?: () => void;
   upstreamUserText?: string;
@@ -125,7 +129,12 @@ export class CodexAppServerEventProjector {
         runAbortSignal: options.runAbortSignal,
       },
     );
-    this.generatedMediaProjection = new CodexGeneratedMediaProjection(params.config);
+    this.generatedMediaProjection = new CodexGeneratedMediaProjection(params.config, {
+      remoteWorkspaceRoot: options.remoteWorkspaceRoot,
+      readFile: options.readRemoteWorkspaceFile,
+      requestTimeoutMs: options.remoteWorkspaceRequestTimeoutMs,
+      signal: options.runAbortSignal,
+    });
     this.toolProgressProjection = new CodexToolProgressProjection(params);
     this.toolTranscriptProjection = new CodexToolTranscriptProjection(
       params,
@@ -552,7 +561,7 @@ export class CodexAppServerEventProjector {
     }
     this.assistantProjection.recordItemCompleted(item, itemId, this.activeItemIds);
     this.reasoningProjection.recordItem(item);
-    this.generatedMediaProjection.recordNative(item);
+    await this.generatedMediaProjection.recordNative(item);
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
@@ -638,7 +647,7 @@ export class CodexAppServerEventProjector {
       this.diagnostics.warnUnknownItemStatus(item);
       this.assistantProjection.recordSnapshotItem(item);
       this.reasoningProjection.recordItem(item);
-      this.generatedMediaProjection.recordNative(item);
+      await this.generatedMediaProjection.recordNative(item);
       this.toolProgressProjection.recordToolMeta(item);
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
       await this.emitSnapshotOnlyNativeToolProgress(item);
