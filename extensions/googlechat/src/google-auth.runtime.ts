@@ -432,6 +432,12 @@ function createGoogleAuthFetch(): FetchLike {
         statusText: response.statusText,
       });
     } finally {
+      // The size guard can reject before the stream is touched, leaving an
+      // unread body. Start cancellation before release; awaiting it can
+      // deadlock when debug capture tees the stream.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   };
