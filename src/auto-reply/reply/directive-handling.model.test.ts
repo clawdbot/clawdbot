@@ -23,6 +23,9 @@ const modelsCommandMock = vi.hoisted(() => ({
   delegateToActual: false,
   resolveModelsCommandReply: vi.fn(),
 }));
+const stickyModelMock = vi.hoisted(() => ({
+  persist: vi.fn(async (_params: { agentId: string; model: string }) => "defaults" as const),
+}));
 
 function defaultModelsCommandReply() {
   return {
@@ -94,6 +97,11 @@ vi.mock("./commands-models.js", () => ({
     }
     return defaultModelsCommandReply();
   },
+}));
+
+vi.mock("../../agents/sticky-model-selection.js", () => ({
+  persistStickyModelSelection: (params: { agentId: string; model: string }) =>
+    stickyModelMock.persist(params),
 }));
 
 vi.mock("./directive-handling.auth.js", () => ({
@@ -473,6 +481,7 @@ beforeEach(() => {
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   vi.mocked(enqueueSystemEvent).mockClear();
   queueMocks.refreshQueuedFollowupSession.mockReset();
+  stickyModelMock.persist.mockClear();
   clearInternalHooks();
 });
 
@@ -717,6 +726,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Providers:");
     expect(reply?.text).toContain("Use: /models <provider>");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+    expect(stickyModelMock.persist).not.toHaveBeenCalled();
   });
 
   it("passes workspace scope through the /model list browser alias", async () => {
@@ -1877,6 +1887,27 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("for this session");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
+    expect(stickyModelMock.persist).toHaveBeenCalledWith({
+      agentId: "main",
+      model: "openai/gpt-4o",
+    });
+  });
+
+  it("uses the target session agent when persisting a model selection", async () => {
+    vi.mocked(resolveSessionAgentId).mockReturnValue("work");
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry,
+      }),
+    );
+
+    expect(stickyModelMock.persist).toHaveBeenCalledWith({
+      agentId: "work",
+      model: "openai/gpt-4o",
+    });
   });
 
   it("persists an explicit runtime with a directive-only model switch", async () => {
@@ -1973,6 +2004,20 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(otherEntry.providerOverride).toBeUndefined();
     expect(otherEntry.modelOverride).toBeUndefined();
     expect(otherEntry.modelOverrideSource).toBeUndefined();
+  });
+
+  it("persists a mixed-command model selection after its session transaction", async () => {
+    vi.mocked(resolveSessionAgentId).mockReturnValue("work");
+
+    await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o continue with the request",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+    });
+
+    expect(stickyModelMock.persist).toHaveBeenCalledWith({
+      agentId: "work",
+      model: "openai/gpt-4o",
+    });
   });
 
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {

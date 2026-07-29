@@ -7,6 +7,9 @@ import type { SessionEntry } from "../config/sessions/types.js";
 
 const effects = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
+  persistStickyModelSelection: vi.fn(
+    async (_params: { agentId: string; model: string }) => "defaults" as const,
+  ),
   refreshQueuedFollowupSession: vi.fn(),
   triggerSessionPatchHook: vi.fn(),
 }));
@@ -21,6 +24,10 @@ vi.mock("../auto-reply/reply/queue.js", () => ({
 }));
 vi.mock("../gateway/session-patch-hooks.js", () => ({
   triggerSessionPatchHook: (...args: unknown[]) => effects.triggerSessionPatchHook(...args),
+}));
+vi.mock("../agents/sticky-model-selection.js", () => ({
+  persistStickyModelSelection: (params: { agentId: string; model: string }) =>
+    effects.persistStickyModelSelection(params),
 }));
 
 import {
@@ -76,6 +83,7 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
 
 beforeEach(() => {
   effects.enqueueSystemEvent.mockReset();
+  effects.persistStickyModelSelection.mockClear();
   effects.refreshQueuedFollowupSession.mockReset();
   effects.triggerSessionPatchHook.mockReset();
 });
@@ -124,6 +132,10 @@ describe("applySessionModelSelection", () => {
     expect(sessionEntry.contextTokens).toBeUndefined();
     expect(sessionEntry.contextBudgetStatus).toBeUndefined();
     expect(effects.triggerSessionPatchHook).toHaveBeenCalledOnce();
+    expect(effects.persistStickyModelSelection).toHaveBeenCalledWith({
+      agentId: "main",
+      model: "openai/gpt-4o",
+    });
     expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
     expect(effects.enqueueSystemEvent).toHaveBeenCalledWith(
       "Model switched to Fast (openai/gpt-4o).",
@@ -163,6 +175,7 @@ describe("applySessionModelSelection", () => {
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
     expect(sessionEntry.agentHarnessId).toBe("codex");
+    expect(effects.persistStickyModelSelection).not.toHaveBeenCalled();
   });
 
   it.each([

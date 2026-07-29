@@ -8,6 +8,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { modelKey, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { persistStickyModelSelection } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -421,6 +422,17 @@ export async function persistInlineDirectives(params: {
         provider = persistedEntry?.providerOverride?.trim() || defaultProvider;
         model = persistedEntry?.modelOverride?.trim() || defaultModel;
         thinkingRemap = undefined;
+      }
+      if (
+        modelDirective &&
+        modelResolution?.modelSelection &&
+        modelApplied &&
+        !modelResolution.modelSelection.isDefault
+      ) {
+        await persistStickyModelSelection({
+          agentId: activeAgentId,
+          model: `${provider}/${model}`,
+        });
       }
       if (modelDirective && modelUpdated && modelApplied) {
         triggerSessionPatchHook({
