@@ -700,6 +700,56 @@ describe("subscribeEmbeddedAgentSession", () => {
     expectBlockReplyPayload(onBlockReply, {
       text: "Here it is.",
       mediaUrls: ["/tmp/lobster-boss.mp3"],
+      trustedLocalMedia: true,
+    });
+  });
+
+  it("does not trust a mixed generated and non-generated pending media batch", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          announceType: "music generation task",
+          taskLabel: "theme",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated music.",
+          mediaUrls: ["/tmp/generated.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:child:main",
+          announceType: "subagent task",
+          taskLabel: "other",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Other media.",
+          mediaUrls: ["/tmp/untrusted.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Done.",
+      mediaUrls: ["/tmp/generated.mp3", "/tmp/untrusted.mp3"],
+      trustedLocalMedia: undefined,
     });
   });
 

@@ -267,6 +267,54 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     },
   );
 
+  it("keeps attachment metadata aligned while deduplicating generated media", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const firstPath = path.join(workspaceDir, "first.mp3");
+    const secondPath = path.join(workspaceDir, "second.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await fs.writeFile(secondPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [
+        {
+          mediaUrl: secondPath,
+          mediaUrls: [firstPath, firstPath],
+          attachments: [
+            { type: "audio", path: firstPath, name: "first.mp3", durationMs: 1_000 },
+            { type: "audio", path: firstPath, name: "wrong.mp3", durationMs: 9_999 },
+            { type: "audio", name: "second.mp3", durationMs: 2_000 },
+          ],
+          trustedLocalMedia: true,
+        },
+      ],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([
+      expect.objectContaining({ type: "audio", fileName: "first.mp3", durationMs: 1_000 }),
+      expect.objectContaining({ type: "audio", fileName: "second.mp3", durationMs: 2_000 }),
+    ]);
+  });
+
+  it("keeps normalized MEDIA directive URLs when projecting history", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const audioPath = path.join(workspaceDir, "directive.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [{ text: `MEDIA:${audioPath}`, trustedLocalMedia: true }],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+  });
+
   it("does not preserve untrusted local audio paths before display normalization", async () => {
     const { stateDir, cfg } = createMediaTestContext({ allowRead: false });
     const audioPath = path.join(testState.root, "outside", "voice.mp3");

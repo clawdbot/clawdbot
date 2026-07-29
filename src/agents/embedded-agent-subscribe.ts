@@ -60,6 +60,7 @@ import {
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -140,14 +141,20 @@ function splitTrailingFenceFragment(
 
 function collectPendingMediaFromInternalEvents(
   events: SubscribeEmbeddedAgentSessionParams["internalEvents"],
-): { mediaUrls: string[]; attachments: NonNullable<AgentInternalEvent["attachments"]> } {
+): {
+  mediaUrls: string[];
+  attachments: NonNullable<AgentInternalEvent["attachments"]>;
+  trustedLocalMedia: boolean;
+} {
   if (!events?.length) {
-    return { mediaUrls: [], attachments: [] };
+    return { mediaUrls: [], attachments: [], trustedLocalMedia: false };
   }
   const pending: string[] = [];
   const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
   const indexByUrl = new Map<string, number>();
+  const trustedByUrl = new Map<string, boolean>();
   for (const event of events) {
+    const generatedMediaEvent = hasGeneratedMediaCompletionEvent([event]);
     const attachmentByUrl = new Map(
       (event.attachments ?? []).flatMap((attachment) => {
         const reference = normalizeOptionalString(
@@ -168,17 +175,24 @@ function collectPendingMediaFromInternalEvents(
       const metadata = attachmentByUrl.get(normalized);
       const existingIndex = indexByUrl.get(normalized);
       if (existingIndex !== undefined) {
+        trustedByUrl.set(normalized, trustedByUrl.get(normalized) === true || generatedMediaEvent);
         if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
           attachments[existingIndex] = metadata;
         }
         continue;
       }
       indexByUrl.set(normalized, pending.length);
+      trustedByUrl.set(normalized, generatedMediaEvent);
       pending.push(normalized);
       attachments.push(metadata ?? {});
     }
   }
-  return { mediaUrls: pending, attachments };
+  return {
+    mediaUrls: pending,
+    attachments,
+    trustedLocalMedia:
+      pending.length > 0 && pending.every((mediaUrl) => trustedByUrl.get(mediaUrl) === true),
+  };
 }
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
@@ -261,7 +275,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,
     pendingToolAudioAsVoice: false,
-    pendingToolTrustedLocalMedia: false,
+    pendingToolTrustedLocalMedia: initialPendingToolMedia.trustedLocalMedia,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,

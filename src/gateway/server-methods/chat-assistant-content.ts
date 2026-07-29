@@ -3,7 +3,7 @@ import {
   readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
@@ -19,6 +19,70 @@ const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
 const chatHistoryManagedMediaCleanupState = new Map<string, Promise<void>>();
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
+
+function collectReplyMediaEntries(payload: ReplyPayload) {
+  const attachmentByReference = new Map<string, NonNullable<ReplyPayload["attachments"]>[number]>();
+  for (const attachment of payload.attachments ?? []) {
+    const reference = (
+      attachment.path ??
+      attachment.url ??
+      attachment.mediaUrl ??
+      attachment.filePath
+    )?.trim();
+    if (reference && !attachmentByReference.has(reference)) {
+      attachmentByReference.set(reference, attachment);
+    }
+  }
+  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
+  return [
+    ...(payload.mediaUrls ?? []).map((url, index) => ({
+      url,
+      attachment: attachmentByReference.get(url.trim()) ?? payload.attachments?.[index],
+    })),
+    ...(typeof payload.mediaUrl === "string"
+      ? [
+          {
+            url: payload.mediaUrl,
+            attachment:
+              attachmentByReference.get(payload.mediaUrl.trim()) ??
+              payload.attachments?.[mediaUrlCount],
+          },
+        ]
+      : []),
+  ];
+}
+
+function resolveAlignedReplyMedia(
+  payload: ReplyPayload,
+  metadataSource: ReplyPayload = payload,
+): {
+  mediaUrls: string[];
+  attachments?: NonNullable<ReplyPayload["attachments"]>;
+} {
+  const metadataByUrl = new Map<string, NonNullable<ReplyPayload["attachments"]>[number]>();
+  for (const entry of collectReplyMediaEntries(metadataSource)) {
+    const key = entry.url.trim();
+    if (key && entry.attachment && !metadataByUrl.has(key)) {
+      metadataByUrl.set(key, entry.attachment);
+    }
+  }
+  const seen = new Set<string>();
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<ReplyPayload["attachments"]> = [];
+  let hasMetadata = false;
+  for (const entry of collectReplyMediaEntries(payload)) {
+    const key = entry.url.trim();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    mediaUrls.push(entry.url);
+    const attachment = metadataByUrl.get(key) ?? entry.attachment ?? {};
+    attachments.push(attachment);
+    hasMetadata ||= Object.keys(attachment).length > 0;
+  }
+  return { mediaUrls, ...(hasMetadata ? { attachments } : {}) };
+}
 
 /** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
 export function combineNonStreamingReplyParts(parts: readonly string[]): string {
@@ -131,17 +195,18 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       typeof payload.text === "string" &&
       payload.text.trim().length > 0,
   ).length;
-  const normalized = normalizeReplyPayloadsForDelivery(params.payloads);
-  if (normalized.length === 0) {
+  const plan = createOutboundPayloadPlan(params.payloads);
+  if (plan.length === 0) {
     return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
   }
 
   const preserveTextBoundaries =
-    normalized.filter((payload) => typeof payload.text === "string" && payload.text.trim()).length >
+    plan.filter(({ payload }) => typeof payload.text === "string" && payload.text.trim()).length >
     1;
   const content: AssistantDisplayContentBlock[] = [];
   let strippedTextPayloadCount = 0;
-  for (const payload of normalized) {
+  for (const entry of plan) {
+    const payload = entry.payload;
     const text = sanitizeAssistantDisplayText(payload.text, {
       preserveBoundaries: preserveTextBoundaries,
     });
@@ -168,17 +233,12 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
     }
-    const mediaUrls = Array.from(
-      new Set([
-        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-        ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-      ]),
-    );
+    const media = resolveAlignedReplyMedia(payload, params.payloads[entry.sourceIndex] ?? payload);
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey: params.sessionKey,
       ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
-      mediaUrls,
-      attachments: payload.attachments,
+      mediaUrls: media.mediaUrls,
+      attachments: media.attachments,
       localRoots: params.managedMediaLocalRoots,
       allowLocalNonImage: payload.trustedLocalMedia === true,
       continueOnPrepareError: true,
