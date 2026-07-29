@@ -570,7 +570,8 @@ export function restoreOriginalLineEndings(
   const originalLines = splitLinesWithTerminators(originalContent);
   const normalizedContent = originalLines.map((line) => line.replace(/\r\n?$/, "\n")).join("");
   const parts = diffLines(normalizedContent, updatedContent);
-  let ending: LineTerminator = detectLineEnding(originalContent);
+  let ending: LineTerminator =
+    getLineTerminator(originalLines[0]) ?? detectLineEnding(originalContent);
   let originalIndex = 0;
   let result = "";
   for (const [index, part] of parts.entries()) {

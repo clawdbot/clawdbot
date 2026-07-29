@@ -727,6 +727,12 @@ describe("edit tool", () => {
       expected: "ONLY\r",
     },
     {
+      name: "uses the first carriage return for a leading inserted line",
+      original: "alpha\rbeta\r",
+      edits: [{ oldText: "alpha", newText: "prefix\nalpha" }],
+      expected: "prefix\ralpha\rbeta\r",
+    },
+    {
       name: "keeps trailing CRLF lines when the first line ends with LF",
       original: "alpha\nbeta\r\ngamma\r\n",
       edits: [{ oldText: "alpha", newText: "ALPHA" }],
