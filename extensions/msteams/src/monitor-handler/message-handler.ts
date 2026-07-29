@@ -43,11 +43,12 @@ import {
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import {
+  buildMSTeamsNormalizedText,
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
-  stripMSTeamsMentionTags,
+  translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
@@ -219,6 +220,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     rawText: string;
     text: string;
     attachments: MSTeamsAttachmentLike[];
+    quoteInfo?: ReturnType<typeof extractMSTeamsQuoteInfo>;
+    quoteContext?: MSTeamsTurnContext;
+    quoteReplyToId?: string;
+    debounceScopeKey: string;
     wasMentioned: boolean;
     implicitMentionKinds: Array<"reply_to_bot">;
     turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
@@ -238,7 +243,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const historyBody = [text, formatMediaPlaceholderText(advertisedMedia)]
       .filter(Boolean)
       .join("\n");
-    const quoteInfo = extractMSTeamsQuoteInfo(attachments);
+    const quoteInfo = params.quoteInfo;
+    const quoteContext = params.quoteContext;
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
     const from = activity.from;
@@ -658,7 +664,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // and channel quotes retain their visibility-filtered preview.
     let quoteBodyFull: string | undefined;
     const quoteMessageId = quoteInfo?.id;
-    if (quoteMessageId && isDirectMessage && conversationId.startsWith("19:")) {
+    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+      isDirectMessage,
+      conversationId,
+      aadObjectId: from.aadObjectId,
+      appId,
+    });
+    if (quoteMessageId && isDirectMessage && graphConversationId.startsWith("19:")) {
       try {
         const graphToken = await withMSTeamsRequestDeadline({
           deadline: preprocessingDeadline,
@@ -669,7 +681,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           deadline: preprocessingDeadline,
           label: "MS Teams quote lookup",
           work: () =>
-            fetchChatMessageText(graphToken, conversationId, quoteMessageId, preprocessingDeadline),
+            fetchChatMessageText(
+              graphToken,
+              graphConversationId,
+              quoteMessageId,
+              preprocessingDeadline,
+            ),
         });
       } catch (err) {
         log.debug?.("failed to fetch full quoted message text", {
@@ -773,11 +790,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           markParentContextInjected(route.sessionKey, threadParentId);
         }
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
-        quoteSenderName =
-          parentMsg?.from?.user?.displayName ??
-          parentMsg?.from?.application?.displayName ??
-          quoteInfo?.sender;
+        if (quoteContext === context && !quoteInfo?.fromQuotedReplyEntity) {
+          quoteSenderId =
+            parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+          quoteSenderName =
+            parentMsg?.from?.user?.displayName ??
+            parentMsg?.from?.application?.displayName ??
+            quoteInfo?.sender;
+        }
         const { items: threadMessages } = filterSupplementalContextItems({
           items: allMessages,
           mode: contextVisibilityMode,
@@ -794,6 +814,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
     quoteSenderName ??= quoteInfo?.sender;
+    quoteSenderId ??= quoteInfo?.senderId;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
     const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
@@ -864,7 +885,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       supplemental: {
         quote: quoteInfo
           ? {
-              id: quoteInfo.id ?? activity.replyToId ?? undefined,
+              id: quoteInfo.id ?? params.quoteReplyToId ?? activity.replyToId ?? undefined,
               body: quoteBodyFull ?? quoteInfo.body,
               sender: quoteInfo.sender,
               senderAllowed: quoteSenderAllowed,
@@ -1039,9 +1060,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<MSTeamsDebounceEntry>({
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
-      const conversationId = normalizeMSTeamsConversationId(
-        entry.context.activity.conversation?.id ?? "",
-      );
+      const conversationId = entry.debounceScopeKey;
       const senderId =
         entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
       if (!senderId || !conversationId) {
@@ -1083,11 +1102,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               .join("\n");
             const wasMentioned = entries.some((entry) => entry.wasMentioned);
             const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
+            const quoteEntry = entries.findLast(
+              (entry) => entry.quoteInfo && entry.debounceScopeKey === last.debounceScopeKey,
+            );
             await handleTeamsMessageNow({
               context: last.context,
               rawText: combinedRawText,
               text: combinedText,
               attachments: [],
+              quoteInfo: quoteEntry?.quoteInfo,
+              quoteContext: quoteEntry?.quoteContext,
+              quoteReplyToId: quoteEntry?.quoteReplyToId,
+              debounceScopeKey: last.debounceScopeKey,
               wasMentioned,
               implicitMentionKinds,
               ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
@@ -1117,7 +1143,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const htmlText = extractTextFromHtmlAttachments(attachments);
     const valueText =
       rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
-    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
+    const text = buildMSTeamsNormalizedText({
+      text: rawText || htmlText || valueText || "",
+      entities: activity.entities,
+      attachments,
+      botId: activity.recipient?.id,
+      botName: activity.recipient?.name,
+    });
+    const quoteInfo = extractMSTeamsQuoteInfo(attachments, activity.entities);
+    const debounceScopeKey = resolveMSTeamsDebounceScopeKey(activity);
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
@@ -1133,6 +1167,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       rawText,
       text,
       attachments,
+      quoteInfo,
+      quoteContext: quoteInfo ? context : undefined,
+      quoteReplyToId: replyToId,
+      debounceScopeKey,
       wasMentioned,
       implicitMentionKinds,
       turnAdoptionLifecycle,
@@ -1144,5 +1182,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
     return undefined;
   };
+}
+function resolveMSTeamsDebounceScopeKey(activity: MSTeamsTurnContext["activity"]): string {
+  const rawConversationId = activity.conversation?.id ?? "";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+  if (activity.conversation?.conversationType !== "channel") {
+    return conversationId;
+  }
+  const threadId =
+    extractMSTeamsConversationMessageId(rawConversationId) ??
+    activity.replyToId ??
+    activity.id ??
+    "";
+  return `${conversationId}:${threadId}`;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
