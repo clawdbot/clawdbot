@@ -185,6 +185,8 @@ export type ResolvedConversationCapabilityProfile = {
     explicitToolAllowlist: string[];
     /** Explicit config/runtime grants only; excludes built-in profile expansion. */
     explicitToolOverrideAllowlist: string[];
+    /** Explicit and inherited grants used to select plugin tools before policy filtering. */
+    pluginToolDiscoveryAllowlist: string[];
     explicitToolDenylist: string[];
     runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
@@ -267,6 +269,7 @@ export function resolveConversationCapabilityProfile(
     return merged.length > 0 ? merged : undefined;
   };
   const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
+  const pluginToolDiscoveryPolicies = [...explicitOverridePolicies, inheritedToolPolicy];
   const explicitToolAllowlistPolicies = [
     profilePolicy,
     providerProfilePolicy,
@@ -380,6 +383,7 @@ export function resolveConversationCapabilityProfile(
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
       explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
+      pluginToolDiscoveryAllowlist: collectExplicitAllowlist(pluginToolDiscoveryPolicies),
       explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
       runtimePluginToolGrant: params.runtimePluginToolGrant,
     },

@@ -81,6 +81,43 @@ describe("tool-policy-pipeline", () => {
     expect(names).toEqual(["plugin_tool"]);
   });
 
+  test("built-in profiles preserve plugin tools without widening core tools", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "browser" },
+      { name: "plugin_tool" },
+    ] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools(tools),
+      toolMeta: (tool) => (tool.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
+      warn: () => {},
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profile: "coding",
+        profilePolicy: { allow: ["exec"] },
+      }),
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["exec", "plugin_tool"]);
+  });
+
+  test("explicit policies can still restrict plugin tools after a profile", () => {
+    const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools(tools),
+      toolMeta: (tool) => (tool.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
+      warn: () => {},
+      steps: [
+        ...buildDefaultToolPolicyPipelineSteps({
+          profile: "coding",
+          profilePolicy: { allow: ["exec"] },
+        }),
+        { policy: { allow: ["exec"] }, label: "tools.allow" },
+      ],
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["exec"]);
+  });
+
   test.each([
     { expected: ["exec"], policy: { deny: ["canvas"] } },
     { expected: ["canvas", "show_widget"], policy: { allow: ["canvas"] } },

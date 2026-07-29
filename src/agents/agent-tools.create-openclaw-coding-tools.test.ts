@@ -616,6 +616,17 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
   });
 
+  it("does not use built-in profiles to restrict plugin discovery", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual([]);
+  });
+
   it("does not inherit native-harness bridge runtime allowlists", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

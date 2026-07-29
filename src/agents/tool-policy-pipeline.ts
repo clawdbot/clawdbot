@@ -39,6 +39,7 @@ function rememberToolPolicyWarning(warning: string): boolean {
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
+  preservePluginTools?: boolean;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
@@ -78,6 +79,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
+      preservePluginTools: true,
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
       unavailableCoreToolReason,
@@ -87,6 +89,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
+      preservePluginTools: true,
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
@@ -210,12 +213,16 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     if (!expanded) {
       continue;
     }
+    const effectivePolicy =
+      step.preservePluginTools && expanded.allow
+        ? { ...expanded, allow: [...expanded.allow, ...pluginGroups.all] }
+        : expanded;
     const before = filtered;
-    filtered = filterToolsByPolicy(before, expanded);
-    params.onFilter?.({ step, policy: expanded, before, after: filtered });
+    filtered = filterToolsByPolicy(before, effectivePolicy);
+    params.onFilter?.({ step, policy: effectivePolicy, before, after: filtered });
     auditToolPolicyFilter({
       stepLabel: step.label,
-      policy: expanded,
+      policy: effectivePolicy,
       before,
       after: filtered,
       logLevel: params.auditLogLevel,
