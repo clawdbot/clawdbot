@@ -75,6 +75,13 @@ const SKILL_PROPOSAL_STATUSES = [
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
 
+function skillWorkshopAgentEventActor(agentId?: string) {
+  return {
+    type: "agent" as const,
+    ...(agentId ? { id: agentId } : {}),
+  };
+}
+
 function requireProposalContent(content: string | undefined): string {
   if (content === undefined) {
     throw new ToolInputError("proposal_content required");
@@ -284,6 +291,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const evaluated = await evaluateSkillProposal({
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
@@ -309,6 +317,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
@@ -326,6 +335,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const rejected = await rejectSkillProposal({
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
@@ -341,6 +351,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const quarantined = await quarantineSkillProposal({
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
@@ -388,6 +399,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           proposal = await proposeCreateSkill({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
             name: readStringParam(params, "name", { required: true }),
@@ -405,6 +417,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           proposal = await proposeUpdateSkill({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
             skillName: readStringParam(params, "skill_name", {
@@ -434,6 +447,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           proposal = await reviseSkillProposal({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
             proposalId: pendingProposal.record.id,

@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
@@ -86,6 +87,14 @@ describe("skill_workshop tool", () => {
         },
       },
     });
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: details.id }).events.map(
+        (event) => event.actor,
+      ),
+    ).toEqual([
+      { type: "agent", id: "main" },
+      { type: "agent", id: "main" },
+    ]);
   });
 
   it("documents that proposal_content must be final skill body content, not a plan or change description", () => {

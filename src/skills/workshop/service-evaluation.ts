@@ -136,7 +136,7 @@ export async function evaluateSkillProposal(
   const eventInput = createSkillProposalEvent({
     record: pendingRecord,
     type: "evaluation_completed",
-    actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+    actor: input.eventActor,
     ...(correlationId ? { correlationId } : {}),
     occurredAt: completedAt,
     payload: {

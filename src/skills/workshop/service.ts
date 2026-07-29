@@ -106,7 +106,7 @@ class SkillProposalLifecycleError extends Error {
 
 type SkillProposalTransitionInput = Pick<
   SkillProposalActionInput,
-  "agentId" | "correlationId" | "env" | "workspaceDir"
+  "agentId" | "correlationId" | "env" | "eventActor" | "workspaceDir"
 >;
 
 export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
@@ -300,7 +300,7 @@ export async function proposeCreateSkill(
     event: createSkillProposalEvent({
       record,
       type: "created",
-      actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "system" },
+      actor: input.eventActor,
     }),
     store: proposalStoreOptions(input.env),
   });
@@ -434,7 +434,7 @@ export async function proposeUpdateSkill(
     event: createSkillProposalEvent({
       record,
       type: "created",
-      actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "system" },
+      actor: input.eventActor,
     }),
     store: proposalStoreOptions(input.env),
   });
@@ -572,7 +572,7 @@ export async function reviseSkillProposal(
       event: createSkillProposalEvent({
         record: revised,
         type: "revised",
-        actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "system" },
+        actor: input.eventActor,
         ...(input.correlationId ? { correlationId: input.correlationId } : {}),
         occurredAt: now,
       }),
@@ -626,7 +626,7 @@ export async function quarantineSkillProposal(
       event: createSkillProposalEvent({
         record,
         type: "quarantined",
-        actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+        actor: input.eventActor,
         ...(input.correlationId ? { correlationId: input.correlationId } : {}),
         occurredAt: now,
       }),
@@ -665,6 +665,7 @@ export async function applySkillProposal(
     evaluated = await evaluateSkillProposal({
       workspaceDir: input.workspaceDir,
       ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.eventActor ? { eventActor: input.eventActor } : {}),
       ...(input.env ? { env: input.env } : {}),
       proposalId: input.proposalId,
       expectedRevisionHash: initial.revisionHash,
@@ -733,7 +734,7 @@ export async function applySkillProposal(
           event: createSkillProposalEvent({
             record: updated,
             type: "quarantined",
-            actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+            actor: input.eventActor,
             ...(input.correlationId ? { correlationId: input.correlationId } : {}),
             occurredAt: updated.updatedAt,
           }),
@@ -843,7 +844,7 @@ export async function applySkillProposal(
         event: createSkillProposalEvent({
           record: applied,
           type: "applied",
-          actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+          actor: input.eventActor,
           ...(input.correlationId ? { correlationId: input.correlationId } : {}),
           occurredAt: now,
           payload: { targetSkillFile: record.target.skillFile },
@@ -1047,7 +1048,7 @@ async function markProposal(
       event: createSkillProposalEvent({
         record,
         type: status,
-        actor: input.agentId ? { type: "agent", id: input.agentId } : { type: "gateway" },
+        actor: input.eventActor,
         ...(input.correlationId ? { correlationId: input.correlationId } : {}),
         occurredAt: now,
       }),
@@ -1069,7 +1070,7 @@ async function markProposal(
 async function withPendingSkillProposalMutation<T>(
   input: Pick<
     SkillProposalActionInput,
-    "agentId" | "env" | "expectedRevisionHash" | "proposalId" | "workspaceDir"
+    "agentId" | "env" | "eventActor" | "expectedRevisionHash" | "proposalId" | "workspaceDir"
   >,
   action: "applied" | "quarantined" | "rejected" | "revised",
   fn: (read: SkillProposalReadResult) => Promise<T>,
@@ -1190,9 +1191,7 @@ async function markProposalStale(params: {
     event: createSkillProposalEvent({
       record: stale,
       type: "stale",
-      actor: params.input.agentId
-        ? { type: "agent", id: params.input.agentId }
-        : { type: "gateway" },
+      actor: params.input.eventActor,
       ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
       occurredAt: now,
     }),

@@ -440,6 +440,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         evaluateSkillProposal({
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
@@ -458,6 +459,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         proposeCreateSkill({
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           config: resolved.cfg,
           name: parsedParams.name,
           description: parsedParams.description,
@@ -481,6 +483,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           config: resolved.cfg,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           skillName: parsedParams.skillName,
           description: parsedParams.description,
           content: parsedParams.content,
@@ -502,6 +505,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         reviseSkillProposal({
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
@@ -590,6 +594,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         applySkillProposal({
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
@@ -609,6 +614,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         rejectSkillProposal({
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
@@ -627,6 +633,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         quarantineSkillProposal({
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          eventActor: { type: "gateway" },
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,

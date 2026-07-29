@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -148,6 +149,12 @@ describe("skills proposal gateway handlers", () => {
     };
     expect(created.record.id).toMatch(/^weather-planner-/);
     expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
+    expect(
+      readSkillProposalEvents({
+        workspaceDir: mocks.workspaceDir,
+        proposalId: created.record.id,
+      }).events[0]?.actor,
+    ).toEqual({ type: "gateway" });
 
     const list = await callHandler("skills.proposals.list", {});
     expect(list.ok).toBe(true);
@@ -269,6 +276,7 @@ describe("skills proposal gateway handlers", () => {
     expect(mocks.evaluateSkillProposal).toHaveBeenCalledWith({
       workspaceDir: mocks.workspaceDir,
       agentId: "main",
+      eventActor: { type: "gateway" },
       proposalId: "proposal-1",
       expectedRevisionHash: revisionHash,
       correlationId: "correlation-1",
@@ -335,7 +343,12 @@ describe("skills proposal gateway handlers", () => {
       mocks.quarantineSkillProposal,
     ]) {
       expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({ proposalId: "proposal-1", expectedRevisionHash, correlationId }),
+        expect.objectContaining({
+          eventActor: { type: "gateway" },
+          proposalId: "proposal-1",
+          expectedRevisionHash,
+          correlationId,
+        }),
       );
     }
   });

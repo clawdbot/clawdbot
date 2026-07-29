@@ -456,6 +456,7 @@ async function runSkillProposalApply(
     }
     return await applySkillProposal({
       agentId: resolved.agentId,
+      eventActor: { type: "system", id: "cli" },
       workspaceDir: resolved.workspaceDir,
       config: resolved.config,
       proposalId,
@@ -1001,6 +1002,7 @@ export function registerSkillsCli(program: Command) {
           const proposal = await proposeCreateSkill({
             workspaceDir,
             agentId,
+            eventActor: { type: "system", id: "cli" },
             config,
             name: opts.name,
             description: opts.description,
@@ -1059,6 +1061,7 @@ export function registerSkillsCli(program: Command) {
             workspaceDir,
             config,
             agentId,
+            eventActor: { type: "system", id: "cli" },
             skillName: skill,
             description: opts.description,
             content: draft.content,
@@ -1115,6 +1118,7 @@ export function registerSkillsCli(program: Command) {
           const proposal = await reviseSkillProposal({
             workspaceDir,
             agentId,
+            eventActor: { type: "system", id: "cli" },
             config,
             proposalId,
             content: draft.content,
@@ -1208,6 +1212,7 @@ export function registerSkillsCli(program: Command) {
           const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const record = await rejectSkillProposal({
             agentId,
+            eventActor: { type: "system", id: "cli" },
             workspaceDir,
             proposalId,
             reason: opts.reason,
@@ -1240,6 +1245,7 @@ export function registerSkillsCli(program: Command) {
           const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const record = await quarantineSkillProposal({
             agentId,
+            eventActor: { type: "system", id: "cli" },
             workspaceDir,
             proposalId,
             reason: opts.reason,

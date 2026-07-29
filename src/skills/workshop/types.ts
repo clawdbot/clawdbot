@@ -203,6 +203,7 @@ export type SkillProposalSupportFileInput = {
 export type SkillProposalCreateInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   name: string;
@@ -219,6 +220,7 @@ export type SkillProposalCreateInput = {
 export type SkillProposalUpdateInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   skillName: string;
@@ -235,6 +237,7 @@ export type SkillProposalUpdateInput = {
 export type SkillProposalReviseInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
@@ -251,6 +254,7 @@ export type SkillProposalReviseInput = {
 export type SkillProposalActionInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
@@ -262,6 +266,7 @@ export type SkillProposalActionInput = {
 export type SkillProposalEvaluateInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
   expectedRevisionHash?: string;
