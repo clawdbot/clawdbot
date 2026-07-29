@@ -207,9 +207,8 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
 }): Promise<number | undefined> {
   // Import the named export: the rolldown-emitted re-export shim uses
   // `export *`, which forwards named bindings but not `default`.
-  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } = await import(
-    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
-  );
+  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
+    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 
