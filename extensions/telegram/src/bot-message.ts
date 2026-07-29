@@ -35,8 +35,8 @@ import type { TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
-import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
 import { formatTelegramFallbackError } from "./telegram-error-presenter.js";
+import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
