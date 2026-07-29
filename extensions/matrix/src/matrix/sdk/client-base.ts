@@ -437,13 +437,24 @@ export abstract class MatrixClientBase {
             room.roomId, "m.room.encryption", "",
           );
           if (!encContent) continue;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (crypto as any).onCryptoEvent(room, {
+          await (
+            crypto as unknown as {
+              onCryptoEvent(
+                room: unknown,
+                event: {
+                  getContent(): unknown;
+                  getType(): string;
+                  getStateKey(): string;
+                  isState(): boolean;
+                },
+              ): Promise<void>;
+            }
+          ).onCryptoEvent(room, {
             getContent: () => encContent,
             getType: () => "m.room.encryption",
             getStateKey: () => "",
             isState: () => true,
-          } as any);
+          });
         } catch {
           // Best-effort: skip rooms that fail state fetch or crypto config
         }
