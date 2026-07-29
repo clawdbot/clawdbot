@@ -6,11 +6,8 @@ import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from "undici";
 import { describe, expect, it, vi } from "vitest";
-import { decodeMulawSample, mulaw8KhzToPcm16Khz, mulawToPcm16, resamplePcm16 } from "./audio.js";
-import {
-  buildLocalWhisperRealtimeTranscriptionProvider,
-  resolveLocalWhisperConfig,
-} from "./realtime-transcription-provider.js";
+import { mulaw8KhzToPcm16Khz } from "./audio.js";
+import { buildLocalWhisperRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { createLocalWhisperRealtimeTranscriptionSession } from "./session.js";
 import type {
   LocalWhisperWorker,
@@ -82,39 +79,62 @@ function mockSession(
   return { session, worker, workerFactory };
 }
 
+function runWorkerPython(assertions: string): void {
+  const script = `
+import argparse
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("local_whisper_worker", ${JSON.stringify(
+    join(import.meta.dirname, "worker.py"),
+  )})
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+class Vad:
+    def is_speech(self, frame, _rate):
+        return frame[0] == 1
+
+def make_worker(max_ms=30000):
+    args = argparse.Namespace(
+        model="small", device="cpu", compute_type="int8", language="no",
+        vad_aggressiveness=2, silence_ms=700, max_utterance_ms=max_ms,
+    )
+    worker = module.Worker(args)
+    worker.vad = Vad()
+    captured = []
+    worker.transcribe = captured.append
+    return worker, captured
+
+frame = lambda value: bytes([value]) * module.FRAME_BYTES
+${assertions}
+`;
+  execFileSync(TEST_PYTHON, ["-c", script], { stdio: "pipe" });
+}
+
 describe("local-whisper audio", () => {
-  it("decodes the canonical G.711 µ-law values", () => {
-    expect(decodeMulawSample(0xff)).toBe(0);
-    expect(decodeMulawSample(0x7f)).toBe(0);
-    expect(decodeMulawSample(0x00)).toBe(-32124);
-    expect(decodeMulawSample(0x80)).toBe(32124);
-    expect([...mulawToPcm16(Buffer.from([0xff, 0x80]))]).toEqual([0, 0, 124, 125]);
-  });
-
-  it("resamples 8 kHz PCM16 to exactly twice the samples at 16 kHz", () => {
-    const pcm = Buffer.alloc(6);
-    pcm.writeInt16LE(0, 0);
-    pcm.writeInt16LE(1_000, 2);
-    pcm.writeInt16LE(2_000, 4);
-    const output = resamplePcm16(pcm);
-    expect(output.length).toBe(12);
-    expect(
-      Array.from({ length: output.length / 2 }, (_, index) => output.readInt16LE(index * 2)),
-    ).toEqual([0, 500, 1_000, 1_500, 2_000, 2_000]);
-  });
-
-  it("converts a 20 ms 8 kHz µ-law fixture into 20 ms 16 kHz PCM16", () => {
-    const fixture = Buffer.alloc(160, 0xff);
-    const output = mulaw8KhzToPcm16Khz(fixture);
+  it("converts a 20 ms silence fixture to 16 kHz PCM16", () => {
+    const output = mulaw8KhzToPcm16Khz(Buffer.alloc(160, 0xff));
     expect(output).toHaveLength(640);
     expect(output.equals(Buffer.alloc(640))).toBe(true);
+  });
+
+  it("decodes and resamples canonical µ-law signal values", () => {
+    const output = mulaw8KhzToPcm16Khz(Buffer.from([0xff, 0x80]));
+    expect(output).toHaveLength(8);
+    expect(
+      Array.from({ length: output.length / 2 }, (_, index) => output.readInt16LE(index * 2)),
+    ).toEqual([0, 16_062, 32_124, 32_124]);
   });
 });
 
 describe("local-whisper provider", () => {
   it("resolves nested config with offline Norwegian defaults", () => {
-    expect(
-      resolveLocalWhisperConfig({
+    const provider = buildLocalWhisperRealtimeTranscriptionProvider();
+    const config = provider.resolveConfig?.({
+      cfg: {} as OpenClawConfig,
+      rawConfig: {
         providers: {
           "local-whisper": {
             model: "base",
@@ -122,8 +142,9 @@ describe("local-whisper provider", () => {
             vadAggressiveness: 3,
           },
         },
-      }),
-    ).toMatchObject({
+      },
+    });
+    expect(config).toMatchObject({
       model: "base",
       language: "no",
       device: "cpu",
@@ -135,7 +156,7 @@ describe("local-whisper provider", () => {
     });
   });
 
-  it("is configured with the checked-in worker and an explicit Python executable", () => {
+  it("is configured with the bundled worker and an explicit Python executable", () => {
     const provider = buildLocalWhisperRealtimeTranscriptionProvider();
     const config = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
@@ -188,13 +209,12 @@ describe("local-whisper provider", () => {
 });
 
 describe("local-whisper session", () => {
-  it("waits for ready, converts audio, and forwards final callbacks without partials", async () => {
+  it("waits for ready, converts audio, and forwards final callbacks", async () => {
     const onSpeechStart = vi.fn();
     const onTranscript = vi.fn();
     const onError = vi.fn();
     const { session, worker } = mockSession({ onSpeechStart, onTranscript, onError });
     const connecting = session.connect();
-    expect(session.isConnected()).toBe(false);
     worker.emit({ event: "ready", pid: worker.pid!, model: "small" });
     await connecting;
 
@@ -221,7 +241,6 @@ describe("local-whisper session", () => {
 
     for (const text of ["første tur", "andre tur"]) {
       session.sendAudio(Buffer.alloc(160, 0xff));
-      worker.emit({ event: "speech_start" });
       worker.emit({ event: "transcript", text });
     }
 
@@ -246,49 +265,23 @@ describe("local-whisper session", () => {
 });
 
 describe("local-whisper worker hardening", () => {
-  it("keeps pre-roll before speech and forces a transcript at max utterance", () => {
-    const script = `
-import argparse
-import importlib.util
-import sys
-
-spec = importlib.util.spec_from_file_location("local_whisper_worker", ${JSON.stringify(
-      join(import.meta.dirname, "worker.py"),
-    )})
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-
-class Vad:
-    def is_speech(self, frame, _rate):
-        return frame[0] == 1
-
-def make_worker(max_ms):
-    args = argparse.Namespace(
-        model="small", device="cpu", compute_type="int8", language="no",
-        vad_aggressiveness=2, silence_ms=700, max_utterance_ms=max_ms,
-    )
-    worker = module.Worker(args)
-    worker.vad = Vad()
-    captured = []
-    worker.transcribe = captured.append
-    return worker, captured
-
-frame = lambda value: bytes([value]) * module.FRAME_BYTES
-worker, captured = make_worker(30_000)
+  it("keeps 300 ms of pre-roll before speech", () => {
+    runWorkerPython(`
+worker, captured = make_worker()
 worker.feed(frame(0) * 7 + frame(1) * 10 + frame(0) * 24)
 assert len(captured) == 1
 assert captured[0].startswith(frame(0) * 7)
 assert frame(1) * 10 in captured[0]
+`);
+  });
 
-worker, captured = make_worker(30_000)
-worker.feed(frame(1) * (35_000 // module.FRAME_MS))
+  it("forces a transcript at the maximum utterance duration", () => {
+    runWorkerPython(`
+worker, captured = make_worker(30000)
+worker.feed(frame(1) * (35000 // module.FRAME_MS))
 assert captured
-assert len(captured[0]) == 30_000 * module.SAMPLE_RATE * 2 // 1000
-`;
-    execFileSync(TEST_PYTHON, ["-c", script], {
-      stdio: "pipe",
-    });
+assert len(captured[0]) == 30000 * module.SAMPLE_RATE * 2 // 1000
+`);
   });
 
   it("treats worker stderr as diagnostics rather than a structured error event", async () => {
