@@ -90,8 +90,8 @@ Installing a skill or a plugin from ClawHub reports that install back to ClawHub
 See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
 what is never included.
 
-| Variable                    | Purpose                                                     |
-| --------------------------- | ----------------------------------------------------------- |
+| Variable                    | Purpose                                                             |
+| --------------------------- | ------------------------------------------------------------------- |
 | `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
 
 `CLAWDHUB_DISABLE_TELEMETRY` is accepted as a legacy spelling of the same setting.
