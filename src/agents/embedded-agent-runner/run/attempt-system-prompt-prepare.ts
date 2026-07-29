@@ -261,9 +261,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     toolNames: params.effectiveTools.map((tool) => tool.name),
     capabilityToolNames: params.capabilityToolNames,
   });
-  const activeProjectKeys = attempt.preparedModelRuntime?.projectKey
-    ? [attempt.preparedModelRuntime.projectKey]
-    : [];
+  const activeProjectKeys = attempt.preparedModelRuntime?.activeProjectKeys ?? [];
   const projectMemoryBootstrap =
     effectivePromptMode === "full" && activeProjectKeys.length > 0
       ? await prepareProjectMemoryBootstrap({

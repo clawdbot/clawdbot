@@ -981,6 +981,7 @@ export async function prepareCliRunContext(
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      toolOverrides: params.toolOverrides,
       agentDir,
       // Restricted runs serve only the loopback server; merging user/plugin
       // MCP servers would let the run reach tools outside its allowlist.

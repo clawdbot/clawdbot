@@ -176,6 +176,7 @@ export {
   SessionsCompactionRestoreParamsSchema,
   SessionBranchSchema,
   SessionRowSchema,
+  SessionToolOverridesSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
   SessionsBranchesSwitchParamsSchema,

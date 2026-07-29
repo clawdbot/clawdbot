@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
-import { inspectSkillProposal, listSkillProposals } from "../skills/workshop/service.js";
+import {
+  applySkillProposal,
+  inspectSkillProposal,
+  listSkillProposals,
+  reviseSkillProposal,
+} from "../skills/workshop/service.js";
 import { hashSkillProposalContent, readSkillProposalRollback } from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -37,6 +42,105 @@ afterEach(async () => {
 });
 
 describe("doctor Skill Workshop SQLite migration", () => {
+  it("preserves shipped v1 proposals through migration, revision, and apply", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workshop-shipped-upgrade-");
+    const proposalId = "shipped-workshop-20260729-1234567890";
+    const proposalDir = path.join(testState.stateDir, "skill-workshop", "proposals", proposalId);
+    const targetDir = path.join(workspaceDir, "skills", "shipped-workshop");
+    const now = "2026-07-29T00:00:00.000Z";
+    const supportContent = "Shipped support artifact.\n";
+    const content = renderProposalMarkdown({
+      name: "shipped-workshop",
+      description: "Proposal written by a shipped Workshop release",
+      content: "# Shipped Workshop\n\nOriginal proposal body.\n",
+      date: now,
+    });
+    const record: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: proposalId,
+      kind: "create",
+      status: "pending",
+      title: "Create Shipped Workshop",
+      description: "Proposal written by a shipped Workshop release",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      origin: {
+        agentId: "main",
+        sessionKey: "agent:main:shipped-workshop",
+        runId: "shipped-run",
+      },
+      originRunIds: ["shipped-run"],
+      originRunMutationCounts: { "shipped-run": 1 },
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(content),
+      supportFiles: [
+        {
+          path: "references/proof.md",
+          sizeBytes: Buffer.byteLength(supportContent, "utf8"),
+          hash: hashSkillProposalContent(supportContent),
+        },
+      ],
+      target: {
+        skillName: "Shipped Workshop",
+        skillKey: "shipped-workshop",
+        skillDir: targetDir,
+        skillFile: path.join(targetDir, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+      scan: {
+        state: "clean",
+        scannedAt: now,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      },
+    };
+    await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(proposalDir, "proposal.json"), JSON.stringify(record), "utf8");
+    await fs.writeFile(path.join(proposalDir, "PROPOSAL.md"), content, "utf8");
+    await fs.writeFile(path.join(proposalDir, "references", "proof.md"), supportContent, "utf8");
+
+    await expect(
+      migrateLegacySkillWorkshopProposals({
+        config: {
+          agents: {
+            entries: {
+              main: { default: true, workspace: workspaceDir },
+            },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId,
+      content: "# Shipped Workshop\n\nRevised after upgrade.\n",
+    });
+    expect(revised.record).toMatchObject({
+      id: proposalId,
+      proposedVersion: "v2",
+      status: "pending",
+      supportFiles: [expect.objectContaining({ path: "references/proof.md" })],
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, agentId: "main", proposalId }),
+    ).resolves.toMatchObject({
+      record: { id: proposalId, status: "applied" },
+    });
+    await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toContain(
+      "Revised after upgrade.",
+    );
+    await expect(
+      fs.readFile(path.join(record.target.skillDir, "references", "proof.md"), "utf8"),
+    ).resolves.toBe(supportContent);
+  });
+
   it("imports verified sidecars, preserves review artifacts, and removes legacy JSON", async () => {
     const oldWorkspace = await tempDirs.make("openclaw-workshop-old-workspace-");
     const currentWorkspace = await tempDirs.make("openclaw-workshop-current-workspace-");

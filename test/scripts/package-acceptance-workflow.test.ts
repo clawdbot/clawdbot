@@ -2628,44 +2628,16 @@ describe("package artifact reuse", () => {
     ).filter((input) => input.startsWith("matrix_"));
     expect(matrixSpecificInputs).toEqual([]);
     expect(workflowStep(matrixJob, "Upload Matrix QA artifacts").with?.name).toBe(
-      "${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}-shard-{1}-of-5', inputs.expected_sha, matrix.shard) || format('qa-live-matrix-{0}-{1}-shard-{2}-of-5', github.run_id, github.run_attempt, matrix.shard) }}",
+      "${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}",
     );
     expect(matrixJob["continue-on-error"]).toBeUndefined();
-    expect(matrixJob.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5]);
-    expect(
-      workflowStep(matrixJob, "Verify internal Matrix execution sharding support").run,
-    ).toContain('grep -Fq "OPENCLAW_QA_EXECUTION_SHARD"');
-    expect(
-      workflowStep(matrixJob, "Verify internal Matrix execution sharding support").run,
-    ).toContain("does not support internal post-selection QA sharding");
-    expect(workflowStep(matrixJob, "Run Matrix live lane").env).toMatchObject({
-      OPENCLAW_QA_EXECUTION_SHARD: "${{ format('{0}/5', matrix.shard) }}",
+    expect(matrixJob.strategy).toBeUndefined();
+    expect(workflowStep(matrixJob, "Run Matrix live lane").env).toEqual({
+      OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
     });
-    expect(readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).jobs?.run_live_matrix_sharded).toBeUndefined();
     expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
-    expect(workflowStep(matrixJob, "Run Matrix live lane").run).not.toContain("for attempt in");
-    expect(qaWorkflow).not.toContain("Matrix live lane failed on attempt");
-    expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
-    expect(qaWorkflow).not.toContain("legacy_profiles");
-    expect(qaWorkflow).not.toContain("matrix_selection");
-    expect(qaWorkflow).not.toContain("--shard <index/total>");
-    expect(qaWorkflow).not.toContain("--fail-fast");
-  });
-
-  it("keeps Matrix sharding internal to post-selection execution", () => {
-    const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
-    const runStep = workflowStep(matrixJob, "Run Matrix live lane");
-    const run = runStep.run;
-
-    expect(runStep.env).toMatchObject({
-      OPENCLAW_QA_EXECUTION_SHARD: "${{ format('{0}/5', matrix.shard) }}",
-    });
-    expect(run).not.toContain("--shard");
-    expect(run).not.toContain("--profile");
-    expect(run).not.toContain("matrix_selection");
-    expect(matrixJob.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {

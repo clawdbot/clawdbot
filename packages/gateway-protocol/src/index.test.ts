@@ -170,6 +170,29 @@ describe("lazy protocol validators", () => {
     ).toBe(false);
   });
 
+  it("validates sparse session tool overrides", () => {
+    const key = "agent:main:main";
+    expect(
+      validateSessionsPatchParams({
+        key,
+        toolOverrides: {
+          mcpServers: { docs: false },
+          mcpToolsDeny: { github: ["delete_issue"] },
+          skills: { release: true },
+          webSearch: false,
+        },
+      }),
+    ).toBe(true);
+    expect(validateSessionsPatchParams({ key, toolOverrides: null })).toBe(true);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpServers: { docs: "no" } } }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpToolsDeny: { github: [1] } } }),
+    ).toBe(false);
+    expect(validateSessionsPatchParams({ key, toolOverrides: { unknown: true } })).toBe(false);
+  });
+
   it("keeps validation errors readable on the exported validator", () => {
     expect(validateConnectParams({})).toBe(false);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");

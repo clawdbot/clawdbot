@@ -71,6 +71,9 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
       },
       mlx: {
         modelId: "mlx-community/Soprano-80M-bf16",
+        // Fish S2 Pro can also use a local reference voice:
+        // referenceAudioPath: "/Users/example/Voices/reference.wav",
+        // referenceText: "Exact transcript of the reference clip.",
       },
       system: {},
     },
@@ -150,6 +153,8 @@ change under OAuth.
 | `speechLocale`                           | device default                             | BCP 47 locale for Android, iOS, and macOS native speech recognition, plus the iOS system-voice fallback. Apple Speech may use network services; Android also forwards the language component to realtime input transcription.                                                           |
 | `providers.elevenlabs.modelId`           | `eleven_multilingual_v2`                   |                                                                                                                                                                                                                                                                                         |
 | `providers.mlx.modelId`                  | `mlx-community/Soprano-80M-bf16`           |                                                                                                                                                                                                                                                                                         |
+| `providers.mlx.referenceAudioPath`       | -                                          | Optional client-local reference recording for MLX models that support voice cloning. The path is resolved on the native macOS app host.                                                                                                                                                 |
+| `providers.mlx.referenceText`            | -                                          | Exact transcript of `referenceAudioPath`; Fish S2 Pro uses both values for local voice cloning.                                                                                                                                                                                         |
 | `providers.elevenlabs.apiKey`            | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                                             |
 | `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                                                          |
 | `interruptOnSpeech`                      | `true`                                     |                                                                                                                                                                                                                                                                                         |
@@ -195,7 +200,7 @@ change under OAuth.
 - Requires Speech + Microphone permissions.
 - Native Talk uses the active Gateway session and only falls back to history polling when response events are unavailable.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
-- macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development.
+- macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development. The helper streams PCM, keeps one selected model resident, and supports Fish S2 Pro reference audio through `providers.mlx.referenceAudioPath` plus `referenceText`.
 - Voice directive value ranges (ElevenLabs): `stability`, `similarity`, and `style` accept `0..1`; `speed` accepts `0.5..2`; `latency_tier` accepts `0..4`.
 
 ## Related
