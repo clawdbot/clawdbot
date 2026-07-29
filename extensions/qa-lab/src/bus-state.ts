@@ -36,6 +36,15 @@ import type {
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";
 
+function normalizeInboundConversation(conversation: QaBusConversation): QaBusConversation {
+  const rawKind = (conversation as { kind?: unknown }).kind;
+  const kind = rawKind === "dm" ? "direct" : rawKind;
+  if (kind !== "direct" && kind !== "channel" && kind !== "group") {
+    throw new Error(`invalid qa-channel conversation kind: ${String(rawKind)}`);
+  }
+  return kind === conversation.kind ? conversation : { ...conversation, kind };
+}
+
 type QaBusEventSeed =
   | {
       kind: "inbound-message";
@@ -179,7 +188,10 @@ export function createQaBusState() {
       const message = createMessage({
         direction: "inbound",
         accountId,
-        conversation: input.conversation,
+        // `dm:` is the canonical target spelling and is also used by manual
+        // QA-bus clients. Normalize its matching ingress alias before routing
+        // so a DM can never silently acquire group/channel privacy semantics.
+        conversation: normalizeInboundConversation(input.conversation),
         senderId: input.senderId,
         senderName: input.senderName,
         text: input.text,

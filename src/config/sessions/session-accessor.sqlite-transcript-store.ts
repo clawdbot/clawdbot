@@ -475,17 +475,17 @@ export function readTranscriptIdentityByEventId(
   database: OpenClawAgentDatabase,
   sessionId: string,
   eventId: string,
-): { eventId: string; seq: number } | undefined {
+): { eventId: string; parentId: string | null; seq: number } | undefined {
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("transcript_event_identities")
-      .select(["event_id", "seq"])
+      .select(["event_id", "parent_id", "seq"])
       .where("session_id", "=", sessionId)
       .where("event_id", "=", eventId),
   );
-  return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+  return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
 function readTranscriptIdentityByMessageIdempotencyKey(

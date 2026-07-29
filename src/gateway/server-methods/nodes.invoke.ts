@@ -6,7 +6,10 @@ import {
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { isAdminOnlyNodeInvokeCommand } from "../../infra/node-commands.js";
+import {
+  isAdminOnlyNodeInvokeCommand,
+  isBrowserProxyNodeInvokeCommand,
+} from "../../infra/node-commands.js";
 import { captureNodePairingGeneration } from "../../infra/node-pairing-state.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -168,13 +171,13 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     if (nodeInvokePolicy.rejectClaudeAgentRun(command, respond)) {
       return;
     }
-    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(p.params)) {
+    if (isBrowserProxyNodeInvokeCommand(command) && isForbiddenBrowserProxyMutation(p.params)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+          `node.invoke cannot mutate persistent browser profiles via ${command}`,
           { details: { command } },
         ),
       );

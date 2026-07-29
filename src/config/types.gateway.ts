@@ -456,6 +456,12 @@ export type GatewayPushConfig = {
 
 export type GatewayNodePairingConfig = {
   /**
+   * Silently approve trusted local device pairing and access upgrades.
+   * Set false to require explicit approval; metadata refreshes remain automatic.
+   * Default: true.
+   */
+  autoApproveLocal?: boolean;
+  /**
    * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
    * Only applies to fresh node pairing requests with no requested scopes.
    * Default: unset/disabled.

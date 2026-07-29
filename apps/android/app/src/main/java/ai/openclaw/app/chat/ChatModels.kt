@@ -63,7 +63,7 @@ data class ChatTranscriptAnchorState(
 )
 
 /**
- * One content part in a chat message; images carry either bounded base64 or a managed artifact reference.
+ * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",

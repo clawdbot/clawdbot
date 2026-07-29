@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyEditsToNormalizedContent, generateDiffString, normalizeToLF } from "./edit-diff.js";
+import { normalizeToLF } from "../../line-endings.js";
+import { applyEditsToNormalizedContent, generateDiffString } from "./edit-diff.js";
 
 function getMismatchMessage(
   content: string,
@@ -134,5 +135,33 @@ describe("generateDiffString", () => {
       diff: "  1 1\n- 2 2\n+ 2 TWO\n  3 3\n    ...\n  8 8\n- 9 9\n+ 9 NINE\n 10 10",
       firstChangedLine: 2,
     });
+  });
+});
+
+describe("applyEditsToNormalizedContent uniqueness", () => {
+  it("replaces an exactly unique match when trailing whitespace makes a sibling line fuzzy-identical", () => {
+    const content = "foo();  \nfoo();\nbar();\n";
+
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [{ oldText: "foo();\n", newText: "baz();\n" }],
+      "test.ts",
+    );
+
+    expect(result.newContent).toBe("foo();  \nbaz();\nbar();\n");
+  });
+});
+
+describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
+  it("still rejects a fuzzy match that is ambiguous once normalization is applied", () => {
+    const content = "foo();  \nfoo();\t\nbar();\n";
+
+    expect(() =>
+      applyEditsToNormalizedContent(
+        normalizeToLF(content),
+        [{ oldText: "foo();\n", newText: "baz();\n" }],
+        "test.ts",
+      ),
+    ).toThrow(/Found 2 occurrences/);
   });
 });

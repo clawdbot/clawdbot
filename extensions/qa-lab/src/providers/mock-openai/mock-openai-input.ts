@@ -276,27 +276,6 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
   return texts;
 }
 
-export function extractSystemInputText(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "system") {
-      continue;
-    }
-    if (typeof item.content === "string" && item.content.trim()) {
-      texts.push(item.content.trim());
-      continue;
-    }
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n");
-}
-
 export function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {

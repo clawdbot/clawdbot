@@ -311,7 +311,7 @@ function registerMemoryManagerWarmup(
 
 export default definePluginEntry({
   id: "memory-core",
-  name: "Memory (Core)",
+  name: "OpenClaw Memory",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {

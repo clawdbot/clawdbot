@@ -179,12 +179,16 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("tracks plugin SDK subagent agent runs through the subagent registry only", async () => {
+  it.each([
+    { identity: "ASCII", runId: "plugin-subagent-task-run" },
+    { identity: "astral prefix", runId: "abc😀" + "x".repeat(10) },
+    { identity: "astral suffix", runId: "x".repeat(10) + "😀abc" },
+    { identity: "astral prefix and suffix", runId: "abc😀" + "x".repeat(10) + "😀xyz" },
+  ])("tracks plugin subagent $identity runs through the registry", async ({ runId }) => {
     await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
-      const runId = "plugin-subagent-task-run";
       const childSessionKey = "agent:work:subagent:plugin-helper";
       const cfg = {
         session: { mainKey: "main", scope: "per-sender" },
@@ -330,10 +334,11 @@ describe("gateway agent handler", () => {
         resetSubagentRegistryForTests({ persist: false });
         // Route through the harness helper so the ensureRuntimePluginsLoaded
         // pin survives this wholesale deps override.
+        const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
+          throw new Error("disk full");
+        });
         applyGatewaySubagentRegistryTestDeps({
-          persistSubagentRunsToDiskOrThrow: () => {
-            throw new Error("disk full");
-          },
+          persistSubagentRunsToDiskOrThrow,
         });
         const runId = "plugin-subagent-registry-fail";
         const childSessionKey = "agent:main:subagent:registry-fail";
@@ -387,6 +392,7 @@ describe("gateway agent handler", () => {
           },
         );
 
+        expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
         await waitForAssertion(() => {
           const task = requireValue(findTaskByRunId(runId), "expected fallback cli task");

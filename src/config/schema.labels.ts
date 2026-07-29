@@ -365,6 +365,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
   "gateway.nodes.pairing": "Gateway Node Pairing",
+  "gateway.nodes.pairing.autoApproveLocal": "Gateway Node Pairing Auto-Approve Local",
   "gateway.nodes.pairing.autoApproveCidrs": "Gateway Node Pairing Auto-Approve CIDRs",
   "gateway.nodes.pairing.sshVerify": "Gateway Node Pairing SSH Verification",
   ...NODE_CAPABILITY_FIELD_LABELS,

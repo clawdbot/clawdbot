@@ -1067,7 +1067,12 @@ import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("lossless-claw", (ctx) => ({
-    info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+    info: {
+      id: "lossless-claw",
+      name: "Lossless Claw",
+      ownsCompaction: true,
+      acceptedHostParams: ["sessionKey"],
+    },
     async ingest() {
       return { ingested: true };
     },

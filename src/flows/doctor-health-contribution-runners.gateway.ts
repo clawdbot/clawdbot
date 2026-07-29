@@ -1,3 +1,6 @@
+import { note } from "../../packages/terminal-core/src/note.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
@@ -17,6 +20,10 @@ export async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
   const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
     await import("../commands/doctor-gateway-services.js");
   const {
@@ -66,6 +73,9 @@ export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
   const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
 }
@@ -98,6 +108,9 @@ export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");
   await maybeRepairGatewayDaemon({
     cfg: ctx.cfg,

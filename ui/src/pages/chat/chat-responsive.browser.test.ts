@@ -1112,9 +1112,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const image = page.locator("img.chat-message-image");
         const video = page.locator("video");
         // First wait absorbs the cold-app render; both elements land in the same
-        // history render pass, so the video follows immediately after.
+        // history render pass. Video stays behind its placeholder until metadata loads.
         await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-        await video.waitFor({ timeout: 10_000 });
+        await video.waitFor({ state: "attached", timeout: 10_000 });
         expect(await image.getAttribute("src")).toBe(imageUrl);
         expect(await video.getAttribute("src")).toBe(videoUrl);
       } finally {

@@ -63,7 +63,7 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
   @Test
-  fun managedImageDownload_usesArtifactTicketWithoutGatewayBearer() =
+  fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
       val json = Json { ignoreUnknownKeys = true }
@@ -73,6 +73,9 @@ class GatewaySessionCustomHeadersTest {
       val attachmentId = "11111111-1111-4111-8111-111111111111"
       val artifactId = "artifact_managed_image_$attachmentId"
       val imagePath = "/api/chat/media/outgoing/main/$attachmentId/full?mediaTicket=ticket"
+      val videoAttachmentId = "22222222-2222-4222-8222-222222222222"
+      val videoArtifactId = "artifact_managed_media_$videoAttachmentId"
+      val videoPath = "/api/chat/media/outgoing/main/$videoAttachmentId/full?mediaTicket=video-ticket"
       val server =
         MockWebServer().apply {
           dispatcher =
@@ -106,9 +109,20 @@ class GatewaySessionCustomHeadersTest {
                             """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
                           )
                         "artifacts.download" ->
-                          webSocket.send(
-                            """{"type":"res","id":"$id","ok":true,"payload":{"url":"$imagePath"}}""",
-                          )
+                          if (frame["params"]
+                              ?.jsonObject
+                              ?.get("artifactId")
+                              ?.jsonPrimitive
+                              ?.content == videoArtifactId
+                          ) {
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$videoArtifactId","type":"video","mimeType":"video/mp4","download":{"mode":"url"}},"url":"$videoPath"}}""",
+                            )
+                          } else {
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"url":"$imagePath"}}""",
+                            )
+                          }
                       }
                     }
                   },
@@ -164,6 +178,12 @@ class GatewaySessionCustomHeadersTest {
         val request = withTimeout(TEST_TIMEOUT_MS) { imageRequest.await() }
         assertNull(request.getHeader("Authorization"))
         assertEquals("image/*", request.getHeader("Accept"))
+
+        val streamed =
+          session.loadMediaArtifact(stableId, "main", "main", videoArtifactId, GatewayMediaKind.Video) as GatewayLoadedMedia.Streaming
+        assertEquals("http://127.0.0.1:${server.port}$videoPath", streamed.url)
+        assertEquals("video/*", streamed.headers["Accept"])
+        assertEquals("video/mp4", streamed.mimeType)
       } finally {
         session.disconnectAndJoin()
         scope.cancel()

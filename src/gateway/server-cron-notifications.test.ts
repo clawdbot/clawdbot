@@ -226,6 +226,41 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     },
   );
 
+  it("cancels an unread webhook response before releasing its guard", async () => {
+    const cleanupOrder: string[] = [];
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          cleanupOrder.push("cancel");
+        },
+      }),
+      { status: 200 },
+    );
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response,
+      finalUrl: "https://example.invalid/cron",
+      release: vi.fn(async () => {
+        cleanupOrder.push("release");
+      }),
+    });
+
+    await sendGatewayCronFailureAlert({
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      job: createWebhookJob({
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      }),
+      text: "cron failed",
+      channel: "last",
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    expect(cleanupOrder).toEqual(["cancel", "release"]);
+  });
+
   it("delivers a failed cron webhook even when the run produced no summary", async () => {
     const logger = { warn: vi.fn() };
     const job = createWebhookJob({

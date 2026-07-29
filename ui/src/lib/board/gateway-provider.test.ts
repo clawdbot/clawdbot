@@ -1,4 +1,5 @@
 // @vitest-environment node
+import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayBoardProvider, type BoardProvider } from "./provider.ts";
 
@@ -154,6 +155,168 @@ describe("gateway board provider lifecycle", () => {
     expect(provider.snapshot$.value).toEqual(snapshot);
   });
 
+  it("pauses board retries during an outage and refreshes once after reconnect", async () => {
+    vi.useFakeTimers();
+    let connected = true;
+    const snapshot = {
+      sessionKey: "agent:main:paused-reconnect",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockImplementation(async () => {
+        if (!connected) {
+          throw new Error("gateway not connected");
+        }
+        return snapshot;
+      });
+    const client = {
+      request: request as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider(snapshot.sessionKey, client);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+
+    connected = false;
+    provider.attachClient(client, false);
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    connected = true;
+    provider.attachClient(client, true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(provider.snapshot$.value).toEqual(snapshot);
+    provider.dispose();
+  });
+
+  it("pauses a failed user-requested widget refresh until reconnect", async () => {
+    vi.useFakeTimers();
+    const snapshot = {
+      sessionKey: "agent:main:offline-widget-refresh",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway not connected"))
+      .mockResolvedValue(snapshot);
+    const client = {
+      request: request as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider(snapshot.sessionKey, client, false);
+
+    const refresh = provider.refreshWidgetFrame("status");
+    await vi.advanceTimersByTimeAsync(0);
+    await refresh;
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    provider.attachClient(client, true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(provider.snapshot$.value).toEqual(snapshot);
+    provider.dispose();
+  });
+
+  it("preserves a manual offline refresh that joins an existing retry loop", async () => {
+    vi.useFakeTimers();
+    const snapshot = {
+      sessionKey: "agent:main:coalesced-offline-widget-refresh",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockRejectedValueOnce(new Error("gateway not connected"))
+      .mockResolvedValue(snapshot);
+    const client = {
+      request: request as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider(snapshot.sessionKey, client);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+
+    provider.attachClient(client, false);
+    const refresh = provider.refreshWidgetFrame("status");
+    await vi.advanceTimersByTimeAsync(0);
+    await refresh;
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+
+    provider.attachClient(client, true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(provider.snapshot$.value).toEqual(snapshot);
+    provider.dispose();
+  });
+
+  it("does not reread a queued manual refresh after its gateway disconnects", async () => {
+    vi.useFakeTimers();
+    const initial = {
+      sessionKey: "agent:main:offline-queued-refresh",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const changed = { ...initial, revision: 2 };
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const resolvers: Array<(value: typeof initial) => void> = [];
+    const request = vi.fn(
+      () =>
+        new Promise<typeof initial>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const client = {
+      request: request as never,
+      addEventListener: (next: (event: EventFrame) => void) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    };
+    const provider = new GatewayBoardProvider(initial.sessionKey, client, true);
+    const refresh = provider.refreshWidgetFrame("status");
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: initial.sessionKey, revision: changed.revision },
+    });
+    provider.attachClient(client, false);
+    resolvers[0]?.(initial);
+    await refresh;
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    provider.attachClient(client, true);
+    resolvers[1]?.(changed);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(provider.snapshot$.value).toEqual(changed);
+    provider.dispose();
+  });
+
   it("retries a transient board.changed refresh failure", async () => {
     vi.useFakeTimers();
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
@@ -240,17 +403,15 @@ describe("gateway board provider lifecycle", () => {
           resolvers.push(resolve);
         }),
     );
-    const provider = new GatewayBoardProvider(
-      initial.sessionKey,
-      {
-        request: request as never,
-        addEventListener: (next) => {
-          listener = next as typeof listener;
-          return () => {};
-        },
+    const client = {
+      request: request as never,
+      addEventListener: (next: (event: EventFrame) => void) => {
+        listener = next as typeof listener;
+        return () => {};
       },
-      false,
-    );
+    };
+    const provider = new GatewayBoardProvider(initial.sessionKey, client, false);
+    provider.attachClient(client, true);
 
     const refresh = provider.refreshWidgetFrame("status");
     listener?.({

@@ -87,6 +87,12 @@ function describeCliDetail(credentials: boolean | undefined, loginHint: string):
   return "installed";
 }
 
+function describeGeminiCliDetail(credentials: boolean | undefined): string {
+  return credentials === true
+    ? "installed; credentials found"
+    : "installed; login status unavailable";
+}
+
 async function detectCodexLoginState(
   probe: typeof probeLocalCommand,
   command: string,
@@ -260,15 +266,17 @@ export async function detectInferenceBackends(
     });
   }
   if (geminiProbe.found && !geminiProbe.timedOut) {
-    // Gemini CLI stores its OAuth login in a plain file on every platform (no
-    // keychain), so a missing credential file is a definitive logout signal.
-    const credentials = readGemini() !== null;
+    // Current Gemini CLI releases keep primary auth in a private secure store;
+    // oauth_creds.json is only a legacy migration source. Its absence cannot
+    // distinguish logout from a modern login, and probing the secure store can
+    // prompt the user, so only readable legacy credentials are conclusive.
+    const credentials = readGemini() !== null ? true : undefined;
     cliCandidates.push({
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       label: "Gemini CLI",
-      detail: describeCliDetail(credentials, "sign in to Gemini CLI"),
-      credentials,
+      detail: describeGeminiCliDetail(credentials),
+      ...(credentials === undefined ? {} : { credentials }),
     });
   }
   // Claude Code and Codex share rank within a credential tier. Randomize before

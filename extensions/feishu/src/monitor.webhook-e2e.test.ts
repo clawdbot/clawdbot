@@ -31,6 +31,8 @@ vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
 import { httpServers } from "./monitor.state.js";
+import { monitorWebhook } from "./monitor.transport.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 beforeAll(async () => {
   await import("./monitor.account.js");
@@ -339,6 +341,7 @@ describe("Feishu webhook signed-request e2e", () => {
         const response = await postSignedPayload(url, payload);
 
         expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
         await expect(response.json()).resolves.toEqual({ challenge: "challenge-token" });
       },
     );
@@ -364,9 +367,150 @@ describe("Feishu webhook signed-request e2e", () => {
         const response = await postSignedPayload(url, payload);
 
         expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
         expect(await response.text()).toContain("no unknown.event event handle");
       },
     );
+  });
+
+  it("marks durably admitted message acks with the delivery-accepted header", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "signed-durable-ack",
+        path: "/hook-e2e-durable-ack",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          schema: "2.0",
+          header: { event_type: "im.message.receive_v1", event_id: "evt-durable-ack-1" },
+          event: { message: { chat_id: "oc_durable_ack" } },
+        };
+        const response = await postSignedPayload(url, payload);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+      },
+    );
+  });
+
+  it("acks durable envelopes only after ingress admission resolves", async () => {
+    const accountId = "durable-ack-ordering";
+    const path = "/hook-e2e-durable-ack-ordering";
+    const port = await getFreePort();
+    const abortController = new AbortController();
+    let releaseAdmission: (() => void) | undefined;
+    const invoke = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseAdmission = resolve;
+        }),
+    );
+    const monitorPromise = monitorWebhook({
+      account: {
+        accountId,
+        encryptKey: "encrypt_key",
+        config: {
+          enabled: true,
+          connectionMode: "webhook",
+          webhookHost: "127.0.0.1",
+          webhookPort: port,
+          webhookPath: path,
+        },
+      } as ResolvedFeishuAccount,
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: { invoke } as never,
+      invokeWebhookEvent: async () => {
+        await invoke();
+        return { kind: "durable", value: undefined };
+      },
+    });
+
+    try {
+      const url = `http://127.0.0.1:${port}${path}`;
+      await waitUntilServerReady(url);
+
+      const payload = {
+        schema: "2.0",
+        header: { event_type: "im.message.receive_v1", event_id: "evt-durable-ack-ordering-1" },
+        event: { message: { chat_id: "oc_durable_ack_ordering" } },
+      };
+      let acceptedResponseReceived = false;
+      const acceptedRequest = postSignedPayload(url, payload).then((response) => {
+        acceptedResponseReceived = true;
+        return response;
+      });
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledTimes(1);
+      });
+      expect(acceptedResponseReceived).toBe(false);
+      if (!releaseAdmission) {
+        throw new Error("expected pending Feishu durable admission");
+      }
+      releaseAdmission();
+
+      const accepted = await acceptedRequest;
+      expect(accepted.status).toBe(200);
+      expect(accepted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+    } finally {
+      releaseAdmission?.();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("does not mark acks when durable admission fails", async () => {
+    const accountId = "durable-ack-failure";
+    const path = "/hook-e2e-durable-ack-failure";
+    const port = await getFreePort();
+    const abortController = new AbortController();
+    const invoke = vi.fn(async () => {
+      throw new Error("admission failed");
+    });
+    const monitorPromise = monitorWebhook({
+      account: {
+        accountId,
+        encryptKey: "encrypt_key",
+        config: {
+          enabled: true,
+          connectionMode: "webhook",
+          webhookHost: "127.0.0.1",
+          webhookPort: port,
+          webhookPath: path,
+        },
+      } as ResolvedFeishuAccount,
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: { invoke } as never,
+      invokeWebhookEvent: async () => {
+        await invoke();
+        return { kind: "durable", value: undefined };
+      },
+    });
+
+    try {
+      const url = `http://127.0.0.1:${port}${path}`;
+      await waitUntilServerReady(url);
+
+      const response = await postSignedPayload(url, {
+        schema: "2.0",
+        header: { event_type: "im.message.receive_v1", event_id: "evt-durable-ack-failure-1" },
+        event: { message: { chat_id: "oc_durable_ack_failure" } },
+      });
+      expect(response.status).toBe(500);
+      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
   });
 
   it("does not emit unhandled-event warning for bot_p2p_chat_entered_v1", async () => {

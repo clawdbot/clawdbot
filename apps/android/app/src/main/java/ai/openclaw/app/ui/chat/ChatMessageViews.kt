@@ -11,6 +11,8 @@ import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
 import ai.openclaw.app.chat.chatOutboxDisplayError
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.tools.ToolDisplayRegistry
@@ -107,6 +109,8 @@ internal fun ChatMessageBubble(
   onToggleListen: ((String, String) -> Unit)? = null,
   imageResolverReady: Boolean = false,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage? = { null },
+  inlineMediaPlaybackBlocked: Boolean = false,
+  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia? = { _, _ -> null },
 ) {
   val role = normalizeVisibleChatMessageRole(message.role) ?: return
   val style = bubbleStyle(role)
@@ -117,7 +121,7 @@ internal fun ChatMessageBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank() || !part.artifactId.isNullOrBlank()
-        else -> part.isAudioAttachment()
+        else -> part.isAudioAttachment() || part.isVideoAttachment()
       }
     }
 
@@ -148,6 +152,8 @@ internal fun ChatMessageBubble(
         textColor = mobileText,
         imageResolverReady = imageResolverReady,
         loadImageArtifact = loadImageArtifact,
+        inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+        loadMediaArtifact = loadMediaArtifact,
       )
       ChatMessageLinkPreview(messageId = message.id, role = role, content = displayableContent)
       messageSpeech?.let { speech ->
@@ -235,6 +241,8 @@ private fun ChatMessageBody(
   textColor: Color,
   imageResolverReady: Boolean,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  inlineMediaPlaybackBlocked: Boolean,
+  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia?,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {
@@ -243,7 +251,19 @@ private fun ChatMessageBody(
           val text = part.text ?: continue
           ChatMarkdown(text = text, textColor = textColor)
         }
-        part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
+        part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
+          ChatAudioPlayerCard(
+            content = part,
+            playbackBlocked = inlineMediaPlaybackBlocked,
+            loadMedia = loadMediaArtifact,
+          )
+        part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
+          ChatVideoPlayerCard(
+            content = part,
+            playbackBlocked = inlineMediaPlaybackBlocked,
+            loadMedia = loadMediaArtifact,
+          )
+        part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
         part.type == "image" && !part.base64.isNullOrBlank() ->
           ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
         part.type == "image" && !part.artifactId.isNullOrBlank() ->

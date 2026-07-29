@@ -3910,6 +3910,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
   - H2: Node event trust boundaries (2026.3.31+)
+  - H2: Silent local pairing
   - H2: SSH-verified device auto-approval (default)
   - H2: Auto-approval (macOS app)
   - H2: Trusted-CIDR device auto-approval
@@ -5142,6 +5143,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: UX copy (suggested)
   - H2: Related
 
+## nodes/media-playback.md
+
+- Route: /nodes/media-playback
+- Headings:
+  - H2: Client support
+  - H2: Portable formats
+  - H2: Lazy playback renditions
+  - H2: Managed attachments and access
+  - H2: Metadata and limits
+  - H2: Troubleshooting
+  - H3: Duration or dimensions are missing
+  - H3: A recognized format downloads instead of playing
+  - H3: Playback stays in preparing state
+  - H3: Linux reports a codec error
+  - H3: Android shows a media row while offline
+  - H2: Related
+
 ## nodes/media-understanding.md
 
 - Route: /nodes/media-understanding
@@ -5860,7 +5878,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
   - H3: Shared plugin cache
-  - H2: Remote catalog limit
+  - H2: Remote marketplaces
   - H2: Configuration reference
   - H2: What OpenClaw checks
   - H2: macOS permissions
@@ -5893,6 +5911,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
+  - H2: Experimental sandbox process streaming
   - H2: V1 support contract
   - H2: Native permissions and MCP elicitations
   - H2: Queue steering
@@ -6217,6 +6236,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Dashboards and health reports
   - H2: Search and retrieval
   - H2: Agent tools
+  - H2: Browsing the wiki in the Control UI
   - H2: Prompt and context behavior
   - H2: Configuration
   - H3: Per-agent vaults

@@ -130,14 +130,26 @@ export function buildTriggerRecallContext(matches: TriggerRecallMatch[]): string
   return buildPromptPrefix(truncateUtf16Safe(summary, MAX_TRIGGER_CONTEXT_CHARS));
 }
 
-export async function resolveTriggerRecall(params: {
+type TriggerLookupParams = {
   cfg: OpenClawConfig;
   agentId: string;
   query: string;
-  message: string;
   activeProjectKeys?: string[];
   signal?: AbortSignal;
-}): Promise<{ context?: string; hasStrongHit: boolean; injectedCount: number }> {
+  runId?: string;
+};
+
+type TriggerRecallPrewarmEntry = {
+  activeProjectKeys: string[];
+  agentId: string;
+  cfg: OpenClawConfig;
+  promise: Promise<MemorySearchResult[]>;
+  query: string;
+};
+
+const triggerRecallPrewarms = new Map<string, TriggerRecallPrewarmEntry>();
+
+async function loadTriggerRecallCandidates(params: TriggerLookupParams) {
   params.signal?.throwIfAborted();
   const activeProjectKeys = params.activeProjectKeys ?? [];
   const lookup = await waitForTriggerLookup(
@@ -148,7 +160,7 @@ export async function resolveTriggerRecall(params: {
     params.signal,
   );
   if (!lookup.manager?.listTriggerCandidates) {
-    return { hasStrongHit: false, injectedCount: 0 };
+    return [];
   }
   const lookupWork = Promise.all([
     lookup.manager
@@ -169,7 +181,7 @@ export async function resolveTriggerRecall(params: {
       .catch(() => []),
   ]);
   const [retrieved, triggerCandidates] = await waitForTriggerLookup(lookupWork, params.signal);
-  const candidates = [
+  return [
     ...new Map(
       [...triggerCandidates, ...retrieved].map((entry) => [
         `${entry.source}:${entry.path}:${String(entry.startLine)}:${String(entry.endLine)}`,
@@ -177,6 +189,55 @@ export async function resolveTriggerRecall(params: {
       ]),
     ).values(),
   ];
+}
+
+function resolveTriggerRecallCandidates(params: TriggerLookupParams) {
+  const runId = params.runId?.trim();
+  if (!runId) {
+    return loadTriggerRecallCandidates(params);
+  }
+  const existing = triggerRecallPrewarms.get(runId);
+  const activeProjectKeys = params.activeProjectKeys ?? [];
+  if (
+    existing &&
+    existing.cfg === params.cfg &&
+    existing.agentId === params.agentId &&
+    existing.query === params.query &&
+    existing.activeProjectKeys.length === activeProjectKeys.length &&
+    existing.activeProjectKeys.every((key, index) => key === activeProjectKeys[index])
+  ) {
+    return existing.promise;
+  }
+  const entry: TriggerRecallPrewarmEntry = {
+    activeProjectKeys: [...activeProjectKeys],
+    agentId: params.agentId,
+    cfg: params.cfg,
+    promise: loadTriggerRecallCandidates(params),
+    query: params.query,
+  };
+  triggerRecallPrewarms.set(runId, entry);
+  void entry.promise.catch(() => {
+    if (triggerRecallPrewarms.get(runId) === entry) {
+      triggerRecallPrewarms.delete(runId);
+    }
+  });
+  return entry.promise;
+}
+
+/** Open and exercise the exact local lookup path used by lane 1 before its deadline starts. */
+export async function prewarmTriggerRecall(params: TriggerLookupParams): Promise<void> {
+  await resolveTriggerRecallCandidates(params);
+}
+
+export async function resolveTriggerRecall(
+  params: TriggerLookupParams & { message: string },
+): Promise<{ context?: string; hasStrongHit: boolean; injectedCount: number }> {
+  params.signal?.throwIfAborted();
+  const activeProjectKeys = params.activeProjectKeys ?? [];
+  const candidates = await waitForTriggerLookup(
+    resolveTriggerRecallCandidates(params),
+    params.signal,
+  );
   const matches = selectStrongTriggerMatches(params.message, candidates, activeProjectKeys);
   const context = buildTriggerRecallContext(matches);
   return {
@@ -184,6 +245,16 @@ export async function resolveTriggerRecall(params: {
     hasStrongHit: matches.length > 0,
     injectedCount: matches.length,
   };
+}
+
+export function forgetTriggerRecallPrewarm(runId: string | undefined): void {
+  if (runId) {
+    triggerRecallPrewarms.delete(runId);
+  }
+}
+
+export function resetTriggerRecallPrewarmsForTests(): void {
+  triggerRecallPrewarms.clear();
 }
 
 function waitForTriggerLookup<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {

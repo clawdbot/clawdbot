@@ -26,19 +26,20 @@ import {
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import {
-  collectInventoryOwnedAppIds,
-  readConfigLayersForAppAdmission,
-  readThreadAdmissibleAccountApps,
-  refreshAppInventoryNow,
-  resolveAccountAppThreadAdmission,
-  resolveExplicitAppEnablement,
-  resolvePluginAppThreadAdmission,
-  resolveThreadConfigAppsForRecord,
-  shouldForceRefreshForNotReadyPluginApps,
-  toOwnedAccountApp,
+  collectCodexPluginOwnedAppIds,
+  collectCodexReservedPluginAppIds,
+  readCodexConfigForAppAdmission,
+  readCodexThreadAdmissibleAccountApps,
+  refreshCodexPluginAppInventory,
+  resolveCodexExplicitAppEnablement,
+  resolveCodexPluginAppThreadAdmission,
+  resolveCodexThreadConfigAppsForRecord,
+  shouldForceRefreshCodexNotReadyPluginApps,
+  toCodexPluginOwnedAccountApp,
+  type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import { isJsonObject, type CodexConfigEdit, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
 export type PluginAppPolicyContextEntry = {
@@ -76,6 +77,7 @@ type CodexPluginThreadConfigDiagnostic =
   | CodexPluginThreadAppAdmissionDiagnostic
   | {
       code:
+        | "account_app_ownership_unavailable"
         | "plugin_activation_failed"
         | "plugin_config_timeout"
         | "app_not_ready"
@@ -88,6 +90,7 @@ type CodexPluginThreadConfigDiagnostic =
 export type CodexPluginThreadConfig = {
   enabled: boolean;
   configPatch?: JsonObject;
+  /** Modern app IDs that must be attested against the effective Codex thread. */
   provisionalAppIds?: readonly string[];
   fingerprint: string;
   inputFingerprint: string;
@@ -172,6 +175,7 @@ export async function buildCodexPluginThreadConfig(
           request: params.request,
           appCache,
           appCacheKey: params.appCacheKey,
+          configCwd: params.configCwd,
           metadataCache: params.metadataCache,
           nowMs: params.nowMs,
           suppressAppInventoryRefresh: true,
@@ -181,13 +185,13 @@ export async function buildCodexPluginThreadConfig(
     inventory.records.some((record) => record.activationRequired) &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshAppInventoryNow(params, appCache, {
+    await refreshCodexPluginAppInventory(params, appCache, {
       // OpenClaw is missing its process-local snapshot, but Codex may already
       // have a current inventory. Avoid rebuilding the entire remote catalog
       // during thread startup; post-install and readiness repair still force.
       forceRefetch: false,
       reason: "initial_missing",
-      targetAppIds: collectInventoryOwnedAppIds(inventory),
+      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -195,6 +199,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
@@ -215,6 +220,7 @@ export async function buildCodexPluginThreadConfig(
       appCache,
       appCacheKey: params.appCacheKey,
       metadataCache: params.metadataCache,
+      deferAppInventoryRefresh: true,
       targetAppIds: record.ownedAppIds,
     });
     activationResults.push(activation);
@@ -236,10 +242,10 @@ export async function buildCodexPluginThreadConfig(
     !postInstallRefreshRequired &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
-    await refreshAppInventoryNow(params, appCache, {
+    await refreshCodexPluginAppInventory(params, appCache, {
       forceRefetch: true,
       reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
-      targetAppIds: collectInventoryOwnedAppIds(inventory),
+      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -247,6 +253,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
@@ -255,11 +262,11 @@ export async function buildCodexPluginThreadConfig(
       appCacheKey: params.appCacheKey,
     });
   }
-  if (shouldForceRefreshForNotReadyPluginApps(params, policy, inventory)) {
-    await refreshAppInventoryNow(params, appCache, {
+  if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
+    await refreshCodexPluginAppInventory(params, appCache, {
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
-      targetAppIds: collectInventoryOwnedAppIds(inventory),
+      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -267,6 +274,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
@@ -276,8 +284,10 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  const accountAppsResult: Awaited<ReturnType<typeof readThreadAdmissibleAccountApps>> =
-    policy.allowAllPlugins ? await readThreadAdmissibleAccountApps(params, appCache) : { apps: [] };
+  const accountAppsResult: Awaited<ReturnType<typeof readCodexThreadAdmissibleAccountApps>> =
+    policy.allowAllPlugins
+      ? await readCodexThreadAdmissibleAccountApps(params, appCache)
+      : { apps: [] };
 
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [
     ...inventory.diagnostics,
@@ -294,13 +304,34 @@ export async function buildCodexPluginThreadConfig(
   };
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
-  let configLayersForAppAdmission: Promise<readonly JsonObject[] | undefined> | undefined;
-  const pluginOwnedAppIds = new Set(
-    inventory.records.flatMap((record) =>
-      record.appOwnership === "proven" ? record.ownedAppIds : [],
-    ),
-  );
+  let configForAppAdmission: Promise<CodexPluginThreadAppAdmissionConfig | undefined> | undefined;
+  const pluginOwnedAppIds = collectCodexReservedPluginAppIds({
+    policy,
+    inventory,
+    accountApps: accountAppsResult.apps,
+  });
+  const unresolvedDisabledPluginOwnership = policy.allowAllPlugins
+    ? policy.pluginPolicies.find(
+        (pluginPolicy) =>
+          !pluginPolicy.enabled &&
+          !inventory.records.some(
+            (record) => record.policy.configKey === pluginPolicy.configKey && record.detail,
+          ),
+      )
+    : undefined;
+  if (unresolvedDisabledPluginOwnership) {
+    // Codex omits disabled plugin ownership from app/read display names. A
+    // broad account policy cannot safely proceed without authoritative detail.
+    diagnostics.push({
+      code: "account_app_ownership_unavailable",
+      plugin: unresolvedDisabledPluginOwnership,
+      message: `Could not verify disabled Codex plugin app ownership for ${unresolvedDisabledPluginOwnership.pluginName}; account apps were not exposed.`,
+    });
+  }
   for (const record of inventory.records) {
+    if (!record.policy.enabled) {
+      continue;
+    }
     const activation = activationResults.find(
       (item) => item.identity.configKey === record.policy.configKey,
     );
@@ -311,16 +342,16 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
-    for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
-      let admission = resolvePluginAppThreadAdmission(app, inventory);
-      if (admission === "provisional") {
-        configLayersForAppAdmission ??= readConfigLayersForAppAdmission(params);
-        const layers = await configLayersForAppAdmission;
-        if (layers === undefined || resolveExplicitAppEnablement(layers, app.id) === false) {
-          admission = "blocked";
-        }
-      }
-      if (admission === "blocked") {
+    for (const app of resolveCodexThreadConfigAppsForRecord({ record, inventory })) {
+      const admission = resolveCodexPluginAppThreadAdmission(app, inventory);
+      const admissionConfig =
+        admission === "blocked"
+          ? undefined
+          : await (configForAppAdmission ??= readCodexConfigForAppAdmission(params));
+      if (
+        !admissionConfig ||
+        resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false
+      ) {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
@@ -333,6 +364,7 @@ export async function buildCodexPluginThreadConfig(
         !(await clearPersistedAppToolApprovalOverrides({
           request: params.request,
           configCwd: params.configCwd,
+          config: admissionConfig.config,
           plugin: record.policy,
           app,
           diagnostics,
@@ -340,9 +372,7 @@ export async function buildCodexPluginThreadConfig(
       ) {
         continue;
       }
-      if (admission === "provisional") {
-        provisionalAppIds.add(app.id);
-      }
+      provisionalAppIds.add(app.id);
       apps[app.id] = buildEnabledAppConfig(record.policy);
       policyApps[app.id] = {
         configKey: record.policy.configKey,
@@ -355,29 +385,41 @@ export async function buildCodexPluginThreadConfig(
     }
   }
 
-  for (const app of accountAppsResult.apps) {
+  for (const app of unresolvedDisabledPluginOwnership ? [] : accountAppsResult.apps) {
     // An explicit plugin policy is more specific than the account-wide policy.
     // Reserve proven ownership even when activation/readiness fails so a broad
     // account policy cannot re-admit an app that the explicit path excluded.
     if (pluginOwnedAppIds.has(app.id)) {
       continue;
     }
-    const admission = resolveAccountAppThreadAdmission(app, accountAppsResult.source);
-    const accountApp = toOwnedAccountApp(app);
+    configForAppAdmission ??= readCodexConfigForAppAdmission(params);
+    const admissionConfig = await configForAppAdmission;
+    if (!admissionConfig) {
+      diagnostics.push({
+        code: "account_app_config_unavailable",
+        message: "Codex account app configuration was unavailable; account apps were not exposed.",
+      });
+      break;
+    }
+    if (resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false) {
+      continue;
+    }
+    const accountApp = toCodexPluginOwnedAccountApp(app);
     if (
       policy.destructiveApprovalMode === "ask" &&
       !(await clearPersistedAppToolApprovalOverrides({
         request: params.request,
         configCwd: params.configCwd,
+        config: admissionConfig.config,
         app: accountApp,
         diagnostics,
       }))
     ) {
       continue;
     }
-    if (admission === "provisional") {
-      provisionalAppIds.add(app.id);
-    }
+    // Global callability does not prove this thread's workspace/managed
+    // policy. Attest only apps that also passed destructive-approval checks.
+    provisionalAppIds.add(app.id);
     apps[app.id] = buildEnabledAppConfig(policy);
     policyApps[app.id] = {
       source: "account",
@@ -531,25 +573,48 @@ function buildPluginAppPolicyContext(
 async function clearPersistedAppToolApprovalOverrides(params: {
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
+  config: JsonObject;
   plugin?: ResolvedCodexPluginPolicy;
   app: CodexPluginOwnedApp;
   diagnostics: CodexPluginThreadConfigDiagnostic[];
 }): Promise<boolean> {
   try {
-    const overrideNames = await readPersistedAppToolApprovalOverrideNames(params);
-    for (const toolName of overrideNames) {
-      const response = await params.request("config/value/write", {
+    const overrideNames = readPersistedAppToolApprovalOverrideNames(params.config, params.app);
+    if (overrideNames.length === 0) {
+      return true;
+    }
+    const edits = overrideNames.map(
+      (toolName): CodexConfigEdit => ({
         keyPath: `apps.${quoteConfigKeyPathSegment(params.app.id)}.tools.${quoteConfigKeyPathSegment(
           toolName,
         )}.approval_mode`,
         value: null,
         mergeStrategy: "replace",
-      });
-      if (isOverriddenConfigWriteResponse(response)) {
-        throw new Error(`approval override for ${toolName} is controlled by another config layer`);
-      }
+      }),
+    );
+    const response = await params.request("config/batchWrite", { edits });
+    if (
+      !isJsonObject(response) ||
+      (response.status !== "ok" && response.status !== "okOverridden")
+    ) {
+      throw new Error("Codex did not confirm the approval override batch");
     }
-    const remainingOverrideNames = await readPersistedAppToolApprovalOverrideNames(params);
+    if (response.status === "okOverridden") {
+      throw new Error(
+        `approval override for ${overrideNames.join(", ")} is controlled by another config layer`,
+      );
+    }
+    const confirmed = await params.request("config/read", {
+      includeLayers: false,
+      ...(params.configCwd ? { cwd: params.configCwd } : {}),
+    });
+    if (!isJsonObject(confirmed) || !isJsonObject(confirmed.config)) {
+      throw new Error("Codex did not confirm effective app approval configuration");
+    }
+    const remainingOverrideNames = readPersistedAppToolApprovalOverrideNames(
+      confirmed.config,
+      params.app,
+    );
     if (remainingOverrideNames.length > 0) {
       throw new Error(
         `effective approval overrides remain for ${remainingOverrideNames.join(", ")}`,
@@ -568,22 +633,12 @@ async function clearPersistedAppToolApprovalOverrides(params: {
   }
 }
 
-async function readPersistedAppToolApprovalOverrideNames(params: {
-  request: CodexPluginRuntimeRequest;
-  configCwd?: string;
-  app: CodexPluginOwnedApp;
-}): Promise<string[]> {
-  const response = await params.request("config/read", {
-    includeLayers: false,
-    ...(params.configCwd ? { cwd: params.configCwd } : {}),
-  });
-  const config = isJsonObject(response) ? response.config : undefined;
-  const appsRoot = isJsonObject(config) ? config.apps : undefined;
-  const nestedApps = isJsonObject(appsRoot) ? appsRoot.apps : undefined;
-  const appConfig = isJsonObject(appsRoot)
-    ? (appsRoot[params.app.id] ??
-      (isJsonObject(nestedApps) ? nestedApps[params.app.id] : undefined))
-    : undefined;
+function readPersistedAppToolApprovalOverrideNames(
+  config: JsonObject,
+  app: CodexPluginOwnedApp,
+): string[] {
+  const appsRoot = config.apps;
+  const appConfig = isJsonObject(appsRoot) ? appsRoot[app.id] : undefined;
   const tools = isJsonObject(appConfig) ? appConfig.tools : undefined;
   if (!isJsonObject(tools)) {
     return [];
@@ -595,13 +650,7 @@ async function readPersistedAppToolApprovalOverrideNames(params: {
 }
 
 function hasPersistedToolApprovalOverride(value: JsonValue): boolean {
-  return (
-    isJsonObject(value) && (value.approval_mode !== undefined || value.approvalMode !== undefined)
-  );
-}
-
-function isOverriddenConfigWriteResponse(response: unknown): boolean {
-  return isJsonObject(response) && response.status === "okOverridden";
+  return isJsonObject(value) && value.approval_mode !== undefined;
 }
 
 function quoteConfigKeyPathSegment(segment: string): string {

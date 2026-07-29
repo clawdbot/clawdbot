@@ -238,6 +238,9 @@ async function downloadGeneratedVideoFromUri(params: {
       });
       try {
         if (!response.ok) {
+          // A debug-capture clone can keep the tee open, so waiting for cancel
+          // would hang before the HTTP error and dispatcher can be released.
+          void response.body?.cancel().catch(() => undefined);
           throw new Error(
             `Failed to download Google generated video: ${response.status} ${response.statusText}`,
           );

@@ -52,7 +52,8 @@ dispatch so authorization failures have one canonical structured response:
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
-  `operator.admin` for `browser.proxy`, `fs.listDir`, and `terminal.upload`.
+  `operator.admin` for `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
+  and `terminal.upload`.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
@@ -118,11 +119,11 @@ stores relate.
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
 
-| Declared commands                                                                                                    | Required scopes                       |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                 | `operator.pairing`                    |
-| ordinary node commands                                                                                               | `operator.pairing` + `operator.write` |
-| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                                               | Required scopes                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                                            | `operator.pairing`                    |
+| ordinary node commands                                                                                                                          | `operator.pairing` + `operator.write` |
+| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 Approving a node declaration records its command surface. For `computer.act`,
 the node advertises that surface only after Computer Control is enabled locally;

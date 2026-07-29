@@ -19,8 +19,6 @@ import {
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
   type MemorySearchManager,
-  type MemorySearchRuntimeDebug,
-  type MemorySource,
   type MemorySyncParams,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -40,6 +38,7 @@ import {
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
+type MemoryManagerSearchOptions = Parameters<MemorySearchManager["search"]>[1];
 type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
@@ -642,20 +641,7 @@ class BorrowedMemoryManager implements MemorySearchManager {
     }
   }
 
-  async search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      lexicalOnly?: boolean;
-      activeProjectKeys?: string[];
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-      signal?: AbortSignal;
-    },
-  ) {
+  async search(query: string, opts?: MemoryManagerSearchOptions) {
     return await this.inner.search(query, opts);
   }
 
@@ -824,20 +810,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     private readonly onClose?: () => void,
   ) {}
 
-  async search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      lexicalOnly?: boolean;
-      activeProjectKeys?: string[];
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-      signal?: AbortSignal;
-    },
-  ) {
+  async search(query: string, opts?: MemoryManagerSearchOptions) {
     this.ensureOpen();
     if (!this.primaryFailed) {
       try {
@@ -913,26 +886,13 @@ class FallbackMemoryManager implements MemorySearchManager {
     if (!this.primaryFailed) {
       return this.deps.primary.status();
     }
-    const fallbackStatus = this.fallback?.status();
+    const fallbackStatus = this.fallback?.status() ?? this.deps.primary.status();
     const fallbackInfo = { from: "qmd", reason: this.lastError ?? "unknown" };
-    if (fallbackStatus) {
-      const custom = fallbackStatus.custom ?? {};
-      return {
-        ...fallbackStatus,
-        fallback: fallbackInfo,
-        custom: {
-          ...custom,
-          fallback: { disabled: true, reason: this.lastError ?? "unknown" },
-        },
-      };
-    }
-    const primaryStatus = this.deps.primary.status();
-    const custom = primaryStatus.custom ?? {};
     return {
-      ...primaryStatus,
+      ...fallbackStatus,
       fallback: fallbackInfo,
       custom: {
-        ...custom,
+        ...fallbackStatus.custom,
         fallback: { disabled: true, reason: this.lastError ?? "unknown" },
       },
     };

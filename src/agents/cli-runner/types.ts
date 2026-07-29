@@ -1,4 +1,7 @@
-import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import type {
+  AgentMessage,
+  ToolResultContentSource,
+} from "../../../packages/agent-core/src/types.js";
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
@@ -313,6 +316,7 @@ export type PreparedCliRunContext = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
 };
