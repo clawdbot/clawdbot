@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { removeRegistryEntry, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import {
@@ -474,7 +475,11 @@ describe("sandbox workspace Doctor migration", () => {
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
         rawSessionKey,
-        workspaceDir: context.workspaceDir,
+        workspaceDir: resolveAgentWorkspaceDir(
+          cfg,
+          parseAgentSessionKey(rawSessionKey)?.agentId ?? "main",
+          context.env,
+        ),
       });
       return path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
     };
