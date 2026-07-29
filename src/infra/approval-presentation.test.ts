@@ -1,6 +1,7 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
+import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -16,6 +17,7 @@ function buildExecPresentation(request: {
 function buildPluginPresentation(request: {
   title: string;
   description: string;
+  detail?: string;
   pluginId?: string;
   toolName?: string;
   agentId?: string;
@@ -53,6 +55,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Deploy\u202Eprod\nnow",
       description: "Line one\r\nLine two\u0000\u202E",
+      detail: "Input one\r\nInput two\u0000\u202E",
       pluginId: "plugin\u202Eid",
       toolName: "tool\nname",
       agentId: "agent\u0000id",
@@ -62,6 +65,7 @@ describe("buildApprovalPresentation", () => {
       kind: "plugin",
       title: "Deploy\\u{202E}prod\\u{A}now",
       description: "Line one\nLine two\\u{0}\\u{202E}",
+      detail: "Input one\nInput two\\u{0}\\u{202E}",
       pluginId: "plugin\\u{202E}id",
       toolName: "tool\\u{A}name",
       agentId: "agent\\u{0}id",
@@ -110,6 +114,23 @@ describe("buildApprovalPresentation", () => {
         description: `${description}${String.fromCodePoint(0x1f6e1)}`,
       }),
     ).toBeNull();
+  });
+
+  it("truncates oversized plugin detail without invalidating the presentation", () => {
+    const presentation = buildPluginPresentation({
+      title: "Review tool input",
+      description: "Bounded channel summary",
+      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      detail: expect.stringMatching(/…\[truncated\]$/u),
+    });
+    if (presentation?.kind !== "plugin" || !presentation.detail) {
+      throw new Error("expected plugin detail");
+    }
+    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
   });
 });
 

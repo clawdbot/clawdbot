@@ -153,9 +153,10 @@ actor VoiceWakeRuntime {
             }
 
             self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-            self.recognitionRequest?.shouldReportPartialResults = true
-            self.recognitionRequest?.taskHint = .dictation
             guard let request = self.recognitionRequest else { return }
+            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
+                request,
+                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
 
             // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
             if self.audioEngine == nil {

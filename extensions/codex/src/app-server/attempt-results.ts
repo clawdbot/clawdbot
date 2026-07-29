@@ -5,9 +5,9 @@
 import type {
   AgentMessage,
   EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAttemptTurnWatchTimeoutKind } from "./attempt-turn-watches.js";
 
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
@@ -109,14 +109,10 @@ export function buildCodexTurnStartFailureResult(params: {
   systemPromptReport: CodexSystemPromptReport;
 }): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: params.promptError ?? params.message,
-    promptErrorSource: "prompt",
+    terminal: attemptTerminal.normalize({
+      promptError: params.promptError ?? params.message,
+      promptErrorSource: "prompt",
+    }),
     sessionIdUsed: params.params.sessionId,
     messagesSnapshot: params.messagesSnapshot,
     assistantTexts: [],

@@ -19,10 +19,17 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
+import { runGit } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  readSessionTranscriptVisibleMessageDelta,
+  resolveTranscriptReadTarget,
+  sqliteMessageEventWithSeq,
+  toTranscriptReadScope,
+  type SessionTranscriptReadScope,
+} from "../session-transcript-readers.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -59,13 +66,22 @@ type TouchedFile = {
 type LoadedSessionFiles = {
   root?: string;
   fileRoot?: string;
+  diffCwd?: string;
   files: TouchedFile[];
+};
+
+type TouchedFilesCacheEntry = {
+  cursor: string;
+  files: Map<string, TouchedFile>;
 };
 
 const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
+const TOUCHED_FILES_CACHE_LIMIT = 16;
+const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
+const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
 const SEARCH_SKIP_DIRS = new Set([
   ".git",
   ".hg",
@@ -76,6 +92,33 @@ const SEARCH_SKIP_DIRS = new Set([
   "dist",
   "node_modules",
 ]);
+
+// Request latency must not scale with transcript size: delta resets rebuild the
+// fold, while this process-local LRU cap bounds retained session state.
+const touchedFilesCache = new Map<string, TouchedFilesCacheEntry>();
+// Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
+const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
+
+function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined {
+  const cached = touchedFilesCache.get(key);
+  if (cached) {
+    touchedFilesCache.delete(key);
+    touchedFilesCache.set(key, cached);
+  }
+  return cached;
+}
+
+function writeTouchedFilesCache(key: string, entry: TouchedFilesCacheEntry): void {
+  touchedFilesCache.delete(key);
+  touchedFilesCache.set(key, entry);
+  while (touchedFilesCache.size > TOUCHED_FILES_CACHE_LIMIT) {
+    const oldestKey = touchedFilesCache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    touchedFilesCache.delete(oldestKey);
+  }
+}
 
 function sessionFilesError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
@@ -186,6 +229,70 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
     } else if (toolName === "apply_patch") {
       addPatchFiles(files, args);
     }
+  }
+}
+
+async function foldSqliteTouchedFiles(
+  scope: SessionTranscriptReadScope,
+  cacheKey: string,
+): Promise<Map<string, TouchedFile>> {
+  let cached = readTouchedFilesCache(cacheKey);
+  let cursor = cached?.cursor;
+  let files = cached?.files ?? new Map<string, TouchedFile>();
+  let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
+
+  while (true) {
+    const delta = readSessionTranscriptVisibleMessageDelta(scope, {
+      ...(cursor ? { cursor } : {}),
+      maxBytes,
+      maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
+    });
+    if (delta.kind === "missing") {
+      touchedFilesCache.delete(cacheKey);
+      return new Map();
+    }
+    if (delta.kind === "reset") {
+      cached = { cursor: delta.cursor, files: new Map() };
+      cursor = cached.cursor;
+      files = cached.files;
+      writeTouchedFilesCache(cacheKey, cached);
+      continue;
+    }
+    for (const event of delta.events) {
+      const message = sqliteMessageEventWithSeq(event);
+      if (message !== undefined) {
+        collectTouchedFilesFromMessage(message, files);
+      }
+    }
+    cached = { cursor: delta.cursor, files };
+    cursor = cached.cursor;
+    writeTouchedFilesCache(cacheKey, cached);
+    if (!delta.hasMore) {
+      return files;
+    }
+    if (delta.requiredBytes !== undefined) {
+      maxBytes = delta.requiredBytes;
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
+
+async function loadSqliteTouchedFiles(
+  scope: SessionTranscriptReadScope,
+  cacheKey: string,
+): Promise<Map<string, TouchedFile>> {
+  const inFlight = touchedFilesFolds.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+  const fold = foldSqliteTouchedFiles(scope, cacheKey);
+  touchedFilesFolds.set(cacheKey, fold);
+  try {
+    return await fold;
+  } finally {
+    touchedFilesFolds.delete(cacheKey);
   }
 }
 
@@ -348,7 +455,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntry(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
@@ -359,15 +466,21 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
       resolveDefaultAgentId(loaded.cfg),
   );
   const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
-  const root =
-    normalizePathValue(loaded.entry.spawnedWorkspaceDir) ??
-    spawnedCwd ??
-    normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  const spawnedWorkspaceDir = normalizePathValue(loaded.entry.spawnedWorkspaceDir);
+  const configuredWorkspaceDir =
+    spawnedCwd || spawnedWorkspaceDir
+      ? undefined
+      : normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  // Keep this cwd precedence aligned with sessions.diff so the advertised
+  // checkout state cannot disagree with the panel's fallback result.
+  const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
+  const root = spawnedWorkspaceDir ?? spawnedCwd ?? configuredWorkspaceDir;
   return {
     ...loaded,
     agentId,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
+    diffCwd,
   };
 }
 
@@ -523,25 +636,24 @@ async function loadSessionFiles(params: {
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
-  const files = new Map<string, TouchedFile>();
-  await visitSessionMessagesAsync(
-    {
-      agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: canonicalKey,
-      storePath,
-    },
-    (message) => collectTouchedFilesFromMessage(message, files),
-    {
-      mode: "full",
-      reason: "session files transcript scan",
-      cache: "reuse",
-    },
+  const scope = {
+    agentId,
+    sessionEntry: entry,
+    sessionId: entry.sessionId,
+    sessionKey: canonicalKey,
+    storePath,
+  } satisfies SessionTranscriptReadScope;
+  const target = resolveTranscriptReadTarget(scope);
+  // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
+  // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
+  const files = await loadSqliteTouchedFiles(
+    toTranscriptReadScope(target),
+    `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`,
   );
   return {
     root: loaded.root,
     fileRoot: loaded.fileRoot,
+    diffCwd: loaded.diffCwd,
     files: [...files.values()].toSorted((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
@@ -556,9 +668,23 @@ async function buildListResult(params: {
   agentId?: string;
   path?: string;
   search?: string;
-}): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
+}): Promise<{
+  root?: string;
+  gitCheckout?: boolean;
+  files: SessionFileEntry[];
+  browser?: SessionFileBrowserResult;
+}> {
   const loaded = await loadSessionFiles(params);
   const root = loaded.root;
+  let gitCheckout: boolean | undefined;
+  if (loaded.diffCwd) {
+    try {
+      const result = await runGit(loaded.diffCwd, ["rev-parse", "--show-toplevel"]);
+      gitCheckout = result.code === 0 && Boolean(result.stdout.trim());
+    } catch {
+      gitCheckout = false;
+    }
+  }
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
@@ -576,6 +702,7 @@ async function buildListResult(params: {
   });
   return {
     ...(root ? { root } : {}),
+    ...(gitCheckout === undefined ? {} : { gitCheckout }),
     files,
     ...(browser ? { browser } : {}),
   };
@@ -687,7 +814,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...result,
     });
   },
-  "sessions.files.set": async ({ params, respond }) => {
+  "sessions.files.set": async ({ params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
@@ -742,6 +869,9 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     let update: WorkspaceFileUpdateResult;
+    // The resolved root belongs to the authorized instance. Recheck after all async path
+    // discovery so a replacement cannot redirect this write to its workspace.
+    sessionMutationAuthorization?.assertCurrent();
     try {
       update = await updateWorkspaceFile(
         loaded.root,

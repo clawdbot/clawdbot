@@ -36,6 +36,7 @@ import type {
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
+  StreamFn,
   ThinkingLevel,
   ToolExecutionMode,
 } from "../../runtime/index.js";
@@ -503,6 +504,8 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Parameter schema (TypeBox) */
   parameters: TParams;
+  /** Exact schema for the structured value returned in AgentToolResult.details. */
+  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
 
@@ -612,6 +615,10 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
+  /** Prepared reasoning level for extension-owned summarization. */
+  thinkingLevel?: ThinkingLevel;
+  /** Prepared provider stream for extension-owned summarization. */
+  streamFn?: StreamFn;
 }
 
 /** Fired after context compaction */

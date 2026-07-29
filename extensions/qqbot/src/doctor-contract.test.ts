@@ -124,6 +124,39 @@ describe("qqbot doctor contract", () => {
     });
   });
 
+  it("moves legacy voice upload formats at root and account scope", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          voiceDirectUploadFormats: [".mp3"],
+          audioFormatPolicy: { transcodeEnabled: false },
+          accounts: {
+            bot2: {
+              voiceDirectUploadFormats: [".silk"],
+            },
+            bot3: {
+              voiceDirectUploadFormats: [".silk"],
+              audioFormatPolicy: { uploadDirectFormats: [".wav"] },
+            },
+          },
+        },
+      },
+    } as never as OpenClawConfig;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+    const qqbot = result.config.channels?.qqbot as unknown as Record<string, unknown>;
+    expect(qqbot.voiceDirectUploadFormats).toBeUndefined();
+    expect(qqbot.audioFormatPolicy).toStrictEqual({
+      transcodeEnabled: false,
+      uploadDirectFormats: [".mp3"],
+    });
+    const accounts = qqbot.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.bot2?.voiceDirectUploadFormats).toBeUndefined();
+    expect(accounts.bot2?.audioFormatPolicy).toStrictEqual({ uploadDirectFormats: [".silk"] });
+    expect(accounts.bot3?.voiceDirectUploadFormats).toBeUndefined();
+    expect(accounts.bot3?.audioFormatPolicy).toStrictEqual({ uploadDirectFormats: [".wav"] });
+  });
+
   it("is idempotent: a second run reports no changes", () => {
     const cfg = {
       channels: {

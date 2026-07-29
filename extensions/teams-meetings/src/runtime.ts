@@ -1,19 +1,25 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type {
+  TranscriptStartRequest,
+  TranscriptStopRequest,
+} from "openclaw/plugin-sdk/transcripts";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
 import {
   testTeamsMeetingListening,
   testTeamsMeetingSpeech,
   type TeamsMeetingsProbeContext,
 } from "./runtime-probes.js";
-import { createTeamsMeetingsSession } from "./runtime-session.js";
 import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
 import {
   launchTeamsMeetingInChrome,
@@ -22,11 +28,7 @@ import {
   readTeamsMeetingTranscript,
   recoverCurrentTeamsMeetingTab,
 } from "./transports/chrome.js";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-  isTeamsMeetingsTalkBackMode,
-} from "./transports/teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./transports/teams-meetings-platform-adapter.js";
 import type {
   TeamsMeetingsBrowserTab,
   TeamsMeetingsChromeHealth,
@@ -35,7 +37,7 @@ import type {
   TeamsMeetingsSession,
 } from "./transports/types.js";
 
-type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualActionReason"]>;
+type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualAction"]>["reason"];
 type SpeechBlockedReason = NonNullable<TeamsMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
   TeamsMeetingsSession,
@@ -81,6 +83,7 @@ function noteSession(session: TeamsMeetingsSession, note: string): void {
 }
 
 export class TeamsMeetingsRuntime {
+  readonly #defaultAgentId: string;
   readonly #sessions: SessionRuntime;
   readonly #requesterSessionKeys = new Map<string, string>();
 
@@ -92,6 +95,9 @@ export class TeamsMeetingsRuntime {
       logger: RuntimeLogger;
     },
   ) {
+    this.#defaultAgentId = normalizeAgentId(
+      params.config.realtime.agentId ?? resolveDefaultAgentId(params.fullConfig),
+    );
     this.#sessions = new MeetingSessionRuntime({
       logger: params.logger,
       logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
@@ -117,8 +123,6 @@ export class TeamsMeetingsRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Microsoft Teams browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Microsoft Teams browser prompt before asking OpenClaw to speak.",
           microphoneMuted: "Turn on the OpenClaw Teams microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "teams-microphone-muted",
           notInCall: "Microsoft Teams has not reported that the browser guest is in the call.",
@@ -131,10 +135,15 @@ export class TeamsMeetingsRuntime {
         url: TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request, params.config),
         mode: request.mode ?? params.config.defaultMode,
-        agentId: normalizeAgentId(request.agentId ?? params.config.realtime.agentId),
+        agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
-        const session = createTeamsMeetingsSession({ config: params.config, resolved, createdAt });
+        const session: TeamsMeetingsSession = createMeetingSession({
+          platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+          config: params.config,
+          resolved,
+          createdAt,
+        });
         if (request.requesterSessionKey) {
           this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
         }
@@ -143,7 +152,7 @@ export class TeamsMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isTeamsMeetingsTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
         TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
@@ -176,16 +185,29 @@ export class TeamsMeetingsRuntime {
         await this.#refreshBrowserHealth(session, options),
       refreshStatus: async (session) =>
         await this.#sessions.refreshBrowserHealth(session, { force: true, readOnly: true }),
-      refreshReusableSession: async () => {},
+      refreshReusableSession: async (_session, _request, _resolved) => {},
       ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async () => undefined,
+      durableTranscripts: {
+        config: params.fullConfig.transcripts,
+        providerId: "teams",
+        providerName: "Microsoft Teams",
+      },
     });
   }
 
   list(): TeamsMeetingsSession[] {
     return this.#sessions.list();
+  }
+
+  async startTranscriptSource(request: TranscriptStartRequest) {
+    return await this.#sessions.startTranscriptSource(request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest) {
+    return await this.#sessions.stopTranscriptSource(request);
   }
 
   ownsSession(agentId: string, sessionId: string): boolean {
@@ -257,13 +279,14 @@ export class TeamsMeetingsRuntime {
   #probeContext(): TeamsMeetingsProbeContext {
     return {
       config: this.params.config,
-      resolveAgentId: (request) =>
-        normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId),
+      resolveAgentId: (request) => normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       list: () => this.list(),
       join: async (request) => await this.join(request),
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
+      refreshCaptionHealth: async (session, timeoutMs) =>
+        await this.#refreshBrowserHealth(session, { timeoutMs }),
     };
   }
 
@@ -321,7 +344,7 @@ export class TeamsMeetingsRuntime {
           ? "Teams guest joined in Chrome on the selected node with realtime audio through the node bridge."
           : "Teams guest joined in local Chrome with realtime audio through BlackHole 2ch and SoX."
         : session.mode === "transcribe"
-          ? "Teams guest joined observe-only; caption snapshots remain empty pending live selector validation."
+          ? "Teams guest joined observe-only with live-caption transcript capture."
           : "Teams guest join is waiting for the browser to become ready before starting realtime audio.",
     );
     this.#sessions.refreshSpeechReadiness(session);
@@ -350,11 +373,11 @@ export class TeamsMeetingsRuntime {
     session: TeamsMeetingsSession,
   ): Promise<MeetingSessionRuntimeHandles<TeamsMeetingsChromeHealth> | undefined> {
     if (
-      !isTeamsMeetingsTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
-      !isTeamsMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }
@@ -407,18 +430,21 @@ export class TeamsMeetingsRuntime {
 
   async #refreshBrowserHealth(
     session: TeamsMeetingsSession,
-    options: { readOnly?: boolean } = {},
+    options: { readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<void> {
     try {
       const result = await recoverCurrentTeamsMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        fullConfig: this.params.fullConfig,
+        meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,
         readOnly: options.readOnly,
         trackedMeetingUrl: session.url,
         trackedTargetId: session.chrome?.browserTab?.targetId,
         transport: session.transport,
+        timeoutMs: options.timeoutMs,
         url: session.url,
       });
       if (result.found && session.chrome) {
@@ -443,6 +469,9 @@ export class TeamsMeetingsRuntime {
   }
 
   async #captureTranscript(session: TeamsMeetingsSession, options: { finalize?: boolean } = {}) {
+    // Recovery permits caption setup but atomically refuses a different live
+    // session owner, so stale sessions read their archived page buffer instead.
+    await this.#sessions.refreshCaptionHealth(session);
     const tab = session.chrome?.browserTab;
     if (!tab) {
       return undefined;
@@ -483,6 +512,7 @@ export class TeamsMeetingsRuntime {
       const result = await leaveTeamsMeetingInBrowser({
         runtime: this.params.runtime,
         config: this.params.config,
+        meetingSessionId: session.id,
         meetingUrl: session.url,
         nodeId: session.chrome?.nodeId,
         tab,
@@ -490,6 +520,18 @@ export class TeamsMeetingsRuntime {
       noteSession(session, result.note);
       if (result.left && session.chrome) {
         session.chrome.browserTab = undefined;
+        if (session.chrome.health) {
+          session.chrome.health = {
+            ...session.chrome.health,
+            captioning: false,
+            audioInputRouted: false,
+            audioOutputRouted: false,
+            providerConnected: false,
+            realtimeReady: false,
+            audioInputActive: false,
+            audioOutputActive: false,
+          };
+        }
       }
       session.browserLeft = result.left;
       return result.left;

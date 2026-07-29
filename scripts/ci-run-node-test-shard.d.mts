@@ -35,6 +35,8 @@ export function buildChildEnv(
 
 export function pruneFsModuleCache(root: string, maxBytes?: number): FsModuleCachePruneResult;
 
+export function clonePersistentCacheSlots(root: string | undefined, concurrency: number): number;
+
 export function resolveShardChildCommand(
   args: string[],
   nodeExecPath?: string,

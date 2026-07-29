@@ -137,6 +137,7 @@ vi.mock("../config/sessions/paths.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: statusSummaryMocks.listSessionEntries,
+  listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -170,6 +171,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  LEGACY_IMPLICIT_AGENT_ID: "main",
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),
@@ -284,9 +286,10 @@ describe("getStatusSummary", () => {
         ownerKind: "account",
         ownerId: "discord:ops",
         state: "unavailable",
+        degradationState: "cold",
         paths: ["channels.discord.accounts.ops.token"],
         refKeys: ["env:default:PRIVATE_REF_ID"],
-        reason: "secret reference was not found",
+        reason: "provider SecretRef is unresolved (env:default:PRIVATE_REF_ID)",
       },
     ]);
 
@@ -297,8 +300,9 @@ describe("getStatusSummary", () => {
         ownerKind: "account",
         ownerId: "discord:ops",
         state: "unavailable",
+        degradationState: "cold",
         paths: ["channels.discord.accounts.ops.token"],
-        reason: "secret reference was not found",
+        reason: "secret resolution failed",
       },
     ]);
     expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");

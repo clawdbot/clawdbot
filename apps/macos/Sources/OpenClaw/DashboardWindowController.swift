@@ -1,5 +1,7 @@
 import AppKit
+import AVFoundation
 import Foundation
+import OpenClawKit
 import WebKit
 
 private final class DashboardWindowContentView: NSView {
@@ -87,14 +89,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
     private static let updateMessageHandlerName = "openclawUpdate"
 
-    private let webView: DashboardWebView
+    let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
     private let linkBrowserSplitView: DashboardLinkSplitView
     private let splitViewController: NSSplitViewController
     private let updateMessageHandler: DashboardUpdateMessageHandler
     private(set) var currentURL: URL
-    private var auth: DashboardWindowAuth
+    var auth: DashboardWindowAuth
+    var gatewaySnapshot: DashboardGatewaySnapshot?
+    let tlsParams: GatewayTLSParams?
+    private let dashboardFrameAutosaveName: String
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
     private let requestBrowserProfileImportOffer:
@@ -108,12 +113,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var hasLiveContent = false
     private var isShowingFailurePage = false
     private var pendingNativeCommands: [DashboardNativeCommand] = []
+    var onClosed: (() -> Void)?
 
     init(
         url: URL,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
+        tlsParams: GatewayTLSParams? = nil,
+        gatewaySnapshot: DashboardGatewaySnapshot? = nil,
+        windowTitle: String = "OpenClaw",
+        windowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName,
         requestBrowserProfileImportOffer:
         @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool = { shouldApply in
             await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
@@ -122,6 +132,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
         self.currentURL = url
         self.auth = auth
+        self.gatewaySnapshot = gatewaySnapshot
+        self.tlsParams = tlsParams
+        self.dashboardFrameAutosaveName = windowAutosaveName
         self.updater = updater
         self.updateBridgeEnabled = shouldEnableUpdateBridge
         self.requestBrowserProfileImportOffer = requestBrowserProfileImportOffer
@@ -137,6 +150,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
         let windowDragMessageHandler = DashboardWindowDragMessageHandler()
         config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
+        let notificationsMessageHandler = DashboardNotificationsMessageHandler()
+        config.userContentController.add(notificationsMessageHandler, name: Self.notificationsMessageHandlerName)
+        let gatewaysMessageHandler = DashboardGatewaysMessageHandler()
+        config.userContentController.add(gatewaysMessageHandler, name: Self.gatewaysMessageHandlerName)
         let updateMessageHandler = DashboardUpdateMessageHandler()
         self.updateMessageHandler = updateMessageHandler
         if shouldEnableUpdateBridge {
@@ -145,6 +162,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             config.userContentController.add(updateMessageHandler, name: Self.updateMessageHandlerName)
         }
         Self.installNativeChromeScript(into: config.userContentController)
+        Self.installNativeGatewaysScript(into: config.userContentController, snapshot: gatewaySnapshot)
         Self.installNativeAuthScript(into: config.userContentController, url: url, auth: auth)
 
         self.webView = DashboardWebView(
@@ -187,12 +205,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserSplitView = linkBrowserSplitView
         self.splitViewController = splitViewController
 
-        let window = Self.makeWindow(contentView: splitViewController.view)
+        let window = Self.makeWindow(
+            contentView: splitViewController.view,
+            title: windowTitle,
+            frameAutosaveName: windowAutosaveName)
         super.init(window: window)
         // NSWindowController adopts its own frame state during initialization;
         // keep it aligned with the autosave name installed by makeWindow, then
         // re-correct placement in case the assignment re-applied a stale frame.
-        self.windowFrameAutosaveName = DashboardWindowLayout.windowFrameAutosaveName
+        self.windowFrameAutosaveName = windowAutosaveName
         WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
 
         // Width is autosaved, while each new dashboard window starts with the
@@ -200,6 +221,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
         windowDragMessageHandler.owner = self
+        notificationsMessageHandler.owner = self
+        gatewaysMessageHandler.owner = self
         updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
@@ -411,7 +434,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     func releaseFrameAutosaveForReplacement() {
         // AppKit rejects duplicate autosave owners. Release only when the manager
         // replaces this controller so the successor can restore the saved frame.
-        self.window?.saveFrame(usingName: DashboardWindowLayout.windowFrameAutosaveName)
+        self.window?.saveFrame(usingName: self.dashboardFrameAutosaveName)
         self.windowFrameAutosaveName = ""
     }
 
@@ -685,6 +708,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         let controller = self.webView.configuration.userContentController
         controller.removeAllUserScripts()
         Self.installNativeChromeScript(into: controller)
+        Self.installNativeGatewaysScript(into: controller, snapshot: self.gatewaySnapshot)
         Self.installNativeAuthScript(into: controller, url: url, auth: auth)
     }
 
@@ -736,7 +760,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return linkWebView
     }
 
-    private static func makeWindow(contentView: NSView) -> NSWindow {
+    private static func makeWindow(
+        contentView: NSView,
+        title: String,
+        frameAutosaveName: String) -> NSWindow
+    {
         let window = DashboardWindow(
             contentRect: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -769,7 +797,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             topRightDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             topRightDragRegion.heightAnchor.constraint(equalToConstant: 6),
         ])
-        window.title = "OpenClaw"
+        window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         // An empty unified toolbar grows the transparent titlebar to 52pt so the
@@ -790,12 +818,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.minSize = DashboardWindowLayout.windowMinSize
         // Autosave restore first, placement correction last: a frame saved on
         // a since-disconnected monitor must not leave the window off-screen.
-        window.setFrameAutosaveName(DashboardWindowLayout.windowFrameAutosaveName)
+        window.setFrameAutosaveName(frameAutosaveName)
         WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
         return window
     }
 
-    private static func installNativeChromeScript(into userContentController: WKUserContentController) {
+    static func installNativeChromeScript(into userContentController: WKUserContentController) {
         // Deliberately no native fallback for pages that ignore this flag
         // (older gateway bundles, failure pages): they keep their own in-page
         // toggles plus back/forward gestures and the Cmd-[/] menu items.
@@ -837,7 +865,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     }
 
-    private static func installNativeAuthScript(
+    static func installNativeAuthScript(
         into userContentController: WKUserContentController,
         url: URL,
         auth: DashboardWindowAuth)
@@ -900,15 +928,35 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return String(raw.dropFirst().dropLast())
     }
 
-    static func shouldAllowNavigation(to url: URL, dashboardURL: URL) -> Bool {
+    static func shouldAllowNavigation(
+        to url: URL,
+        dashboardURL: URL,
+        isMainFrame: Bool,
+        isTrustedDashboardSource: Bool = false) -> Bool
+    {
         guard let scheme = url.scheme?.lowercased() else { return true }
         if scheme == "about" || scheme == "blob" || scheme == "data" {
             return true
         }
         guard scheme == "http" || scheme == "https" else { return false }
-        return url.scheme?.lowercased() == dashboardURL.scheme?.lowercased() &&
-            url.host?.lowercased() == dashboardURL.host?.lowercased() &&
-            url.port == dashboardURL.port
+        let dashboardScheme = dashboardURL.scheme?.lowercased()
+        let dashboardHost = dashboardURL.host?.lowercased()
+        let host = url.host?.lowercased()
+        if scheme == dashboardScheme, host == dashboardHost, url.port == dashboardURL.port {
+            return true
+        }
+        guard !isMainFrame,
+              isTrustedDashboardSource,
+              host?.isEmpty == false,
+              url.user == nil,
+              url.password == nil
+        else {
+            return false
+        }
+        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
+        return components.count == 4 &&
+            components[0] == "embed" &&
+            (components[1] == "channel" || components[1] == "thread")
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -961,6 +1009,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     func windowWillClose(_: Notification) {
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
+        self.onClosed?()
     }
 
     private func showLoadFailure(_ error: Error) {
@@ -991,6 +1040,67 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void)
+    {
+        guard webView === self.webView else {
+            decisionHandler(.deny)
+            return
+        }
+        let mediaTypes: [AVMediaType]
+        switch type {
+        case .camera:
+            mediaTypes = [.video]
+        case .microphone:
+            mediaTypes = [.audio]
+        case .cameraAndMicrophone:
+            mediaTypes = [.video, .audio]
+        @unknown default:
+            decisionHandler(.deny)
+            return
+        }
+        guard frame.isMainFrame,
+              Self.isTrustedMediaCaptureOrigin(
+                  protocol: origin.protocol,
+                  host: origin.host,
+                  port: origin.port,
+                  dashboardURL: self.currentURL)
+        else {
+            decisionHandler(.prompt)
+            return
+        }
+        let authorized = mediaTypes.allSatisfy { AVCaptureDevice.authorizationStatus(for: $0) == .authorized }
+        decisionHandler(authorized ? .grant : .prompt)
+    }
+
+    static func isTrustedMediaCaptureOrigin(
+        protocol scheme: String,
+        host: String,
+        port: Int,
+        dashboardURL: URL) -> Bool
+    {
+        guard scheme.caseInsensitiveCompare(dashboardURL.scheme ?? "") == .orderedSame,
+              host.caseInsensitiveCompare(dashboardURL.host ?? "") == .orderedSame
+        else {
+            return false
+        }
+        let requestedPort = port == 0 ? Self.defaultPort(for: scheme) : port
+        let dashboardPort = dashboardURL.port ?? Self.defaultPort(for: dashboardURL.scheme)
+        return requestedPort == dashboardPort
+    }
+
+    private static func defaultPort(for scheme: String?) -> Int? {
+        switch scheme?.lowercased() {
+        case "http": 80
+        case "https": 443
+        default: nil
+        }
+    }
+
     static func shouldReloadDashboard(
         currentURL: URL,
         newURL: URL,
@@ -1115,7 +1225,15 @@ extension DashboardWindowController {
                 decisionHandler: decisionHandler)
             return
         }
-        if Self.shouldAllowNavigation(to: url, dashboardURL: self.currentURL) {
+        if Self.shouldAllowNavigation(
+            to: url,
+            dashboardURL: self.currentURL,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
+                Self.isTrustedLinkSource(
+                    navigationAction.sourceFrame.request.url,
+                    dashboardURL: self.currentURL))
+        {
             decisionHandler(.allow)
             return
         }
@@ -1223,6 +1341,10 @@ extension DashboardWindowController {
 
     var _testUpdateBridgeAvailable: Bool {
         self.updateBridgeEnabled
+    }
+
+    var _testTLSParams: GatewayTLSParams? {
+        self.tlsParams
     }
 
     var _testLinkBrowserIsCollapsed: Bool {

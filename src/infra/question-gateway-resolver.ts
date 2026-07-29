@@ -15,11 +15,21 @@ export type ResolveQuestionOverGatewayResult =
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
   questionId: string;
-  optionIndex: number;
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
-};
+} & (
+  | {
+      /** Rendered option value carried by the pressed control (reactions). */
+      optionValue: string;
+      optionIndex?: never;
+    }
+  | {
+      /** Compact callback index; mapped to the canonical label via question.get. */
+      optionIndex: number;
+      optionValue?: never;
+    }
+);
 
 function readTerminalReason(error: unknown): "already-terminal" | "not-found" | undefined {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
@@ -36,15 +46,18 @@ function readTerminalReason(error: unknown): "already-terminal" | "not-found" | 
   return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
 }
 
-/** Maps a compact option index to the canonical label, then resolves the question atomically. */
+/** Resolves one rendered option value against the gateway-owned question. */
 export async function resolveQuestionOverGateway(
   params: ResolveQuestionOverGatewayParams,
 ): Promise<ResolveQuestionOverGatewayResult> {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
-  if (!Number.isInteger(params.optionIndex) || params.optionIndex < 0) {
-    throw new Error("question resolution requires a valid option index");
+  if (params.optionValue === undefined && !Number.isInteger(params.optionIndex)) {
+    throw new Error("question resolution requires an option value or index");
+  }
+  if (params.optionValue !== undefined && !params.optionValue) {
+    throw new Error("question resolution requires a non-empty option value");
   }
   const gatewayOptions = {
     config: params.cfg,
@@ -76,18 +89,17 @@ export async function resolveQuestionOverGateway(
   if (!question || question.multiSelect || question.isSecret) {
     throw new Error("question button resolution requires one tappable question");
   }
-  const optionValue = question.options[params.optionIndex]?.label;
+  const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
   if (!optionValue) {
-    throw new Error("question resolution option index is out of range");
+    throw new Error("question resolution index does not match a declared option");
   }
-
   try {
     await callGateway<QuestionResolveResult>({
       ...gatewayOptions,
       method: "question.resolve",
       params: {
         id: params.questionId,
-        answers: { answers: { [question.id]: { answers: [optionValue] } } },
+        answers: { answers: { [question.questionId]: [optionValue] } },
         resolvedBy: params.senderId?.trim() || undefined,
       },
     });
@@ -98,5 +110,5 @@ export async function resolveQuestionOverGateway(
     }
     throw error;
   }
-  return { status: "answered", questionId: question.id, optionValue };
+  return { status: "answered", questionId: question.questionId, optionValue };
 }

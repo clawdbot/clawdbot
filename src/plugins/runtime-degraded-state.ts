@@ -93,9 +93,11 @@ export function clearActiveDegradedPlugin(pluginId: string): void {
   activeDegradedPlugins = activeDegradedPlugins.filter((entry) => entry.pluginId !== pluginId);
 }
 
-/** Matches install-record and discovered roots across symlink/path aliases. */
-export function degradedPluginMatchesRoot(plugin: DegradedPlugin, rootDir: string): boolean {
-  const installPath = plugin.diagnostic.installPath;
+/** Matches an install-record path and discovered root across symlink/path aliases. */
+export function pluginInstallPathMatchesRoot(
+  installPath: string | undefined,
+  rootDir: string,
+): boolean {
   if (!installPath) {
     return false;
   }
@@ -107,6 +109,11 @@ export function degradedPluginMatchesRoot(plugin: DegradedPlugin, rootDir: strin
     }
   };
   return canonicalize(installPath) === canonicalize(rootDir);
+}
+
+/** Matches install-record and discovered roots across symlink/path aliases. */
+export function degradedPluginMatchesRoot(plugin: DegradedPlugin, rootDir: string): boolean {
+  return pluginInstallPathMatchesRoot(plugin.diagnostic.installPath, rootDir);
 }
 
 /** Removes the known private install root before diagnostics leave the Gateway process. */

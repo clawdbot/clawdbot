@@ -48,7 +48,11 @@ describe("detectGraphicalSession", () => {
 });
 
 describe("runBrowserHatchHandoff", () => {
-  it("opens once in a GUI session and returns after the Control UI connects", async () => {
+  it.each([
+    { platform: "darwin" as const, env: {} },
+    { platform: "linux" as const, env: { DISPLAY: ":0" } },
+    { platform: "win32" as const, env: {} },
+  ])("opens once in a $platform GUI session", async ({ platform, env }) => {
     const prompter = createWizardPrompter();
     const openBrowser = vi.fn(async () => true);
     const probePresence = vi
@@ -59,8 +63,8 @@ describe("runBrowserHatchHandoff", () => {
     const result = await runBrowserHatchHandoff(
       { config: {}, prompter },
       {
-        env: {},
-        platform: "darwin",
+        env,
+        platform,
         openBrowser,
         resolveTarget: async () => target,
         probePresence,
@@ -77,7 +81,10 @@ describe("runBrowserHatchHandoff", () => {
     );
   });
 
-  it("prints the authenticated URL and waits longer in a headless session", async () => {
+  it.each([
+    { name: "headless Linux", env: {} },
+    { name: "Linux SSH", env: { DISPLAY: ":0", SSH_CONNECTION: "client server" } },
+  ])("prints the authenticated URL and waits longer in $name", async ({ env }) => {
     const prompter = createWizardPrompter();
     const openBrowser = vi.fn(async () => true);
     const probePresence = vi.fn(async () => ({ reachable: true as const, clientKeys: [] }));
@@ -89,8 +96,8 @@ describe("runBrowserHatchHandoff", () => {
     const result = await runBrowserHatchHandoff(
       { config: {}, prompter },
       {
-        env: { SSH_CONNECTION: "client server" },
-        platform: "darwin",
+        env,
+        platform: "linux",
         openBrowser,
         resolveTarget: async () => target,
         probePresence,

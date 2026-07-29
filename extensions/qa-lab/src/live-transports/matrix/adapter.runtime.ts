@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
+import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import { createMatrixQaScenarioEnvironment } from "./scenarios/scenario-environment.js";

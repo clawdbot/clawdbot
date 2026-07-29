@@ -18,6 +18,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
@@ -53,6 +54,11 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         })
       : undefined;
   const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
+  prewarmCodexAttemptClient({
+    connection,
+    authProfileStore: attemptAuthProfileStore,
+    authBindingFingerprint: preparedAuthBinding?.fingerprint,
+  });
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -98,6 +104,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         modelId: effectiveRuntimeModelId,
         model: supervisedRuntimeModel,
         thinkLevel: _outerThinkLevel,
+        fastMode: _outerFastMode,
         sessionKey: contextSessionKey,
       }
     : {

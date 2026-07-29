@@ -14,42 +14,14 @@ type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonito
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 type SignalIngressDispatch = Parameters<typeof startSignalIngressMonitor>[0]["dispatch"];
 
-function createTrackedTaskRunner() {
-  const pending = new Set<Promise<void>>();
-  const failures: unknown[] = [];
-
-  const runTrackedTask = (task: () => Promise<void>) => {
-    const promise = task()
-      .catch((error: unknown) => {
-        failures.push(error);
-      })
-      .finally(() => {
-        pending.delete(promise);
-      });
-    pending.add(promise);
-  };
-  const waitForIdle = async () => {
-    while (pending.size > 0) {
-      await Promise.all(pending);
-    }
-    if (failures.length > 0) {
-      throw failures[0];
-    }
-  };
-
-  return { runTrackedTask, waitForIdle };
-}
-
 async function startMonitor(queue: SignalIngressQueue, dispatch: SignalIngressDispatch) {
-  const tasks = createTrackedTaskRunner();
   const monitor = await startSignalIngressMonitor({
     accountId: "default",
     queue,
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
-    runTrackedTask: tasks.runTrackedTask,
   });
-  return { monitor, waitForIdle: tasks.waitForIdle };
+  return { monitor, waitForIdle: monitor.waitForIdle };
 }
 
 function signalEvent(params?: {
@@ -114,7 +86,6 @@ describe("Signal durable ingress", () => {
         queue: failingQueue,
         dispatch,
         runtime: { error: vi.fn(), log: vi.fn() },
-        runTrackedTask: vi.fn(),
       });
       try {
         await expect(monitor.receive(signalEvent())).rejects.toBe(appendError);

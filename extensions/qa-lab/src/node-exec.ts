@@ -9,11 +9,18 @@ type ExecFileAsync = (
   options: {
     encoding: "utf8";
     env?: NodeJS.ProcessEnv;
+    timeoutMs: number;
   },
 ) => Promise<{ stdout: string; stderr: string }>;
 
+const NODE_BINARY_LOOKUP_TIMEOUT_MS = 5_000;
+
 const execFileAsync: ExecFileAsync = async (file, args, options) =>
-  await runExec(file, [...args], { baseEnv: options.env, logOutput: false });
+  await runExec(file, [...args], {
+    baseEnv: options.env,
+    logOutput: false,
+    timeoutMs: options.timeoutMs,
+  });
 
 function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
@@ -48,6 +55,7 @@ export async function resolveQaNodeExecPath(params?: {
     ({ stdout } = await execFileImpl(locator, ["node"], {
       encoding: "utf8",
       env: params?.env,
+      timeoutMs: NODE_BINARY_LOOKUP_TIMEOUT_MS,
     }));
   } catch {
     throw new Error(

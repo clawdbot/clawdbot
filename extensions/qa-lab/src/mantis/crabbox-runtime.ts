@@ -39,15 +39,15 @@ export async function defaultCommandRunner(
     });
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (text: string) => {
       stdout += text;
       if (options.stdio === "inherit") {
         process.stdout.write(text);
       }
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stderr?.on("data", (text: string) => {
       stderr += text;
       if (options.stdio === "inherit") {
         process.stderr.write(text);

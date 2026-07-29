@@ -187,10 +187,7 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
       "AGENTS.md",
       "SOUL.md",
-      "TOOLS.md",
       "IDENTITY.md",
-      "USER.md",
-      "HEARTBEAT.md",
       "BOOTSTRAP.md",
     ]);
     expect(warnings).toHaveLength(3);
@@ -226,6 +223,30 @@ describe("resolveBootstrapFilesForRun", () => {
 
     expect(files.map((file) => file.name)).toContain("AGENTS.md");
     expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+  });
+
+  it("treats USER.md as optional", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => file.name)).not.toContain("USER.md");
+  });
+
+  it("refreshes USER.md on every turn for long-lived sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const userPath = path.join(workspaceDir, "USER.md");
+    const sessionKey = `agent:main:webchat:direct:${randomUUID()}`;
+    await fs.writeFile(userPath, "Prefer concise answers.", "utf8");
+    const first = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    await fs.writeFile(userPath, "Prefer detailed answers.", "utf8");
+    const second = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    expect(first.find((file) => file.name === "USER.md")?.content).toBe("Prefer concise answers.");
+    expect(second.find((file) => file.name === "USER.md")?.content).toBe(
+      "Prefer detailed answers.",
+    );
   });
 
   it("keeps BOOTSTRAP.md until Doctor migrates legacy setup state", async () => {
@@ -303,12 +324,11 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
 
-  it("keeps subagent sessions to project and tool bootstrap files", async () => {
+  it("keeps subagent sessions to AGENTS.md", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-subagent-");
     await Promise.all(
       [
         ["AGENTS.md", "project rules"],
-        ["TOOLS.md", "tool rules"],
         ["SOUL.md", "persona"],
         ["IDENTITY.md", "identity"],
         ["USER.md", "user profile"],
@@ -329,7 +349,7 @@ describe("resolveBootstrapFilesForRun", () => {
       sessionKey: "agent:main:subagent:worker",
     });
 
-    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md"]);
   });
 
   it("keeps cron sessions on their existing minimal bootstrap files", async () => {
@@ -337,7 +357,6 @@ describe("resolveBootstrapFilesForRun", () => {
     await Promise.all(
       [
         ["AGENTS.md", "project rules"],
-        ["TOOLS.md", "tool rules"],
         ["SOUL.md", "persona"],
         ["IDENTITY.md", "identity"],
         ["USER.md", "user profile"],
@@ -361,7 +380,6 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.name)).toStrictEqual([
       "AGENTS.md",
       "SOUL.md",
-      "TOOLS.md",
       "IDENTITY.md",
       "USER.md",
     ]);
@@ -398,9 +416,8 @@ describe("resolveBootstrapContextForRun", () => {
     expect(contextFileNames.has("AGENTS.md")).toBe(true);
   });
 
-  it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
+  it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
@@ -409,8 +426,8 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "heartbeat",
     });
 
-    expect(files.map((file) => file.name)).toStrictEqual(["HEARTBEAT.md"]);
-    expect(files[0]?.content).toBe("check inbox");
+    // Heartbeat context comes from cron scratch via the heartbeat runner now.
+    expect(files).toStrictEqual([]);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -440,67 +457,21 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.map((file) => file.name)).toContain("SOUL.md");
   });
 
-  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
+  it("never re-imports a leftover workspace HEARTBEAT.md into bootstrap context", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            heartbeat: {
-              includeSystemPromptSection: false,
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expectHeartbeatExcludedAndAgentsKept(files);
-  });
-
-  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
-    const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            heartbeat: {
-              every: "0m",
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expectHeartbeatExcludedAndAgentsKept(files);
-  });
-
-  it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
       runKind: "heartbeat",
       config: {
         agents: {
-          defaults: {
-            heartbeat: {
-              includeSystemPromptSection: false,
-            },
-          },
+          defaults: { heartbeat: {} },
           list: [{ id: "main" }],
         },
       },
     });
 
-    const fileNames = files.map((file) => file.name);
-    expect(fileNames).toContain("HEARTBEAT.md");
+    expectHeartbeatExcludedAndAgentsKept(files);
   });
 });
 

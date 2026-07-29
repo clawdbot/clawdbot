@@ -127,6 +127,9 @@ describe("command-analysis risks", () => {
     expect(detectCommandCarrierArgv(["env", "-S", "sh -c id"])).toEqual([
       { command: "env", flag: "-S" },
     ]);
+    expect(
+      detectCommandCarrierArgv(["runuser", "-u", "root", "python3", "-c", "print(1)"]),
+    ).toEqual([{ command: "runuser" }]);
   });
 
   it.each([

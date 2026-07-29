@@ -75,6 +75,8 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   apiKeyInfo: ResolvedProviderAuth | null;
   attempt: EmbeddedRunAttemptResult;
   provider: string;
+  modelId: string;
+  modelApi: string;
   agentHarnessId: string;
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
@@ -141,6 +143,8 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   input.onSuccessfulAuthBinding?.({
     ...(input.profileId ? { authProfileId: input.profileId } : {}),
     agentHarnessId: input.agentHarnessId,
+    modelId: input.modelId,
+    modelApi: input.modelApi,
     ...(authFingerprint ? { authFingerprint } : {}),
     ...(runtimeOwnerFingerprint ? { runtimeOwnerFingerprint } : {}),
     ...(runtimeOwnerKind ? { runtimeOwnerKind } : {}),

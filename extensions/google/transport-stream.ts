@@ -29,6 +29,7 @@ import {
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
   type WritableTransportStream,
@@ -709,7 +710,7 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,

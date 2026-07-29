@@ -36,10 +36,34 @@ describe("wizard i18n", () => {
   });
 
   it("uses OPENCLAW_LOCALE before process locale variables", () => {
-    vi.stubEnv("OPENCLAW_LOCALE", "zh-TW");
+    vi.stubEnv("OPENCLAW_LOCALE", "en");
     vi.stubEnv("LC_ALL", "zh-CN");
+    vi.stubEnv("LANG", "zh-TW");
+    expect(t("wizard.gateway.port")).toBe("Gateway port");
+  });
+
+  it("ignores blank locale overrides when a process locale is available", () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "   ");
+    vi.stubEnv("LC_ALL", "");
+    vi.stubEnv("LC_MESSAGES", "zh-CN");
     vi.stubEnv("LANG", "en-US");
+    expect(t("wizard.gateway.port")).toBe("Gateway 端口");
+  });
+
+  it("continues through a blank LC_MESSAGES value to LANG", () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "");
+    vi.stubEnv("LC_ALL", " ");
+    vi.stubEnv("LC_MESSAGES", "\t");
+    vi.stubEnv("LANG", "zh-TW");
     expect(t("wizard.gateway.port")).toBe("Gateway 連接埠");
+  });
+
+  it("uses English when every locale variable is blank", () => {
+    vi.stubEnv("OPENCLAW_LOCALE", " ");
+    vi.stubEnv("LC_ALL", "");
+    vi.stubEnv("LC_MESSAGES", "\t");
+    vi.stubEnv("LANG", "  ");
+    expect(t("wizard.gateway.port")).toBe("Gateway port");
   });
 
   it("falls back to English and interpolates params", () => {

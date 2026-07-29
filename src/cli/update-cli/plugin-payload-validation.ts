@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
@@ -105,6 +106,24 @@ export async function runPluginPayloadSmokeCheck(params: {
   }
 
   return { checked, failures };
+}
+
+/** Verifies the exact manifest records selected for this process. */
+export async function runPluginPayloadSmokeCheckForManifestRecords(params: {
+  plugins: readonly Pick<PluginManifestRecord, "id" | "rootDir" | "format">[];
+  env: NodeJS.ProcessEnv;
+}): Promise<PluginPayloadSmokeResult> {
+  const records = Object.fromEntries(
+    params.plugins.map((plugin) => [
+      plugin.id,
+      {
+        source: plugin.format === "bundle" ? "marketplace" : "npm",
+        installPath: plugin.rootDir,
+        ...(plugin.format === "bundle" ? { clawhubFamily: "bundle-plugin" as const } : {}),
+      } satisfies PluginInstallRecord,
+    ]),
+  );
+  return await runPluginPayloadSmokeCheck({ records, env: params.env });
 }
 
 type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };
@@ -227,12 +246,14 @@ async function validatePackagePayload(params: {
         detail: `Plugin extension entry validation failed: ${extensionValidation.error}`,
       });
     }
+
+    // Native plugin loading follows the declared extensions, not npm's main.
+    // Checking both would quarantine a loadable plugin or duplicate its real entry failure.
+    return failures;
   }
 
-  // Only fail on `missing-main-entry` when `main` is *explicitly declared*
-  // and absent on disk. Fully resolving `exports` conditional sub-keys is
-  // out of scope for a static smoke check, so packages with only `exports`
-  // remain intentionally permissive.
+  // Without native extension metadata, only check an explicitly declared npm
+  // main. Conditional exports remain outside this static smoke-check contract.
   if (typeof params.manifest.main !== "string" || !params.manifest.main.trim()) {
     return failures;
   }

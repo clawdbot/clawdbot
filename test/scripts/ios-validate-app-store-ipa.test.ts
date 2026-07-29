@@ -128,6 +128,10 @@ function writeFakePlutil(filePath: string): void {
     filePath,
     `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
+if (process.argv[2] === "-convert" && process.argv[3] === "xml1") {
+  process.stdout.write(readFileSync(process.argv[process.argv.length - 1], "utf8"));
+  process.exit(0);
+}
 const extractIndex = process.argv.indexOf("-extract");
 const expectIndex = process.argv.indexOf("-expect");
 if (extractIndex < 0 || expectIndex < 0 || process.argv[expectIndex + 1] !== "string") process.exit(2);
@@ -209,6 +213,8 @@ async function writeValidFixture(
     buildCommit?: string;
     buildTimestamp?: string;
     healthUpdateUsage?: boolean | string | null;
+    displayName?: string;
+    localizedDisplayName?: string;
     pushMode?: string;
     legacyKey?: boolean;
   } = {},
@@ -230,6 +236,7 @@ async function writeValidFixture(
 
   const infoBody = [
     plistString("CFBundleIdentifier", "ai.openclawfoundation.app"),
+    plistString("CFBundleDisplayName", options.displayName ?? "OpenClaw"),
     plistString("OpenClawGitCommit", options.buildCommit ?? BUILD_COMMIT),
     plistString("OpenClawBuildTimestamp", options.buildTimestamp ?? BUILD_TIMESTAMP),
     plistString("OpenClawPushMode", options.pushMode ?? "appStore"),
@@ -249,6 +256,17 @@ async function writeValidFixture(
     options.legacyKey ? plistString("OpenClawPushRelayProfile", "production") : "",
   ].join("");
   writeFileSync(path.join(appDir, "Info.plist"), plist(infoBody), "utf8");
+  const localizedDir = path.join(appDir, "de.lproj");
+  mkdirSync(localizedDir, { recursive: true });
+  writeFileSync(
+    path.join(localizedDir, "InfoPlist.strings"),
+    plist(
+      options.localizedDisplayName === undefined
+        ? plistString("NSCameraUsageDescription", "OpenClaw verwendet die Kamera.")
+        : plistString("CFBundleDisplayName", options.localizedDisplayName),
+    ),
+    "utf8",
+  );
   writeFileSync(path.join(appDir, "embedded.mobileprovision"), "fixture profile", "utf8");
 
   const entitlementsPath = path.join(fixturesDir, "entitlements.plist");
@@ -404,6 +422,30 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Health update usage description must be a non-empty string");
+  });
+
+  it("rejects an IPA with the wrong canonical display name", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const fixture = await writeValidFixture(root, { displayName: "OpenClaw Debug" });
+
+    const result = runValidator(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("display name mismatch");
+  });
+
+  it("rejects unresolved build settings in localized plist resources", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const fixture = await writeValidFixture(root, {
+      localizedDisplayName: "$(OPENCLAW_APP_DISPLAY_NAME)",
+    });
+
+    const result = runValidator(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("unresolved build setting in localized plist");
   });
 
   it("rejects a non-string Health update purpose value", async () => {

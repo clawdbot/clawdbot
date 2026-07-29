@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"thread-declined"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"command-declined","type":"command_execution","command":"rm protected.txt","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"command-declined","type":"command_execution","command":"rm protected.txt","aggregated_output":"","status":"declined"}}
+{"type":"item.completed","item":{"id":"message-declined","type":"agent_message","text":"command declined"}}
+{"type":"turn.completed","usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0}}

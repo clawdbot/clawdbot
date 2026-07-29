@@ -1,4 +1,5 @@
 // Control UI view renders dreaming screen content.
+import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -471,21 +472,53 @@ function basename(value: string): string {
 function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "report"): string {
   switch (kind) {
     case "entity":
-      return "entity";
+      return t("dreaming.wiki.pageTypes.entity");
     case "concept":
-      return "concept";
+      return t("dreaming.wiki.pageTypes.concept");
     case "source":
-      return "source";
+      return t("dreaming.wiki.pageTypes.source");
     case "synthesis":
-      return "synthesis";
+      return t("dreaming.wiki.pageTypes.synthesis");
     case "report":
-      return "report";
+      return t("dreaming.wiki.pageTypes.report");
   }
   return kind;
 }
 
-function formatCount(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
+function formatPageCount(count: number): string {
+  return count === 1
+    ? t("dreaming.wiki.counts.pageOne", { count: String(count) })
+    : t("dreaming.wiki.counts.pages", { count: String(count) });
+}
+
+function formatClaimRowCount(count: number): string {
+  return count === 1
+    ? t("dreaming.wiki.counts.claimRowOne", { count: String(count) })
+    : t("dreaming.wiki.counts.claimRows", { count: String(count) });
+}
+
+function formatOpenQuestionCount(count: number): string {
+  return count === 1
+    ? t("dreaming.wiki.counts.openQuestionOne", { count: String(count) })
+    : t("dreaming.wiki.counts.openQuestions", { count: String(count) });
+}
+
+function formatContradictionCount(count: number): string {
+  return count === 1
+    ? t("dreaming.wiki.counts.contradictionOne", { count: String(count) })
+    : t("dreaming.wiki.counts.contradictions", { count: String(count) });
+}
+
+function formatChatCount(count: number): string {
+  return t("dreaming.wiki.counts.chats", { count: String(count) });
+}
+
+function formatSignalCount(count: number): string {
+  return t("dreaming.wiki.counts.signals", { count: String(count) });
+}
+
+function formatMessageCount(count: number): string {
+  return t("dreaming.wiki.counts.messages", { count: String(count) });
 }
 
 const MEMORY_PALACE_PAGE_COUNT_ORDER: Array<keyof WikiMemoryPalace["pageCounts"]> = [
@@ -499,15 +532,15 @@ const MEMORY_PALACE_PAGE_COUNT_ORDER: Array<keyof WikiMemoryPalace["pageCounts"]
 function formatMemoryPalacePageCountLabel(kind: keyof WikiMemoryPalace["pageCounts"]): string {
   switch (kind) {
     case "source":
-      return "Sources";
+      return t("dreaming.wiki.pageGroups.sources");
     case "synthesis":
-      return "Syntheses";
+      return t("dreaming.wiki.pageGroups.syntheses");
     case "report":
-      return "Reports";
+      return t("dreaming.wiki.pageGroups.reports");
     case "entity":
-      return "Entities";
+      return t("dreaming.wiki.pageGroups.entities");
     case "concept":
-      return "Concepts";
+      return t("dreaming.wiki.pageGroups.concepts");
   }
   return kind;
 }
@@ -516,25 +549,39 @@ function formatMemoryPalacePageBreakdown(pageCounts: WikiMemoryPalace["pageCount
   const parts = MEMORY_PALACE_PAGE_COUNT_ORDER.map((kind) => {
     const count = pageCounts[kind];
     return count > 0
-      ? `${formatMemoryPalacePageCountLabel(kind)} · ${formatCount(count, "page")}`
+      ? t("dreaming.wiki.pageGroupSummary", {
+          label: formatMemoryPalacePageCountLabel(kind),
+          count: formatPageCount(count),
+        })
       : null;
   }).filter((entry): entry is string => entry !== null);
-  return parts.length > 0 ? parts.join("; ") : "No pages yet";
+  return parts.length > 0 ? parts.join("; ") : t("dreaming.wiki.noPagesYet");
 }
 
 function formatMemoryPalaceClusterSummary(cluster: WikiMemoryPalace["clusters"][number]): string {
-  const parts = [`${cluster.label}: ${formatCount(cluster.itemCount, "page")}`];
+  const parts = [
+    t("dreaming.wiki.sectionPageSummary", {
+      label: cluster.label,
+      count: formatPageCount(cluster.itemCount),
+    }),
+  ];
   if (cluster.claimCount > 0) {
-    parts.push(formatCount(cluster.claimCount, "claim row"));
+    parts.push(formatClaimRowCount(cluster.claimCount));
   }
   if (cluster.questionCount > 0) {
     const questionPageCount = cluster.items.filter((item) => item.questionCount > 0).length;
-    const questionPageSuffix =
-      questionPageCount > 0 ? ` on ${formatCount(questionPageCount, "page")}` : "";
-    parts.push(`${formatCount(cluster.questionCount, "open question")}${questionPageSuffix}`);
+    const questionCount = formatOpenQuestionCount(cluster.questionCount);
+    parts.push(
+      questionPageCount > 0
+        ? t("dreaming.wiki.questionCountOnPages", {
+            questionCount,
+            pageCount: formatPageCount(questionPageCount),
+          })
+        : questionCount,
+    );
   }
   if (cluster.contradictionCount > 0) {
-    parts.push(formatCount(cluster.contradictionCount, "contradiction"));
+    parts.push(formatContradictionCount(cluster.contradictionCount));
   }
   return parts.join(" · ");
 }
@@ -544,19 +591,19 @@ function formatImportBadge(item: {
   riskLevel: "low" | "medium" | "high" | "unknown";
 }): string {
   if (item.digestStatus === "withheld") {
-    return "needs review";
+    return t("dreaming.wiki.risk.needsReview");
   }
   switch (item.riskLevel) {
     case "low":
-      return "low risk";
+      return t("dreaming.wiki.risk.low");
     case "medium":
-      return "medium risk";
+      return t("dreaming.wiki.risk.medium");
     case "high":
-      return "high risk";
+      return t("dreaming.wiki.risk.high");
     case "unknown":
-      return "unknown risk";
+      return t("dreaming.wiki.risk.unknown");
   }
-  return "unknown risk";
+  return t("dreaming.wiki.risk.unknown");
 }
 
 function toggleExpandedCard(bucket: Set<string>, key: string, onChange: () => void): void {
@@ -587,7 +634,7 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
       return;
     }
     if (!preview) {
-      state.wikiPreviewError = `No wiki page found for ${lookup}.`;
+      state.wikiPreviewError = t("dreaming.wiki.pageNotFound", { lookup });
       return;
     }
     state.wikiPreviewTitle = preview.title;
@@ -666,10 +713,11 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
                   ${state.wikiPreviewTruncated
                     ? html`
                         <div class="dreams-diary__preview-hint">
-                          Showing the first chunk of this
-                          page${state.wikiPreviewTotalLines !== null
-                            ? ` (${state.wikiPreviewTotalLines} total lines)`
-                            : ""}.
+                          ${state.wikiPreviewTotalLines !== null
+                            ? t("dreaming.wiki.previewTruncatedWithTotal", {
+                                count: String(state.wikiPreviewTotalLines),
+                              })
+                            : t("dreaming.wiki.previewTruncated")}
                         </div>
                       `
                     : nothing}
@@ -1004,6 +1052,35 @@ function renderDiaryImportsSection(props: DreamingProps) {
 
   const clusterIndex = Math.max(0, Math.min(state.diaryPage, clusters.length - 1));
   const cluster = expectDefined(clusters[clusterIndex], "selected imported insight cluster");
+  const clusterMeta = [
+    formatChatCount(cluster.itemCount),
+    ...(cluster.highRiskCount > 0
+      ? [
+          t("dreaming.wiki.counts.sensitive", {
+            count: String(cluster.highRiskCount),
+          }),
+        ]
+      : []),
+    ...(cluster.preferenceSignalCount > 0
+      ? [formatSignalCount(cluster.preferenceSignalCount)]
+      : []),
+  ];
+  const importSummary = [
+    t("dreaming.wiki.importedClusterSummary", {
+      label: cluster.label.toLowerCase(),
+    }),
+    ...(cluster.withheldCount > 0
+      ? [
+          cluster.withheldCount === 1
+            ? t("dreaming.wiki.withheldDigestOne", {
+                count: String(cluster.withheldCount),
+              })
+            : t("dreaming.wiki.withheldDigests", {
+                count: String(cluster.withheldCount),
+              }),
+        ]
+      : []),
+  ];
 
   return html`
     <div class="dreams-diary__daychips">
@@ -1026,20 +1103,9 @@ function renderDiaryImportsSection(props: DreamingProps) {
 
     <article class="dreams-diary__entry" key="imports-${cluster.key}">
       <div class="dreams-diary__accent"></div>
-      <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} chats
-        ${cluster.highRiskCount > 0 ? html`· ${cluster.highRiskCount} sensitive` : nothing}
-        ${cluster.preferenceSignalCount > 0
-          ? html`· ${cluster.preferenceSignalCount} signals`
-          : nothing}
-      </div>
+      <div class="dreams-diary__date">${cluster.label} · ${clusterMeta.join(" · ")}</div>
       <div class="dreams-diary__prose">
-        <p class="dreams-diary__para">
-          Imported chats clustered around ${cluster.label.toLowerCase()}.
-          ${cluster.withheldCount > 0
-            ? ` ${cluster.withheldCount} digest${cluster.withheldCount === 1 ? " was" : "s were"} withheld pending review.`
-            : ""}
-        </p>
+        <p class="dreams-diary__para">${importSummary.join(" ")}</p>
       </div>
       <div class="dreams-diary__insights">
         ${cluster.items.map((item) => {
@@ -1065,7 +1131,9 @@ function renderDiaryImportsSection(props: DreamingProps) {
               </div>
               <div class="dreams-diary__insight-meta">
                 ${item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)}
-                ${item.activeBranchMessages > 0 ? ` · ${item.activeBranchMessages} messages` : ""}
+                ${item.activeBranchMessages > 0
+                  ? ` · ${formatMessageCount(item.activeBranchMessages)}`
+                  : ""}
               </div>
               <p class="dreams-diary__insight-line">${item.summary}</p>
               ${item.candidateSignals.length > 0
@@ -1110,7 +1178,13 @@ function renderDiaryImportsSection(props: DreamingProps) {
                         : nothing}
                       <p class="dreams-diary__insight-line">
                         <strong>${t("dreaming.wiki.messages")}</strong>
-                        ${item.userMessageCount} user · ${item.assistantMessageCount} assistant
+                        ${t("dreaming.wiki.counts.userMessages", {
+                          count: String(item.userMessageCount),
+                        })}
+                        ·
+                        ${t("dreaming.wiki.counts.assistantMessages", {
+                          count: String(item.assistantMessageCount),
+                        })}
                       </p>
                       ${item.riskReasons.length > 0
                         ? html`
@@ -1153,7 +1227,7 @@ function renderDiaryImportsSection(props: DreamingProps) {
                     );
                   }}
                 >
-                  ${expanded ? "Hide details" : "Details"}
+                  ${expanded ? t("dreaming.wiki.hideDetails") : t("dreaming.wiki.details")}
                 </button>
                 <button
                   class="btn btn--subtle btn--sm"
@@ -1203,8 +1277,14 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   const totalContradictions = palace?.totalContradictions ?? 0;
   const pageBreakdown = palace
     ? formatMemoryPalacePageBreakdown(palace.pageCounts)
-    : "No pages yet";
+    : t("dreaming.wiki.noPagesYet");
   const clusterSummary = formatMemoryPalaceClusterSummary(cluster);
+  const vaultMeta = [
+    formatPageCount(totalPages),
+    ...(totalClaims > 0 ? [formatClaimRowCount(totalClaims)] : []),
+    ...(totalQuestions > 0 ? [formatOpenQuestionCount(totalQuestions)] : []),
+    ...(totalContradictions > 0 ? [formatContradictionCount(totalContradictions)] : []),
+  ];
 
   return html`
     <div class="dreams-diary__daychips">
@@ -1227,19 +1307,18 @@ function renderMemoryPalaceSection(props: DreamingProps) {
 
     <article class="dreams-diary__entry" key="palace-${cluster.key}">
       <div class="dreams-diary__accent"></div>
-      <div class="dreams-diary__date">
-        Vault · ${formatCount(totalPages, "page")}
-        ${totalClaims > 0 ? html`· ${formatCount(totalClaims, "claim row")}` : nothing}
-        ${totalQuestions > 0 ? html`· ${formatCount(totalQuestions, "open question")}` : nothing}
-        ${totalContradictions > 0
-          ? html`· ${formatCount(totalContradictions, "contradiction")}`
-          : nothing}
-      </div>
+      <div class="dreams-diary__date">${t("dreaming.wiki.vault")} · ${vaultMeta.join(" · ")}</div>
       <div class="dreams-diary__prose">
-        <p class="dreams-diary__para">Full vault breakdown: ${pageBreakdown}.</p>
         <p class="dreams-diary__para">
-          Selected section: ${clusterSummary}.
-          ${cluster.updatedAt ? ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.` : ""}
+          ${t("dreaming.wiki.fullVaultBreakdown", { breakdown: pageBreakdown })}
+        </p>
+        <p class="dreams-diary__para">
+          ${t("dreaming.wiki.selectedSection", { summary: clusterSummary })}
+          ${cluster.updatedAt
+            ? ` ${t("dreaming.wiki.latestUpdate", {
+                date: formatCompactDateTime(cluster.updatedAt),
+              })}`
+            : ""}
         </p>
       </div>
       <div class="dreams-diary__insights">
@@ -1335,7 +1414,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
                     );
                   }}
                 >
-                  ${expanded ? "Hide details" : "Details"}
+                  ${expanded ? t("dreaming.wiki.hideDetails") : t("dreaming.wiki.details")}
                 </button>
                 <button
                   class="btn btn--subtle btn--sm"

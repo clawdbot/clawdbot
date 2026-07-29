@@ -1,10 +1,9 @@
-/** Tests heartbeat prompt, token, task parsing, and due-time helpers. */
+/** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
-  parseHeartbeatTasks,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -318,34 +317,5 @@ describe("resolveHeartbeatPromptForResponseTool", () => {
     expect(prompt).toContain("Check the deployment queue");
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
-  });
-});
-
-describe("parseHeartbeatTasks", () => {
-  it("does not bleed top-level interval/prompt fields into task parsing", () => {
-    const content = `tasks:
-  - name: email-check
-    interval: 30m
-    prompt: Check for urgent emails
-interval: should-not-bleed
-`;
-    expect(parseHeartbeatTasks(content)).toEqual([
-      {
-        name: "email-check",
-        interval: "30m",
-        prompt: "Check for urgent emails",
-      },
-    ]);
-  });
-
-  it("ignores task blocks inside HTML comments", () => {
-    const content = `<!--
-tasks:
-  - name: inbox
-    interval: 30m
-    prompt: Check inbox
--->
-`;
-    expect(parseHeartbeatTasks(content)).toEqual([]);
   });
 });

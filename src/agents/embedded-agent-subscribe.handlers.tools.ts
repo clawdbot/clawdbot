@@ -12,7 +12,6 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { QuestionRequestQuestion } from "../../packages/gateway-protocol/src/schema/questions.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -20,25 +19,24 @@ import {
 import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
-  AgentApprovalEventData,
   AgentCommandOutputEventData,
   AgentItemEventData,
   AgentPatchSummaryEventData,
-} from "../infra/agent-events.js";
+} from "../infra/agent-activity-events.js";
 import {
   emitAgentApprovalEvent,
   emitAgentCommandOutputEvent,
-  emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
-} from "../infra/agent-events.js";
+} from "../infra/agent-activity-events.js";
+import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
-import { hasReplyPayloadContent, type MessagePresentation } from "../interactive/payload.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
@@ -90,7 +88,8 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
-import { formatAgentHarnessUserInputPrompt } from "./harness/user-input-bridge.js";
+import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
+import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
@@ -121,44 +120,6 @@ const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModu
   () => import("../plugins/hook-runner-global.js"),
 );
 
-function buildAskUserQuestionPresentation(params: {
-  questionId: string;
-  questions: QuestionRequestQuestion[];
-}): MessagePresentation | undefined {
-  // Button taps resolve atomically, so v1 keeps multi-question records text-only.
-  if (params.questions.length !== 1) {
-    return undefined;
-  }
-  const [question] = params.questions;
-  if (!question || question.multiSelect || question.isSecret || question.options.length === 0) {
-    return undefined;
-  }
-  const presentationText = [
-    question.question,
-    "",
-    ...question.options.map(
-      (option) => `- ${option.label}${option.description ? `: ${option.description}` : ""}`,
-    ),
-    "",
-    "Tap an option, or reply with the option text or your own answer.",
-  ].join("\n");
-  return {
-    blocks: [
-      { type: "text", text: presentationText },
-      {
-        type: "buttons",
-        buttons: question.options.map((option) => ({
-          label: option.label,
-          action: {
-            type: "question",
-            questionId: params.questionId,
-            optionValue: option.label,
-          },
-        })),
-      },
-    ],
-  };
-}
 const fallbackToolTerminalObservers = new WeakMap<
   ToolHandlerContext["state"],
   ReturnType<typeof createToolTerminalObserver>
@@ -195,11 +156,18 @@ function readUpdatePlanResult(
 function buildAskUserPromptPayload(
   toolCallId: string,
   sessionKey: string | undefined,
+  runId: string,
   args: unknown,
 ) {
   try {
-    const { questions } = normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions });
+    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId,
+      sessionKey,
+      runId,
+      questions,
+      timeoutSeconds,
+    });
     if (!reservation) {
       return undefined;
     }
@@ -1012,11 +980,11 @@ export function handleToolExecutionStart(
   const startToolName = normalizeToolName(evt.toolName);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, evt.args)
+      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
       : undefined;
   const cancelAskUserPromptReservation = () => {
     if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey);
+      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
@@ -1260,15 +1228,16 @@ export function handleToolExecutionStart(
             if (!questions) {
               return;
             }
-            const prompt = formatAgentHarnessUserInputPrompt(questions, {
-              intro: "Question for you:",
-            });
-            const presentation = buildAskUserQuestionPresentation({ questionId, questions });
-            return ctx.params.onToolResult?.({
-              text: `${prompt}\n\nReply with the number, the option text, or your own answer.`,
-              ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
-              channelData: { askUser: { questionId } },
-            });
+            return ctx.params.onToolResult?.(
+              buildAgentHarnessQuestionPromptPayload({
+                questionId,
+                questions: questions.map(({ questionId: id, ...question }) => ({
+                  ...question,
+                  id,
+                })),
+                options: { intro: "Question for you:" },
+              }),
+            );
           })
           .then(
             () => settleAskUserPromptDelivery(questionId),
@@ -1407,7 +1376,7 @@ export async function handleToolExecutionEnd(
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   if (toolName === "ask_user") {
-    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey);
+    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1419,6 +1388,13 @@ export async function handleToolExecutionEnd(
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
   const isToolError = observerIsError && !approvalUnavailable;
+  if (!isToolError) {
+    const channelView = readMcpAppChannelView(result);
+    if (channelView) {
+      // A later successful app result supersedes the earlier launch target.
+      ctx.state.latestMcpAppChannelView = channelView;
+    }
+  }
   try {
     ctx.params.onAgentToolResult?.({
       toolName,

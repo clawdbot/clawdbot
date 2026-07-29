@@ -53,6 +53,50 @@ function insertKeywordFixture(
   );
 }
 
+describe("memory search provenance", () => {
+  it("returns SQLite-owned provenance with keyword hits", async () => {
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      insertKeywordFixture(db, {
+        id: "provenance-hit",
+        path: "memory/2026-07-01.md",
+        source: "memory",
+        model: "fts-only",
+        text: "green tea preference",
+        startLine: 1,
+        endLine: 1,
+      });
+      db.prepare(
+        `UPDATE memory_index_chunk_provenance
+         SET origin_class = ?, session_kind = ?, observed_at = ?, supersedes_key = ?
+         WHERE chunk_id = ?`,
+      ).run("owner", "interactive", 1234, "tea-preference", "provenance-hit");
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "memory_index_chunks_fts",
+        query: "green tea",
+        limit: 3,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results[0]?.provenance).toEqual({
+        originClass: "owner",
+        sessionKind: "interactive",
+        observedAt: 1234,
+        supersedesKey: "tea-preference",
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("searchKeyword trigram fallback", () => {
   const { DatabaseSync } = requireNodeSqlite();
 
@@ -1286,7 +1330,19 @@ describe("searchVector sqlite-vec KNN", () => {
       };
     });
     const batchSizes: number[] = [];
+    let provenanceReads = 0;
     const prepare = vi.fn((sql: string) => {
+      // Provenance is enriched only for the retained top-N after streaming, so a
+      // handful of per-result provenance reads is expected; the batch scan itself
+      // must still stream one query per batch.
+      if (sql.includes("memory_index_chunk_provenance")) {
+        return {
+          get: () => {
+            provenanceReads += 1;
+            return undefined;
+          },
+        };
+      }
       expect(sql).toContain("SELECT rowid, id, path");
       expect(sql).toContain("ORDER BY rowid ASC");
       expect(sql).toContain("LIMIT ?");
@@ -1313,6 +1369,8 @@ describe("searchVector sqlite-vec KNN", () => {
 
     expect(results.map((row) => row.id)).toEqual(["target-511", "target-512"]);
     expect(batchSizes).toEqual([256, 256, 1]);
+    // Provenance reads must scale with the returned limit (2), not the 513 scanned candidates.
+    expect(provenanceReads).toBe(2);
   });
 
   it("yields to the event loop during large fallback scans (issue #81172)", async () => {

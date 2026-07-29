@@ -50,6 +50,9 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
   onAgentEvent: vi.fn((handler: typeof lifecycleHandler) => {
     lifecycleHandler = handler;
     return noop;

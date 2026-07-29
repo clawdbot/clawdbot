@@ -202,14 +202,14 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout dispatch ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -456,6 +456,14 @@ jobs:
           const path = require("node:path");
           const [manifestPath, packageDir] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const dependencyTarballs = Array.isArray(manifest.corePackageTarballs)
+            ? manifest.corePackageTarballs
+            : manifest.corePackageTarballs === undefined && Array.isArray(manifest.dependencyTarballs)
+              ? manifest.dependencyTarballs
+              : null;
+          if (!dependencyTarballs) {
+            throw new Error("package artifact manifest is missing dependency tarball metadata");
+          }
           const entries = [
             {
               packageName: "openclaw",
@@ -463,7 +471,7 @@ jobs:
               tarballName: manifest.tarballName,
               tarballSha256: manifest.tarballSha256,
             },
-            ...(Array.isArray(manifest.dependencyTarballs) ? manifest.dependencyTarballs : []),
+            ...dependencyTarballs,
           ];
           const packageNames = new Set();
           const tarballNames = new Set();

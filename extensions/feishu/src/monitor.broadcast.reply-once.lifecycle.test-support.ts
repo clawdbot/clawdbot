@@ -229,13 +229,16 @@ describe("Feishu broadcast reply-once lifecycle", () => {
       text: "hello broadcast",
     });
 
-    dispatchReplyFromConfigMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
-      if (typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:susan:")) {
-        return { queuedFinal: false, counts: { final: 0 } };
-      }
-      await dispatcher.sendFinalReply({ text: "broadcast reply once" });
-      throw new Error("post-send failure");
-    });
+    dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ ctx, dispatcher, replyOptions }) => {
+        await replyOptions?.turnAdoptionLifecycle?.onAdopted();
+        if (typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:susan:")) {
+          return { queuedFinal: false, counts: { final: 0 } };
+        }
+        await dispatcher.sendFinalReply({ text: "broadcast reply once" });
+        throw new Error("post-send failure");
+      },
+    );
 
     await runFeishuLifecycleSequence(
       [() => onMessageA(event), () => onMessageB(event)],

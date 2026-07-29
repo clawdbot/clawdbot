@@ -35,6 +35,7 @@ export function createGatewayChatUserTurnController(params: {
   provenance?: InputProvenance;
   rawMessage: string;
   restartAdmission?: RestartSafeChatAdmission;
+  sender?: UserTurnInput["sender"];
   senderIsOwner: boolean;
   sessionKey: string;
   sessionLoadOptions?: { agentId?: string; clone?: boolean };
@@ -46,6 +47,7 @@ export function createGatewayChatUserTurnController(params: {
     text: params.rawMessage,
     timestamp: params.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(params.clientRunId),
+    ...(params.sender ? { sender: params.sender } : {}),
     ...(params.senderIsOwner ? { senderIsOwner: true } : {}),
     ...(params.provenance ? { provenance: params.provenance } : {}),
   };

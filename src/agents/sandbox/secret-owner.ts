@@ -8,7 +8,7 @@ import {
   assertRuntimeSandboxSecretOwnerAvailable,
   runtimeSandboxSecretOwnerId,
 } from "../../secrets/runtime-sandbox-secret-owner.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import { listAgentEntriesWithSource, resolveAgentConfig } from "../agent-scope-config.js";
 import type { SandboxScope } from "./types.js";
 
 const SSH_SECRET_KEYS = ["identityData", "certificateData", "knownHostsData"] as const;
@@ -32,10 +32,10 @@ export function assertSshSandboxSecretOwnerAvailable(params: {
       ? resolveAgentConfig(params.config, params.agentId)?.sandbox?.ssh
       : undefined;
   const normalizedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  const agentIndex = normalizedAgentId
-    ? params.config.agents?.list?.findIndex(
-        (entry) => normalizeAgentId(entry?.id) === normalizedAgentId,
-      )
+  const agentSource = normalizedAgentId
+    ? listAgentEntriesWithSource(params.config).find(
+        ({ entry }) => normalizeAgentId(entry.id) === normalizedAgentId,
+      )?.source
     : undefined;
   const unresolved: Array<{ path: string; refKey: string }> = [];
   for (const key of SSH_SECRET_KEYS) {
@@ -47,8 +47,10 @@ export function assertSshSandboxSecretOwnerAvailable(params: {
     }
     unresolved.push({
       path:
-        usesAgentValue && agentIndex !== undefined && agentIndex >= 0
-          ? `agents.list.${agentIndex}.sandbox.ssh.${key}`
+        usesAgentValue && agentSource
+          ? agentSource.kind === "entries"
+            ? `agents.entries.${agentSource.key}.sandbox.ssh.${key}`
+            : `agents.list.${agentSource.index}.sandbox.ssh.${key}`
           : `agents.defaults.sandbox.ssh.${key}`,
       refKey: secretRefKey(ref),
     });

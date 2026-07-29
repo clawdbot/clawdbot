@@ -5,22 +5,29 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.pairing-gate
+      - whatsapp.dm-pairing-challenge
   objective: Verify an unpaired WhatsApp DM receives the pairing gate instead of reaching the agent.
+  gatewayConfigPatch:
+    channels:
+      whatsapp:
+        accounts:
+          $selectedAccount:
+            dmPolicy: pairing
+            allowFrom:
+              - "+15550000000"
   successCriteria:
     - The inbound DM receives access-not-configured or pairing-code guidance.
     - The agent marker is not emitted.
   docsRefs:
     - docs/channels/whatsapp.md
   codeRefs:
-    - extensions/whatsapp/src/monitor.ts
+    - extensions/whatsapp/src/inbound/access-control.ts
   execution:
     kind: flow
     channel: whatsapp
     suiteIsolation: isolated
     summary: Verify pairing gate output through the canonical WhatsApp adapter.
     config:
-      accountId: sut
       conversationId: 15550000001@s.whatsapp.net
       senderId: 15550000002@s.whatsapp.net
 
@@ -32,14 +39,6 @@ flow:
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady
           args: [{ ref: env }, 60000]
-        - call: patchConfig
-          args:
-            - env: { ref: env }
-              patch:
-                expr: "({ channels: { whatsapp: { dmPolicy: 'pairing', allowFrom: ['+15550000000'], ...(env.transport.accountId === 'default' ? {} : { accounts: { [env.transport.accountId]: { dmPolicy: 'pairing', allowFrom: ['+15550000000'] } } }) } } })"
-              replacePaths:
-                - channels.whatsapp.allowFrom
-                - channels.whatsapp.accounts.sut.allowFrom
         - resetTransport: true
         - set: marker
           value:

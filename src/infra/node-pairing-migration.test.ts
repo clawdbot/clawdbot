@@ -7,8 +7,8 @@ import { approveDevicePairing, getPairedDevice, requestDevicePairing } from "./d
 import { migrateLegacyNodePairingStore } from "./node-pairing-migration.js";
 import {
   approveNodePairing,
-  claimPairedNodeConnection,
   listNodePairing,
+  recordPairedNodeConnection,
   requestNodePairing,
 } from "./node-pairing.js";
 import { resolvePairingPaths } from "./pairing-files.js";
@@ -136,10 +136,9 @@ describe("migrateLegacyNodePairingStore", () => {
       orphaned: 1,
     });
     await expect(
-      claimPairedNodeConnection("legacy-client-instance-id", 4_000, baseDir),
+      recordPairedNodeConnection("legacy-client-instance-id", 4_000, baseDir),
     ).resolves.toEqual({
       recorded: false,
-      firstConnection: false,
     });
 
     const pending = await requestNodePairing(
@@ -153,17 +152,17 @@ describe("migrateLegacyNodePairingStore", () => {
         baseDir,
       ),
     ).resolves.toMatchObject({ node: { nodeId: "canonical-device-id" } });
-    await expect(claimPairedNodeConnection("canonical-device-id", 4_000, baseDir)).resolves.toEqual(
-      {
-        recorded: true,
-        firstConnection: true,
-      },
-    );
-    await expect(claimPairedNodeConnection("canonical-device-id", 5_000, baseDir)).resolves.toEqual(
-      {
-        recorded: true,
-        firstConnection: false,
-      },
-    );
+    await expect(
+      recordPairedNodeConnection("canonical-device-id", 4_000, baseDir),
+    ).resolves.toEqual({
+      recorded: true,
+      firstConnection: true,
+    });
+    await expect(
+      recordPairedNodeConnection("canonical-device-id", 5_000, baseDir),
+    ).resolves.toEqual({
+      recorded: true,
+      firstConnection: false,
+    });
   });
 });

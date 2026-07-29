@@ -148,6 +148,30 @@ export function assertReadySuspensionResponse(response, now = Date.now()) {
   return payload;
 }
 
+export async function prepareReadySuspension(
+  { deadline, requestId, rpc },
+  { delayImpl = delay, now = Date.now } = {},
+) {
+  while (true) {
+    if (now() >= deadline) {
+      throw new DOMException("gateway suspension preparation timeout", "TimeoutError");
+    }
+    const response = await rpc("gateway.suspend.prepare", { requestId });
+    if (response?.status !== 200 || response.body?.ok !== true) {
+      return assertReadySuspensionResponse(response, now());
+    }
+    const payload = response.body.payload;
+    if (payload?.status !== "busy") {
+      return assertReadySuspensionResponse(response, now());
+    }
+    const retryAfterMs =
+      typeof payload.retryAfterMs === "number" && Number.isFinite(payload.retryAfterMs)
+        ? Math.max(1, Math.floor(payload.retryAfterMs))
+        : 100;
+    await delayImpl(Math.min(retryAfterMs, Math.max(1, deadline - now())));
+  }
+}
+
 export function assertGatewaySuspendingError(response) {
   assert.equal(response?.ok, false, "normal RPC must fail during suspension");
   assert.equal(response.error?.code, "UNAVAILABLE", "normal RPC must be unavailable");
@@ -206,9 +230,11 @@ export async function runGatewaySuspensionPreRestartClient(
     url,
   };
   const rpc = (method, params) => adminRpc(requestContext, method, params);
-  const firstLease = assertReadySuspensionResponse(
-    await rpc("gateway.suspend.prepare", { requestId: "gateway-network-live-contract" }),
-  );
+  const firstLease = await prepareReadySuspension({
+    deadline: requestContext.deadline,
+    requestId: "gateway-network-live-contract",
+    rpc,
+  });
 
   assertSuspendedProbes(
     await readProbe(requestContext, "/healthz"),
@@ -263,9 +289,11 @@ export async function runGatewaySuspensionPreRestartClient(
   );
 
   const requestId = "gateway-network-restart-contract";
-  const secondLease = assertReadySuspensionResponse(
-    await rpc("gateway.suspend.prepare", { requestId }),
-  );
+  const secondLease = await prepareReadySuspension({
+    deadline: requestContext.deadline,
+    requestId,
+    rpc,
+  });
   await writeFile(
     statePath,
     JSON.stringify({
@@ -309,9 +337,11 @@ export async function runGatewaySuspensionPostRestartClient(
   );
   assertAdminSuccess(await rpc("health"), "Admin health after restart");
 
-  const replacement = assertReadySuspensionResponse(
-    await rpc("gateway.suspend.prepare", { requestId: state.requestId }),
-  );
+  const replacement = await prepareReadySuspension({
+    deadline: requestContext.deadline,
+    requestId: state.requestId,
+    rpc,
+  });
   assert(
     replacement.suspensionId !== state.suspensionId,
     "reused request id must create a fresh suspension lease after restart",

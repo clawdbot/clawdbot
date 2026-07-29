@@ -66,7 +66,9 @@ export function createCodexAttemptServerRequestController(
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
+    requestSignal: AbortSignal = new AbortController().signal,
   ) => {
+    const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
     const projector = projectorRef.current;
     let armCompletionWatchOnResponse = false;
@@ -96,7 +98,7 @@ export function createCodexAttemptServerRequestController(
           ...(computerUseConfig.enabled
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
             : {}),
-          signal: runAbortController.signal,
+          signal,
         });
       }
       if (request.method === "item/tool/requestUserInput") {
@@ -123,7 +125,7 @@ export function createCodexAttemptServerRequestController(
             turnId,
             nativeHookRelay: resourceState.nativeHookRelay,
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
-            signal: runAbortController.signal,
+            signal,
             onNativeToolFailureDisposition: (itemId, disposition) =>
               projector?.recordNativeToolApprovalFailure(itemId, disposition),
           });
@@ -210,7 +212,7 @@ export function createCodexAttemptServerRequestController(
           handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
-            signal: runAbortController.signal,
+            signal,
             timeoutMs: dynamicToolTimeoutMs,
             toolMeta,
             toolCallOrdinal,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
 
@@ -88,7 +89,9 @@ describe("buildStatusText channel features", () => {
       sessionEntry: {
         sessionId: "telegram-rich-account",
         updatedAt: 0,
-        lastAccountId: "work",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", accountId: "work" },
+        }),
       },
     });
 
@@ -305,5 +308,48 @@ describe("session status cost line", () => {
     await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
       "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
+  });
+});
+
+describe("buildStatusText thinking facts", () => {
+  it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
+    const text = await buildStatusText({
+      cfg: {},
+      sessionEntry: {
+        sessionId: "wa-ollama-think",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        modelOverride: "glm-5.2:cloud",
+        providerOverride: "ollama",
+      },
+      sessionKey: "agent:main:main",
+      statusChannel: "whatsapp",
+      provider: "ollama",
+      model: "glm-5.2:cloud",
+      thinkingCatalog: [
+        {
+          provider: "ollama",
+          id: "glm-5.2:cloud",
+          reasoning: true,
+        },
+      ],
+      resolvedHarness: "openclaw",
+      resolvedThinkLevel: "high",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "on",
+      resolveDefaultThinkingLevel: async () => "high",
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      pluginHealthLineOverride: "Plugins: test",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+      modelAuthOverride: "local",
+      activeModelAuthOverride: "local",
+      includeTranscriptUsage: false,
+    });
+
+    expect(text).toContain("Think: high");
+    expect(text).not.toMatch(/Think:\s*off\b/);
   });
 });

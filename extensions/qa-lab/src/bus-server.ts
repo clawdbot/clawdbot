@@ -233,12 +233,16 @@ export async function handleQaBusRequest(params: {
         return true;
       case "/v1/poll": {
         const input = normalizeQaBusPollInput(body);
+        const pollInput = {
+          ...input,
+          cursor: params.state.resolvePollCursor(input),
+        };
         const timeoutMs = input.timeoutMs ?? 0;
         const accountId = normalizeAccountId(input.accountId);
-        const initial = params.state.poll(input);
+        const initial = params.state.poll(pollInput);
         const effectiveStartCursor = resolveQaBusPollStartCursor({
           currentCursor: initial.cursor,
-          requestedCursor: input.cursor,
+          requestedCursor: pollInput.cursor,
         });
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
@@ -253,7 +257,7 @@ export async function handleQaBusRequest(params: {
         } catch {
           // timeout ok for long-poll
         }
-        writeJson(params.res, 200, params.state.poll(input));
+        writeJson(params.res, 200, params.state.poll(pollInput));
         return true;
       }
       case "/v1/wait":

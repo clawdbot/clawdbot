@@ -10,18 +10,26 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { JsonValue, v2 } from "./protocol.js";
+import { CodexAppServerRpcError } from "./client.js";
+import type {
+  CodexAppServerRequestParams,
+  CodexAppServerRequestResult,
+  JsonValue,
+  v2,
+} from "./protocol.js";
 
 /** Default app inventory cache freshness window. */
 const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
-const CODEX_TARGETED_APP_INVENTORY_LIMIT = 1_000;
+// Codex 0.145.0 AppsReadParams rejects requests with more than 100 app IDs.
+const CODEX_APP_READ_BATCH_LIMIT = 100;
+const CODEX_TARGETED_LEGACY_APP_INVENTORY_LIMIT = 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
-/** App-server request function used to list installed/available apps. */
-export type CodexAppInventoryRequest = (
-  method: "app/list",
-  params: v2.AppsListParams,
-) => Promise<v2.AppsListResponse>;
+/** App-server request function used to read installed apps and their metadata. */
+export type CodexAppInventoryRequest = <Method extends "app/installed" | "app/list" | "app/read">(
+  method: Method,
+  params: CodexAppServerRequestParams<Method>,
+) => Promise<CodexAppServerRequestResult<Method>>;
 
 /** Runtime identity fields that affect visible Codex app inventory. */
 export type CodexAppInventoryCacheKeyInput = {
@@ -44,6 +52,7 @@ type CodexAppInventoryCacheDiagnostic = {
 export type CodexAppInventorySnapshot = {
   key: string;
   apps: v2.AppInfo[];
+  source: "installed" | "legacy";
   fetchedAtMs: number;
   expiresAtMs: number;
   revision: number;
@@ -193,7 +202,7 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const apps = await listAllApps(
+      const inventory = await readInstalledApps(
         params.request,
         params.forceRefetch ?? false,
         params.targetAppIds,
@@ -202,7 +211,8 @@ export class CodexAppInventoryCache {
       const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
         key: params.key,
-        apps,
+        apps: inventory.apps,
+        source: inventory.source,
         fetchedAtMs: nowMs,
         expiresAtMs,
         revision: this.revision,
@@ -288,30 +298,105 @@ function normalizeRuntimeIdentityForCacheKey(
   return entries.length > 0 ? Object.fromEntries(entries) : null;
 }
 
-async function listAllApps(
+async function readInstalledApps(
   request: CodexAppInventoryRequest,
   forceRefetch: boolean,
   targetAppIds: readonly string[] = [],
+): Promise<{ apps: v2.AppInfo[]; source: CodexAppInventorySnapshot["source"] }> {
+  let installed: v2.AppsInstalledResponse;
+  try {
+    // A non-forced installed read returns the prior committed runtime snapshot;
+    // refreshing OpenClaw's cache must refresh the upstream snapshot as well.
+    installed = await request("app/installed", { forceRefresh: true });
+  } catch (error) {
+    // OpenClaw still supports Codex 0.143.0 and 0.144.x, which do not
+    // implement the 0.145.0 installed-app lifecycle methods.
+    if (
+      !(error instanceof CodexAppServerRpcError) ||
+      error.code !== -32601 ||
+      error.method !== "app/installed"
+    ) {
+      throw error;
+    }
+    return {
+      apps: await readLegacyInstalledApps(request, forceRefetch, targetAppIds),
+      source: "legacy",
+    };
+  }
+  const targetIds = new Set(targetAppIds.filter(Boolean));
+  const apps =
+    targetIds.size === 0 ? installed.apps : installed.apps.filter((app) => targetIds.has(app.id));
+  if (apps.length === 0) {
+    return { apps: [], source: "installed" };
+  }
+
+  const metadataResponses = await Promise.all(
+    Array.from({ length: Math.ceil(apps.length / CODEX_APP_READ_BATCH_LIMIT) }, (_, index) =>
+      request("app/read", {
+        appIds: apps
+          .slice(index * CODEX_APP_READ_BATCH_LIMIT, (index + 1) * CODEX_APP_READ_BATCH_LIMIT)
+          .map((app) => app.id),
+      }),
+    ),
+  );
+  const metadataById = new Map(
+    metadataResponses
+      .flatMap((response) => response.apps)
+      .map((metadata) => [metadata.id, metadata]),
+  );
+
+  return {
+    apps: apps.flatMap((installedApp): v2.AppInfo[] => {
+      const metadata = metadataById.get(installedApp.id);
+      if (!metadata) {
+        return [];
+      }
+
+      return [
+        {
+          id: installedApp.id,
+          name: metadata.name,
+          description: metadata.description ?? null,
+          logoUrl: metadata.iconUrl ?? null,
+          logoUrlDark: metadata.iconUrlDark ?? null,
+          distributionChannel: metadata.distributionChannel ?? null,
+          branding: null,
+          appMetadata: null,
+          labels: null,
+          installUrl: metadata.installUrl ?? null,
+          isAccessible: installedApp.callable,
+          isEnabled: installedApp.enabled,
+          pluginDisplayNames: metadata.pluginDisplayNames,
+        },
+      ];
+    }),
+    source: "installed",
+  };
+}
+
+async function readLegacyInstalledApps(
+  request: CodexAppInventoryRequest,
+  forceRefetch: boolean,
+  targetAppIds: readonly string[],
 ): Promise<v2.AppInfo[]> {
   const apps: v2.AppInfo[] = [];
-  const targetIds = new Set(targetAppIds.filter(Boolean));
-  const remainingTargetIds = new Set(targetIds);
+  const remainingTargetIds = new Set(targetAppIds.filter(Boolean));
   const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
+
   do {
     const response = await request("app/list", {
       cursor,
-      // Thread startup only needs to recover the configured plugin-owned apps.
-      // Large pages minimize startup latency while pagination still proves an
-      // absent target instead of publishing a known-incomplete lookup.
-      limit: targetIds.size > 0 ? CODEX_TARGETED_APP_INVENTORY_LIMIT : 100,
+      limit: remainingTargetIds.size > 0 ? CODEX_TARGETED_LEGACY_APP_INVENTORY_LIMIT : 100,
       forceRefetch,
     });
-    apps.push(...response.data);
     for (const app of response.data) {
+      // Legacy accessibility predates installed callability; disabled apps
+      // must obey the same fail-closed runtime contract as modern snapshots.
+      apps.push(app.isEnabled ? app : { ...app, isAccessible: false });
       remainingTargetIds.delete(app.id);
     }
-    if (targetIds.size > 0 && remainingTargetIds.size === 0) {
+    if (targetAppIds.length > 0 && remainingTargetIds.size === 0) {
       break;
     }
     cursor = response.nextCursor;
@@ -322,6 +407,7 @@ async function listAllApps(
       seenCursors.add(cursor);
     }
   } while (cursor);
+
   return apps;
 }
 
