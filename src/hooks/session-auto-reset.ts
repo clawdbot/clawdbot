@@ -11,7 +11,7 @@ import {
   triggerInternalHook,
 } from "./internal-hooks.js";
 
-export type SessionAutoResetReason = Extract<PluginHookSessionEndReason, "daily" | "idle">;
+type SessionAutoResetReason = Extract<PluginHookSessionEndReason, "daily" | "idle">;
 
 export function isSessionAutoResetReason(reason: unknown): reason is SessionAutoResetReason {
   return reason === "daily" || reason === "idle";
