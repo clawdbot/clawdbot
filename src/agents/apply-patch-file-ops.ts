@@ -155,7 +155,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
   });
 }
 
-const PATCH_CREATE_EXISTS = Symbol("patch-create-exists");
+class PatchCreateExistsSignal extends Error {}
 
 function withPatchMemoryWriteProvenance(params: {
   operations: PatchFileOps;
@@ -178,13 +178,13 @@ function withPatchMemoryWriteProvenance(params: {
           contentAfter: content,
           commit: async () => {
             if ((await params.operations.createFileExclusive(filePath, content)) === "exists") {
-              throw PATCH_CREATE_EXISTS;
+              throw new PatchCreateExistsSignal();
             }
           },
         });
         return "created";
       } catch (error) {
-        if (error === PATCH_CREATE_EXISTS) {
+        if (error instanceof PatchCreateExistsSignal) {
           return "exists";
         }
         throw error;
