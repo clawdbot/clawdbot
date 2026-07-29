@@ -158,7 +158,10 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   // guesses by keeping timers occupied. Settlers are tracked only so dispose()
   // can release waiters without stalling gateway shutdown.
   const loopbackPenaltyUntil = new Map<string, number>();
-  const pendingLoopbackFailureDelays = new Set<() => void>();
+  const loopbackPenaltyWaiters = new Map<
+    string,
+    { deadline: number; resolvers: (() => void)[]; timer: ReturnType<typeof setTimeout> }
+  >();
   let overflowLockedUntil: number | undefined;
 
   // Periodic cleanup to avoid unbounded map growth.
@@ -293,25 +296,44 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       now + LOOPBACK_FAILURE_DELAY_MAX_MS,
     );
     loopbackPenaltyUntil.set(key, deadline);
-    const delayMs = Math.max(0, deadline - now);
     await new Promise<void>((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
-      const settle = () => {
-        if (settled) {
-          return;
+      // One timer per key, not per request: every waiter on a key is released by the
+      // same deadline, so concurrent failures cost a bounded number of timers
+      // (at most one per distinct loopback key) instead of one per open attempt.
+      const existing = loopbackPenaltyWaiters.get(key);
+      if (existing) {
+        existing.resolvers.push(resolve);
+        if (deadline > existing.deadline) {
+          existing.deadline = deadline;
+          clearTimeout(existing.timer);
+          existing.timer = scheduleRelease(key, deadline);
         }
-        settled = true;
-        if (timer) {
-          clearTimeout(timer);
-        }
-        pendingLoopbackFailureDelays.delete(settle);
-        resolve();
-      };
-      pendingLoopbackFailureDelays.add(settle);
-      timer = setTimeout(settle, delayMs);
-      timer.unref?.();
+        return;
+      }
+      loopbackPenaltyWaiters.set(key, {
+        deadline,
+        resolvers: [resolve],
+        timer: scheduleRelease(key, deadline),
+      });
     });
+  }
+
+  function scheduleRelease(key: string, deadline: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => releaseLoopbackWaiters(key), Math.max(0, deadline - Date.now()));
+    timer.unref?.();
+    return timer;
+  }
+
+  function releaseLoopbackWaiters(key: string): void {
+    const waiters = loopbackPenaltyWaiters.get(key);
+    if (!waiters) {
+      return;
+    }
+    loopbackPenaltyWaiters.delete(key);
+    clearTimeout(waiters.timer);
+    for (const resolve of waiters.resolvers) {
+      resolve();
+    }
   }
 
   function reset(rawIp: string | undefined, rawScope?: string): void {
@@ -395,8 +417,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     entries.clear();
     loopbackPenaltyUntil.clear();
     overflowLockedUntil = undefined;
-    for (const settle of [...pendingLoopbackFailureDelays]) {
-      settle();
+    for (const key of [...loopbackPenaltyWaiters.keys()]) {
+      releaseLoopbackWaiters(key);
     }
   }
 
