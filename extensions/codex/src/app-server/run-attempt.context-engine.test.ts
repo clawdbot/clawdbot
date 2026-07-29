@@ -9,7 +9,7 @@ import {
   supportsModelTools,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { installSessionManagerFileCompat } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   initializeGlobalHookRunner,
@@ -18,6 +18,7 @@ import {
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -36,10 +37,9 @@ import {
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-
-installSessionManagerFileCompat();
 
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
@@ -123,7 +123,10 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
   } as EmbeddedRunAttemptParams;
 }
 
-function createSqliteParams(workspaceDir: string, storeName: string): EmbeddedRunAttemptParams {
+async function createSqliteParams(
+  workspaceDir: string,
+  storeName: string,
+): Promise<EmbeddedRunAttemptParams> {
   const sessionId = "session-1";
   const sessionKey = "agent:main:session-1";
   const storePath = path.join(tempDir, `${storeName}.sqlite`);
@@ -133,6 +136,12 @@ function createSqliteParams(workspaceDir: string, storeName: string): EmbeddedRu
     storePath,
   });
   const params = createParams(sessionFile, workspaceDir);
+  await upsertSessionEntry({
+    agentId: "main",
+    sessionKey,
+    storePath,
+    entry: { sessionFile, sessionId, updatedAt: Date.now() },
+  });
   params.sessionTarget = {
     agentId: "main",
     sessionId,
@@ -224,7 +233,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.125.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -260,7 +269,7 @@ function turnStartResult(turnId = "turn-1", status = "inProgress") {
 }
 
 function getMockServerVersion() {
-  return "0.132.0";
+  return CODEX_APP_SERVER_VERSION;
 }
 
 function getMockRuntimeIdentity() {
@@ -460,7 +469,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
     const openSpy = vi.spyOn(SessionManager, "open");
@@ -538,7 +547,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("canonical main context", Date.now()) as never,
     );
     const contextEngine = createContextEngine();
@@ -729,7 +738,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("bootstrap-only context", Date.now()) as never,
     );
     const contextEngine = createContextEngine({
@@ -874,7 +883,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: 1_000,
           },
         },
@@ -982,7 +990,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage("previous stale-bootstrap request", Date.now()) as never,
     );
@@ -1044,7 +1052,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
@@ -1072,7 +1079,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("keeps mirrored history when an inactive per-turn context-engine binding starts fresh", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(userMessage("previous per-turn request", 10) as never);
     sessionManager.appendMessage(assistantMessage("previous per-turn answer", 11) as never);
     await writeCodexAppServerBinding(sessionFile, {
@@ -1450,7 +1457,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("retries a resumed context-engine thread on a fresh Codex thread without plugin compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1552,7 +1559,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("returns a replay-safe recovery result when the executable owner changes during overflow retry", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1619,7 +1626,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1691,7 +1698,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("clears a resumed context-engine binding when a turn terminally overflows", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1769,7 +1776,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     const hugePayload = {
@@ -1851,7 +1858,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("does not call hung owning context-engine compaction during Codex overflow recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1932,7 +1939,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("keeps current inbound context at the front of the Codex context-engine prompt", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("older context", Date.now()) as never,
     );
     const contextEngine = createContextEngine();
@@ -1981,7 +1988,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
       const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
       const harness = createStartedThreadHarness();
-      const params = createSqliteParams(
+      const params = await createSqliteParams(
         workspaceDir,
         `heartbeat-${testCase.bootstrapContextRunKind}`,
       );
@@ -2031,7 +2038,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.openFile(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
     const afterTurn = vi.fn(
@@ -2039,7 +2046,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
     const bootstrap = vi.fn(
       async ({ sessionFile: file }: Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]) => {
-        SessionManager.openFile(file).appendMessage(
+        openFileBackedSessionManagerForTest(file).appendMessage(
           assistantMessage("bootstrap context", Date.now() + 1) as never,
         );
         return { bootstrapped: true };
@@ -2113,7 +2120,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       bootstrap: undefined,
     });
     const harness = createStartedThreadHarness();
-    const params = createSqliteParams(workspaceDir, "prompt-failure");
+    const params = await createSqliteParams(workspaceDir, "prompt-failure");
     params.contextEngine = contextEngine;
 
     const run = runCodexAppServerAttempt(params);

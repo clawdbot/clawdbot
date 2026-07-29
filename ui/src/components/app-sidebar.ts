@@ -320,6 +320,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
+  loadMoreSidebarSessions(): Promise<void> {
+    return this.sessionData.loadMoreSidebarSessions();
+  }
+
   dismissSessionMutationError(): void {
     this.sessionData.dismissSessionMutationError();
   }
@@ -372,6 +376,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       host: this,
       empty: visibleSessions.length === 0,
       sections,
+      nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
       catalogRenderer: this.catalogRenderer,
       showDraft:
         Boolean(this.draftSessionAgentId) &&

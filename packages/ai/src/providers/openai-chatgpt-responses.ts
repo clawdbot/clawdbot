@@ -301,16 +301,6 @@ export const streamOpenAICodexResponses: StreamFunction<
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
       // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
-      const websocketRequestId = sessionId || createCodexRequestId();
-      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
-      const websocketHeaders = buildWebSocketHeaders(
-        modelHeaders,
-        optionHeaders,
-        accountId,
-        apiKey,
-        websocketRequestId,
-      );
-      const bodyJson = JSON.stringify(body);
       requestTimeoutMs = resolveRequestTimeoutMs(options);
       requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
@@ -322,6 +312,13 @@ export const streamOpenAICodexResponses: StreamFunction<
         transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
 
       if (transport !== "sse" && !websocketDisabledForSession) {
+        const websocketHeaders = buildWebSocketHeaders(
+          modelHeaders,
+          optionHeaders,
+          accountId,
+          apiKey,
+          sessionId || createCodexRequestId(),
+        );
         let websocketStarted = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
@@ -371,7 +368,7 @@ export const streamOpenAICodexResponses: StreamFunction<
                 phase: websocketStarted
                   ? "after_message_stream_start"
                   : "before_message_stream_start",
-                requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+                requestBytes: new TextEncoder().encode(JSON.stringify(body)).byteLength,
               }),
             );
             if (transport === "auto" && options?.sessionId) {
@@ -385,6 +382,8 @@ export const streamOpenAICodexResponses: StreamFunction<
         }
       }
 
+      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
+      const bodyJson = JSON.stringify(body);
       const canCompressSseBody = model.provider === "openai" && !sseHeaders.has("content-encoding");
       const compressedBody = canCompressSseBody ? compressRequestBodyZstd(bodyJson) : null;
       if (compressedBody) {

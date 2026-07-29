@@ -8,8 +8,7 @@ import {
   acquireBoardProviderForSession,
   boardExists,
   boardProviderCacheKey,
-  boardProviderForSession,
-  GatewayBoardProvider,
+  hasLoadedBoardSnapshot,
   type BoardProvider,
   type BoardProviderLease,
   type BoardViewCallbacks,
@@ -59,16 +58,12 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
     }
     const key = boardProviderCacheKey(sessionKey);
     if (this.lease?.client === client && this.lease.sessionKey === key) {
-      boardProviderForSession(
-        key,
-        client,
-        true,
-        this.connected,
-        false,
-        false,
-        this.canMutate,
-        this.canGrant,
-      );
+      this.lease.update(client, this.connected, {
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: this.canMutate,
+        canGrant: this.canGrant,
+      });
       return;
     }
 
@@ -108,8 +103,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
     if (!snapshot.tabs.some((tab) => tab.tabId === this.activeTabId)) {
       this.activeTabId = firstTabId;
     }
-    const loaded = !(provider instanceof GatewayBoardProvider) || provider.hasLoadedSnapshot;
-    if (!this.expansionInitialized && loaded) {
+    if (!this.expansionInitialized && hasLoadedBoardSnapshot(provider)) {
       this.expansionInitialized = true;
       this.expanded = boardExists(snapshot);
     }
@@ -161,8 +155,8 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
                     provider.widgetFrameUrl(name, revision)}
                   .callbacks=${callbacks}
                   .sessions=${[]}
-                  .canMutate=${provider.canMutate}
-                  .canGrant=${provider.canGrant}
+                  .canMutate=${this.canMutate}
+                  .canGrant=${this.canGrant}
                   .ticketRefreshEnabled=${this.expanded}
                 ></openclaw-board-view>
               `

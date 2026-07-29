@@ -710,6 +710,13 @@ public actor GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
+    public func currentGatewayID(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        guard self.isCurrentRoute(route), self.channel != nil else { return nil }
+        // iOS operator routes normalize this to the effective stable ID before connect.
+        // Keep nil for unscoped clients rather than letting artifact HTTP bind to a guessed owner.
+        return self.connectOptions?.deviceAuthGatewayID
+    }
+
     public func supportsServerCapability(
         _ capability: GatewayServerCapability,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) -> Bool?

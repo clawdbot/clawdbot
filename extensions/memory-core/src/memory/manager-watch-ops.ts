@@ -119,7 +119,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     // Core paths preserve original symlink-follow behavior (chokidar/fs.watch
     // resolve through symlinks by default); extraPaths preserves the original
     // explicit symlink-skip policy.
-    const fileWatchPaths = new Set<string>([path.join(this.workspaceDir, "MEMORY.md")]);
+    const fileWatchPaths = new Set<string>([
+      path.join(this.workspaceDir, "MEMORY.md"),
+      path.join(this.workspaceDir, "USER.md"),
+    ]);
     const dirWatchPaths = new Set<string>([path.join(this.workspaceDir, "memory")]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {

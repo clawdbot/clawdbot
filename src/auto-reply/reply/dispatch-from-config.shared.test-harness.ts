@@ -25,6 +25,7 @@ type AbortResult = {
   rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
+type FastApproveResult = { handled: false } | { handled: true; reply?: ReplyPayload };
 type PluginTargetedInboundClaimOutcome = Awaited<
   ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
 >;
@@ -34,14 +35,24 @@ const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(
     async (
       _params: unknown,
-    ): Promise<{ ok: boolean; messageId?: string; suppressed?: boolean; error?: string }> => ({
+    ): Promise<{
+      ok: boolean;
+      delivered: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      error?: string;
+    }> => ({
       ok: true,
+      delivered: true,
       messageId: "mock",
     }),
   ),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
+  })),
+  tryFastApproveFromMessage: vi.fn<() => Promise<FastApproveResult>>(async () => ({
+    handled: false,
   })),
 }));
 const globalMocks = vi.hoisted(() => ({
@@ -450,6 +461,10 @@ vi.mock("./abort.runtime.js", () => ({
     const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
     return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
   },
+}));
+
+vi.mock("./fast-approve.runtime.js", () => ({
+  tryFastApproveFromMessage: mocks.tryFastApproveFromMessage,
 }));
 
 vi.mock("../../globals.js", async (importOriginal) => {

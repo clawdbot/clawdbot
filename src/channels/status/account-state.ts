@@ -17,7 +17,7 @@ type ChannelAccountState =
     }
   | { kind: "unconfigured"; reason: string; failure: string | null }
   | { kind: "unlinked"; reason: string; failure: string | null }
-  | { kind: "running"; linked?: true; connected: boolean; failure: string | null }
+  | { kind: "running"; linked?: true; connected?: boolean; failure: string | null }
   | { kind: "stopped"; linked?: true; connected?: boolean; failure: string | null };
 
 type ChannelAccountStateInput = {
@@ -59,7 +59,11 @@ export function resolveChannelAccountState(input: ChannelAccountStateInput): Cha
     return {
       kind: "running",
       linked: input.linked,
-      connected: input.runtime.connected ?? false,
+      // Connectivity is tri-state: absent means the transport publishes none at
+      // all (imessage, signal, sms, ...), which is not a reported disconnect.
+      // Defaulting to false makes `evaluateChannelHealth` return "disconnected"
+      // and the health monitor restart every socketless channel per cooldown.
+      connected: input.runtime.connected,
       failure,
     };
   }
@@ -115,7 +119,7 @@ function projectChannelAccountState(state: ChannelAccountState): {
         configured: true,
         ...(state.linked ? { linked: true } : {}),
         running: true,
-        connected: state.connected,
+        ...(typeof state.connected === "boolean" ? { connected: state.connected } : {}),
         lastError: state.failure,
       };
     case "stopped":

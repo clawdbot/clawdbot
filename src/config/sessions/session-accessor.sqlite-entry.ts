@@ -84,6 +84,37 @@ type ResolvedSqliteSessionEntry = {
   normalizedKey: string;
 };
 
+const childSessionKeysByEntrySnapshot = new WeakMap<
+  Map<string, SessionEntry>,
+  Map<string, string[]>
+>();
+
+function getChildSessionKeysByParent(entries: Map<string, SessionEntry>): Map<string, string[]> {
+  const cached = childSessionKeysByEntrySnapshot.get(entries);
+  if (cached) {
+    return cached;
+  }
+  const childKeysByParent = new Map<string, Set<string>>();
+  for (const [sessionKey, entry] of entries) {
+    for (const rawParentKey of [entry.spawnedBy, entry.parentSessionKey]) {
+      const parentKey = rawParentKey?.trim();
+      if (!parentKey || parentKey === sessionKey) {
+        continue;
+      }
+      const childKeys = childKeysByParent.get(parentKey) ?? new Set<string>();
+      childKeys.add(sessionKey);
+      childKeysByParent.set(parentKey, childKeys);
+    }
+  }
+  // The parsed entry snapshot is replaced whenever SQLite's validity token changes.
+  // Keying the derived index by that identity keeps repeated single-row reads cheap and current.
+  const indexedChildKeys = new Map(
+    [...childKeysByParent].map(([parentKey, childKeys]) => [parentKey, [...childKeys]]),
+  );
+  childSessionKeysByEntrySnapshot.set(entries, indexedChildKeys);
+  return indexedChildKeys;
+}
+
 /** Resolves one canonical entry and its proven aliases without materializing the store. */
 export function resolveSqliteSessionEntry(
   scope: SessionAccessScope,
@@ -181,22 +212,45 @@ export function loadExactSqliteSessionEntryReadOnly(
     : undefined;
 }
 
+/** Lists direct child rows without cloning or rebuilding the complete session store. */
+export function listSqliteSessionChildEntriesReadOnly(
+  scope: SessionAccessScope,
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const snapshot = readSessionEntrySnapshot(database, resolved, scope.readConsistency);
+    const childKeys = getChildSessionKeysByParent(snapshot.entries).get(resolved.sessionKey) ?? [];
+    return childKeys.flatMap((sessionKey) => {
+      if (isInternalSessionEffectsKey(sessionKey)) {
+        return [];
+      }
+      const entry = snapshot.entries.get(sessionKey);
+      return entry
+        ? [{ sessionKey, entry: scope.clone === false ? entry : cloneSessionEntry(entry) }]
+        : [];
+    });
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : [];
+}
+
 /** Resolves the persisted session key for a SQLite transcript session id. */
 export function resolveSqliteSessionKeyBySessionId(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
 ): string | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("session_windows")
-      .select("session_key")
-      .where("session_id", "=", resolved.sessionId)
-      .limit(1),
-  );
-  return row?.session_key;
+  // session_windows.session_id is the primary key; the indexed lookup cannot be ambiguous.
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getSessionKysely(database.db);
+    return executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", resolved.sessionId)
+        .limit(1),
+    );
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value?.session_key : undefined;
 }
 
 /** Lists session entries from the additive SQLite session store. */

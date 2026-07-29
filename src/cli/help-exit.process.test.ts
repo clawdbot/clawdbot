@@ -13,12 +13,9 @@ import { registerSubCliByName } from "./program/register.subclis.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Fork CI uses shared hosted runners where cold TSX startup can exceed 45 seconds.
-const CHILD_PROCESS_TIMEOUT_MS = 75_000;
-// The full 4-vCPU CLI shard can starve this first source-run child past the shared deadline. This
-// remains a deadlock guard, not a startup SLO; dedicated startup benchmarks own latency limits.
-const ROOT_HELP_PROCESS_TIMEOUT_MS = 120_000;
-const ROOT_HELP_TEST_TIMEOUT_MS = ROOT_HELP_PROCESS_TIMEOUT_MS + 15_000;
+// This is a deadlock guard, not a startup SLO. Fork CI can take over a minute
+// to cold-load the CLI graph on shared hosted runners, while still exiting correctly.
+const CHILD_PROCESS_TIMEOUT_MS = 120_000;
 const LAZY_GROUP_HELP_CASES = [
   { group: "backup", usageCommand: "backup", registry: "core" },
   { group: "capability", usageCommand: "infer|capability", registry: "subcli" },
@@ -142,7 +139,6 @@ async function runCliProcess(params: {
   loggingViaInclude?: boolean;
   loggingViaRootInclude?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
-  timeoutMs?: number;
 }) {
   const fixture = await createHelpProcessFixture(
     params.config,
@@ -191,7 +187,7 @@ async function runCliProcess(params: {
         ...params.env,
       },
       killSignal: "SIGKILL",
-      timeout: params.timeoutMs ?? CHILD_PROCESS_TIMEOUT_MS,
+      timeout: CHILD_PROCESS_TIMEOUT_MS,
     },
   );
   return { ...result, fixture };
@@ -210,20 +206,14 @@ type CliProcessFailure = Error & {
   stdout?: string;
 };
 describe("CLI help process exit", () => {
-  it(
-    "exits promptly after root --help",
-    async () => {
-      const result = await runCliProcess({
-        args: ["--help"],
-        forbidTlsImport: true,
-        timeoutMs: ROOT_HELP_PROCESS_TIMEOUT_MS,
-      });
+  it("exits promptly after root --help", async () => {
+    // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
+    // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
+    const result = await runCliProcess({ args: ["--help"], config: {}, forbidTlsImport: true });
 
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("Usage: openclaw [options] [command]");
-    },
-    ROOT_HELP_TEST_TIMEOUT_MS,
-  );
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: openclaw [options] [command]");
+  });
 
   // One lazy process is representative by design; the matrix below exercises
   // both core and sub-CLI registrars without multiplying Node+tsx launches.
@@ -469,6 +459,9 @@ describe("JSON console style process output", () => {
         await runCliProcess({
           args: ["openclaw-json-console-missing-command", modifier],
           config: loggingConfig,
+          // The fake command cannot belong to a bundled plugin. Avoid cold plugin
+          // discovery so this subprocess measures structured validation, not fleet load.
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
         });
       } catch (error) {
         failure = error as CliProcessFailure;

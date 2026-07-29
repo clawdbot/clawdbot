@@ -71,6 +71,7 @@ function asAgentTool(tool: {
   execute: ReturnType<typeof vi.fn>;
   name: string;
   parameters?: object;
+  resultContentSource?: AnyAgentTool["resultContentSource"];
 }): AnyAgentTool {
   return tool as unknown as AnyAgentTool;
 }
@@ -1135,6 +1136,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         name: "web_fetch",
         description: "fetch",
         parameters: {},
+        resultContentSource: "network",
         execute: vi.fn().mockResolvedValue({
           content: [],
           details: { status: 200 },
@@ -1161,6 +1163,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(onToolOutcome).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "web_fetch",
+        resultContentSource: "network",
         terminalPresentation: "Fetched with status 200",
       }),
     );

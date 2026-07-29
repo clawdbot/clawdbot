@@ -24,12 +24,21 @@ const detected: SystemAgentSetupDetectResult = {
   unavailableCandidates: [
     {
       id: "gemini-cli",
+      brandId: "google-gemini-cli",
       label: "Gemini CLI",
-      detail: "Installed",
-      reason: "No active login",
+      detail: "installed; login status unavailable",
+      reason: "OpenClaw could not confirm a usable login.",
+      authOptionId: "google-gemini-cli",
+      manualProviderId: "gemini-api-key",
     },
   ],
   manualProviders: [
+    {
+      id: "gemini-api-key",
+      brandId: "google",
+      label: "Google Gemini API key",
+      hint: "Use an AI Studio API key.",
+    },
     {
       id: "openai",
       brandId: "openai",
@@ -39,6 +48,15 @@ const detected: SystemAgentSetupDetectResult = {
     },
   ],
   authOptions: [
+    {
+      id: "google-gemini-cli",
+      brandId: "google-gemini-cli",
+      label: "Gemini CLI OAuth",
+      groupLabel: "Google",
+      kind: "oauth",
+      featured: true,
+      hint: "Continue with Google.",
+    },
     {
       id: "openai-oauth",
       brandId: "openai",
@@ -97,6 +115,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     onStartAuth: vi.fn(),
     onStartPrepare: vi.fn(),
     onManualProviderChange: vi.fn(),
+    onUseManualProvider: vi.fn(),
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),
@@ -156,8 +175,8 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Found on this Gateway");
     expect(text(container)).toContain("Codex CLI");
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
-    expect(text(container)).toContain("Detected, but not auto-tested");
-    expect(text(container)).toContain("No active login");
+    expect(text(container)).toContain("Found, but needs attention");
+    expect(text(container)).toContain("OpenClaw could not confirm a usable login");
     expect(text(container)).toContain("Sign in with a provider");
     expect(text(container)).toContain("Set up a local model");
     expect(text(container)).toContain("Connect with an API key or token");
@@ -166,6 +185,9 @@ describe("renderModelSetup", () => {
     );
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
+    expect(
+      container.querySelector('[data-unavailable-candidate="gemini-cli"] [data-provider-icon]'),
+    ).not.toBeNull();
     expect(
       container.querySelector('[data-candidate-kind="codex-cli"] [data-provider-icon="codex"]'),
     ).not.toBeNull();
@@ -180,6 +202,29 @@ describe("renderModelSetup", () => {
         ?.textContent,
     ).toContain("O");
     expect(container.querySelectorAll("img")).toHaveLength(0);
+  });
+
+  it("offers direct recovery actions for an unavailable provider", () => {
+    const onStartAuth = vi.fn();
+    const onUseManualProvider = vi.fn();
+    const onDetect = vi.fn();
+    const container = mount(props({ onStartAuth, onUseManualProvider, onDetect }));
+    const buttons = container.querySelectorAll<HTMLButtonElement>(
+      '[data-unavailable-candidate="gemini-cli"] button',
+    );
+
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+      "Sign in with Google",
+      "Use API key",
+      "Check again",
+    ]);
+    buttons[0]?.click();
+    buttons[1]?.click();
+    buttons[2]?.click();
+
+    expect(onStartAuth).toHaveBeenCalledWith(expect.objectContaining({ id: "google-gemini-cli" }));
+    expect(onUseManualProvider).toHaveBeenCalledWith("gemini-api-key");
+    expect(onDetect).toHaveBeenCalledOnce();
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {

@@ -38,7 +38,7 @@ const matrixThreadBindingsSchema = z
 
 const matrixExecApprovalsSchema = z
   .object({
-    enabled: z.boolean().optional(),
+    enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
     approvers: AllowFromListSchema,
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),

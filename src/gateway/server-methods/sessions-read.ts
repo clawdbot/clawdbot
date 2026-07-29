@@ -37,7 +37,7 @@ import {
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
   canAccessIncognitoSession,
-  filterDraftSessionsForClient,
+  createSessionListEntryFilter,
   isGatewayAdmin,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
@@ -251,15 +251,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
-        const visibleStore = filterDraftSessionsForClient({ client, store });
+        const entryFilter = createSessionListEntryFilter({ client });
         const listStore = configuredAgentsOnly
-          ? filterSessionStoreToConfiguredAgents(cfg, visibleStore)
-          : visibleStore;
-        const visibleStorePath = Object.entries(listStore).some(
-          ([sessionKey, entry]) => entry.incognito === true || isIncognitoSessionKey(sessionKey),
-        )
-          ? storePath
-          : (durableStorePath ?? storePath);
+          ? filterSessionStoreToConfiguredAgents(cfg, store)
+          : store;
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
           () =>
@@ -278,7 +273,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           () =>
             listSessionsFromStoreAsync({
               cfg,
-              storePath: visibleStorePath,
+              durableStorePath,
+              ...(entryFilter ? { entryFilter } : {}),
+              storePath,
               store: listStore,
               modelCatalog,
               opts: p,
@@ -286,9 +283,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           {
             config: cfg,
             phase: "sessions.list",
-            attributes: {
-              storeEntries: Object.keys(listStore).length,
-            },
           },
         );
         const identityId = gatewayClientSessionCreator(client)?.id;
@@ -421,11 +415,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
-        // The pre-await draft filter used a stale store snapshot; re-drop rows
+        // The pre-await visibility predicate used a stale store snapshot; re-drop rows
         // whose freshly resolved sharing state is a draft this caller cannot see
         // (a session flipped to draft mid-list, or an older shared alias hiding
         // a now-draft canonical entry). Drafts are owner+admin only — members
-        // lose access, matching filterDraftSessionsForClient — so keep a draft
+        // lose access, matching createSessionListEntryFilter — so keep a draft
         // row only for the owner role. Admins and identity-less solo callers
         // keep everything.
         const canSeeDrafts = !identityId || isGatewayAdmin(client);

@@ -93,8 +93,11 @@ type ResourceString = {
   value: string;
 };
 
-const GENERATED_TRANSLATION_LINT_IGNORE =
-  'tools:ignore="Typos,TypographyDashes,TypographyEllipsis"';
+const GENERATED_TRANSLATION_LINT_IGNORES = [
+  "Typos",
+  "TypographyDashes",
+  "TypographyEllipsis",
+] as const;
 
 type TranslationContradiction = {
   locale: string;
@@ -274,6 +277,19 @@ function parseStrings(source: string): ResourceString[] {
     rawValue: match[3] ?? "",
     value: decodeXml(match[3] ?? ""),
   }));
+}
+
+function withGeneratedTranslationLintIgnores(attrs: string): string {
+  const existing = attrs.match(/\btools:ignore\s*=\s*"([^"]*)"/u);
+  const ignores = [
+    ...(existing?.[1]
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean) ?? []),
+    ...GENERATED_TRANSLATION_LINT_IGNORES,
+  ];
+  const rendered = `tools:ignore="${[...new Set(ignores)].join(",")}"`;
+  return existing ? attrs.replace(existing[0], rendered) : `${attrs} ${rendered}`;
 }
 
 function parseArrays(source: string): Map<string, string[]> {
@@ -1136,7 +1152,7 @@ function localizeManualStrings(
         ? selectExactArtifactTranslation(source, inventoryEntry.id, artifactEntries)
         : source;
     return {
-      attrs: translatable ? `${entry.attrs} ${GENERATED_TRANSLATION_LINT_IGNORE}` : entry.attrs,
+      attrs: translatable ? withGeneratedTranslationLintIgnores(entry.attrs) : entry.attrs,
       key: entry.key,
       rawValue: `"${escapeAndroidResourceValue(value)}"`,
       value,
@@ -1168,7 +1184,7 @@ function renderStringsXml(
       // Translation-memory text intentionally preserves technical tokens and source punctuation,
       // so Android's English dictionary and typography suggestions do not apply to managed keys.
       lines.push(
-        `    <string name="${key}"${formatted} ${GENERATED_TRANSLATION_LINT_IGNORE}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
+        `    <string name="${key}"${withGeneratedTranslationLintIgnores(formatted)}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
       );
     }
   }

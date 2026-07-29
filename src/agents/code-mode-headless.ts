@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
+import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
@@ -32,6 +33,7 @@ import {
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
+  waitForPendingBridgeSettlement,
   type PendingBridgeState,
 } from "./code-mode-state.js";
 import {
@@ -88,37 +90,6 @@ function remainingHeadlessMs(deadline: number): number {
     throw new CodeModeHeadlessTimeoutError();
   }
   return remaining;
-}
-
-async function awaitHeadlessDeadline<T>(params: {
-  promise: Promise<T>;
-  deadline: number;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const remainingMs = remainingHeadlessMs(params.deadline);
-  if (params.signal?.aborted) {
-    throw headlessAbortError(params.signal);
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  try {
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new CodeModeHeadlessTimeoutError()), remainingMs);
-      const signal = params.signal;
-      if (signal) {
-        onAbort = () => reject(headlessAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }
-    });
-    return await Promise.race([params.promise, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (params.signal && onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
-    }
-  }
 }
 
 async function runHeadlessWorkerLeg(params: {
@@ -251,10 +222,12 @@ export async function runCodeModeScriptHeadless(params: {
     const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
-    const preparedSource = await awaitHeadlessDeadline({
-      promise: prepareSource({ code: params.code, language: params.language, config }),
-      deadline,
+    const preparedSource = await awaitCodeModeDeadline({
+      operation: () => prepareSource({ code: params.code, language: params.language, config }),
+      deadlineMs: deadline,
       signal: abortScope.signal,
+      createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
+      createAbortError: headlessAbortError,
     });
     const namespaces = mergeHeadlessNamespaces(
       namespaceRuntime.descriptors,
@@ -268,7 +241,7 @@ export async function runCodeModeScriptHeadless(params: {
           kind: "exec",
           source,
           catalog,
-          apiFiles: createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled),
+          apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
           namespaces,
           swarmEnabled,
         },
@@ -297,10 +270,13 @@ export async function runCodeModeScriptHeadless(params: {
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
+      // Node discovery invokes the generic nodes tool for live status too;
+      // excluding list/get would bypass the same headless tool-call budget.
       const requestedToolCalls = newRequests.filter(
         (request) =>
           request.method === "call" ||
           request.method === "callValue" ||
+          request.method === "nodes" ||
           request.method === "namespace",
       ).length;
       toolCallCount += requestedToolCalls;
@@ -324,7 +300,10 @@ export async function runCodeModeScriptHeadless(params: {
           signal: abortScope.signal,
         }),
       );
-      const frontierPending = pendingBridgeStatesForSettlement(pending, result.settlementMode);
+      // Preserve the waiting frontier before the lazy deadline callback;
+      // later worker legs replace the discriminated result entirely.
+      const settlementMode = result.settlementMode;
+      const frontierPending = pendingBridgeStatesForSettlement(pending, settlementMode);
       if (frontierPending.length === 0) {
         return headlessFailure({
           code: "internal_error",
@@ -333,29 +312,15 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      // Detached calls belong to an already-completed guest and must all run;
-      // an awaiting guest resumes at its actual first settled frontier.
-      const bridgeFrontier =
-        result.settlementMode.kind === "awaiting"
-          ? Promise.race(frontierPending.map((entry) => entry.promise))
-          : Promise.all(frontierPending.map((entry) => entry.promise)).then((settled) => {
-              const first = settled[0];
-              if (!first) {
-                throw new Error("code mode is waiting without pending bridge requests");
-              }
-              return first;
-            });
-      const firstSettled = await awaitHeadlessDeadline({
-        promise: bridgeFrontier,
-        deadline,
+      await awaitCodeModeDeadline({
+        operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
+        deadlineMs: deadline,
         signal: abortScope.signal,
+        createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
+        createAbortError: headlessAbortError,
       });
       const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
-      if (!settledRequests.some((entry) => entry.id === firstSettled.id)) {
-        settledRequests.push(firstSettled);
-      }
-      const settledIds = new Set(settledRequests.map((entry) => entry.id));
-      pending = pending.filter((entry) => !settledIds.has(entry.id));
+      pending = pending.filter((entry) => !entry.settled);
       result = normalizeCodeModeWorkerResult(
         await runHeadlessWorkerLeg({
           input: {

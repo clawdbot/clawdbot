@@ -233,8 +233,11 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toMatch(
-      /^\/tmp\/openclaw-sandboxes\/agent-builder-/,
+    expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
+      path.resolve("/tmp/openclaw-sandboxes"),
+    );
+    expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
+      /^workspace-[a-f0-9]{32}$/,
     );
     expect(parsed.sandbox.workspaceSource).toBe("sandbox");
     expect(parsed.sandbox.workspaceMounts).toEqual([

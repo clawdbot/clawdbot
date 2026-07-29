@@ -464,6 +464,7 @@ export type ArtifactDownloadResult = {
   encoding?: "base64";
   data?: string;
   url?: string;
+  expiresAt?: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
@@ -564,6 +565,7 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
+  toolOverrides?: import("../lib/sessions/patch.js").SessionToolOverrides;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;

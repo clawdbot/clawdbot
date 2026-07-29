@@ -41,6 +41,7 @@ export const ko: TranslationMap = {
     unselect: "선택 해제",
     enabled: "사용",
     disabled: "사용 안 함",
+    failed: "실패",
     none: "없음",
     na: "해당 없음",
     never: "never",
@@ -241,11 +242,6 @@ export const ko: TranslationMap = {
       schemaUnavailable: "스키마를 사용할 수 없습니다. Raw를 사용하세요.",
       channelSchemaUnavailable: "채널 구성 스키마를 사용할 수 없습니다.",
       loadingSchema: "구성 스키마를 불러오는 중…",
-    },
-    health: {
-      title: "채널 상태",
-      subtitle: "Gateway의 채널 상태 스냅샷입니다.",
-      noSnapshotYet: "아직 스냅샷이 없습니다.",
     },
     generic: {
       subtitle: "채널 상태 및 구성.",
@@ -592,7 +588,8 @@ export const ko: TranslationMap = {
     worktreeNameInvalid: "Worktree 이름은 소문자, 숫자, 대시를 사용합니다.",
     incognito: "시크릿",
     incognitoDescription: "이 스레드를 Gateway가 다시 시작될 때까지만 유지합니다",
-    startAsDraft: "초안으로 시작",
+    draft: "초안",
+    draftDescription: "게시하기 전까지 이 스레드를 나만 볼 수 있도록 유지합니다",
     messagePlaceholder: "이 세션에서 어떤 작업을 해야 하나요?",
     readingAttachment: "첨부 파일 읽는 중",
     start: "세션 시작",
@@ -601,6 +598,11 @@ export const ko: TranslationMap = {
     createOutcomeUnknown:
       "이 세션을 시작하는 동안 Gateway가 변경되었습니다. 이 작업을 다시 시작하기 전에 최근 세션을 확인하세요.",
     catalogUnavailable: "이 세션 대상을 사용할 수 없습니다.",
+  },
+  dashboardsPage: {
+    emptyTitle: "아직 대시보드가 없습니다",
+    emptyDescription: "스레드를 열고 Dashboard 페이스로 전환하여 여기에 추가하세요.",
+    loadError: "대시보드를 불러올 수 없습니다: {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -723,6 +725,7 @@ export const ko: TranslationMap = {
     runErrorTimedOut: "시간 초과",
     runErrorUnknown: "알 수 없는 오류",
     attentionRequired: "세션에 주의가 필요합니다",
+    openSession: "스레드 열기",
     model: "모델",
     provider: "제공업체",
     runtime: "런타임",
@@ -979,6 +982,8 @@ export const ko: TranslationMap = {
       notCreatedYet: "Not Created Yet",
       updatedUnknown: "Updated Unknown",
       missingHint: "This file is missing. Saving will create it in the agent workspace.",
+      addFile: "파일 추가…",
+      createHint: "이 파일은 아직 존재하지 않습니다. 저장하면 에이전트 워크스페이스에 생성됩니다.",
       content: "Content",
       words: "{count} words",
       lines: "lines",
@@ -1119,9 +1124,9 @@ export const ko: TranslationMap = {
         label: "브로드캐스트",
         description: "브로드캐스트 및 알림 설정",
       },
-      audio: {
-        label: "오디오",
-        description: "오디오 입력/출력 설정",
+      tts: {
+        label: "음성",
+        description: "텍스트 음성 변환 출력, 음성 및 페르소나",
       },
       session: {
         label: "세션",
@@ -1131,17 +1136,9 @@ export const ko: TranslationMap = {
         label: "Cron",
         description: "예약된 작업 및 자동화",
       },
-      web: {
-        label: "Web",
-        description: "웹 서버 및 API 설정",
-      },
       discovery: {
         label: "Discovery",
         description: "서비스 검색 및 네트워킹",
-      },
-      canvasHost: {
-        label: "Canvas Host",
-        description: "캔버스 렌더링 및 표시",
       },
       talk: {
         label: "Talk",
@@ -1206,6 +1203,8 @@ export const ko: TranslationMap = {
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} 방문함",
       lobsterdexFirstVisited: "{name} · 첫 방문일 {date}",
+      lobsterdexCardFirstVisited: "처음 방문 {date}",
+      lobsterdexOpen: "Lobsterdex 열기",
     },
     security: {
       title: "보안",
@@ -1303,7 +1302,7 @@ export const ko: TranslationMap = {
       broadcast: "브로드캐스트",
       notifications: "알림",
       talk: "대화",
-      audio: "오디오",
+      tts: "음성",
       commands: "명령",
       hooks: "훅",
       bindings: "바인딩",
@@ -1312,12 +1311,9 @@ export const ko: TranslationMap = {
       security: "보안 정책",
       plugins: "플러그인",
       gateway: "Gateway",
-      web: "웹",
       browser: "브라우저",
       nodeHost: "Node Host",
-      canvasHost: "Canvas Host",
       discovery: "검색",
-      media: "미디어",
       acp: "ACP",
       mcp: "MCP",
       theme: "테마",
@@ -1448,7 +1444,6 @@ export const ko: TranslationMap = {
     open: "열기",
     applying: "적용 중…",
     autoSaveSaving: "저장 중…",
-    autoSaveSaved: "저장됨",
     autoSaveFailed: "저장 실패",
     autoSaveConflict: "다른 곳에서 설정이 변경됨",
     retry: "재시도",
@@ -1827,13 +1822,16 @@ export const ko: TranslationMap = {
     skillWorkshop: "Skill Workshop",
     nodes: "노드",
     chat: "채팅",
+    dashboards: "대시보드",
     custodian: "OpenClaw",
     config: "구성",
     profile: "프로필",
     communications: "커뮤니케이션",
     appearance: "모양",
+    lobsterdex: "Lobsterdex",
     automation: "자동화",
     mcp: "MCP",
+    memory: "메모리",
     infrastructure: "인프라",
     labs: "Labs",
     about: "정보",
@@ -1863,13 +1861,16 @@ export const ko: TranslationMap = {
     skillWorkshop: "제안이 실제 Skills가 되기 전에 검토하고, 다듬고, 적용하세요.",
     nodes: "페어링된 디바이스 및 명령.",
     chat: "빠른 개입을 위한 Gateway 채팅.",
+    dashboards: "대시보드 페이스로 열리는 스레드입니다.",
     custodian: "시스템 설정 및 관리.",
     config: "openclaw.json 편집.",
     profile: "에이전트의 통계, 연속 기록, 산호초에서의 활동을 확인하세요.",
     communications: "채널, 메시지, 오디오 설정.",
     appearance: "테마, UI, 설정 마법사 설정.",
+    lobsterdex: "이 브라우저를 방문한 모든 랍스터 팔레트입니다.",
     automation: "명령, hooks, cron, plugins.",
     mcp: "MCP 서버, 인증, 도구 및 진단.",
+    memory: "메모리 엔진, 백엔드, 검색 및 드리밍.",
     infrastructure: "Gateway, 웹, 브라우저, 미디어 설정.",
     labs: "실험적인 에이전트 및 도구 기능.",
     about: "Control UI 및 연결된 Gateway 빌드 ID입니다.",
@@ -2134,6 +2135,154 @@ export const ko: TranslationMap = {
     tlsVerifyOff: "TLS 검증 꺼짐",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "메모리 섹션",
+    tabs: {
+      overview: "개요",
+      search: "검색",
+      dreaming: "드리밍",
+    },
+    engine: {
+      title: "엔진",
+      description:
+        "정확히 하나의 메모리 플러그인이 메모리 슬롯을 소유합니다. 엔진을 선택하면 해당 엔진이 활성화되고 나머지는 비활성화됩니다.",
+      rowTitle: "메모리 엔진",
+      off: "끔",
+      autoHint: "config에 고정된 엔진이 없으므로 슬롯이 기본 소유자로 폴백됩니다.",
+      explicitHint: "이 엔진은 config의 plugins.slots.memory 아래에 고정되어 있습니다.",
+      offHint:
+        "메모리가 설정에서 꺼져 있습니다: plugins.slots.memory가 none으로 설정되어 있습니다.",
+      catalogUnavailable: "메모리 엔진을 변경하려면 Gateway에 연결하세요.",
+      changeFailed: "메모리 엔진을 변경할 수 없습니다",
+      disabledTitle: "이 엔진은 비활성화되어 있습니다",
+      disabledHint:
+        "메모리 슬롯이 이 플러그인을 가리키고 있지만, 플러그인 자체가 비활성화되어 있어 메모리가 실행되지 않습니다.",
+      enable: "활성화",
+    },
+    backend: {
+      title: "백엔드",
+      description: "선택한 엔진에 대해 메모리가 저장되고 검색되는 방식입니다.",
+      rowTitle: "검색 백엔드",
+      builtin: "기본 제공",
+      qmd: "QMD",
+      builtinHint: "메모리 파일은 OpenClaw 자체에서 색인 및 검색됩니다.",
+      qmdHint: "검색은 QMD에 위임됩니다. 관련 설정은 아래에 표시됩니다.",
+    },
+    addons: {
+      title: "애드온",
+      description:
+        "이 플러그인들은 슬롯을 두고 경쟁하는 대신 엔진 위에 계층으로 동작하므로, 어떤 조합이든 동시에 실행할 수 있습니다.",
+      activeMemory: {
+        title: "활성 메모리",
+      },
+      memoryWiki: {
+        title: "메모리 위키",
+      },
+      stateUnknown: "알 수 없음",
+      manage: "애드온 활성화 또는 비활성화",
+      manageLink: "플러그인 열기",
+    },
+    import: {
+      title: "가져오기",
+      description: "다른 어시스턴트의 기존 메모리를 에이전트 워크스페이스로 가져옵니다.",
+      link: "메모리 가져오기 열기",
+    },
+    search: {
+      intro: "메모리 재정의가 없는 모든 에이전트가 공유하는 임베딩 및 검색 기본값입니다.",
+    },
+    dreaming: {
+      intro:
+        "Dreaming은 모든 에이전트 워크스페이스에 걸쳐 하나의 관리형 cron 작업으로 실행되므로 이 설정은 전역입니다. 이 설정은 {plugin} 플러그인이 소유합니다.",
+      schedule: {
+        title: "일정",
+        description: "전체 스윕이 실행되는 시점과 이를 서술하는 모델입니다.",
+      },
+      frequency: {
+        label: "Dreaming 빈도",
+        help: "전체 dreaming 스윕(light, REM, deep 순)의 cron 주기입니다. 플러그인 기본값을 사용하려면 비워 두세요.",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "시간대",
+        help: "cron 주기를 해석하는 데 사용되는 IANA 시간대입니다.",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "Dreaming 모델",
+        help: "dream diary 서술을 위한 provider/model 재정의입니다. 서브에이전트 모델 재정의가 허용되어야 합니다.",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "상세 로깅",
+        help: "각 dreaming 단계를 자세히 기록합니다. 임계값을 조정할 때 유용합니다.",
+      },
+      storage: {
+        title: "스토리지",
+        description: "승격된 메모리와 dreaming 보고서가 기록되는 위치입니다.",
+        modeLabel: "스토리지 모드",
+        modeHelp: "Inline은 메모리 파일에 기록하고, Separate는 전용 보고서 파일을 유지합니다.",
+        modes: {
+          inline: "Inline",
+          separate: "Separate",
+          both: "Both",
+        },
+        separateReportsLabel: "리포트 분리",
+        separateReportsHelp: "dreaming 리포트를 기본 메모리 파일에서 분리합니다.",
+      },
+      phases: {
+        light: {
+          title: "라이트 단계",
+          description: "리플레이 후보를 준비하는 저비용 최근 활동 처리 단계입니다.",
+        },
+        deep: {
+          title: "딥 단계",
+          description: "단기 항목을 메모리로 승격시키는 점수 기반 승격 처리 단계입니다.",
+        },
+        rem: {
+          title: "REM 단계",
+          description: "룩백 기간에 걸쳐 반복되는 주제를 찾는 패턴 처리 단계입니다.",
+        },
+      },
+      phaseFields: {
+        enabled: "활성화됨",
+        enabledHelp: "스윕 중에 이 단계를 실행합니다.",
+        lookbackDays: "룩백 일수",
+        lookbackDaysHelp:
+          "이 단계가 얼마나 이전까지 읽을지 설정합니다. 플러그인 기본값을 사용하려면 비워 두세요.",
+        limit: "제한",
+        limitHelp: "이 단계가 실행당 처리하는 최대 항목 수입니다.",
+        dedupeSimilarity: "중복 제거 유사도",
+        dedupeSimilarityHelp: "두 후보를 중복으로 처리하는 기준이 되는 유사도 값입니다.",
+        minScore: "최소 점수",
+        minScoreHelp: "항목이 도달해야 하는 승격 점수입니다.",
+        minRecallCount: "최소 회상 수",
+        minRecallCountHelp: "항목이 승격되기 전에 회상되어야 하는 횟수입니다.",
+        minUniqueQueries: "최소 고유 쿼리 수",
+        minUniqueQueriesHelp: "항목을 표면화한 고유 쿼리 수입니다.",
+        recencyHalfLifeDays: "최근성 반감기(일)",
+        recencyHalfLifeDaysHelp: "오래된 회상 신호가 얼마나 빠르게 가중치를 잃는지입니다.",
+        maxAgeDays: "최대 기간(일)",
+        maxAgeDaysHelp: "이 기간보다 오래된 단기 항목을 무시합니다.",
+        maxPromotedSnippetTokens: "승격된 스니펫 최대 토큰",
+        maxPromotedSnippetTokensHelp:
+          "승격된 각 스니펫의 토큰 예산입니다. 출처 정보는 그대로 유지됩니다.",
+        minPatternStrength: "최소 패턴 강도",
+        minPatternStrengthHelp: "반복되는 패턴이 보고되기 위해 도달해야 하는 강도입니다.",
+      },
+      agentScope: {
+        title: "에이전트 보기",
+        description:
+          "위 설정은 전역입니다. 아래의 드림 다이어리, 단기 카운트, 유지 관리 작업은 하나의 에이전트에 속합니다.",
+        rowTitle: "에이전트",
+      },
+      unsupported: {
+        title: "드리밍 설정",
+        rowTitle: "이 엔진에서 사용할 수 없음",
+        description:
+          "{plugin} 플러그인이 메모리 슬롯을 소유하고 있으며 해당 구성 스키마에 드리밍 섹션이 없어 이 설정을 저장할 수 없습니다. 이를 편집하려면 개요 탭에서 엔진을 전환하세요.",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "스레드 섹션",
   },
@@ -2293,6 +2442,21 @@ export const ko: TranslationMap = {
       description: "Code Mode가 하위 에이전트 그룹을 병렬로 오케스트레이션할 수 있게 합니다.",
       empty: "활성 swarm이 없습니다.",
       defaultPhase: "단계 미지정",
+    },
+    toolSearch: {
+      title: "도구 검색",
+      description:
+        "제한된 도구 디렉터리를 표시하고 나머지는 검색 뒤로 미뤄, 대규모 MCP 및 플러그인 카탈로그가 프롬프트를 혼잡하게 만들지 않도록 합니다.",
+    },
+    localModelLean: {
+      title: "로컬 모델용 경량 도구",
+      description:
+        "작은 로컬 모델이 제대로 처리하지 못하는 무거운 기본 도구를 제거하고, 안정적으로 사용할 수 있는 더 짧은 세트만 남깁니다.",
+    },
+    auditMessages: {
+      title: "메시지 감사 메타데이터",
+      description:
+        "감사 원장에 직접 대화의 콘텐츠 없는 메타데이터를 기록합니다. 메시지 내용은 저장되지 않습니다.",
     },
   },
   aboutPage: {
@@ -3067,7 +3231,6 @@ export const ko: TranslationMap = {
       title: "스냅샷",
       subtitle: "최신 Gateway 핸드셰이크 정보.",
       status: "상태",
-      uptime: "가동 시간",
       tickInterval: "틱 간격",
       lastChannelsRefresh: "마지막 채널 새로고침",
       lastError: "마지막 오류",
@@ -3083,6 +3246,7 @@ export const ko: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "알 수 없는 오류",
     cronFailed: "cron 작업 {count}개 실패",
     cronOverdue: "cron 작업 {count}개 기한 초과",
     modelAuthExpired: "모델 인증 만료됨: {providers}",
@@ -3178,14 +3342,18 @@ export const ko: TranslationMap = {
       on: "드리밍 켜짐",
       off: "드리밍 꺼짐",
     },
-    restartConfirmation: {
-      title: "Restart Gateway to Apply Change",
-      subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
-      confirm: "Confirm Restart",
-      restarting: "Restarting…",
-      failed: "Could not apply change. Check your connection and try again.",
+    toggleConfirmation: {
+      subtitle: "Dreaming은 전역 설정으로, 이 에이전트에만 적용되지 않습니다.",
+      enableTitle: "모든 에이전트에 대해 Dreaming 켜기",
+      enableDetail:
+        "야간 dreaming 스윕이 구성된 모든 에이전트 워크스페이스에서 실행되어, 단기 회상을 장기 기억으로 승격합니다. 즉시 적용됩니다.",
+      enableConfirm: "Dreaming 켜기",
+      disableTitle: "모든 에이전트에 대해 Dreaming 끄기",
+      disableDetail:
+        "야간 dreaming 스윕이 이 에이전트뿐만 아니라 구성된 모든 에이전트에서 중지됩니다. 이미 기록된 기억은 유지되며, 새로 승격되는 것은 없습니다. 즉시 적용됩니다.",
+      disableConfirm: "Dreaming 끄기",
+      saving: "저장 중…",
+      failed: "변경 사항을 적용할 수 없습니다. 연결을 확인하고 다시 시도하세요.",
     },
     status: {
       active: "드리밍 활성",
@@ -3828,6 +3996,11 @@ export const ko: TranslationMap = {
     },
     outputTokens: "출력 토큰 {count}개",
     archivedSessionDisabled: "메시지를 보내려면 이 세션을 복원하세요.",
+    sessionRoute: {
+      chooseTitle: "세션 선택",
+      multipleMatches: "{shortId}와(과) 일치하는 세션이 두 개 이상입니다.",
+      additionalMatches: "검색 결과가 남아 있습니다. 더 긴 id 접두사를 사용하세요.",
+    },
     sessionSharing: {
       menu: "스레드 공유",
       current: "스레드 표시 범위: {visibility}",
@@ -3879,6 +4052,15 @@ export const ko: TranslationMap = {
       oneMessage: "메시지 {count}개",
       messages: "메시지 {count}개",
       activeBranch: "활성 분기",
+      gatewayPicker: {
+        menuLabel: "Gateway: {gateway}",
+        primaryTag: "기본",
+        setPrimary: "기본으로 설정…",
+        openSettings: "Gateway 설정…",
+        connected: "연결됨",
+        unreachable: "연결할 수 없음",
+        unknown: "알 수 없는 상태",
+      },
     },
     board: {
       faceLabel: "스레드 화면",
@@ -4069,7 +4251,9 @@ export const ko: TranslationMap = {
       threads: "스레드",
       groups: "그룹",
       coding: "코딩",
-      groupCatalogSessionsByProject: "프로젝트별 그룹화",
+      catalogViewOptions: "보기 옵션",
+      catalogGroupByProject: "프로젝트",
+      catalogGroupByPerson: "사람",
       openSessionMenu: "Open session menu",
       sortBy: "정렬 기준",
       sortCreated: "생성일",
@@ -4248,6 +4432,16 @@ export const ko: TranslationMap = {
       renderedMarkdownHint: "빠른 읽기를 위한 정리된 서식 텍스트 미리 보기입니다.",
       noPreviewableMarkdown: "미리 볼 수 있는 마크다운 콘텐츠가 없습니다.",
       noContent: "사용할 수 있는 콘텐츠가 없습니다",
+    },
+    sidebarColumns: {
+      chat: "채팅",
+      discussion: "토론",
+      detail: "세부 정보",
+      close: "{panel} 닫기",
+      drag: "{panel} 드래그",
+      dropOnEmptyLeft: "{panel}을(를) 비어 있는 왼쪽 사이드바로 이동",
+      dropOnEmptyRight: "{panel}을(를) 비어 있는 오른쪽 사이드바로 이동",
+      resize: "{panel} 크기 조정",
     },
     thread: {
       search: "메시지 검색",

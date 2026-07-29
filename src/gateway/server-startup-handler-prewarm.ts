@@ -1,10 +1,15 @@
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+
+const SIDEBAR_SESSION_LIST_LIMIT = 60;
+const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-type GatewayHandlerPrewarmFamily = {
+type GatewayHandlerPrewarmItem = {
   name: string;
   load: () => Promise<unknown>;
 };
@@ -13,31 +18,75 @@ type GatewayHandlerPrewarmHandle = {
   stop: () => void;
 };
 
-// These are the families requested by the Control UI's first dashboard turn.
-// Keep the list explicit so adding a cold import is a conscious startup tradeoff.
-const DASHBOARD_HANDLER_FAMILIES: readonly GatewayHandlerPrewarmFamily[] = [
-  { name: "sessions", load: () => import("./server-methods/sessions.js") },
-  { name: "chat", load: () => import("./server-methods/chat.js") },
-  { name: "tasks", load: () => import("./server-methods/tasks.js") },
-  { name: "cron", load: () => import("./server-methods/cron.js") },
-  { name: "models-auth-status", load: () => import("./server-methods/models-auth-status.js") },
-  { name: "agent-identity", load: () => import("./server-methods/agent-identity.js") },
-  { name: "board", load: () => import("./server-methods/board.js") },
-  { name: "channels", load: () => import("./server-methods/channels.js") },
-];
+async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
+  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
+    await Promise.all([
+      import("../config/sessions/combined-store-gateway.js"),
+      import("./session-utils-list.js"),
+    ]);
+  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    agentId,
+    projection: "list",
+  });
+  await listSessionsFromStoreAsync({
+    cfg,
+    durableStorePath,
+    storePath,
+    store,
+    opts: {
+      agentId,
+      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: SIDEBAR_SESSION_LIST_LIMIT,
+    },
+  });
+}
+
+function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmItem[] {
+  const agentIds = listAgentIds(cfg);
+  return [
+    ...agentIds.map((agentId) => ({
+      name: `sessions.${agentId}`,
+      load: () => prewarmGatewaySessionListData(cfg, agentId),
+    })),
+    {
+      name: "plugins",
+      load: async () => {
+        const { listManagedPlugins } = await import("../plugins/management-service.js");
+        await listManagedPlugins({ config: cfg });
+      },
+    },
+    ...agentIds.map((agentId) => ({
+      name: `session-catalog.${agentId}`,
+      load: async () => {
+        const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
+        await prewarmSessionCatalogList({
+          config: cfg,
+          agentId,
+          limitPerHost: SIDEBAR_CATALOG_LIMIT_PER_HOST,
+        });
+      },
+    })),
+  ];
+}
 
 export function scheduleGatewayHandlerPrewarm(params: {
+  cfgAtStart: OpenClawConfig;
   startupTrace?: StartupTrace;
   log: { warn: (msg: string) => void };
-  families?: readonly GatewayHandlerPrewarmFamily[];
+  items?: readonly GatewayHandlerPrewarmItem[];
 }): GatewayHandlerPrewarmHandle {
-  const families = params.families ?? DASHBOARD_HANDLER_FAMILIES;
+  // Frequent updater restarts make cold dashboard data the remaining slow tier.
+  // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
+  const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart);
   let stopped = false;
   let nextIndex = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= families.length) {
+    if (stopped || nextIndex >= items.length) {
       return;
     }
     timer = setTimeout(() => {
@@ -45,19 +94,20 @@ export function scheduleGatewayHandlerPrewarm(params: {
       if (stopped) {
         return;
       }
-      const family = families[nextIndex++];
-      if (!family) {
+      const item = items[nextIndex++];
+      if (!item) {
         return;
       }
-      const load = () => family.load();
+      const load = () => item.load();
       void runWithGatewayIndependentRootWorkAdmission(() =>
         params.startupTrace
-          ? params.startupTrace.measure(`post-ready.gateway-handler.${family.name}`, load)
+          ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
           : load(),
       )
         .catch((err: unknown) => {
+          // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
           params.log.warn(
-            `post-ready gateway handler prewarm failed for ${family.name}: ${String(err)}`,
+            `post-ready gateway data prewarm failed for ${item.name}: ${String(err)}`,
           );
         })
         .finally(scheduleNext);
@@ -65,8 +115,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
     timer.unref?.();
   };
 
-  // One family per event-loop turn keeps this work behind readiness and lets
-  // immediate client traffic run between imports instead of recreating a startup wall.
+  // One cache fill per event-loop turn lets immediate client work run between steps.
   scheduleNext();
 
   return {

@@ -14,6 +14,10 @@ import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
+  attestCodexPluginThreadApps,
+  discardUnattestedCodexPluginThread,
+} from "./plugin-thread-attestation.js";
+import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
@@ -67,6 +71,7 @@ type PendingSupervisionMaterializationParams = {
   webSearchAllowed?: boolean;
   environmentSelection?: CodexTurnEnvironmentParams[];
   signal?: AbortSignal;
+  provisionalAppIds?: readonly string[];
   throwIfAborted: () => void;
   lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "measure" | "mark" | "logSummary">;
   normalizeBindingModelProvider: (
@@ -203,6 +208,38 @@ export async function materializePendingSupervisionBranch(
       modelProvider: nativeModelProvider,
       operation: "thread/start response",
     });
+    if (params.provisionalAppIds?.length) {
+      try {
+        await params.lifecycleTiming.measure("plugin-app-attestation", () =>
+          attestCodexPluginThreadApps({
+            client: params.client,
+            threadId: finalThreadId,
+            appIds: params.provisionalAppIds ?? [],
+            signal: params.signal,
+          }),
+        );
+      } catch (error) {
+        // The fresh persistent branch has no rollout yet; delete it before
+        // archiving the probe, and retain both for recovery if cleanup fails.
+        const finalCleanupConfirmed = await discardUnattestedCodexPluginThread({
+          client: params.client,
+          threadId: finalThreadId,
+          ephemeral: startParams.ephemeral === true,
+        });
+        if (
+          !finalCleanupConfirmed ||
+          !(await archiveSupervisionArtifact(params.client, probeThreadId))
+        ) {
+          provisionalCleanupSafe = false;
+          throw new CodexAppServerUnsafeSubscriptionError(
+            "Codex supervised plugin app attestation cleanup failed",
+            { cause: error },
+          );
+        }
+        pending = await trackPendingSupervisionArtifacts(params, pending, []);
+        throw error;
+      }
+    }
     if (history.responseItems.length > 0) {
       await params.lifecycleTiming.measure("supervision-history-inject", () =>
         params.client.request(

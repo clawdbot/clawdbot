@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
 import {
   importConfigMachineState,
+  readConfigMachineState,
   updateConfigMachineState,
 } from "../state/config-machine-state.js";
 import {
@@ -57,7 +58,22 @@ export function migrateLegacyConfigMachineState(params: {
       compareOpenClawVersions(meta.lastTouchedVersion, BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION) ===
         -1)
   ) {
-    entries.push(["plugins.bundledDiscovery", "compat"]);
+    // Only infer compat when the canonical SQLite row does not already exist.
+    // Beta versions (e.g. 2026.7.2-beta.5) are treated by SemVer as older than
+    // the cutover release (2026.7.2), so the inference re-fires on every new
+    // CLI process.  Checking for an existing canonical value here avoids
+    // re-reporting the already-preserved state as a Doctor change.
+    let hasCanonicalState = false;
+    try {
+      hasCanonicalState =
+        readConfigMachineState("plugins.bundledDiscovery", { env: params.env }) !== undefined;
+    } catch {
+      // SQLite temporarily unavailable — fall through to infer compat;
+      // importConfigMachineState below will handle it.
+    }
+    if (!hasCanonicalState) {
+      entries.push(["plugins.bundledDiscovery", "compat"]);
+    }
   }
   const tts = record(raw.tts);
   if (tts && Object.hasOwn(tts, "prefsPath")) {

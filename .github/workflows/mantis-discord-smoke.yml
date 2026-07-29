@@ -85,14 +85,14 @@ jobs:
           selected_revision="$(git rev-parse HEAD)"
           trusted_reason=""
 
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
           if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
           elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
             trusted_reason="release-tag"
           elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
             release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
             if [[ "$selected_revision" == "$release_branch_sha" ]]; then
               trusted_reason="release-branch-head"

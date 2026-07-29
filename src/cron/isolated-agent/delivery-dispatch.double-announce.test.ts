@@ -726,17 +726,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       threadId: "42",
     });
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery({ threadId: "42" }),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -776,17 +766,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -836,17 +816,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       });
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -902,17 +872,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "session:agent:main:main",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
+      ...makeBaseParams({ runStartedAt: 1_000, sessionTarget: "session:agent:main:main" }),
       agentSessionKey: "agent:main:main",
-      runStartedAt: 1_000,
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -953,17 +914,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     mockResolvedOutboundRoute();
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -1001,17 +952,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery({
         channel: "telegram",
         to: "123456",
@@ -2140,90 +2081,43 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("does not retry a batch after an earlier direct announce payload was sent", async () => {
-    mockResolvedOutboundRoute({
-      sessionKey: "agent:main:telegram:direct:123456",
-      baseSessionKey: "agent:main:telegram:direct:123456",
-      to: "telegram:123456",
-    });
-    const notDispatchedError = new PlatformMessageNotDispatchedError(
-      "second payload stopped before final dispatch",
-      {
-        cause: Object.assign(new Error("connect ECONNREFUSED"), {
-          code: "ECONNREFUSED",
-          syscall: "connect",
-        }),
-      },
-    );
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
-      deliveryParams.onPayloadDeliveryOutcome?.({
+  it.each([
+    {
+      name: "does not retry a batch after an earlier direct announce payload was sent",
+      firstOutcome: {
         index: 0,
-        status: "sent",
-        results: [{ channel: "telegram", messageId: "tg-first" }] as never,
-      });
-      deliveryParams.onPayloadDeliveryOutcome?.({
-        index: 1,
-        status: "failed",
-        error: notDispatchedError,
-        sentBeforeError: false,
-        stage: "platform_send",
-      });
-      return [{ channel: "telegram", messageId: "tg-first" }] as never;
-    });
-
-    const params = makeBaseParams({
-      synthesizedText: undefined,
-      runStartedAt: 1_000,
-    });
-    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
-    params.outputText = "Second payload.";
-    params.summary = "Second payload.";
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectResultFields(state.result, {
-      status: "error",
-      error: String(notDispatchedError),
-      deliveryAttempted: true,
-    });
-    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
-        "Job: Test Job",
-        "Target: telegram:123456",
-        "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
-        "One or more scheduled message payloads may already have been delivered.",
-      ].join("\n"),
-      {
-        sessionKey: "agent:main:telegram:direct:123456",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
+        status: "sent" as const,
+        results: [{ channel: "telegram", messageId: "tg-first" }],
       },
-    );
-  });
-
-  it("does not retry after an earlier direct announce payload returned no identity", async () => {
-    mockResolvedOutboundRoute({
-      sessionKey: "agent:main:telegram:direct:123456",
-      baseSessionKey: "agent:main:telegram:direct:123456",
-      to: "telegram:123456",
-    });
-    const notDispatchedError = new PlatformMessageNotDispatchedError(
-      "second payload stopped before final dispatch",
-      {
-        cause: Object.assign(new Error("connect ECONNREFUSED"), {
-          code: "ECONNREFUSED",
-          syscall: "connect",
-        }),
-      },
-    );
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
-      deliveryParams.onPayloadDeliveryOutcome?.({
+      results: [{ channel: "telegram", messageId: "tg-first" }],
+    },
+    {
+      name: "does not retry after an earlier direct announce payload returned no identity",
+      firstOutcome: {
         index: 0,
-        status: "suppressed",
+        status: "suppressed" as const,
         reason: "adapter_returned_no_identity",
-      });
+      },
+      results: [],
+    },
+  ])("$name", async ({ firstOutcome, results }) => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "second payload stopped before final dispatch",
+      {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      },
+    );
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.(firstOutcome as never);
       deliveryParams.onPayloadDeliveryOutcome?.({
         index: 1,
         status: "failed",
@@ -2231,7 +2125,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         sentBeforeError: false,
         stage: "platform_send",
       });
-      return [] as never;
+      return results as never;
     });
 
     const params = makeBaseParams({

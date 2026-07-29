@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ModelProvidersRouteData } from "./model-providers-page.ts";
@@ -26,9 +27,7 @@ async function loadModelProvidersRouteData(
 }
 
 export const page = definePage({
-  id: "model-providers",
-  path: "/settings/model-providers",
-  aliases: ["/model-providers"],
+  ...routePageSpec("model-providers"),
   loader: loadModelProvidersRouteData,
   component: () =>
     import("./model-providers-page.ts").then(() => ({

@@ -2,7 +2,35 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArgs, reportOrphanLocaleDocs } from "../../scripts/docs-sync-publish.mjs";
+import {
+  composeDocsConfig,
+  parseArgs,
+  reportOrphanLocaleDocs,
+} from "../../scripts/docs-sync-publish.mjs";
+
+function collectPages(entry: unknown, pages: string[] = []): string[] {
+  if (typeof entry === "string") {
+    pages.push(entry);
+    return pages;
+  }
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      collectPages(item, pages);
+    }
+    return pages;
+  }
+  if (!entry || typeof entry !== "object") {
+    return pages;
+  }
+  const record = entry as Record<string, unknown>;
+  if (typeof record.page === "string") {
+    pages.push(record.page);
+  }
+  collectPages(record.pages, pages);
+  collectPages(record.groups, pages);
+  collectPages(record.tabs, pages);
+  return pages;
+}
 
 describe("docs-sync-publish", () => {
   it("parses docs sync provenance args", () => {
@@ -67,5 +95,40 @@ describe("docs-sync-publish", () => {
     } finally {
       fs.rmSync(docsDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps generated locale navigation aligned with English routes", () => {
+    const config = composeDocsConfig() as {
+      navigation: {
+        languages: Array<{
+          language: string;
+          tabs: Array<{ tab: string; groups?: Array<{ group: string }> }>;
+        }>;
+      };
+    };
+    const english = config.navigation.languages.find((entry) => entry.language === "en");
+    const simplifiedChinese = config.navigation.languages.find(
+      (entry) => entry.language === "zh-Hans",
+    );
+    const german = config.navigation.languages.find((entry) => entry.language === "de");
+
+    expect(english).toBeDefined();
+    expect(simplifiedChinese).toBeDefined();
+    expect(german).toBeDefined();
+
+    const englishWithoutClawHub = {
+      ...english,
+      tabs: english!.tabs.filter((tab) => tab.tab !== "ClawHub"),
+    };
+    const expectedZhPages = collectPages(englishWithoutClawHub)
+      .map((page) => `zh-CN/${page}`)
+      .toSorted();
+    expect(collectPages(simplifiedChinese).toSorted()).toEqual(expectedZhPages);
+    expect(simplifiedChinese!.tabs[0]?.tab).toBe("快速开始");
+    expect(simplifiedChinese!.tabs[0]?.groups?.[0]?.group).toBe("首页");
+
+    expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
+    expect(german!.tabs[0]?.tab).toBe("Loslegen");
+    expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
   });
 });

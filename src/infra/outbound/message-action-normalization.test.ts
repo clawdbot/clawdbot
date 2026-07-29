@@ -303,6 +303,58 @@ describe("normalizeMessageActionInput", () => {
   });
 
   it.each([
+    "agent:main:subagent:worker",
+    "agent:main:cron:job:run:turn",
+    "channel:agent:main:subagent:worker",
+    "channel:agent:main:main",
+  ])("does not infer internal session %s as a message target", (currentChannelId) => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord" },
+        toolContext: {
+          currentChannelId,
+          currentChannelProvider: "discord",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("uses a real current messaging target instead of an internal session channel", () => {
+    expect(
+      normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord" },
+        toolContext: {
+          currentChannelId: "agent:main:subagent:worker",
+          currentMessagingTarget: "channel:123456789012345678",
+          currentChannelProvider: "discord",
+        },
+      }),
+    ).toMatchObject({
+      channel: "discord",
+      target: "channel:123456789012345678",
+      to: "channel:123456789012345678",
+    });
+  });
+
+  it("preserves an explicitly supplied target shaped like an internal session", () => {
+    expect(
+      normalizeMessageActionInput({
+        action: "send",
+        args: {
+          channel: "discord",
+          target: "agent:main:subagent:worker",
+        },
+      }),
+    ).toMatchObject({
+      channel: "discord",
+      target: "agent:main:subagent:worker",
+      to: "agent:main:subagent:worker",
+    });
+  });
+
+  it.each([
     { name: "a nonempty targets array", targets: ["C_TARGET"] },
     { name: "an empty targets array", targets: [] },
     { name: "a malformed targets value", targets: "C_TARGET" },

@@ -451,6 +451,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("describes the actual Code Mode control surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "wait"],
+      codeModeActive: true,
+    });
+
+    expect(prompt).toContain(
+      "- exec: Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
+    );
+    expect(prompt).toContain("- wait: Resume a suspended Code Mode exec");
+    expect(prompt).not.toContain("- exec: Run shell");
+    expect(prompt).not.toContain("Use exec yieldMs");
+  });
+
   it("uses provider-neutral web_search prompt metadata", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -963,11 +978,22 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
     );
     expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
     expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
       prompt.indexOf("NEVER use [[tts:...]]"),
+    );
+  });
+
+  it("adds USER guidance when a user-model file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
+    });
+
+    expect(prompt).toContain(
+      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
     );
   });
 
@@ -1827,6 +1853,63 @@ describe("buildSubagentSystemPrompt", () => {
         expect(prompt, testCase.name).toContain("spawned by main agent");
       }
     }
+  });
+});
+
+describe("watched sessions prompt surfaces", () => {
+  it("renders prepared watched sessions with titles, overflow, and recall guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_list", "sessions_history", "sessions_search"],
+      preparedWatchedSessions: {
+        sessions: [
+          { key: "agent:main:telegram:group:alpha", title: "Family group" },
+          { key: "agent:main:telegram:group:beta" },
+        ],
+        hiddenCount: 1,
+        readToolNames: ["sessions_history", "sessions_search"],
+        listToolAvailable: true,
+      },
+    });
+
+    expect(prompt).toContain("## Watched Sessions");
+    expect(prompt).toContain(
+      "Readable now (read-only) via sessions_history/sessions_search; rows appear in sessions_list.",
+    );
+    expect(prompt).toContain("- agent:main:telegram:group:alpha — Family group");
+    expect(prompt).toContain("- agent:main:telegram:group:beta");
+    expect(prompt).toContain('(+1 more: sessions_list kinds=["group"].)');
+    expect(prompt).toContain(
+      "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
+    );
+  });
+
+  it("names only granted read tools and skips the sessions_list overflow hint without it", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_history"],
+      preparedWatchedSessions: {
+        sessions: [{ key: "agent:main:telegram:group:alpha" }],
+        hiddenCount: 2,
+        readToolNames: ["sessions_history"],
+        listToolAvailable: false,
+      },
+    });
+
+    expect(prompt).toContain("Readable now (read-only) via sessions_history.");
+    expect(prompt).not.toContain("rows appear in sessions_list");
+    expect(prompt).toContain("(+2 more.)");
+    expect(prompt).not.toContain('sessions_list kinds=["group"]');
+  });
+
+  it("omits the watched section and recall line without prepared data or session tools", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "exec"],
+    });
+
+    expect(prompt).not.toContain("## Watched Sessions");
+    expect(prompt).not.toContain("before claiming no access");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

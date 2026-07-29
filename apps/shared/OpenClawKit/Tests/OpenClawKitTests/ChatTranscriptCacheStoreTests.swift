@@ -798,6 +798,7 @@ struct ChatTranscriptCacheStoreTests {
             "client-state-branch-revision-v3",
             "client-state-agent-id-v4",
             "client-state-outbox-attempt-scope-v5",
+            "client-state-outbox-attachment-rekey-v6",
         ])
     }
 }
@@ -1174,6 +1175,47 @@ struct ChatCommandOutboxStoreTests {
             replacementID: "requeued-retry") == .updated)
         #expect(await stickyStore.loadCommands()
             .contains(where: { $0.id == "requeued-retry" && $0.attemptVersion == 1 }))
+    }
+
+    @Test func `parked accepted attachment follows the fresh retry identity`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        let attachment = OpenClawChatOutboxAttachment(
+            type: "audio",
+            mimeType: "audio/m4a",
+            fileName: "note.m4a",
+            data: Data([1, 2, 3]),
+            durationSeconds: 1)
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        let state = try #require(await store.branchState(for: scope))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "attached",
+            text: "maybe accepted",
+            attachments: [attachment])))
+        _ = try #require(await store.claimNextCommand())
+        _ = try #require(await store.reconcileBranchScope(
+            scope,
+            previousState: state,
+            activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"],
+            lastError: "branch changed"))
+        let parked = try #require(await store.loadCommands().first)
+
+        #expect(await store.markCommandRetriedIfPresent(
+            id: parked.id,
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: parked.attemptVersion,
+                retryCount: parked.retryCount,
+                lastError: parked.lastError),
+            agentID: "main",
+            deliverySessionKey: "main",
+            routingContract: "per-sender|main|main",
+            replacementID: "attached-retry") == .updated)
+        let retried = try #require(await store.loadCommands().first)
+        #expect(retried.id == "attached-retry")
+        #expect(retried.attachments == [attachment])
     }
 
     @Test func `empty root reconcile permits first row and parks a wiped scope`() async throws {

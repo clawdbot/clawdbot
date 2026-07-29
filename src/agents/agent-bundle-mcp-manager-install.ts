@@ -1,3 +1,4 @@
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Session MCP runtime manager install path: static get-or-create + requester resolve/install. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -28,6 +29,7 @@ type RuntimeEntryParams = {
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
   configFingerprint?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 };
 
 type SessionMcpRuntimeManagerInstall = {
@@ -49,6 +51,7 @@ type SessionMcpRuntimeManagerInstall = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     requesterScope: SessionMcpRequesterScope;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
 };
 
@@ -93,6 +96,7 @@ export function createSessionMcpRuntimeManagerInstall(
         excludeServerNames: params.excludeServerNames,
         redactConnectionServerNames: params.redactConnectionServerNames,
         safeServerNamesByServer: params.safeServerNamesByServer,
+        toolOverrides: params.toolOverrides,
       }).fingerprint;
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
     if (existing) {
@@ -149,6 +153,7 @@ export function createSessionMcpRuntimeManagerInstall(
         redactConnectionServerNames: params.redactConnectionServerNames,
         requesterScope: params.requesterScope,
         configFingerprint: nextFingerprint,
+        toolOverrides: params.toolOverrides,
       }),
     ).then((runtime) => {
       reconcileReusableRetirement(params.sessionId, runtime);
@@ -187,6 +192,7 @@ export function createSessionMcpRuntimeManagerInstall(
     connectionOverrides: Map<string, McpServerConnectionResolved>;
     redactConnectionServerNames: ReadonlySet<string>;
     requesterScope: SessionMcpRequesterScope;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }): Promise<SessionMcpRuntime> => {
     const resolvedNameSet = new Set(params.connectionOverrides.keys());
     const { fingerprint: resolvedFingerprint } = loadSessionMcpConfig({
@@ -197,6 +203,7 @@ export function createSessionMcpRuntimeManagerInstall(
       includeServerNames: resolvedNameSet,
       redactConnectionServerNames: params.redactConnectionServerNames,
       safeServerNamesByServer: params.safeServerNamesByServer,
+      toolOverrides: params.toolOverrides,
     });
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
@@ -241,6 +248,7 @@ export function createSessionMcpRuntimeManagerInstall(
       redactConnectionServerNames: params.redactConnectionServerNames,
       requesterScope: params.requesterScope,
       configFingerprint: resolvedFingerprint,
+      toolOverrides: params.toolOverrides,
     });
     store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
       connectionHash,
@@ -275,6 +283,7 @@ export function createSessionMcpRuntimeManagerInstall(
     agentAccountId?: string | null;
     messageChannel?: string | null;
     requesterScope: SessionMcpRequesterScope;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }): Promise<SessionMcpRuntime | undefined> => {
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
     const meta = store.connectionMetaByRuntimeKey.get(params.runtimeKey);
@@ -330,6 +339,7 @@ export function createSessionMcpRuntimeManagerInstall(
       connectionOverrides,
       redactConnectionServerNames: params.scopedNameSet,
       requesterScope: params.requesterScope,
+      toolOverrides: params.toolOverrides,
     });
   };
 

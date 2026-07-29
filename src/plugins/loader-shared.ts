@@ -25,6 +25,7 @@ import { clearEmbeddingProviders } from "./embedding-providers.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
+import { clearLegacyPluginInternalHooks } from "./legacy-internal-hook-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -172,6 +173,10 @@ export function clearActivatedPluginRuntimeState(): void {
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
   clearPluginInteractiveHandlers();
+  // Legacy api.registerHook callbacks are process-global compatibility state.
+  // Retire them with the active registry so disabled or removed plugins cannot
+  // keep running.
+  clearLegacyPluginInternalHooks();
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
@@ -292,6 +297,7 @@ export function createManifestPluginRecord(params: {
     id: manifestRecord.id,
     name: manifestRecord.name ?? manifestRecord.id,
     description: manifestRecord.description,
+    packageVersion: manifestRecord.packageVersion,
     version: manifestRecord.version,
     builtWithOpenClawVersion: candidate.packageManifest?.build?.openclawVersion?.trim(),
     packageName: manifestRecord.packageName,

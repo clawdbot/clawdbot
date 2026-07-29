@@ -648,6 +648,8 @@ class BorrowedMemoryManager implements MemorySearchManager {
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      lexicalOnly?: boolean;
+      activeProjectKeys?: string[];
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
@@ -659,6 +661,10 @@ class BorrowedMemoryManager implements MemorySearchManager {
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {
     return await this.inner.readFile(params);
+  }
+
+  async listCuratedProjectCandidates(opts: { activeProjectKeys: string[]; limit?: number }) {
+    return (await this.inner.listCuratedProjectCandidates?.(opts)) ?? [];
   }
 
   status() {
@@ -824,6 +830,8 @@ class FallbackMemoryManager implements MemorySearchManager {
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      lexicalOnly?: boolean;
+      activeProjectKeys?: string[];
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
@@ -881,6 +889,23 @@ class FallbackMemoryManager implements MemorySearchManager {
       return await fallback.readFile(params);
     }
     throw new Error(this.lastError ?? "memory read unavailable");
+  }
+
+  async listCuratedProjectCandidates(opts: { activeProjectKeys: string[]; limit?: number }) {
+    this.ensureOpen();
+    if (!this.primaryFailed && this.deps.primary.listCuratedProjectCandidates) {
+      try {
+        return await this.deps.primary.listCuratedProjectCandidates(opts);
+      } catch (err) {
+        this.primaryFailed = true;
+        this.lastError = formatErrorMessage(err);
+        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        this.deps.retirePrimary();
+        this.evictCacheEntry();
+      }
+    }
+    const fallback = await this.ensureFallback();
+    return (await fallback?.listCuratedProjectCandidates?.(opts)) ?? [];
   }
 
   status() {

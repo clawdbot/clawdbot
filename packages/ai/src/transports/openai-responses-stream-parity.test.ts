@@ -551,7 +551,15 @@ const fixtures: ParityFixture[] = [
           content: [{ type: "output_text", text: "hello", annotations: [] }],
         },
       },
-      completed("resp_text"),
+      completed("resp_text", [
+        {
+          id: "msg_text",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "hello", annotations: [] }],
+        },
+      ]),
     ],
     canonical: {
       events: [
@@ -586,6 +594,285 @@ const fixtures: ParityFixture[] = [
       content: [{ type: "text", text: "recovered" }],
       responseId: "resp_terminal_text",
       stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal completed message recovery after streamed reasoning",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_terminal", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_terminal",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_text", [
+        {
+          id: "rs_before_terminal",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+          encrypted_content: "encrypted",
+        },
+        {
+          id: "msg_after_reasoning",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "recovered final answer", annotations: [] }],
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_end", contentIndex: 1, content: "recovered final answer" },
+      ],
+      content: [
+        { type: "thinking", thinking: "thought", encrypted: true },
+        { type: "text", text: "recovered final answer" },
+      ],
+      responseId: "resp_reasoning_terminal_text",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal completed message recovery after multiple streamed reasoning blocks",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_multi_first", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_multi_first",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "first thought" }],
+          content: [],
+        },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        item: { id: "rs_before_multi_second", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 1,
+        item: {
+          id: "rs_before_multi_second",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "second thought" }],
+          content: [],
+        },
+      },
+      completed("resp_multi_reasoning_terminal_text", [
+        {
+          id: "rs_before_multi_first",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "first thought" }],
+          content: [],
+        },
+        {
+          id: "rs_before_multi_second",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "second thought" }],
+          content: [],
+        },
+        {
+          id: "msg_after_multiple_reasoning",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "recovered final answer", annotations: [] }],
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "first thought" },
+        { type: "thinking_start", contentIndex: 1 },
+        { type: "thinking_end", contentIndex: 1, content: "second thought" },
+        { type: "text_start", contentIndex: 2 },
+        { type: "text_end", contentIndex: 2, content: "recovered final answer" },
+      ],
+      content: [
+        { type: "thinking", thinking: "first thought", encrypted: false },
+        { type: "thinking", thinking: "second thought", encrypted: false },
+        { type: "text", text: "recovered final answer" },
+      ],
+      responseId: "resp_multi_reasoning_terminal_text",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal completed refusal recovery after streamed reasoning",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_refusal", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_refusal",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_refusal", [
+        {
+          id: "rs_before_refusal",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+        {
+          id: "msg_after_reasoning_refusal",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help with that." }],
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_end", contentIndex: 1, content: "I cannot help with that." },
+      ],
+      content: [
+        { type: "thinking", thinking: "thought", encrypted: false },
+        { type: "text", text: "I cannot help with that." },
+      ],
+      responseId: "resp_reasoning_terminal_refusal",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal null message after streamed reasoning is ignored",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_terminal_null", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_terminal_null",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_null", [
+        {
+          id: "rs_terminal_null",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+        {
+          id: "msg_after_reasoning_null",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: null,
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+      ],
+      content: [{ type: "thinking", thinking: "thought", encrypted: false }],
+      responseId: "resp_reasoning_terminal_null",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal-only completed tool call recovery after streamed reasoning",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_tool", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_tool",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_tool", [
+        {
+          id: "rs_before_tool",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+        {
+          id: "fc_terminal",
+          call_id: "call_terminal",
+          type: "function_call",
+          name: "lookup",
+          arguments: '{"q":"x"}',
+          status: "completed",
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+        { type: "toolcall_start", contentIndex: 1 },
+        { type: "toolcall_end", contentIndex: 1 },
+      ],
+      content: [
+        { type: "thinking", thinking: "thought", encrypted: false },
+        {
+          type: "toolCall",
+          id: "call_terminal|fc_terminal",
+          name: "lookup",
+          arguments: { q: "x" },
+          partialJson: false,
+        },
+      ],
+      responseId: "resp_reasoning_terminal_tool",
+      stopReason: "toolUse",
       error: null,
     },
   },

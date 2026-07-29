@@ -68,7 +68,6 @@ describe("prepareCodexAttemptConnection", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },

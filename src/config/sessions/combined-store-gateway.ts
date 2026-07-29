@@ -45,32 +45,17 @@ function resolveCombinedStorePath(paths: string[], storeConfig?: string): string
 
 function loadGatewayStoreEntries(params: {
   agentId: string;
+  includeOpenDatabases?: boolean;
   projection: GatewaySessionEntryProjection;
   storePath: string;
-}): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesReadOnly({
-      agentId: params.agentId,
-      clone: false,
-      projection: params.projection,
-      storePath: params.storePath,
-    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-}
-
-function loadIncognitoGatewayStoreEntries(params: {
-  agentId: string;
-  projection: GatewaySessionEntryProjection;
-  storePath: string;
-}): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntries({
-      agentId: params.agentId,
-      clone: false,
-      projection: params.projection,
-      storePath: params.storePath,
-    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+}) {
+  const listEntries = params.includeOpenDatabases ? listSessionEntries : listSessionEntriesReadOnly;
+  return listEntries({
+    agentId: params.agentId,
+    clone: false,
+    projection: params.projection,
+    storePath: params.storePath,
+  });
 }
 
 function mergeSessionEntryIntoCombined(params: {
@@ -129,13 +114,14 @@ function mergeOpenIncognitoStores(params: {
     if (params.agentId && target.agentId !== params.agentId) {
       continue;
     }
-    const store = loadIncognitoGatewayStoreEntries({
+    const store = loadGatewayStoreEntries({
       agentId: target.agentId,
+      includeOpenDatabases: true,
       projection: params.projection,
       storePath: target.storePath,
     });
     let merged = false;
-    for (const [sessionKey, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of store) {
       if (!isIncognitoSessionKey(sessionKey) || entry.incognito !== true) {
         continue;
       }
@@ -213,7 +199,7 @@ export function loadCombinedSessionStoreForGateway(
     );
     for (const { agentId, storePath } of ownerTargets) {
       const store = loadGatewayStoreEntries({ agentId, projection, storePath });
-      for (const [key, entry] of Object.entries(store)) {
+      for (const { sessionKey: key, entry } of store) {
         const canonicalKey = resolveStoredSessionKeyForAgentStore({
           cfg,
           agentId,
@@ -264,7 +250,7 @@ export function loadCombinedSessionStoreForGateway(
     const agentId = target.agentId;
     const storePath = target.storePath;
     const store = loadGatewayStoreEntries({ agentId, projection, storePath });
-    for (const [key, entry] of Object.entries(store)) {
+    for (const { sessionKey: key, entry } of store) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,
         agentId,

@@ -5,6 +5,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
+import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
 import {
   ChatComposerPersistence,
@@ -74,6 +75,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
+      releaseChatMediaResourceSubscriber(this.stateValue.requestUpdate);
       this.attachmentReads.abortReads();
       this.composerPersistence.stop();
       cancelChatStreamRenderFrame(this.stateValue);
@@ -319,6 +321,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   adoptComposerRoute() {
     // File reads belong to their original session; abort before a late load can
     // attach its payload to the pane's newly adopted route.
+    releaseChatMediaResourceSubscriber(this.stateValue?.requestUpdate);
     this.attachmentReads.abortReads();
     this.composerPersistence.adoptCurrentRoute();
   }
@@ -357,6 +360,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     const state = this.stateValue;
     if (state) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);

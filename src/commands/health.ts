@@ -43,6 +43,7 @@ import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   degradedPluginMatchesRoot,
   listActiveDegradedPlugins,
@@ -73,10 +74,15 @@ export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const healthLog = createSubsystemLogger("health");
 
-const debugHealth = (cfg: OpenClawConfig | undefined, ...args: unknown[]) => {
+const debugHealth = (
+  cfg: OpenClawConfig | undefined,
+  message: string,
+  meta?: Record<string, unknown>,
+) => {
   if (isDiagnosticFlagEnabled("health", cfg)) {
-    console.warn("[health:debug]", ...args);
+    healthLog.info(message, meta);
   }
 };
 
@@ -256,7 +262,9 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       return entry;
     });
   } catch (error) {
-    debugHealth(undefined, "outbound delivery queue health read failed", error);
+    debugHealth(undefined, "outbound delivery queue health read failed", {
+      error: formatErrorMessage(error),
+    });
   }
   let ingressFailed: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]> = [];
   try {
@@ -272,7 +280,9 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       return entry;
     });
   } catch (error) {
-    debugHealth(undefined, "channel ingress queue health read failed", error);
+    debugHealth(undefined, "channel ingress queue health read failed", {
+      error: formatErrorMessage(error),
+    });
   }
   if (failed.length === 0 && ingressFailed.length === 0) {
     return undefined;
@@ -1056,6 +1066,10 @@ export async function healthCommand(
           error: formatErrorMessage(error),
         });
       }
+    }
+
+    if (Number.isFinite(summary.durationMs)) {
+      runtime.log(info(`Gateway probe duration: ${summary.durationMs}ms`));
     }
 
     if (resolvedAgents.length > 0) {

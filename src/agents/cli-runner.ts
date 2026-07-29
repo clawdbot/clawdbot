@@ -1209,6 +1209,9 @@ export async function runPreparedCliAgent(
           stopReason,
           refusal: false,
         },
+        ...(resultParams.output.toolSummary
+          ? { toolSummary: resultParams.output.toolSummary }
+          : {}),
         agentMeta: {
           sessionId: agentSessionId,
           provider: params.provider,
