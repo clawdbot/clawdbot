@@ -525,7 +525,7 @@ actor PortGuardian {
                 offset += 1
             }
             guard offset > start else { return nil }
-            let value = String(decoding: buffer[start..<offset], as: UTF8.self)
+            guard let value = String(bytes: buffer[start..<offset], encoding: .utf8) else { return nil }
             offset += 1
             return value
         }
