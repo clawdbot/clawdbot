@@ -775,9 +775,19 @@ export function deferGatewayRestartUntilIdle(opts: {
       current = opts.getPendingCount();
     } catch (err) {
       opts.hooks?.onCheckError?.(err);
-      // Preserve the active poll and retry on the next interval — an
-      // inspection exception is not a confirmed-zero result, so fail
-      // closed by deferring instead of emitting a restart (#104064).
+      // Inspection failure means active-work state is unknown; fail closed by
+      // retrying on the next interval. But if the force timeout has elapsed,
+      // the configured bounded bypass must still fire (#104064).
+      const elapsedMs = Date.now() - startedAt;
+      if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
+        stopPoll();
+        opts.hooks?.onTimeout?.(0, elapsedMs);
+        attemptEmission({
+          intent: opts.timeoutIntent,
+          notifyReady: false,
+          skipIdleCheck: true,
+        });
+      }
       return;
     }
     if (current <= 0) {
