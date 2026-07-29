@@ -106,7 +106,7 @@ describe("ChatVideoPlayer", () => {
     const player = document.createElement("openclaw-chat-video-player");
     player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket";
     player.sourceIdentity = "media:principal-clip";
-    player.authToken = "principal-one";
+    player.authToken = "principal-one-token";
     player.label = "clip.avi";
     player.playback = "transcode";
     document.body.append(player);
@@ -114,7 +114,7 @@ describe("ChatVideoPlayer", () => {
       expect(player.querySelector("video")?.getAttribute("src")).toContain("playback=1"),
     );
 
-    player.authToken = "principal-two";
+    player.authToken = "principal-two-token";
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
     expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);

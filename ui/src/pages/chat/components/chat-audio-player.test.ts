@@ -247,6 +247,7 @@ describe("ChatAudioPlayer", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const player = await createPlayer("waveform-reuse");
+    player.durationMs = 4_000;
     const media = player.querySelector("audio")!;
     let paused = true;
     Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
@@ -292,6 +293,7 @@ describe("ChatAudioPlayer", () => {
     refreshed.sourceIdentity = "media://waveform-reuse";
     refreshed.authToken = "different-principal";
     refreshed.label = "waveform-reuse.mp3";
+    refreshed.durationMs = 4_000;
     document.body.append(refreshed);
     await refreshed.updateComplete;
     const refreshedMedia = refreshed.querySelector("audio")!;
@@ -348,6 +350,7 @@ describe("ChatAudioPlayer", () => {
     vi.stubGlobal("fetch", fetchMock);
     const createObjectURL = vi.spyOn(URL, "createObjectURL");
     const player = await createPlayer("oversized-waveform");
+    player.durationMs = 4_000;
     const media = player.querySelector("audio")!;
     Object.defineProperty(media, "paused", { configurable: true, value: true });
     const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
@@ -382,6 +385,7 @@ describe("ChatAudioPlayer", () => {
     );
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:context-fallback");
     const player = await createPlayer("context-fallback");
+    player.durationMs = 4_000;
     const media = player.querySelector("audio")!;
     let paused = true;
     Object.defineProperty(media, "paused", { configurable: true, get: () => paused });

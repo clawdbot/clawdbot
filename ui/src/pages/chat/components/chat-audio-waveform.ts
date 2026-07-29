@@ -25,10 +25,15 @@ export function shouldFetchChatAudioWaveform(params: {
   sizeBytes?: number;
   durationSeconds?: number;
 }): boolean {
-  return !(
-    (params.sizeBytes !== undefined && params.sizeBytes > CHAT_AUDIO_WAVEFORM_MAX_BYTES) ||
-    (params.durationSeconds !== undefined &&
-      params.durationSeconds > CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS)
+  return (
+    params.durationSeconds !== undefined &&
+    Number.isFinite(params.durationSeconds) &&
+    params.durationSeconds >= 0 &&
+    params.durationSeconds <= CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS &&
+    (params.sizeBytes === undefined ||
+      (Number.isFinite(params.sizeBytes) &&
+        params.sizeBytes >= 0 &&
+        params.sizeBytes <= CHAT_AUDIO_WAVEFORM_MAX_BYTES))
   );
 }
 
@@ -36,14 +41,14 @@ export function canDecodeChatAudioWaveform(params: {
   sizeBytes: number;
   durationSeconds?: number;
 }): boolean {
-  // Once fetch has produced a bounded byte length, missing duration metadata
-  // is allowed; decoded duration is still checked before peaks are retained.
   return (
     Number.isFinite(params.sizeBytes) &&
     params.sizeBytes >= 0 &&
     params.sizeBytes <= CHAT_AUDIO_WAVEFORM_MAX_BYTES &&
-    (params.durationSeconds === undefined ||
-      params.durationSeconds <= CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS)
+    params.durationSeconds !== undefined &&
+    Number.isFinite(params.durationSeconds) &&
+    params.durationSeconds >= 0 &&
+    params.durationSeconds <= CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS
   );
 }
 

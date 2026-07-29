@@ -24,8 +24,14 @@ describe("chat audio waveform", () => {
         durationSeconds: 601,
       }),
     ).toBe(false);
-    expect(shouldFetchChatAudioWaveform({})).toBe(true);
-    expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(true);
+    expect(shouldFetchChatAudioWaveform({})).toBe(false);
+    expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(false);
+    expect(
+      canDecodeChatAudioWaveform({
+        sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
+        durationSeconds: Number.NaN,
+      }),
+    ).toBe(false);
   });
 
   it("computes normalized peak buckets from every channel", () => {
