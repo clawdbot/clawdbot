@@ -165,20 +165,24 @@ function createDuckDuckGoSearchProvider(
 }
 
 describe("web search runtime", () => {
+  let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ runWebSearch } = await import("./runtime.js"));
+    ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
-    ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
+    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      await import("../config/config.js"));
   });
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     resolveManifestContractOwnerPluginIdMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
@@ -188,6 +192,7 @@ describe("web search runtime", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     clearSecretsRuntimeSnapshot();
     clearRuntimeAuthProfileStoreSnapshots();
     for (const tempDir of tempDirs.splice(0)) {
@@ -220,6 +225,23 @@ describe("web search runtime", () => {
       provider: "custom",
       result: { query: "hello", ok: true },
     });
+  });
+
+  it("accepts the prepared provider selection without rediscovering providers", () => {
+    expect(
+      hasUsableWebSearchProvider({
+        config: {},
+        runtimeWebSearch: {
+          providerSource: "auto-detect",
+          selectedProvider: "brave",
+          selectedProviderKeySource: "config",
+          diagnostics: [],
+        },
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
+    expect(resolveRuntimeWebSearchProvidersMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
   it("passes the run abort signal to provider execution", async () => {
@@ -436,7 +458,7 @@ describe("web search runtime", () => {
       runWebSearch({
         config: {
           agents: {
-            list: [{ id: "main", agentDir }],
+            list: [{ id: "main", default: true, agentDir }],
           },
         },
         args: { query: "oauth-backed web search" },
@@ -474,18 +496,27 @@ describe("web search runtime", () => {
       provider,
       createDuckDuckGoSearchProvider(),
     ]);
+    const config = {
+      agents: {
+        list: [
+          { id: "main", default: true, agentDir: defaultAgentDir },
+          { id: "side", agentDir: activeAgentDir },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      hasUsableWebSearchProvider({
+        agentDir: activeAgentDir,
+        config,
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
 
     await expect(
       runWebSearch({
         agentDir: activeAgentDir,
-        config: {
-          agents: {
-            list: [
-              { id: "main", default: true, agentDir: defaultAgentDir },
-              { id: "side", agentDir: activeAgentDir },
-            ],
-          },
-        },
+        config,
         args: { query: "active-agent oauth-backed web search" },
       }),
     ).resolves.toEqual({

@@ -2,7 +2,7 @@ import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   asAgentRuntimePolicyConfig,
   isOpenAICodexModelRef,
@@ -12,6 +12,7 @@ import {
   resolveImplicitDefaultAgentModelRef,
   resolveRuntime,
   resolveRuntimeModelRef,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import {
   collectCodexRuntimeModelPolicyRefs,
@@ -25,15 +26,13 @@ import type {
   CodexRouteHit,
   DisabledCodexPluginRouteHit,
   DisabledCodexPluginRouteIssue,
-  MutableRecord,
 } from "./codex-route-types.js";
-
-const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
 
 function collectModelsMapRefs(params: {
   hits: CodexRouteHit[];
   path: string;
   models: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const record = asMutableRecord(params.models);
   if (!record) {
@@ -47,6 +46,27 @@ function collectModelsMapRefs(params: {
       hits: params.hits,
       path: `${params.path}.${modelRef}`,
       model: modelRef,
+      blockedModelIdentities: params.blockedModelIdentities,
+    });
+  }
+}
+
+function collectModelPolicyAllowRefs(params: {
+  hits: CodexRouteHit[];
+  path: string;
+  modelPolicy: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): void {
+  const allow = asMutableRecord(params.modelPolicy)?.allow;
+  if (!Array.isArray(allow)) {
+    return;
+  }
+  for (const [index, modelRef] of allow.entries()) {
+    collectStringModelSlot({
+      hits: params.hits,
+      path: `${params.path}.allow.${index}`,
+      value: modelRef,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
@@ -56,7 +76,7 @@ function collectAgentModelRefs(params: {
   agent: unknown;
   path: string;
   runtime?: string;
-  collectModelsMap?: boolean;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
   if (!agent) {
@@ -68,46 +88,61 @@ function collectAgentModelRefs(params: {
       path: `${params.path}.${key}`,
       value: agent[key],
       runtime: key === "model" ? params.runtime : undefined,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
-  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+  const mediaModels = asMutableRecord(agent.mediaModels);
+  for (const key of ["image", "video"] as const) {
     collectModelConfigSlot({
       hits: params.hits,
-      path: `${params.path}.${key}`,
-      value: agent[key],
+      path: `${params.path}.mediaModels.${key}`,
+      value: mediaModels?.[key],
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.heartbeat.model`,
     value: asMutableRecord(agent.heartbeat)?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelConfigSlot({
     hits: params.hits,
     path: `${params.path}.subagents.model`,
     value: asMutableRecord(agent.subagents)?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   const compaction = asMutableRecord(agent.compaction);
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.model`,
     value: compaction?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.memoryFlush.model`,
     value: asMutableRecord(compaction?.memoryFlush)?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
-  if (params.collectModelsMap) {
-    collectModelsMapRefs({
-      hits: params.hits,
-      path: `${params.path}.models`,
-      models: agent.models,
-    });
-  }
+  collectModelsMapRefs({
+    hits: params.hits,
+    path: `${params.path}.models`,
+    models: agent.models,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
+  collectModelPolicyAllowRefs({
+    hits: params.hits,
+    path: `${params.path}.modelPolicy`,
+    modelPolicy: agent.modelPolicy,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
 }
 
-export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
+export function collectConfigModelRefs(
+  cfg: OpenClawConfig,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
   const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
@@ -116,24 +151,20 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
     agent: defaults,
     path: "agents.defaults",
     runtime: resolveRuntime({ defaultsRuntime }),
-    collectModelsMap: true,
+    blockedModelIdentities,
   });
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  const agents = listMutableCodexRouteAgentEntries(cfg);
+  for (const { agent: agentRecord, path } of agents) {
     collectAgentModelRefs({
       hits,
       agent: agentRecord,
-      path: `agents.list.${id}`,
+      path,
       runtime: resolveRuntime({
         agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
+      blockedModelIdentities,
     });
   }
 
@@ -148,6 +179,7 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
         hits,
         path: `channels.modelByChannel.${channelId}.${targetId}`,
         value: model,
+        blockedModelIdentities,
       });
     }
   }
@@ -157,18 +189,26 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
       hits,
       path: `hooks.mappings.${index}.model`,
       value: mapping.model,
+      blockedModelIdentities,
     });
   }
-  collectStringModelSlot({ hits, path: "hooks.gmail.model", value: cfg.hooks?.gmail?.model });
   collectStringModelSlot({
     hits,
-    path: "messages.tts.summaryModel",
-    value: cfg.messages?.tts?.summaryModel,
+    path: "hooks.gmail.model",
+    value: cfg.hooks?.gmail?.model,
+    blockedModelIdentities,
+  });
+  collectStringModelSlot({
+    hits,
+    path: "tts.summaryModel",
+    value: cfg.tts?.summaryModel,
+    blockedModelIdentities,
   });
   collectStringModelSlot({
     hits,
     path: "channels.discord.voice.model",
     value: asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice)?.model,
+    blockedModelIdentities,
   });
   return hits;
 }
@@ -200,7 +240,7 @@ export function collectDisabledCodexPluginRouteHits(
     });
   }
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listMutableCodexRouteAgentEntries(cfg);
   const inheritedDefaultAuxRefs = defaultRefs.filter(
     (ref) =>
       ref.path === "agents.defaults.heartbeat.model" ||
@@ -216,15 +256,7 @@ export function collectDisabledCodexPluginRouteHits(
   const channelRefs = collectChannelAgentRuntimeModelRefs(cfg);
   const candidateRefs: Array<{ path: string; modelRef: string; agentId?: string }> =
     agents.length === 0 ? [...defaultRefs, ...channelRefs] : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const pathId = readAgentPathId(agentRecord, index);
-    const agentId = normalizeAgentId(
-      typeof agentRecord.id === "string" ? agentRecord.id : undefined,
-    );
+  for (const { agent: agentRecord, agentId, path } of agents) {
     for (const ref of channelRefs) {
       candidateRefs.push({ path: ref.path, modelRef: ref.modelRef, agentId });
     }
@@ -240,7 +272,7 @@ export function collectDisabledCodexPluginRouteHits(
     inheritedModelRefs.push(...inheritedDefaultModelPolicyRefs);
     for (const ref of collectAgentRuntimeModelRefs({
       agent: agentRecord,
-      path: `agents.list.${pathId}`,
+      path,
       fallbackModelRefs: inheritedDefaultModelRefs,
       inheritedModelRefs,
     })) {
@@ -281,12 +313,12 @@ export function collectDisabledCodexPluginRouteIssues(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): DisabledCodexPluginRouteIssue[] {
-  const blockedOutsideEntry = codexPluginIsBlockedOutsideEntry(cfg);
+  const repairBlocked = codexPluginRepairIsBlocked(cfg);
   return collectDisabledCodexPluginRouteHits(cfg, env).map((hit) => ({
     path: hit.path,
     modelRef: hit.modelRef,
     canonicalModel: hit.canonicalModel,
-    blockedOutsideEntry,
+    repairBlocked,
   }));
 }
 
@@ -294,7 +326,8 @@ export function enableCodexPluginForRequiredRoutes(params: {
   cfg: OpenClawConfig;
   routeHits: DisabledCodexPluginRouteHit[];
 }): { cfg: OpenClawConfig; changes: string[] } {
-  if (params.routeHits.length === 0 || codexPluginIsBlockedOutsideEntry(params.cfg)) {
+  // Explicit user opt-out wins over managed-harness repair; doctor warns instead.
+  if (params.routeHits.length === 0 || codexPluginRepairIsBlocked(params.cfg)) {
     return { cfg: params.cfg, changes: [] };
   }
   const cfg = structuredClone(params.cfg);
@@ -327,15 +360,19 @@ export function enableCodexPluginForRequiredRoutes(params: {
   return { cfg, changes };
 }
 
-export function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
+function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.enabled === false || pluginIdListIncludes(cfg.plugins?.deny, "codex");
 }
 
+export function codexPluginRepairIsBlocked(cfg: OpenClawConfig): boolean {
+  return (
+    codexPluginIsBlockedOutsideEntry(cfg) ||
+    asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false
+  );
+}
+
 function isCodexPluginUnavailableByConfig(cfg: OpenClawConfig): boolean {
-  if (codexPluginIsBlockedOutsideEntry(cfg)) {
-    return true;
-  }
-  if (asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false) {
+  if (codexPluginRepairIsBlocked(cfg)) {
     return true;
   }
   const allow = cfg.plugins?.allow;
@@ -405,8 +442,4 @@ function collectChannelAgentRuntimeModelRefs(
     }
   }
   return refs;
-}
-
-function readAgentPathId(agent: MutableRecord, index: number): string {
-  return typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
 }

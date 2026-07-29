@@ -1,6 +1,7 @@
 // Gateway operator-approvals client helper.
 // Connects a backend Gateway client scoped to operator approval events.
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
@@ -56,6 +57,7 @@ export async function createOperatorApprovalsGatewayClient(
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
     scopes: ["operator.approvals"],
     deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
       sendsApprovalRuntimeToken,
@@ -118,7 +120,7 @@ export async function withOperatorApprovalsGatewayClient<T>(
 
   try {
     const readiness = await startGatewayClientWhenEventLoopReady(gatewayClient, {
-      clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
+      clientOptions: {},
     });
     if (!readiness.ready) {
       throw new Error(

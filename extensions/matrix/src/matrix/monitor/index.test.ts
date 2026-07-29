@@ -49,10 +49,13 @@ const hoisted = vi.hoisted(() => {
   const accountConfig = {
     dm: {},
   };
+  const inboundReplayClaim = {
+    keys: ["test"] as const,
+    commit: vi.fn(async () => true),
+    release: vi.fn(),
+  };
   const inboundDeduper = {
-    claimEvent: vi.fn(async () => true),
-    commitEvent: vi.fn(async () => undefined),
-    releaseEvent: vi.fn(),
+    claim: vi.fn(async () => ({ kind: "claimed" as const, handle: inboundReplayClaim })),
   };
   const createMatrixInboundEventDeduper = vi.fn(() => inboundDeduper);
   const client = Object.assign(createEmitter(), {
@@ -118,6 +121,7 @@ const hoisted = vi.hoisted(() => {
     getMemberDisplayName,
     getRoomInfo,
     inboundDeduper,
+    inboundReplayClaim,
     logger,
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
     releaseSharedClientInstance,
@@ -471,9 +475,11 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claimEvent.mockReset().mockResolvedValue(true);
-    hoisted.inboundDeduper.commitEvent.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.releaseEvent.mockReset();
+    hoisted.inboundDeduper.claim
+      .mockReset()
+      .mockResolvedValue({ kind: "claimed" as const, handle: hoisted.inboundReplayClaim });
+    hoisted.inboundReplayClaim.commit.mockReset().mockResolvedValue(true);
+    hoisted.inboundReplayClaim.release.mockReset();
     hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
@@ -484,14 +490,6 @@ describe("monitorMatrixProvider", () => {
 
   it.each([
     [undefined, "off", false],
-    // Scalar/boolean spellings stay honored for schema-open account entries
-    // until the flat-key deprecation window closes; doctor migrates them.
-    [false, "off", false],
-    [true, "partial", true],
-    ["off", "off", false],
-    ["partial", "partial", true],
-    ["quiet", "quiet", true],
-    ["progress", "progress", true],
     [{}, "off", false],
     [{ mode: "off" }, "off", false],
     [{ mode: "partial" }, "partial", true],
@@ -508,9 +506,7 @@ describe("monitorMatrixProvider", () => {
       false,
     ],
     [{ mode: "off", preview: { toolProgress: true } }, "off", false],
-  ] satisfies Array<
-    [MatrixConfig["streaming"] | MatrixStreamingMode | boolean, MatrixStreamingMode, boolean]
-  >)(
+  ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
     async (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
       (hoisted.accountConfig as { streaming?: unknown }).streaming = streaming;

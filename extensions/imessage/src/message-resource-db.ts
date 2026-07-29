@@ -1,9 +1,7 @@
 // Imessage plugin module verifies provider message ownership in the local Messages database.
-import { createRequire } from "node:module";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isIMessageEmailChatIdentifier, type IMessageChatContext } from "./chat-context.js";
 import { resolveLocalIMessageChatDbPath } from "./cli-path.js";
-
-const require = createRequire(import.meta.url);
 
 type IMessageResourceBinding = "match" | "mismatch" | "unavailable";
 type IMessageChatRow = {
@@ -81,14 +79,6 @@ function matchesAnyChatCandidate(stored: unknown, candidates: string[]): boolean
   return candidates.some((candidate) => matchesChatCandidate(stored, candidate));
 }
 
-function loadNodeSqlite(): typeof import("node:sqlite") | null {
-  try {
-    return require("node:sqlite") as typeof import("node:sqlite");
-  } catch {
-    return null;
-  }
-}
-
 export function checkIMessageResourceBinding(params: {
   chatContext: IMessageChatContext;
   cliPath: string;
@@ -97,8 +87,7 @@ export function checkIMessageResourceBinding(params: {
   remoteHost?: string;
 }): IMessageResourceBinding {
   const dbPath = resolveLocalIMessageChatDbPath(params);
-  const sqlite = loadNodeSqlite();
-  if (!dbPath || !sqlite) {
+  if (!dbPath) {
     return "unavailable";
   }
   const messageGuid = normalizeIMessageMessageGuidForLookup(params.messageId);
@@ -123,7 +112,7 @@ export function checkIMessageResourceBinding(params: {
 
   let db: import("node:sqlite").DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const rows = db
       .prepare(
         `SELECT cmj.chat_id AS chatId,

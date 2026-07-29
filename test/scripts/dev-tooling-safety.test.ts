@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -36,7 +37,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -103,7 +104,11 @@ async function waitForChildExit(
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
     new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for child exit")),
+        timeoutMs,
+      );
+      timer.unref();
     }),
   ]);
 }
@@ -213,6 +218,10 @@ describe("dev tooling safety helpers", () => {
       "~/.openclaw/state.json",
     );
     expect(maskIdentifier("session-key-abcdef123456")).toBe("sessio...3456");
+  });
+
+  it("does not split boundary emoji in script log previews", () => {
+    expect(previewForDevToolLog("123456😀tail", 10)).toBe("123456...");
   });
 });
 
@@ -1195,5 +1204,68 @@ describe("script-specific dev tooling hardening", () => {
         maxBytes,
       ),
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it.each([
+    { name: "before response headers", sendsHeaders: false },
+    { name: "during the response body", sendsHeaders: true },
+  ])("bounds an Anthropic upstream stall $name", async ({ sendsHeaders }) => {
+    const nativeFetch = globalThis.fetch;
+    const upstream = http.createServer((_request, response) => {
+      if (sendsHeaders) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.flushHeaders();
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => {
+        upstream.off("error", reject);
+        resolve();
+      });
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("upstream did not bind to a TCP port");
+    }
+    const upstreamUrl = `http://127.0.0.1:${upstreamAddress.port}/v1/messages`;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_input, init) => nativeFetch(upstreamUrl, init));
+    let proxy: Awaited<ReturnType<typeof promptProbeTesting.startAnthropicProxy>> | undefined;
+
+    try {
+      proxy = await promptProbeTesting.startAnthropicProxy({
+        port: 0,
+        upstreamBaseUrl: "https://api.anthropic.com",
+        timeoutMs: 100,
+      });
+      const startedAt = Date.now();
+      const request = nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+        method: "POST",
+        body: "{}",
+      }).then(async (response) => ({ status: response.status, body: await response.text() }));
+
+      if (sendsHeaders) {
+        await expect(request).rejects.toThrow();
+      } else {
+        await expect(request).resolves.toMatchObject({
+          status: 502,
+          body: expect.stringMatching(/TimeoutError/u),
+        });
+      }
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.anthropic.com/v1/messages",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      await proxy?.stop();
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

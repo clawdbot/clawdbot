@@ -19,12 +19,7 @@ vi.mock("qrcode", () => ({
   },
 }));
 
-import {
-  formatQrPngDataUrl,
-  renderQrPngBase64,
-  renderQrPngDataUrl,
-  writeQrPngTempFile,
-} from "./qr-image.ts";
+import { renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } from "./qr-image.ts";
 
 describe("renderQrPngBase64", () => {
   const tmpRoot = path.join(os.tmpdir(), "openclaw-qr-image-tests");
@@ -77,7 +72,6 @@ describe("renderQrPngBase64", () => {
   });
 
   it("formats QR PNG data URLs", async () => {
-    expect(formatQrPngDataUrl(MOCK_PNG_BASE64)).toBe(`data:image/png;base64,${MOCK_PNG_BASE64}`);
     await expect(renderQrPngDataUrl("openclaw")).resolves.toBe(
       `data:image/png;base64,${MOCK_PNG_BASE64}`,
     );

@@ -1,7 +1,6 @@
 // Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
-  LogbookBackgroundRefresh,
   LogbookDaysPayload,
   LogbookStatusPayload,
   LogbookTimelinePayload,
@@ -11,7 +10,22 @@ import type {
 const FRAME_PREVIEW_CACHE_LIMIT = 48;
 const POLL_INTERVAL_MS = 30_000;
 
-const logbookStates = new WeakMap<object, LogbookUiState>();
+type LogbookControllerState = LogbookUiState & {
+  // Client identity is the controller epoch. Rebinding retires every async
+  // owner so an old gateway cannot mutate or block the replacement view.
+  client: GatewayBrowserClient | null;
+  clientGeneration: number;
+  // Every load advances result ownership; foreground loading state has its own
+  // owner so a superseded request cannot clear a newer spinner.
+  loadGeneration: number;
+  loadingGeneration: number | null;
+  backgroundRefresh: Promise<void> | null;
+  backgroundRefreshQueued: boolean;
+  pollTimer: ReturnType<typeof globalThis.setInterval> | null;
+  pollClient: GatewayBrowserClient | null;
+};
+
+const logbookStates = new WeakMap<object, LogbookControllerState>();
 
 export function localDayKey(date = new Date()): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -25,7 +39,7 @@ export function shiftDay(day: string, deltaDays: number): string {
   return localDayKey(base);
 }
 
-export function getLogbookState(host: object): LogbookUiState {
+export function getLogbookState(host: object): LogbookControllerState {
   let state = logbookStates.get(host);
   if (!state) {
     state = {
@@ -46,13 +60,12 @@ export function getLogbookState(host: object): LogbookUiState {
       askAnswer: null,
       askLoading: false,
       actionPending: false,
-      actionGeneration: 0,
-      actionPendingGeneration: null,
+      client: null,
+      clientGeneration: 0,
       loadGeneration: 0,
       loadingGeneration: null,
-      lifecycleGeneration: 0,
       backgroundRefresh: null,
-      backgroundRefreshQueued: null,
+      backgroundRefreshQueued: false,
       pollTimer: null,
       pollClient: null,
       requestUpdate: null,
@@ -66,7 +79,39 @@ function notify(state: LogbookUiState): void {
   state.requestUpdate?.();
 }
 
-function resetDayView(state: LogbookUiState, day: string): void {
+function ownsClient(
+  state: LogbookControllerState,
+  client: GatewayBrowserClient,
+  generation: number,
+): boolean {
+  return state.client === client && state.clientGeneration === generation;
+}
+
+function currentClientGeneration(
+  state: LogbookControllerState,
+  client: GatewayBrowserClient | null,
+): number | null {
+  return client && state.client === client ? state.clientGeneration : null;
+}
+
+function bindClient(state: LogbookControllerState, client: GatewayBrowserClient | null): void {
+  if (state.client === client) {
+    return;
+  }
+  state.client = client;
+  state.clientGeneration += 1;
+  state.loadGeneration += 1;
+  state.loadingGeneration = null;
+  state.loading = false;
+  state.backgroundRefresh = null;
+  state.backgroundRefreshQueued = false;
+  state.actionPending = false;
+  state.standupLoading = false;
+  state.askLoading = false;
+  state.frameLoads = new Set();
+}
+
+function resetDayView(state: LogbookControllerState, day: string): void {
   state.day = day;
   state.timeline = null;
   state.standup = null;
@@ -75,11 +120,12 @@ function resetDayView(state: LogbookUiState, day: string): void {
 }
 
 export async function loadLogbook(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   opts?: { day?: string; today?: boolean; silent?: boolean },
 ): Promise<void> {
-  if (!client) {
+  const clientGeneration = currentClientGeneration(state, client);
+  if (!client || clientGeneration === null) {
     return;
   }
   if (opts?.day) {
@@ -104,7 +150,11 @@ export async function loadLogbook(
       client.request<LogbookDaysPayload>("logbook.days", {}),
       client.request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay }),
     ]);
-    if (generation !== state.loadGeneration || state.day !== requestedDay) {
+    if (
+      !ownsClient(state, client, clientGeneration) ||
+      generation !== state.loadGeneration ||
+      state.day !== requestedDay
+    ) {
       return;
     }
     state.status = status;
@@ -117,7 +167,11 @@ export async function loadLogbook(
       const todayTimeline = await client.request<LogbookTimelinePayload>("logbook.timeline", {
         day: status.today,
       });
-      if (generation !== state.loadGeneration || state.day !== status.today) {
+      if (
+        !ownsClient(state, client, clientGeneration) ||
+        generation !== state.loadGeneration ||
+        state.day !== status.today
+      ) {
         return;
       }
       state.timeline = todayTimeline;
@@ -126,11 +180,12 @@ export async function loadLogbook(
     }
     state.error = null;
   } catch (err) {
-    if (generation === state.loadGeneration) {
+    if (ownsClient(state, client, clientGeneration) && generation === state.loadGeneration) {
       state.error = err instanceof Error ? err.message : String(err);
     }
   } finally {
-    let shouldNotify = generation === state.loadGeneration;
+    let shouldNotify =
+      ownsClient(state, client, clientGeneration) && generation === state.loadGeneration;
     if (state.loadingGeneration === generation) {
       state.loadingGeneration = null;
       state.loading = false;
@@ -143,68 +198,29 @@ export async function loadLogbook(
   }
 }
 
-function retireLogbookLoads(state: LogbookUiState): void {
-  // A stopped or rebound view must not accept results from its retired client,
-  // and an abandoned background request must not block the next polling epoch.
-  state.loadGeneration += 1;
-  state.lifecycleGeneration += 1;
-  state.actionGeneration += 1;
-  state.actionPendingGeneration = null;
-  state.actionPending = false;
-  state.loadingGeneration = null;
-  state.loading = false;
-  state.backgroundRefresh = null;
-  state.backgroundRefreshQueued = null;
-}
-
-function isLogbookActionCurrent(
-  state: LogbookUiState,
-  actionGeneration: number,
-  refresh: LogbookBackgroundRefresh,
-): boolean {
-  return actionGeneration === state.actionGeneration && isLogbookRefreshCurrent(state, refresh);
-}
-
-function isLogbookRefreshCurrent(
-  state: LogbookUiState,
-  refresh: LogbookBackgroundRefresh,
-): boolean {
-  return (
-    refresh.lifecycleGeneration === state.lifecycleGeneration &&
-    (state.pollClient === null || state.pollClient === refresh.client)
-  );
-}
-
-function drainQueuedLogbookRefresh(state: LogbookUiState): void {
-  if (state.loading || state.backgroundRefresh) {
+function drainQueuedLogbookRefresh(state: LogbookControllerState): void {
+  if (!state.backgroundRefreshQueued || state.loading || state.backgroundRefresh) {
     return;
   }
-  const queued = state.backgroundRefreshQueued;
-  state.backgroundRefreshQueued = null;
-  if (!queued || !isLogbookRefreshCurrent(state, queued)) {
+  state.backgroundRefreshQueued = false;
+  const client = state.pollClient;
+  if (!client) {
     return;
   }
-  void refreshLogbookSilently(state, queued.client, {
-    lifecycleGeneration: queued.lifecycleGeneration,
-    required: true,
-  });
+  void refreshLogbookSilently(state, client, { required: true });
 }
 
 function refreshLogbookSilently(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient,
-  opts?: { lifecycleGeneration?: number; required?: boolean },
+  opts?: { required?: boolean },
 ): Promise<void> {
-  const refreshRequest = {
-    client,
-    lifecycleGeneration: opts?.lifecycleGeneration ?? state.lifecycleGeneration,
-  };
-  if (!isLogbookRefreshCurrent(state, refreshRequest)) {
+  if (state.pollClient !== client) {
     return Promise.resolve();
   }
   if (state.loading || state.backgroundRefresh) {
     if (opts?.required) {
-      state.backgroundRefreshQueued = refreshRequest;
+      state.backgroundRefreshQueued = true;
     }
     return state.backgroundRefresh ?? Promise.resolve();
   }
@@ -228,13 +244,14 @@ export function stopLogbookPolling(host: object): void {
   }
   if (state) {
     state.pollClient = null;
-    // PluginPage replaces the host before calling stop. Let detached-host loads
+    state.backgroundRefreshQueued = false;
+    // PluginPage retires this host immediately after stop returns. Let its loads
     // settle; host identity keeps their results out of the replacement view.
   }
 }
 
 export function configureLogbookPolling(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   active: boolean,
 ): void {
@@ -244,7 +261,10 @@ export function configureLogbookPolling(
       state.pollTimer = null;
     }
     state.pollClient = null;
-    retireLogbookLoads(state);
+    state.backgroundRefreshQueued = false;
+    // Unlike stopLogbookPolling's detached-host path, this state can render
+    // again after reconnect. Retire every old async owner before reuse.
+    bindClient(state, null);
     return;
   }
   if (state.pollTimer && state.pollClient === client) {
@@ -253,7 +273,7 @@ export function configureLogbookPolling(
   if (state.pollTimer) {
     clearInterval(state.pollTimer);
   }
-  retireLogbookLoads(state);
+  bindClient(state, client);
   state.pollClient = client;
   state.pollTimer = setInterval(() => {
     // All background refresh sources share one owner so slow gateway responses
@@ -263,12 +283,14 @@ export function configureLogbookPolling(
 }
 
 export async function loadLogbookFramePreview(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   frameId: number,
 ): Promise<void> {
+  const clientGeneration = currentClientGeneration(state, client);
   if (
     !client ||
+    clientGeneration === null ||
     state.framePreviews.has(frameId) ||
     state.frameLoads.has(frameId) ||
     state.framePreviewFailed.has(frameId)
@@ -280,6 +302,9 @@ export async function loadLogbookFramePreview(
     const payload = await client.request<{ base64: string; format: string }>("logbook.frame", {
       frameId,
     });
+    if (!ownsClient(state, client, clientGeneration)) {
+      return;
+    }
     if (state.framePreviews.size >= FRAME_PREVIEW_CACHE_LIMIT) {
       const oldest = state.framePreviews.keys().next().value;
       if (oldest !== undefined) {
@@ -290,38 +315,39 @@ export async function loadLogbookFramePreview(
   } catch {
     // Preview loads are cosmetic, but a missing frame (e.g. pruned by
     // retention) must not re-fetch on every render, so remember the failure.
-    state.framePreviewFailed.add(frameId);
+    if (ownsClient(state, client, clientGeneration)) {
+      state.framePreviewFailed.add(frameId);
+    }
   } finally {
-    state.frameLoads.delete(frameId);
-    notify(state);
+    if (ownsClient(state, client, clientGeneration)) {
+      state.frameLoads.delete(frameId);
+      notify(state);
+    }
   }
 }
 
 export async function setLogbookCapturePaused(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   paused: boolean,
 ): Promise<void> {
-  if (!client || state.actionPending) {
+  const clientGeneration = currentClientGeneration(state, client);
+  if (!client || clientGeneration === null || state.actionPending) {
     return;
   }
-  const actionGeneration = ++state.actionGeneration;
-  state.actionPendingGeneration = actionGeneration;
   state.actionPending = true;
   notify(state);
-  const refresh = { client, lifecycleGeneration: state.lifecycleGeneration };
   try {
     const status = await client.request<LogbookStatusPayload>("logbook.capture.set", { paused });
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+    if (ownsClient(state, client, clientGeneration)) {
       state.status = status;
     }
   } catch (err) {
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+    if (ownsClient(state, client, clientGeneration)) {
       state.error = err instanceof Error ? err.message : String(err);
     }
   } finally {
-    if (state.actionPendingGeneration === actionGeneration) {
-      state.actionPendingGeneration = null;
+    if (ownsClient(state, client, clientGeneration)) {
       state.actionPending = false;
       notify(state);
     }
@@ -329,54 +355,43 @@ export async function setLogbookCapturePaused(
 }
 
 export async function runLogbookAnalysisNow(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
 ): Promise<void> {
-  if (!client || state.actionPending) {
+  const clientGeneration = currentClientGeneration(state, client);
+  if (!client || clientGeneration === null || state.actionPending) {
     return;
   }
-  const actionGeneration = ++state.actionGeneration;
-  state.actionPendingGeneration = actionGeneration;
   state.actionPending = true;
   notify(state);
-  const refresh = { client, lifecycleGeneration: state.lifecycleGeneration };
   try {
     const result = await client.request<{ started: boolean; reason?: string }>(
       "logbook.analyze.now",
       {},
     );
-    if (
-      isLogbookActionCurrent(state, actionGeneration, refresh) &&
-      !result.started &&
-      result.reason
-    ) {
+    if (ownsClient(state, client, clientGeneration) && !result.started && result.reason) {
       state.error = result.reason;
     }
   } catch (err) {
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+    if (ownsClient(state, client, clientGeneration)) {
       state.error = err instanceof Error ? err.message : String(err);
     }
   } finally {
-    if (state.actionPendingGeneration === actionGeneration) {
-      state.actionPendingGeneration = null;
+    if (ownsClient(state, client, clientGeneration)) {
       state.actionPending = false;
       notify(state);
-    }
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
-      void refreshLogbookSilently(state, client, {
-        lifecycleGeneration: refresh.lifecycleGeneration,
-        required: true,
-      });
+      void refreshLogbookSilently(state, client, { required: true });
     }
   }
 }
 
 export async function loadLogbookStandup(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   refresh: boolean,
 ): Promise<void> {
-  if (!client || state.standupLoading) {
+  const clientGeneration = currentClientGeneration(state, client);
+  if (!client || clientGeneration === null || state.standupLoading) {
     return;
   }
   state.standupLoading = true;
@@ -387,23 +402,28 @@ export async function loadLogbookStandup(
       "logbook.standup",
       { day: requestedDay, refresh },
     );
-    if (state.day === requestedDay) {
+    if (ownsClient(state, client, clientGeneration) && state.day === requestedDay) {
       state.standup = standup;
     }
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    if (ownsClient(state, client, clientGeneration)) {
+      state.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
-    state.standupLoading = false;
-    notify(state);
+    if (ownsClient(state, client, clientGeneration)) {
+      state.standupLoading = false;
+      notify(state);
+    }
   }
 }
 
 export async function askLogbook(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
 ): Promise<void> {
   const question = state.askQuestion.trim();
-  if (!client || state.askLoading || question.length === 0) {
+  const clientGeneration = currentClientGeneration(state, client);
+  if (!client || clientGeneration === null || state.askLoading || question.length === 0) {
     return;
   }
   state.askLoading = true;
@@ -415,13 +435,17 @@ export async function askLogbook(
       day: requestedDay,
       question,
     });
-    if (state.day === requestedDay) {
+    if (ownsClient(state, client, clientGeneration) && state.day === requestedDay) {
       state.askAnswer = payload.answer;
     }
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    if (ownsClient(state, client, clientGeneration)) {
+      state.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
-    state.askLoading = false;
-    notify(state);
+    if (ownsClient(state, client, clientGeneration)) {
+      state.askLoading = false;
+      notify(state);
+    }
   }
 }

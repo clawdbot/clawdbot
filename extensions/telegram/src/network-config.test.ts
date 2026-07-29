@@ -13,7 +13,8 @@ let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js"
 let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
 
 async function loadModule() {
-  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
+  const { isWSL2Sync: loadedIsWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env");
+  isWSL2Sync = loadedIsWSL2Sync;
   ({ resolveTelegramAutoSelectFamilyDecision, resolveTelegramDnsResultOrderDecision } =
     await import("./network-config.js"));
 }

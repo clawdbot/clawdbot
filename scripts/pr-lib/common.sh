@@ -251,7 +251,22 @@ is_repo_pr_worktree_dir() {
 
 remove_worktree_if_present() {
   local path="$1"
+  local registered_path=""
+  local registered_parent=""
+  registered_parent=$(resolve_existing_dir_path "$(dirname "$path")" 2>/dev/null || true)
+  if [ -n "$registered_parent" ]; then
+    registered_path="$registered_parent/$(basename "$path")"
+  fi
+
   if [ ! -e "$path" ]; then
+    # A torn-down PR worktree once left a stale registration that poisoned
+    # every later worktree add until the registration was pruned.
+    if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+      git worktree prune || true
+      if worktree_is_registered "$registered_path"; then
+        echo "Warning: failed to remove registered worktree $path"
+      fi
+    fi
     return 0
   fi
 
@@ -260,13 +275,22 @@ remove_worktree_if_present() {
     return 0
   fi
 
-  local registered_path
-  registered_path="$(resolve_existing_dir_path "$(dirname "$path")")/$(basename "$path")"
   if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
-    git worktree remove "$registered_path" --force >/dev/null 2>&1 || true
+    local remove_error
+    if ! remove_error=$(git worktree remove --force "$registered_path" 2>&1); then
+      echo "Warning: git worktree remove failed for $path: $remove_error"
+    fi
   fi
 
   if [ ! -e "$path" ]; then
+    # See the stale-registration recovery above: removal can delete the path
+    # while leaving Git's linked-worktree metadata behind.
+    if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+      git worktree prune || true
+      if worktree_is_registered "$registered_path"; then
+        echo "Warning: failed to remove registered worktree $path"
+      fi
+    fi
     return 0
   fi
 

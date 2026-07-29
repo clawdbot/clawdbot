@@ -39,6 +39,10 @@ export type CommandRunner = (
 type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
   command: string;
+  pnpmIsolated?: {
+    layoutVersion: number;
+    globalBinDir?: string;
+  };
 };
 
 /**
@@ -75,6 +79,18 @@ export type NpmGlobalPrefixLayout = {
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
+}
+
+/** Reads the command value after package-manager warnings printed on stdout. */
+export function readPackageManagerProbeValue(stdout: string): string {
+  const lines = stdout.split(/\r?\n/u);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const value = lines[index]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 }
 
 function normalizePackageVersionForComparison(value: string | null | undefined): string | null {
@@ -679,6 +695,10 @@ function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | nu
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const isolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
+  if (isolatedGlobalRoot) {
+    return isolatedGlobalRoot;
+  }
   const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
   if (resolvePnpmGlobalDirFromGlobalRoot(directGlobalRoot)) {
     return directGlobalRoot;
@@ -703,9 +723,165 @@ function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | n
   return resolvePnpmGlobalDirFromGlobalRoot(globalRoot) ? globalRoot : null;
 }
 
+type PnpmIsolatedGlobalPackage = {
+  globalRoot: string;
+  packageRoot: string;
+  layoutVersion: number;
+  packageNames: string[];
+};
+
+function resolvePnpmIsolatedLayoutVersion(globalRoot?: string | null): number | null {
+  const trimmed = globalRoot?.trim();
+  const match = trimmed ? /^v(\d+)$/u.exec(path.basename(path.resolve(trimmed))) : null;
+  return match ? Number.parseInt(match[1] ?? "", 10) : null;
+}
+
+function inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const nodeModulesRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!nodeModulesRoot) {
+    return null;
+  }
+  const globalRoot = path.dirname(path.dirname(nodeModulesRoot));
+  return resolvePnpmIsolatedLayoutVersion(globalRoot) === null ? null : globalRoot;
+}
+
+async function hasPnpmIsolatedProjectMetadata(
+  pkgRoot?: string | null,
+  packageName = PRIMARY_PACKAGE_NAME,
+): Promise<boolean> {
+  if (!inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot)) {
+    return false;
+  }
+  const nodeModulesRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!nodeModulesRoot) {
+    return false;
+  }
+  const installDir = path.dirname(nodeModulesRoot);
+  const manifest = await fs
+    .readFile(path.join(installDir, "package.json"), "utf8")
+    .then((raw) => JSON.parse(raw) as { dependencies?: Record<string, unknown> })
+    .catch(() => null);
+  return Boolean(
+    manifest?.dependencies &&
+    packageName in manifest.dependencies &&
+    (await pathExists(path.join(installDir, "pnpm-lock.yaml"))),
+  );
+}
+
+/** Resolves the pnpm project owner without following its shared-store package symlink. */
+export async function resolvePnpmIsolatedInstallOwner(
+  pkgRoot?: string | null,
+): Promise<string | null> {
+  const nodeModulesRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!nodeModulesRoot) {
+    return null;
+  }
+  return path.resolve(await tryRealpath(path.dirname(nodeModulesRoot)));
+}
+
+async function listPnpmIsolatedGlobalPackages(params: {
+  globalRoot?: string | null;
+  packageName?: string;
+}): Promise<PnpmIsolatedGlobalPackage[]> {
+  const globalRoot = params.globalRoot?.trim();
+  const layoutVersion = resolvePnpmIsolatedLayoutVersion(globalRoot);
+  if (!globalRoot || layoutVersion === null) {
+    return [];
+  }
+  const packageName = params.packageName?.trim() || PRIMARY_PACKAGE_NAME;
+  const entries = await fs.readdir(globalRoot, { withFileTypes: true }).catch(() => []);
+  const packages: PnpmIsolatedGlobalPackage[] = [];
+
+  // pnpm 11 marks active isolated projects with hash symlinks. Scan those
+  // links, not install directories, so orphaned replacement roots stay ignored.
+  for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isSymbolicLink()) {
+      continue;
+    }
+    const installDir = await fs.realpath(path.join(globalRoot, entry.name)).catch(() => null);
+    if (!installDir) {
+      continue;
+    }
+    const manifest = await fs
+      .readFile(path.join(installDir, "package.json"), "utf8")
+      .then((raw) => JSON.parse(raw) as { dependencies?: Record<string, unknown> })
+      .catch(() => null);
+    if (!manifest?.dependencies || !(packageName in manifest.dependencies)) {
+      continue;
+    }
+    const packageRoot = resolvePackageRootFromGlobalRoot({
+      globalRoot: path.join(installDir, "node_modules"),
+      packageName,
+    });
+    if (await pathExists(packageRoot)) {
+      packages.push({
+        globalRoot: path.resolve(globalRoot),
+        packageRoot,
+        layoutVersion,
+        packageNames: Object.keys(manifest.dependencies).toSorted((a, b) => a.localeCompare(b)),
+      });
+    }
+  }
+  return packages;
+}
+
+export async function listActivePnpmIsolatedGlobalPackages(params: {
+  globalRoot?: string | null;
+  packageName?: string;
+}): Promise<Array<{ packageRoot: string; packageNames: string[] }>> {
+  return (await listPnpmIsolatedGlobalPackages(params)).map((entry) => ({
+    packageRoot: entry.packageRoot,
+    packageNames: entry.packageNames,
+  }));
+}
+
+async function resolvePnpmIsolatedGlobalPackage(params: {
+  globalRoot?: string | null;
+  packageName?: string;
+  pkgRoot?: string | null;
+}): Promise<PnpmIsolatedGlobalPackage | null> {
+  const packages = await listPnpmIsolatedGlobalPackages(params);
+  const requestedPackageRoot = params.pkgRoot ? path.resolve(params.pkgRoot) : null;
+  const requestedOwnerRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
+  const globalRoot = params.globalRoot?.trim();
+  const canonicalRequestedOwnerRoot = requestedOwnerRoot
+    ? path.resolve(await tryRealpath(requestedOwnerRoot))
+    : null;
+  const canonicalGlobalRoot = globalRoot ? path.resolve(await tryRealpath(globalRoot)) : null;
+  const canonicalOwnerMatches =
+    canonicalRequestedOwnerRoot !== null && canonicalRequestedOwnerRoot === canonicalGlobalRoot;
+  const requestedInstallOwner =
+    requestedPackageRoot && canonicalOwnerMatches
+      ? await resolvePnpmIsolatedInstallOwner(requestedPackageRoot)
+      : null;
+
+  for (const entry of packages) {
+    const packageRoot = entry.packageRoot;
+    if (requestedPackageRoot) {
+      // Compare the isolated project owners, not the package symlinks: separate
+      // pnpm 11 projects can point at the same shared-store package directory.
+      const installOwner = await resolvePnpmIsolatedInstallOwner(packageRoot);
+      if (requestedInstallOwner === null || installOwner !== requestedInstallOwner) {
+        continue;
+      }
+    }
+    return entry;
+  }
+  return null;
+}
+
+async function isPnpmIsolatedGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
+  const globalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
+  if (!globalRoot) {
+    return false;
+  }
+  return Boolean(await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }));
+}
+
 /**
- * Resolves pnpm's global-dir from its active `node_modules` root.
- * Versioned pnpm layouts put packages under `<globalDir>/<version>/node_modules`.
+ * Resolves pnpm's global-dir from its active global package root.
+ * pnpm 10 used `<globalDir>/<version>/node_modules`; pnpm 11 uses
+ * `<globalDir>/v<version>` with isolated package projects below it.
  */
 export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null {
   const trimmed = globalRoot?.trim();
@@ -713,6 +889,9 @@ export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): 
     return null;
   }
   const normalized = path.resolve(trimmed);
+  if (/^v\d+$/u.test(path.basename(normalized))) {
+    return path.dirname(normalized);
+  }
   if (path.basename(normalized) !== "node_modules") {
     return null;
   }
@@ -721,6 +900,12 @@ export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): 
 }
 
 async function isPnpmGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
+  if (await isPnpmIsolatedGlobalPackageRoot(pkgRoot)) {
+    return true;
+  }
+  if (await hasPnpmIsolatedProjectMetadata(pkgRoot)) {
+    return true;
+  }
   const globalRoot = inferPnpmGlobalRootFromPackageRoot(pkgRoot);
   if (!globalRoot) {
     return false;
@@ -768,6 +953,19 @@ function normalizeGlobalInstallCommand(
     : managerOrCommand;
 }
 
+function resolveBunGlobalInstallSpec(spec: string): string {
+  const trimmed = normalizePackageTarget(spec);
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(`${PRIMARY_PACKAGE_NAME}@`)) {
+    return trimmed;
+  }
+  const isWindowsAbsolutePath = /^[a-z]:[\\/]/iu.test(trimmed);
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/iu.test(trimmed) && !isWindowsAbsolutePath;
+  const target = /\.(?:tgz|tar\.gz)$/iu.test(trimmed) && !hasScheme ? `file:${trimmed}` : trimmed;
+  // Bun needs an alias to replace the existing global dependency. A bare
+  // tarball is added beside it and can form an openclaw dependency loop.
+  return `${PRIMARY_PACKAGE_NAME}@${target}`;
+}
+
 function resolveInstallCommandForManager(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   manager: GlobalInstallManager,
@@ -798,7 +996,7 @@ async function resolveGlobalRoot(
   if (!res || res.code !== 0) {
     return null;
   }
-  const root = res.stdout.trim();
+  const root = readPackageManagerProbeValue(res.stdout);
   return root || null;
 }
 
@@ -814,30 +1012,61 @@ export async function resolveGlobalInstallTarget(params: {
   honorPackageRoot?: boolean;
   packageName?: string;
 }): Promise<ResolvedGlobalInstallTarget> {
+  const requestedCommand = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
+  const requestedPnpmGlobalRoot =
+    requestedCommand.manager === "pnpm"
+      ? await resolveGlobalRoot(
+          requestedCommand,
+          params.runCommand,
+          params.timeoutMs,
+          params.pkgRoot,
+        )
+      : null;
+  const inferredPnpmIsolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
+  const pnpmIsolatedPackage = inferredPnpmIsolatedGlobalRoot
+    ? await resolvePnpmIsolatedGlobalPackage({
+        globalRoot: inferredPnpmIsolatedGlobalRoot,
+        packageName: params.packageName,
+        pkgRoot: params.pkgRoot,
+      })
+    : await resolvePnpmIsolatedGlobalPackage({
+        globalRoot: requestedPnpmGlobalRoot,
+        packageName: params.packageName,
+        pkgRoot: params.pkgRoot,
+      });
+  const hasPnpmIsolatedMetadata = pnpmIsolatedPackage
+    ? true
+    : await hasPnpmIsolatedProjectMetadata(params.pkgRoot, params.packageName);
+  const verifiedPnpmIsolatedGlobalRoot =
+    pnpmIsolatedPackage?.globalRoot ??
+    (hasPnpmIsolatedMetadata ? inferredPnpmIsolatedGlobalRoot : null);
   const honoredPackageRootGlobalRoot = params.honorPackageRoot
     ? inferGlobalRootFromPackageRoot(params.pkgRoot)
     : null;
-  const pnpmPackageRootGlobalRoot = (await isPnpmGlobalPackageRoot(params.pkgRoot))
-    ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
-    : null;
+  const pnpmPackageRootGlobalRoot =
+    verifiedPnpmIsolatedGlobalRoot || (await isPnpmGlobalPackageRoot(params.pkgRoot))
+      ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
+      : null;
   const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot);
   const honoredDirectNpmRoot =
+    verifiedPnpmIsolatedGlobalRoot === null &&
+    pnpmIsolatedPackage === null &&
     pnpmPackageRootGlobalRoot === null &&
     bunPackageRootGlobalRoot === null &&
     isDirectNpmNodeModulesRoot(honoredPackageRootGlobalRoot);
   const command = bunPackageRootGlobalRoot
     ? resolveInstallCommandForManager(params.manager, "bun", params.pkgRoot)
-    : pnpmPackageRootGlobalRoot
+    : verifiedPnpmIsolatedGlobalRoot || pnpmPackageRootGlobalRoot
       ? resolveInstallCommandForManager(params.manager, "pnpm", params.pkgRoot)
       : honoredDirectNpmRoot
         ? resolveInstallCommandForManager(params.manager, "npm", params.pkgRoot)
         : normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
-  const globalRoot = await resolveGlobalRoot(
-    command,
-    params.runCommand,
-    params.timeoutMs,
-    params.pkgRoot,
-  );
+  const globalRoot =
+    requestedCommand.manager === "pnpm" &&
+    command.manager === requestedCommand.manager &&
+    command.command === requestedCommand.command
+      ? requestedPnpmGlobalRoot
+      : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot);
   const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
   // The detected npm owner applies to the running package, so its prefix is
   // authoritative. PATH's npm may belong to another Node installation and
@@ -848,19 +1077,38 @@ export async function resolveGlobalInstallTarget(params: {
       : null;
   const targetGlobalRoot =
     (command.manager === "bun" ? bunPackageRootGlobalRoot : null) ??
+    (command.manager === "pnpm" ? verifiedPnpmIsolatedGlobalRoot : null) ??
     pkgRootGlobalRoot ??
     (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
     npmPackageRootGlobalRoot ??
     globalRoot;
+  const pnpmIsolatedLayoutVersion =
+    pnpmIsolatedPackage?.layoutVersion ??
+    resolvePnpmIsolatedLayoutVersion(verifiedPnpmIsolatedGlobalRoot);
+  const fallbackPackageRoot = targetGlobalRoot
+    ? resolvePackageRootFromGlobalRoot({
+        globalRoot: targetGlobalRoot,
+        packageName: params.packageName,
+      })
+    : null;
+  const packageRoot =
+    command.manager === "pnpm"
+      ? (pnpmIsolatedPackage?.packageRoot ??
+        (verifiedPnpmIsolatedGlobalRoot && params.pkgRoot ? params.pkgRoot : fallbackPackageRoot))
+      : fallbackPackageRoot;
+  // Preserve metadata-backed pnpm ownership when the invoking project link is gone.
+  // The update preflight must reject that orphan instead of falling through to npm.
   return {
     ...command,
+    ...(command.manager === "pnpm" && pnpmIsolatedLayoutVersion !== null
+      ? {
+          pnpmIsolated: {
+            layoutVersion: pnpmIsolatedLayoutVersion,
+          },
+        }
+      : {}),
     globalRoot: targetGlobalRoot,
-    packageRoot: targetGlobalRoot
-      ? resolvePackageRootFromGlobalRoot({
-          globalRoot: targetGlobalRoot,
-          packageName: params.packageName,
-        })
-      : null,
+    packageRoot,
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot
@@ -893,11 +1141,18 @@ export async function detectGlobalInstallManagerForRoot(
     if (!res || res.code !== 0) {
       continue;
     }
-    const globalRoot = res.stdout.trim();
+    const globalRoot = readPackageManagerProbeValue(res.stdout);
     if (!globalRoot) {
       continue;
     }
     const globalReal = await tryRealpath(globalRoot);
+    if (manager === "pnpm") {
+      for (const name of ALL_PACKAGE_NAMES) {
+        if (await resolvePnpmIsolatedGlobalPackage({ globalRoot, packageName: name, pkgRoot })) {
+          return "pnpm";
+        }
+      }
+    }
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
       const expectedReal = await tryRealpath(expected);
@@ -975,12 +1230,21 @@ export function globalInstallArgs(
       "add",
       "-g",
       ...(installPrefix ? ["--global-dir", installPrefix] : []),
+      ...(resolved.pnpmIsolated?.globalBinDir
+        ? ["--global-bin-dir", resolved.pnpmIsolated.globalBinDir]
+        : []),
       PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG,
       spec,
     ];
   }
   if (resolved.manager === "bun") {
-    return [resolved.command, "add", "-g", BUN_OPENCLAW_TRUST_FLAG, spec];
+    return [
+      resolved.command,
+      "add",
+      "-g",
+      BUN_OPENCLAW_TRUST_FLAG,
+      resolveBunGlobalInstallSpec(spec),
+    ];
   }
   return [
     resolved.command,

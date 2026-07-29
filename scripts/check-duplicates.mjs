@@ -8,6 +8,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const jscpdBin = path.join(repoRoot, "node_modules", "jscpd", "bin", "jscpd");
 
 const targets = [
+  ".github/actions",
   "src",
   "extensions",
   "examples",
@@ -20,8 +21,8 @@ const targets = [
   "security",
   "test",
   "skills",
+  "config",
   "openclaw.mjs",
-  "config/knip.config.ts",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",

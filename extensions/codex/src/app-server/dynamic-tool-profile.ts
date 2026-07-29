@@ -5,7 +5,7 @@ import type {
   CodexAppServerConnectionClass,
   CodexDynamicToolsLoading,
   CodexPluginConfig,
-} from "./config.js";
+} from "./config-contracts.js";
 
 /** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
 const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
@@ -21,6 +21,7 @@ const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_search",
   "tool_search_code",
 ] as const;
+const CODEX_NATIVE_GOAL_TOOL_EXCLUDES = ["get_goal", "create_goal", "update_goal"] as const;
 const CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES = new Set(["exec", "process"]);
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
@@ -138,7 +139,14 @@ function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
   options: { preserveOpenClawShell: boolean },
 ): T[] {
   const excludes = new Set<string>();
-  if (!isForcedPrivateQaCodexRuntime(env)) {
+  for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
+    excludes.add(name);
+  }
+  if (isForcedPrivateQaCodexRuntime(env)) {
+    // Native apply_patch is registered first; advertising a second handler
+    // makes Codex reject the duplicate before either QA patch can execute.
+    excludes.add("apply_patch");
+  } else {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
       if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {
         continue;

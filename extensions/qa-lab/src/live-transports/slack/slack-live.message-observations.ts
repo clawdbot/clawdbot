@@ -312,7 +312,7 @@ export async function waitForSlackChannelStable(
   );
 }
 
-export function isSlackChannelReadyForQa(
+function isSlackChannelReadyForQa(
   status: SlackChannelStatus | undefined,
   mode: SlackChannelReadinessMode,
 ): boolean {
@@ -327,7 +327,7 @@ export function isSlackChannelReadyForQa(
   return mode === "started" || status.connected === true;
 }
 
-export function resolveSlackChannelReadySince(params: {
+function resolveSlackChannelReadySince(params: {
   observedAt: number;
   previousReadySince: number | undefined;
   status: SlackChannelStatus;
@@ -338,7 +338,7 @@ export function resolveSlackChannelReadySince(params: {
   return params.previousReadySince ?? params.observedAt;
 }
 
-export function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
   if (!raw) {
     return SLACK_QA_DEFAULT_READY_TIMEOUT_MS;

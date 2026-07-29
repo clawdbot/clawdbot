@@ -102,6 +102,17 @@ describe("msteams media-helpers", () => {
       expect(await extractFilename("https://example.com/images/2024/photo.png")).toBe("photo.png");
     });
 
+    it.each([
+      ["https://example.com/files/My%20report.pdf", "My report.pdf"],
+      ["https://example.com/files/r%C3%A9sum%C3%A9.pdf", "résumé.pdf"],
+      ["https://example.com/files/100%25.png", "100%.png"],
+      ["https://example.com/files/bad%ZZ.pdf", "bad%ZZ.pdf"],
+      ["https://example.com/files/folder%2Fsecret.png", "folder%2Fsecret.png"],
+      ["https://example.com/files/folder%5Csecret.png", "folder%5Csecret.png"],
+    ])("preserves the safe display filename from %s", async (url, expected) => {
+      expect(await extractFilename(url)).toBe(expected);
+    });
+
     it("handles URLs without extension by deriving from MIME", async () => {
       // Now defaults to application/octet-stream → .bin fallback
       expect(await extractFilename("https://example.com/images/photo")).toBe("photo.bin");

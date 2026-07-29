@@ -1,4 +1,5 @@
 // Device Pair plugin module implements notify behavior.
+import { randomUUID } from "node:crypto";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -23,11 +24,6 @@ const NOTIFY_POLL_INTERVAL_MS = 10_000;
 // Config reload recreates plugin services before an uncancellable delivery may settle.
 // Keep one module-owned poll so the replacement service cannot race state or delivery.
 let notifyPollInFlight: Promise<void> | null = null;
-
-type NotifyStateFile = {
-  subscribers: NotifySubscription[];
-  notifiedRequestIds: Record<string, number>;
-};
 
 type PendingPairingRequest = {
   requestId: string;
@@ -83,13 +79,21 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-function openNotifySubscriberStore(
-  api: OpenClawPluginApi,
-): PluginStateKeyedStore<NotifySubscription> {
-  return api.runtime.state.openKeyedStore<NotifySubscription>({
+type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
+  deleteIf: NonNullable<PluginStateKeyedStore<NotifySubscription>["deleteIf"]>;
+};
+
+function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
+  const store = api.runtime.state.openKeyedStore<NotifySubscription>({
     namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
     maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   });
+  if (!store.deleteIf) {
+    throw new Error(
+      "device-pair notify requires a runtime with atomic plugin state conditional delete support",
+    );
+  }
+  return store as NotifySubscriberStore;
 }
 
 function openNotifySeenRequestStore(
@@ -100,63 +104,6 @@ function openNotifySeenRequestStore(
     maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
     defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
   });
-}
-
-async function readNotifyState(api: OpenClawPluginApi): Promise<NotifyStateFile> {
-  const subscriberStore = openNotifySubscriberStore(api);
-  const seenRequestStore = openNotifySeenRequestStore(api);
-  const [subscriberEntries, seenRequestEntries] = await Promise.all([
-    subscriberStore.entries(),
-    seenRequestStore.entries(),
-  ]);
-
-  const subscribers = subscriberEntries
-    .map((entry) => entry.value)
-    .toSorted((a, b) => a.addedAtMs - b.addedAtMs);
-  const notifiedRequestIds: Record<string, number> = {};
-  for (const entry of seenRequestEntries) {
-    const requestId = normalizeOptionalString(entry.value.requestId);
-    const notifiedAtMs = entry.value.notifiedAtMs;
-    if (!requestId || !Number.isFinite(notifiedAtMs) || notifiedAtMs <= 0) {
-      continue;
-    }
-    notifiedRequestIds[requestId] = Math.trunc(notifiedAtMs);
-  }
-
-  return { subscribers, notifiedRequestIds };
-}
-
-async function writeNotifyState(api: OpenClawPluginApi, state: NotifyStateFile): Promise<void> {
-  const subscriberStore = openNotifySubscriberStore(api);
-  const nextSubscribers = new Map(
-    state.subscribers.map((subscriber) => [notifySubscriberStoreKey(subscriber), subscriber]),
-  );
-  for (const entry of await subscriberStore.entries()) {
-    if (!nextSubscribers.has(entry.key)) {
-      await subscriberStore.delete(entry.key);
-    }
-  }
-  for (const [key, subscriber] of nextSubscribers) {
-    await subscriberStore.register(key, subscriber);
-  }
-
-  const seenRequestStore = openNotifySeenRequestStore(api);
-  const nextSeenRequests = new Map(
-    Object.entries(state.notifiedRequestIds).map(([requestId, notifiedAtMs]) => [
-      notifyRequestStoreKey(requestId),
-      { requestId, notifiedAtMs },
-    ]),
-  );
-  for (const entry of await seenRequestStore.entries()) {
-    if (!nextSeenRequests.has(entry.key)) {
-      await seenRequestStore.delete(entry.key);
-    }
-  }
-  for (const [key, value] of nextSeenRequests) {
-    await seenRequestStore.register(key, value, {
-      ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
-    });
-  }
 }
 
 type NotifyTarget = {
@@ -187,28 +134,49 @@ function resolveNotifyTarget(ctx: {
   };
 }
 
-function upsertNotifySubscriber(
-  subscribers: NotifySubscription[],
+function nextNotifySubscription(
   target: NotifyTarget,
   mode: NotifySubscription["mode"],
-): boolean {
-  const key = notifySubscriberKey(target);
-  const index = subscribers.findIndex((entry) => notifySubscriberKey(entry) === key);
-  const next: NotifySubscription = {
+): NotifySubscription {
+  return {
     ...target,
     mode,
     addedAtMs: Date.now(),
+    armId: randomUUID(),
   };
-  if (index === -1) {
-    subscribers.push(next);
-    return true;
-  }
-  const existing = subscribers[index];
-  if (existing?.mode === mode) {
+}
+
+async function registerNotifySubscriber(params: {
+  api: OpenClawPluginApi;
+  target: NotifyTarget;
+  mode: NotifySubscription["mode"];
+  refresh: boolean;
+}): Promise<boolean> {
+  const store = openNotifySubscriberStore(params.api);
+  const key = notifySubscriberStoreKey(params.target);
+  const current = await store.lookup(key);
+  if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  subscribers[index] = next;
+  await store.register(key, nextNotifySubscription(params.target, params.mode));
   return true;
+}
+
+function isSameNotifySubscription(
+  current: NotifySubscription,
+  expected: NotifySubscription,
+): boolean {
+  if (expected.armId) {
+    return current.armId === expected.armId;
+  }
+  // Doctor-imported legacy subscriptions have no arm id. Their original
+  // fields remain the exact generation until a new arm replaces the row.
+  return (
+    current.armId === undefined &&
+    current.mode === expected.mode &&
+    current.addedAtMs === expected.addedAtMs &&
+    notifySubscriberKey(current) === notifySubscriberKey(expected)
+  );
 }
 
 function buildPairingRequestNotificationText(request: PendingPairingRequest): string {
@@ -289,30 +257,49 @@ async function notifySubscriber(params: {
 }
 
 async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
-  const state = await readNotifyState(params.api);
-  const pairing = await listDevicePairing();
+  const subscriberStore = openNotifySubscriberStore(params.api);
+  const seenRequestStore = openNotifySeenRequestStore(params.api);
+  const [subscriberEntries, seenRequestEntries, pairing] = await Promise.all([
+    subscriberStore.entries(),
+    seenRequestStore.entries(),
+    listDevicePairing(),
+  ]);
+  const subscribers = subscriberEntries.toSorted((a, b) => a.value.addedAtMs - b.value.addedAtMs);
   const pending: PendingPairingRequest[] = pairing.pending;
   const now = Date.now();
   const pendingIds = new Set(pending.map((entry) => entry.requestId));
-  let changed = false;
+  const notifiedRequestIds = new Set<string>();
 
-  for (const [requestId, ts] of Object.entries(state.notifiedRequestIds)) {
-    if (!pendingIds.has(requestId) || now - ts > DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS) {
-      delete state.notifiedRequestIds[requestId];
-      changed = true;
+  for (const entry of seenRequestEntries) {
+    const requestId = normalizeOptionalString(entry.value.requestId);
+    const notifiedAtMs = entry.value.notifiedAtMs;
+    if (
+      !requestId ||
+      !Number.isFinite(notifiedAtMs) ||
+      notifiedAtMs <= 0 ||
+      !pendingIds.has(requestId) ||
+      now - notifiedAtMs > DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS
+    ) {
+      await seenRequestStore.delete(entry.key);
+      continue;
     }
+    notifiedRequestIds.add(requestId);
   }
 
-  if (state.subscribers.length > 0) {
-    const oneShotDelivered = new Set<string>();
+  if (subscribers.length > 0) {
+    const deliveredOneShots = new Set<string>();
     for (const request of pending) {
-      if (state.notifiedRequestIds[request.requestId]) {
+      if (notifiedRequestIds.has(request.requestId)) {
         continue;
       }
 
       const text = buildPairingRequestNotificationText(request);
       let delivered = false;
-      for (const subscriber of state.subscribers) {
+      for (const entry of subscribers) {
+        const subscriber = entry.value;
+        if (subscriber.mode === "once" && deliveredOneShots.has(entry.key)) {
+          continue;
+        }
         if (!shouldNotifySubscriberForRequest(subscriber, request)) {
           continue;
         }
@@ -323,28 +310,24 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
         });
         delivered = delivered || sent;
         if (sent && subscriber.mode === "once") {
-          oneShotDelivered.add(notifySubscriberKey(subscriber));
+          deliveredOneShots.add(entry.key);
+          // Delivery is fallible and uncancellable. Delete only the exact arm
+          // that was sent so an overlapping re-arm remains subscribed.
+          await subscriberStore.deleteIf(entry.key, (current) =>
+            isSameNotifySubscription(current, subscriber),
+          );
         }
       }
 
       if (delivered) {
-        state.notifiedRequestIds[request.requestId] = now;
-        changed = true;
+        await seenRequestStore.register(
+          notifyRequestStoreKey(request.requestId),
+          { requestId: request.requestId, notifiedAtMs: now },
+          { ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS },
+        );
+        notifiedRequestIds.add(request.requestId);
       }
     }
-    if (oneShotDelivered.size > 0) {
-      const initialCount = state.subscribers.length;
-      state.subscribers = state.subscribers.filter(
-        (subscriber) => !oneShotDelivered.has(notifySubscriberKey(subscriber)),
-      );
-      if (state.subscribers.length !== initialCount) {
-        changed = true;
-      }
-    }
-  }
-
-  if (changed) {
-    await writeNotifyState(params.api, state);
   }
 }
 
@@ -379,16 +362,12 @@ export async function armPairNotifyOnce(params: {
     return false;
   }
 
-  const state = await readNotifyState(params.api);
-  let changed = false;
-
-  if (upsertNotifySubscriber(state.subscribers, target, "once")) {
-    changed = true;
-  }
-
-  if (changed) {
-    await writeNotifyState(params.api, state);
-  }
+  await registerNotifySubscriber({
+    api: params.api,
+    target,
+    mode: "once",
+    refresh: true,
+  });
   return true;
 }
 
@@ -413,14 +392,16 @@ export async function handleNotifyCommand(params: {
     return { text: "Could not resolve Telegram target for this chat." };
   }
 
-  const state = await readNotifyState(params.api);
-  const targetKey = notifySubscriberKey(target);
-  const current = state.subscribers.find((entry) => notifySubscriberKey(entry) === targetKey);
+  const subscriberStore = openNotifySubscriberStore(params.api);
+  const targetStoreKey = notifySubscriberStoreKey(target);
 
   if (params.action === "on" || params.action === "enable") {
-    if (upsertNotifySubscriber(state.subscribers, target, "persistent")) {
-      await writeNotifyState(params.api, state);
-    }
+    await registerNotifySubscriber({
+      api: params.api,
+      target,
+      mode: "persistent",
+      refresh: false,
+    });
     return {
       text:
         "✅ Pair request notifications enabled for this Telegram chat.\n" +
@@ -429,13 +410,7 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    const currentIndex = state.subscribers.findIndex(
-      (entry) => notifySubscriberKey(entry) === targetKey,
-    );
-    if (currentIndex !== -1) {
-      state.subscribers.splice(currentIndex, 1);
-      await writeNotifyState(params.api, state);
-    }
+    await subscriberStore.delete(targetStoreKey);
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -452,14 +427,18 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "status" || params.action === "") {
-    const pending = await listDevicePairing();
+    const [current, subscribers, pending] = await Promise.all([
+      subscriberStore.lookup(targetStoreKey),
+      subscriberStore.entries(),
+      listDevicePairing(),
+    ]);
     const enabled = Boolean(current);
     const mode = current?.mode ?? "off";
     return {
       text: [
         `Pair request notifications: ${enabled ? "enabled" : "disabled"} for this chat.`,
         `Mode: ${mode}`,
-        `Subscribers: ${state.subscribers.length}`,
+        `Subscribers: ${subscribers.length}`,
         `Pending requests: ${pending.pending.length}`,
         "",
         "Use /pair notify on|off|once",

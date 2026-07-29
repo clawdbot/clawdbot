@@ -37,24 +37,35 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
-  it("continues ordered cleanup after a resource reports failure", async () => {
+  it("runs the production cleanup plan in dependency order after a failure", async () => {
     const calls: string[] = [];
-    const failure = new Error("gateway pipe failed");
+    const failure = new Error("transport close failed");
+    const step = (name: string, error?: Error) => async () => {
+      calls.push(name);
+      if (error) {
+        throw error;
+      }
+    };
 
-    const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
-      async () => {
-        calls.push("gateway");
-        throw failure;
-      },
-      async () => {
-        calls.push("transport");
-      },
-      async () => {
-        calls.push("lab");
-      },
+    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+      closeWebSessions: step("web sessions"),
+      cleanupTransportBeforeGatewayStop: step("transport before gateway", failure),
+      cleanupTransportAfterGatewayStop: step("transport after gateway"),
+      stopGateway: step("gateway"),
+      disposeAgentHarnesses: step("agent harnesses"),
+      stopProvider: step("provider"),
+      finishLab: step("lab"),
+    });
+
+    expect(calls).toEqual([
+      "web sessions",
+      "transport before gateway",
+      "gateway",
+      "transport after gateway",
+      "agent harnesses",
+      "provider",
+      "lab",
     ]);
-
-    expect(calls).toEqual(["gateway", "transport", "lab"]);
     expect(errors).toEqual([failure]);
   });
 
@@ -68,6 +79,28 @@ describe("qa suite", () => {
         runError,
       }),
     ).toThrow(expect.objectContaining({ cause: runError }));
+  });
+
+  it("does not release transport credentials when gateway teardown fails", async () => {
+    const calls: string[] = [];
+    const gatewayFailure = new Error("gateway remained alive");
+    const step = (name: string, error?: Error) => async () => {
+      calls.push(name);
+      if (error) {
+        throw error;
+      }
+    };
+
+    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+      cleanupTransportBeforeGatewayStop: step("transport before gateway"),
+      cleanupTransportAfterGatewayStop: step("transport after gateway"),
+      stopGateway: step("gateway", gatewayFailure),
+      disposeAgentHarnesses: step("agent harnesses"),
+      finishLab: step("lab"),
+    });
+
+    expect(calls).toEqual(["transport before gateway", "gateway", "agent harnesses", "lab"]);
+    expect(errors).toEqual([gatewayFailure]);
   });
 
   it("rejects unsupported transport ids before starting the lab", async () => {
@@ -133,6 +166,7 @@ describe("qa suite", () => {
       gateway: env.gateway,
       outputDir: "/tmp/qa-output",
       timeoutMs: 45_000,
+      waitForConfigRestartSettle: expect.any(Function),
     });
     expect(scenarioStep).not.toHaveBeenCalled();
   });
@@ -209,6 +243,67 @@ describe("qa suite", () => {
         timeoutMs: 1,
       }),
     ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a successful lab readiness body before releasing its guard", async () => {
+    const events: string[] = [];
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            events.push("cancel");
+          },
+        }),
+        { status: 200 },
+      ),
+      release: async () => {
+        events.push("release");
+      },
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(events).toEqual(["cancel", "release"]);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("bounds a hung lab readiness request by the remaining startup deadline", async () => {
+    vi.useFakeTimers();
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ timeoutMs }: { timeoutMs: number }) =>
+        await new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("request timed out")), timeoutMs);
+        }),
+    );
+
+    const readiness = qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+      lab: {
+        listenUrl: "http://127.0.0.1:43123",
+        stop,
+      },
+      ownsLab: true,
+      timeoutMs: 1_000,
+    });
+    const rejection = expect(readiness).rejects.toThrow(
+      "timed out after 1000ms waiting for qa-lab ready",
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
@@ -465,7 +560,7 @@ describe("qa suite", () => {
     }
   });
 
-  it("writes Crabline channel-driver smoke artifacts when selected", async () => {
+  it("writes the selected Crabline driver with an honest failed result", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
     try {
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -486,7 +581,14 @@ describe("qa suite", () => {
         outputDir,
         startedAt: new Date("2026-04-11T00:00:00.000Z"),
         finishedAt: new Date("2026-04-11T00:01:00.000Z"),
-        scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
+        scenarios: [
+          {
+            name: "Telegram DM",
+            status: "fail",
+            details: "active transport does not implement this scenario",
+            steps: [],
+          },
+        ],
         scenarioDefinitions: [
           {
             ...makeQaSuiteTestScenario("telegram-dm", {
@@ -545,11 +647,18 @@ describe("qa suite", () => {
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
       expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
-        entries?: Array<{ execution?: { channel?: { driver?: string; id?: string } } }>;
+        entries?: Array<{
+          execution?: { channel?: { driver?: string; id?: string } };
+          result?: { failure?: { reason?: string }; status?: string };
+        }>;
       };
       expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({
         driver: "crabline",
         id: "telegram",
+      });
+      expect(evidence.entries?.[0]?.result).toMatchObject({
+        failure: { reason: "active transport does not implement this scenario" },
+        status: "fail",
       });
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
@@ -691,36 +800,6 @@ describe("qa suite", () => {
     ).toEqual({
       OPENAI_API_KEY: "mock",
       NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
-    });
-  });
-
-  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "mock-openai",
-        forcedRuntime: "codex",
-        mockBaseUrl: "http://127.0.0.1:44080",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
-      OPENAI_API_KEY: "qa-mock-openai-key",
-      CODEX_API_KEY: "qa-mock-openai-key",
-    });
-  });
-
-  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "mock-openai",
-        forcedRuntime: "openclaw",
-        mockBaseUrl: "http://127.0.0.1:44080",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "openclaw",
     });
   });
 

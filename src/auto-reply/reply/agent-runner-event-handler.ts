@@ -1,6 +1,7 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyPayload } from "../types.js";
@@ -202,9 +203,7 @@ export function createAgentRunEventHandler(params: {
         phase: readStringValue(evt.data.phase),
         title: readStringValue(evt.data.title),
         explanation: readStringValue(evt.data.explanation),
-        steps: Array.isArray(evt.data.steps)
-          ? evt.data.steps.filter((step): step is string => typeof step === "string")
-          : undefined,
+        steps: normalizeAgentPlanSteps(evt.data.steps),
         source: readStringValue(evt.data.source),
       });
     }

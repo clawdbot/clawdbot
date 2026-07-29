@@ -80,6 +80,29 @@ describe("copyToClipboard", () => {
     ]);
   });
 
+  it("passes PowerShell clipboard text as UTF-8 base64 on stdin", async () => {
+    runCommandWithTimeoutMock
+      .mockRejectedValueOnce(new Error("missing pbcopy"))
+      .mockRejectedValueOnce(new Error("missing xclip"))
+      .mockRejectedValueOnce(new Error("missing wl-copy"))
+      .mockRejectedValueOnce(new Error("missing clip.exe"))
+      .mockResolvedValueOnce({ code: 0, killed: false });
+
+    const value = "\u4f60\u597d\u4e16\u754c \ud83c\udf89 caf\u00e9";
+    await expect(copyToClipboard(value)).resolves.toBe(true);
+
+    const [argv, options] = runCommandWithTimeoutMock.mock.calls[4] as [
+      string[],
+      { timeoutMs: number; input: string },
+    ];
+    expect(argv.slice(0, 4)).toEqual(["powershell", "-NoProfile", "-NonInteractive", "-Command"]);
+    expect(argv.join("\0")).not.toContain(value);
+    expect(options).toEqual({
+      timeoutMs: 3000,
+      input: Buffer.from(value, "utf8").toString("base64"),
+    });
+  });
+
   it("returns false when every clipboard backend fails or is killed", async () => {
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, killed: true })

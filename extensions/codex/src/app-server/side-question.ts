@@ -18,7 +18,6 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
@@ -31,6 +30,7 @@ import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./cl
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
+  resolveCodexAppServerHomeScope,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
@@ -56,7 +56,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
-import { CodexNativeToolLifecycleProjector } from "./event-projector.js";
+import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
@@ -89,6 +89,7 @@ import {
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -199,6 +200,7 @@ export async function runCodexAppServerSideQuestion(
         authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
+        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
         config: params.cfg,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a scoped native OAuth or token profile.",
@@ -288,6 +290,7 @@ export async function runCodexAppServerSideQuestion(
   const clientOptions = {
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
+    authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
     ...(startupPreparedAuth
       ? { preparedAuth: startupPreparedAuth }
       : { authProfileId: connection.clientAuthProfileId }),
@@ -364,6 +367,7 @@ export async function runCodexAppServerSideQuestion(
   let turnId: string | undefined;
   let removeRequestHandler: (() => void) | undefined;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  const activeDynamicToolCalls = new Set<Promise<unknown>>();
 
   try {
     const modelScopedAppServer = resolveCodexAppServerForModelProvider({
@@ -409,8 +413,7 @@ export async function runCodexAppServerSideQuestion(
       runId,
       signal: runAbortController.signal,
     });
-    // Auth refresh is a physical-client concern; the shared runtime handler
-    // stays installed once per client instead of once per side question.
+    // Auth refresh is client-owned; keep one shared handler per physical client.
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
       authProfileId:
@@ -484,13 +487,16 @@ export async function runCodexAppServerSideQuestion(
           sessionKey: params.sessionKey,
         };
         emitDynamicToolStartedDiagnostic(diagnosticContext);
+        const toolCall = handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: runAbortController.signal,
+          timeoutMs,
+          observeToolTerminal: sideRunParams.observeToolTerminal,
+        });
+        activeDynamicToolCalls.add(toolCall);
         try {
-          const response = await handleDynamicToolCallWithTimeout({
-            call,
-            toolBridge,
-            signal: runAbortController.signal,
-            timeoutMs,
-          });
+          const response = await toolCall;
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,
             response,
@@ -509,6 +515,8 @@ export async function runCodexAppServerSideQuestion(
               : "failed",
           });
           throw error;
+        } finally {
+          activeDynamicToolCalls.delete(toolCall);
         }
       });
     removeRequestHandler = registerRequestHandler(client);
@@ -551,6 +559,7 @@ export async function runCodexAppServerSideQuestion(
             appServer.turnCompletionIdleTimeoutMs,
             SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
           ),
+          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
           onPreToolUseFailure: (failure) => {
             if (nativePreToolUseFailureFallbackActive) {
@@ -572,6 +581,7 @@ export async function runCodexAppServerSideQuestion(
           events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
+          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
         })
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
@@ -727,6 +737,10 @@ export async function runCodexAppServerSideQuestion(
       if (!runAbortController.signal.aborted) {
         runAbortController.abort("codex_side_question_finished");
       }
+      // Request handlers can still be finishing after the terminal turn event.
+      // Drain their abort races before unsubscribe so late diagnostics cannot leak
+      // into the next side run.
+      await Promise.allSettled(activeDynamicToolCalls);
       try {
         await cleanupCodexSideThread(client, {
           threadId: childThreadId,
@@ -779,6 +793,7 @@ function registerCodexSideNativeHookRelay(params: {
   channelId?: string;
   requestTimeoutMs: number;
   completionTimeoutMs: number;
+  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
 }): NativeHookRelayRegistrationHandle | undefined {
@@ -794,6 +809,7 @@ function registerCodexSideNativeHookRelay(params: {
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,
+    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexSideNativeHookRelayTtlMs({
       explicitTtlMs: params.options.ttlMs,
       requestTimeoutMs: params.requestTimeoutMs,
@@ -1028,6 +1044,7 @@ async function createCodexSideToolBridge(input: {
       hookContext: {
         agentId: input.sessionAgentId,
         config: input.params.cfg,
+        contextWindowTokens: runtimeModel.contextWindow,
         sessionId: input.params.sessionId,
         sessionKey: input.params.sessionKey,
         runId: input.runId,

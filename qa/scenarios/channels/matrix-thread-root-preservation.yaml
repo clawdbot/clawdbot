@@ -4,14 +4,12 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
+      - matrix.matrix-thread-reply-routing
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 60000
     retryCount: 0
-    config:
-      requiredChannelDriver: live
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-room.js

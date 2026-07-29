@@ -4,6 +4,7 @@
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -106,7 +107,7 @@ async function processEvent(params: {
   // under the same safe correlation id before dispatching any model work.
   const messageClient = correlationId
     ? createClickClackClient({
-        baseUrl: params.account.baseUrl,
+        baseUrl: params.account.apiEndpoint,
         token: params.account.token,
         correlationId,
       })
@@ -177,7 +178,7 @@ export async function startClickClackGatewayAccount(
     throw new Error(`ClickClack is not configured for account "${configuredAccount.accountId}"`);
   }
   const client = createClickClackClient({
-    baseUrl: configuredAccount.baseUrl,
+    baseUrl: configuredAccount.apiEndpoint,
     token: configuredAccount.token,
   });
   const workspaceId = await resolveWorkspaceId(client, configuredAccount.workspace);
@@ -187,6 +188,14 @@ export async function startClickClackGatewayAccount(
     workspace: workspaceId,
     botUserId: configuredAccount.botUserId ?? me.id,
   };
+  const processIncomingEvent = (event: ClickClackEvent) =>
+    processEvent({
+      account,
+      config: ctx.cfg,
+      client,
+      event,
+      botUserId: account.botUserId,
+    });
   if (account.commandMenu) {
     await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
   }
@@ -221,23 +230,18 @@ export async function startClickClackGatewayAccount(
           workspaceId,
           afterCursor,
           abortSignal: ctx.abortSignal,
-          onEvent: async (event) => {
-            await processEvent({
-              account,
-              config: ctx.cfg,
-              client,
-              event,
-              botUserId: account.botUserId,
-            });
-          },
+          onEvent: processIncomingEvent,
         });
       }
       if (ctx.abortSignal.aborted) {
         break;
       }
       const socket = client.websocket(workspaceId, afterCursor);
-      await new Promise<void>((resolve, reject) => {
+      await new Promise<void>((resolve) => {
         let settled = false;
+        let closing = false;
+        let loggedMessageFailure = false;
+        let messageQueue = Promise.resolve();
         let removeAbortListener: (() => void) | undefined;
         const finishSocketCycle = () => {
           if (settled) {
@@ -248,6 +252,33 @@ export async function startClickClackGatewayAccount(
           removeAbortListener = undefined;
           resolve();
         };
+        const finishAfterQueuedMessages = () => {
+          // The queue is scoped to this account/socket. Waiting here preserves
+          // its contiguous cursor without blocking unrelated account streams.
+          void messageQueue.then(
+            () => finishSocketCycle(),
+            () => finishSocketCycle(),
+          );
+        };
+        const reconnectAfterMessageFailure = (error: unknown) => {
+          if (settled || ctx.abortSignal.aborted) {
+            return;
+          }
+          if (!loggedMessageFailure) {
+            loggedMessageFailure = true;
+            ctx.log?.warn?.(
+              `[${account.accountId}] ClickClack event processing failed; reconnecting: ${
+                error instanceof Error ? error.message : formatErrorMessage(error)
+              }`,
+            );
+          }
+          if (!closing) {
+            // Keep the last successful cursor. Reconnect backlog will replay
+            // this event; a repeated failure there remains a surfaced error.
+            closing = true;
+            socket.close();
+          }
+        };
         const abort = () => {
           socket.close();
           finishSocketCycle();
@@ -255,7 +286,12 @@ export async function startClickClackGatewayAccount(
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("message", (data) => {
-          void (async () => {
+          if (closing || settled) {
+            return;
+          }
+          // Preserve server event order and commit each cursor only after its
+          // handler succeeds, so reconnect backlog can retry a failed event.
+          messageQueue = messageQueue.then(async () => {
             const event = parseSocketEvent(data);
             if (!event) {
               ctx.log?.warn?.(
@@ -263,28 +299,21 @@ export async function startClickClackGatewayAccount(
               );
               return;
             }
+            await processIncomingEvent(event);
             afterCursor = event.cursor || afterCursor;
-            await processEvent({
-              account,
-              config: ctx.cfg,
-              client,
-              event,
-              botUserId: account.botUserId ?? "",
-            });
-          })().catch((e: unknown) =>
-            reject(
-              e instanceof Error
-                ? e
-                : new Error(`ClickClack ws message failed: ${formatErrorMessage(e)}`, {
-                    cause: e,
-                  }),
-            ),
-          );
+          });
+          void messageQueue.catch(reconnectAfterMessageFailure);
         });
-        socket.on("close", finishSocketCycle);
+        socket.on("close", () => {
+          closing = true;
+          finishAfterQueuedMessages();
+        });
         socket.on("error", (error) => {
           if (settled || ctx.abortSignal.aborted) {
             finishSocketCycle();
+            return;
+          }
+          if (closing) {
             return;
           }
           ctx.log?.warn?.(
@@ -292,14 +321,20 @@ export async function startClickClackGatewayAccount(
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          finishSocketCycle();
+          closing = true;
           socket.close();
         });
       });
       if (!ctx.abortSignal.aborted) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, account.reconnectMs);
-        });
+        try {
+          // The gateway abort owns both the active socket and its reconnect delay;
+          // otherwise shutdown can remain pending for the full configured backoff.
+          await sleepWithAbort(account.reconnectMs, ctx.abortSignal);
+        } catch (error) {
+          if (!ctx.abortSignal.aborted) {
+            throw error;
+          }
+        }
       }
     }
   } finally {

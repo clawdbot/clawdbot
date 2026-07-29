@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
+import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderDailyChartCompact,
   renderCostWindowComparison,
@@ -102,6 +103,58 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
+  it("renders overview hints as focusable tooltip anchors", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderUsageInsights(
+        totals,
+        aggregates,
+        {
+          durationSumMs: 0,
+          durationCount: 0,
+          avgDurationMs: 0,
+          errorRate: 0,
+        },
+        false,
+        true,
+        [],
+        1,
+        1,
+      ),
+      container,
+    );
+
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
+    const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
+    expect(buttons).toHaveLength(9);
+    expect(tooltips).toHaveLength(9);
+    expect(
+      buttons.every(
+        (button) =>
+          button.type === "button" &&
+          !button.hasAttribute("title") &&
+          Boolean(button.getAttribute("aria-label")),
+      ),
+    ).toBe(true);
+    expect(
+      tooltips.every((tooltip) => {
+        const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
+        const content = tooltip.querySelector('[slot="content"]');
+        return Boolean(
+          button &&
+          buttons.includes(button) &&
+          content &&
+          button.getAttribute("aria-label") !== content.textContent,
+        );
+      }),
+    ).toBe(true);
+
+    buttons[0]?.click();
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
 
@@ -206,6 +259,42 @@ describe("renderUsageInsights", () => {
     );
 
     expect(container.textContent).not.toContain("1000.0% of cost");
+  });
+});
+
+describe("renderUsageHeatmap", () => {
+  it("renders the selected activity range from usage cost data", () => {
+    const container = document.createElement("div");
+    render(
+      renderUsageHeatmap(
+        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
+        "2025-07-11",
+        "2026-07-09",
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
+      "Token Activity",
+    );
+    expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
+    expect(container.querySelector(".usage-heatmap__cell--l4 title")?.textContent).toContain(
+      "20 tokens",
+    );
+  });
+
+  it("keeps short ranges at their natural cell width", () => {
+    const container = document.createElement("div");
+    render(
+      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
+      container,
+    );
+
+    expect(
+      container
+        .querySelector<SVGElement>(".usage-heatmap__svg")
+        ?.style.getPropertyValue("--usage-heatmap-width"),
+    ).toBe("44px");
   });
 });
 

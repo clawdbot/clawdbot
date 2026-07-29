@@ -1,7 +1,11 @@
 // Sandbox env sanitizer tests cover credential filtering for inherited and
 // explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
-import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
+import {
+  sanitizeEnvVars,
+  sanitizeExplicitSandboxEnvVars,
+  validateEnvVarValue,
+} from "./sanitize-env-vars.js";
 
 describe("sanitizeEnvVars", () => {
   it("keeps normal env vars and blocks obvious credentials", () => {
@@ -104,5 +108,13 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ SAFE_SECRET: "ok" });
     expect(result.blocked).toStrictEqual(["NULL_SECRET"]);
+  });
+
+  it("measures the value limit in UTF-8 bytes", () => {
+    const atLimit = "a!".repeat(16384);
+
+    expect(validateEnvVarValue(atLimit)).toBeUndefined();
+    expect(validateEnvVarValue(`${atLimit}x`)).toBe("Value exceeds maximum length");
+    expect(validateEnvVarValue("值".repeat(11000))).toBe("Value exceeds maximum length");
   });
 });

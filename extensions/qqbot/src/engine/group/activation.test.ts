@@ -1,115 +1,71 @@
 // Qqbot tests cover activation plugin behavior.
-import { describe, expect, it } from "vitest";
-import { resolveGroupActivation, type SessionStoreReader } from "./activation.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const sessionStoreMocks = vi.hoisted(() => ({
+  getSessionEntry: vi.fn(),
+  resolveStorePath: vi.fn(() => "/state/agents/main/openclaw-agent.sqlite"),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", () => sessionStoreMocks);
+
+import { resolveGroupActivation } from "./activation.js";
 
 describe("engine/group/activation", () => {
-  describe("resolveGroupActivation — no reader", () => {
-    it("maps configRequireMention=true → mention", () => {
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "s",
-          configRequireMention: true,
-        }),
-      ).toBe("mention");
-    });
+  beforeEach(() => {
+    sessionStoreMocks.getSessionEntry.mockReset();
+    sessionStoreMocks.resolveStorePath.mockClear();
+  });
 
-    it("maps configRequireMention=false → always", () => {
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "s",
-          configRequireMention: false,
-        }),
-      ).toBe("always");
+  it.each([
+    { configRequireMention: true, expected: "mention" },
+    { configRequireMention: false, expected: "always" },
+  ] as const)("falls back to $expected when no override exists", (testCase) => {
+    expect(
+      resolveGroupActivation({
+        cfg: {},
+        agentId: "main",
+        sessionKey: "missing",
+        configRequireMention: testCase.configRequireMention,
+      }),
+    ).toBe(testCase.expected);
+  });
+
+  it.each([
+    { raw: "mention", configRequireMention: false, expected: "mention" },
+    { raw: "always", configRequireMention: true, expected: "always" },
+    { raw: "  Always  ", configRequireMention: true, expected: "always" },
+    { raw: "weird-mode", configRequireMention: true, expected: "mention" },
+  ] as const)("resolves session activation $raw as $expected", (testCase) => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({ groupActivation: testCase.raw });
+
+    expect(
+      resolveGroupActivation({
+        cfg: {},
+        agentId: "main",
+        sessionKey: "k1",
+        configRequireMention: testCase.configRequireMention,
+      }),
+    ).toBe(testCase.expected);
+    expect(sessionStoreMocks.resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
+      storePath: "/state/agents/main/openclaw-agent.sqlite",
+      agentId: "main",
+      sessionKey: "k1",
     });
   });
 
-  describe("resolveGroupActivation — with reader", () => {
-    const makeReader = (
-      store: Record<string, { groupActivation?: string }> | null,
-    ): SessionStoreReader => ({
-      read: () => store,
+  it("falls back when the session accessor fails", () => {
+    sessionStoreMocks.getSessionEntry.mockImplementation(() => {
+      throw new Error("unavailable");
     });
 
-    it("honours explicit session-store override (mention)", () => {
-      const reader = makeReader({ k1: { groupActivation: "mention" } });
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "k1",
-          configRequireMention: false,
-          sessionStoreReader: reader,
-        }),
-      ).toBe("mention");
-    });
-
-    it("honours explicit session-store override (always)", () => {
-      const reader = makeReader({ k1: { groupActivation: "always" } });
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "k1",
-          configRequireMention: true,
-          sessionStoreReader: reader,
-        }),
-      ).toBe("always");
-    });
-
-    it("ignores override when the key is absent", () => {
-      const reader = makeReader({});
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "MISSING",
-          configRequireMention: true,
-          sessionStoreReader: reader,
-        }),
-      ).toBe("mention");
-    });
-
-    it("ignores reader errors (null) and falls back", () => {
-      const reader = makeReader(null);
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "k1",
-          configRequireMention: false,
-          sessionStoreReader: reader,
-        }),
-      ).toBe("always");
-    });
-
-    it("ignores invalid activation values", () => {
-      const reader = makeReader({ k1: { groupActivation: "weird-mode" } });
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "k1",
-          configRequireMention: true,
-          sessionStoreReader: reader,
-        }),
-      ).toBe("mention");
-    });
-
-    it("normalizes whitespace / case", () => {
-      const reader = makeReader({ k1: { groupActivation: "  Always  " } });
-      expect(
-        resolveGroupActivation({
-          cfg: {},
-          agentId: "main",
-          sessionKey: "k1",
-          configRequireMention: true,
-          sessionStoreReader: reader,
-        }),
-      ).toBe("always");
-    });
+    expect(
+      resolveGroupActivation({
+        cfg: {},
+        agentId: "main",
+        sessionKey: "k1",
+        configRequireMention: false,
+      }),
+    ).toBe("always");
   });
 });

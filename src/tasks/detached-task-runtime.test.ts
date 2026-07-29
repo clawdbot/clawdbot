@@ -13,13 +13,15 @@ import {
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
   recordTaskRunProgressByRunId,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "./task-runtime.test-helpers.js";
 
 const { mockFindTaskByRunIdForStatus, mockListTasksForSessionKeyForStatus, mockLogWarn } =
   vi.hoisted(() => ({

@@ -1,5 +1,5 @@
-import { resolveExecutableFromPathEnv as resolveExecutableFromPathEnvDirect } from "../infra/executable-path.js";
-import { resolveExecutableFromUserShellPathWithPathEnv } from "../infra/shell-env.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { resolveExecutableFromUserShellPath as resolveExecutableFromUserShellPathInternal } from "../infra/shell-env.js";
 
 export {
   decodeNodePtyResumeParams,
@@ -10,53 +10,30 @@ export {
 export { validateClaudeSessionId } from "../node-host/invoke-agent-cli-claude-params.js";
 export type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 
-export function resolveExecutableFromPathEnv(
+/** Resolve a node-host executable using the selected PATH source policy. */
+export function resolveNodeHostExecutable(
   executable: string,
-  pathEnv: string,
-  env: NodeJS.ProcessEnv | undefined,
   options: {
+    env?: NodeJS.ProcessEnv;
+    pathEnv?: string;
     includeExtensionless?: boolean;
-    fallbackToLoginShell?: boolean;
-    preferLoginShell?: boolean;
-    withPathEnv: true;
+    strategy: "direct" | "fallback" | "prefer";
   },
-): { executable: string; pathEnv?: string } | undefined;
-export function resolveExecutableFromPathEnv(
-  executable: string,
-  pathEnv: string,
-  env?: NodeJS.ProcessEnv,
-  options?: {
-    includeExtensionless?: boolean;
-    fallbackToLoginShell?: boolean;
-    preferLoginShell?: boolean;
-    withPathEnv?: false;
-  },
-): string | undefined;
-export function resolveExecutableFromPathEnv(
-  executable: string,
-  pathEnv: string,
-  env?: NodeJS.ProcessEnv,
-  options?: {
-    includeExtensionless?: boolean;
-    fallbackToLoginShell?: boolean;
-    preferLoginShell?: boolean;
-    withPathEnv?: boolean;
-  },
-): string | { executable: string; pathEnv?: string } | undefined {
-  let resolution: { executable: string; pathEnv?: string } | undefined;
-  if (!options?.fallbackToLoginShell) {
-    const resolved = resolveExecutableFromPathEnvDirect(executable, pathEnv, env, options);
-    resolution = resolved ? { executable: resolved } : undefined;
-  } else {
-    // Local catalog terminals launch with this same login-shell PATH. Carry it
-    // forward because npm-style launchers may use `#!/usr/bin/env node`.
-    const shellEnv = env ?? process.env;
-    resolution = resolveExecutableFromUserShellPathWithPathEnv(executable, {
-      env: shellEnv,
-      pathEnv,
-      includeExtensionless: options.includeExtensionless,
-      preferLoginShell: options.preferLoginShell,
-    });
+): { executable: string; pathEnv?: string } | undefined {
+  const env = options.env ?? process.env;
+  if (options.strategy === "direct") {
+    const resolved = resolveExecutableFromPathEnv(
+      executable,
+      options.pathEnv ?? env.PATH ?? env.Path ?? "",
+      env,
+      { includeExtensionless: options.includeExtensionless },
+    );
+    return resolved ? { executable: resolved } : undefined;
   }
-  return options?.withPathEnv ? resolution : resolution?.executable;
+  return resolveExecutableFromUserShellPathInternal(executable, {
+    env,
+    pathEnv: options.pathEnv,
+    includeExtensionless: options.includeExtensionless,
+    strategy: options.strategy,
+  });
 }

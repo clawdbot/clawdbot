@@ -1,6 +1,10 @@
 // Tsdown config tests protect package artifact build contracts.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "../../scripts/lib/tsdown-config-groups.mjs";
 import config from "../../tsdown.config.ts";
 
 const configs = Array.isArray(config) ? config : [config];
@@ -20,6 +24,13 @@ describe("tsdown config", () => {
   it("enables declaration output explicitly for package artifact builds", () => {
     expect(configs).not.toHaveLength(0);
     expect(configs.map((entry) => entry.dts)).toEqual(configs.map(() => true));
+  });
+
+  it("isolates the unified graph from package declaration builds", () => {
+    expect(configs.slice(0, -1).map((entry) => entry.name)).toEqual(
+      configs.slice(0, -1).map(() => TSDOWN_PACKAGE_CONFIG_GROUP),
+    );
+    expect(configs.at(-1)?.name).toBe(TSDOWN_UNIFIED_CONFIG_GROUP);
   });
 
   it("keeps node package artifacts on the declared js and dts extensions", () => {

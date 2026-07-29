@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -21,20 +24,54 @@ type PendingFinalDeliveryIdentity = {
   text?: string;
 };
 
+function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<SessionEntry> {
+  // An active receipt/claim may outlive outer reply settlement. Only claimless pending finals
+  // borrow hook provenance until their exact transport intent settles.
+  const clearsRestartRecoveryProof =
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined;
+  const completesHookHandledTurn =
+    clearsRestartRecoveryProof &&
+    (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
+  const endedAt = completesHookHandledTurn ? Date.now() : undefined;
+  return {
+    pendingFinalDelivery: undefined,
+    ...(clearsRestartRecoveryProof
+      ? {
+          restartRecoveryBeforeAgentReplyState: undefined,
+          restartRecoverySourceIngress: undefined,
+          restartRecoveryForceSafeTools: undefined,
+        }
+      : {}),
+    ...(endedAt !== undefined
+      ? {
+          abortedLastRun: false,
+          endedAt,
+          runtimeMs:
+            typeof entry.startedAt === "number"
+              ? Math.max(0, endedAt - entry.startedAt)
+              : undefined,
+          status: "done" as const,
+        }
+      : {}),
+  };
+}
+
 function matchesPendingFinalDeliveryIdentity(
   entry: SessionEntry,
   expected: PendingFinalDeliveryIdentity,
 ): boolean {
-  const currentPresent = Boolean(entry.pendingFinalDelivery || entry.pendingFinalDeliveryText);
+  const pending = entry.pendingFinalDelivery;
+  const currentPresent = pending !== undefined;
   if (currentPresent !== expected.present) {
     return false;
   }
   if (expected.intentId) {
-    return normalizeOptionalString(entry.pendingFinalDeliveryIntentId) === expected.intentId;
+    return pending?.intentId === expected.intentId;
   }
   return (
-    entry.pendingFinalDeliveryCreatedAt === expected.createdAt &&
-    normalizeOptionalString(entry.pendingFinalDeliveryText) === expected.text
+    pending?.createdAt === expected.createdAt &&
+    (pending?.kind === "replayable" ? pending.text : undefined) === expected.text
   );
 }
 
@@ -53,18 +90,11 @@ export async function clearPendingFinalDeliveryAfterSuccess(params: {
       if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
         return null;
       }
-      if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+      if (!entry.pendingFinalDelivery) {
         return null;
       }
       return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        pendingFinalDeliveryIntentId: undefined,
+        ...buildPendingFinalDeliveryCleanupPatch(entry),
         updatedAt: Date.now(),
       };
     },
@@ -81,26 +111,21 @@ export function capturePendingFinalDeliveryIdentity(params: {
     return undefined;
   }
   try {
-    const entry = loadSessionEntry({
+    const entry = loadSessionEntryReadOnly({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
     });
-    if (
-      params.intentId &&
-      normalizeOptionalString(entry?.pendingFinalDeliveryIntentId) !== params.intentId
-    ) {
+    const pending = entry?.pendingFinalDelivery;
+    if (params.intentId && pending?.intentId !== params.intentId) {
       return { present: false };
     }
     return {
-      present: Boolean(entry?.pendingFinalDelivery || entry?.pendingFinalDeliveryText),
-      intentId: params.intentId ?? normalizeOptionalString(entry?.pendingFinalDeliveryIntentId),
-      createdAt:
-        typeof entry?.pendingFinalDeliveryCreatedAt === "number"
-          ? entry.pendingFinalDeliveryCreatedAt
-          : undefined,
-      text: normalizeOptionalString(entry?.pendingFinalDeliveryText),
+      present: pending !== undefined,
+      intentId: params.intentId ?? pending?.intentId,
+      createdAt: pending?.createdAt,
+      text: pending?.kind === "replayable" ? pending.text : undefined,
     };
   } catch {
     return params.intentId ? { present: true, intentId: params.intentId } : undefined;
@@ -173,17 +198,18 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
       if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
         return null;
       }
-      const pendingText = normalizeOptionalString(entry.pendingFinalDeliveryText);
-      if (!entry.pendingFinalDelivery && !pendingText) {
+      const pending = entry.pendingFinalDelivery;
+      if (!pending) {
         return null;
       }
-      const pendingPayloads = pendingText
-        ? resolvePendingFinalDeliveryPayloads({
-            intentId: identity.intentId,
-            pendingText,
-            replies: params.replies,
-          })
-        : undefined;
+      const pendingPayloads =
+        pending.kind === "replayable"
+          ? resolvePendingFinalDeliveryPayloads({
+              intentId: identity.intentId,
+              pendingText: pending.text,
+              replies: params.replies,
+            })
+          : undefined;
       const pendingPayloadSet = pendingPayloads ? new Set(pendingPayloads) : undefined;
       const relevantDeliveries = pendingPayloadSet
         ? params.deliveries.filter((delivery) => pendingPayloadSet.has(delivery.payload))
@@ -204,23 +230,15 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         const retryText = buildPendingFinalDeliveryRetryText(
           failedBeforeDeliver.map((delivery) => delivery.payload),
         );
-        if (retryText) {
+        if (retryText && pending.kind === "replayable") {
           return {
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: retryText,
+            pendingFinalDelivery: { ...pending, text: retryText },
             updatedAt: Date.now(),
           };
         }
       }
       return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        pendingFinalDeliveryIntentId: undefined,
+        ...buildPendingFinalDeliveryCleanupPatch(entry),
         updatedAt: Date.now(),
       };
     },

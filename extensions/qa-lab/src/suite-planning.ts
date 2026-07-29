@@ -45,8 +45,8 @@ function selectQaFlowSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    const selectedScenarios = [...requestedScenarioIds].map(
-      (scenarioId) => scenarioById.get(scenarioId)!,
+    const selectedScenarios = [...requestedScenarioIds].map((scenarioId) =>
+      scenarioById.get(scenarioId)!,
     );
     const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
@@ -59,7 +59,7 @@ function selectQaFlowSuiteScenarios(params: {
         `suite execution requires flow scenarios; unsupported scenario(s): ${scenarioList}`,
       );
     }
-    const channelDriverMismatches = selectedScenarios.flatMap((scenario) => {
+    const laneMismatches = selectedScenarios.flatMap((scenario) => {
       const mismatches = describeQaProviderLaneMismatches({
         scenario,
         providerMode: params.providerMode,
@@ -67,14 +67,12 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
-      }).filter(
-        (mismatch) => mismatch.startsWith("channelDriver=") || mismatch.startsWith("channel="),
-      );
+      });
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
-    if (channelDriverMismatches.length > 0) {
+    if (laneMismatches.length > 0) {
       throw new Error(
-        `selected QA scenario(s) do not match the current QA lane: ${channelDriverMismatches.join(", ")}`,
+        `selected QA scenario(s) do not match the current QA lane: ${laneMismatches.join(", ")}`,
       );
     }
     return selectedScenarios;
@@ -82,6 +80,10 @@ function selectQaFlowSuiteScenarios(params: {
   return params.scenarios.filter(
     (scenario) =>
       scenario.execution.kind === "flow" &&
+      // Explicit single-scenario runs adopt this provider later. Implicit suites must
+      // filter it here so a scenario-pinned provider cannot leak into another lane.
+      (scenario.execution.providerMode === undefined ||
+        scenario.execution.providerMode === params.providerMode) &&
       scenarioMatchesQaProviderLane({
         scenario,
         providerMode: params.providerMode,
@@ -283,6 +285,7 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
         (scenario) =>
           isQaMergePatchObject(scenario.gatewayConfigPatch) ||
           (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
+          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
           (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
       ))
   );
@@ -294,6 +297,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   }
   return (
     scenario.execution.suiteIsolation === "isolated" ||
+    scenario.execution.runtime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||

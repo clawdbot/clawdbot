@@ -11,5 +11,3 @@ export {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 export { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-/** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
-export { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";

@@ -5,7 +5,10 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
-import { normalizeDailyIngestionState, normalizeSessionIngestionState } from "./dreaming-phases.js";
+import {
+  normalizeDailyIngestionState,
+  normalizeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
 import {
   configureMemoryCoreDreamingState,
   DREAMING_DAILY_INGESTION_NAMESPACE,

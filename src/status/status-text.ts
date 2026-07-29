@@ -11,6 +11,9 @@ import {
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -18,7 +21,6 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -26,7 +28,7 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -36,6 +38,7 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -48,6 +51,10 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
 import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
@@ -82,8 +89,8 @@ function resolveStatusChannelFeatureLine(params: {
   const telegramConfig = params.cfg.channels?.telegram;
   const accountId = normalizeAccountId(
     params.statusAccountId ??
-      params.sessionEntry?.lastAccountId ??
-      params.sessionEntry?.origin?.accountId ??
+      deliveryContextFromSession(params.sessionEntry)?.accountId ??
+      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
       telegramConfig?.defaultAccount,
   );
   const accountConfig = resolveNormalizedAccountEntry(
@@ -105,9 +112,10 @@ const loadStatusMessageRuntime = createLazyPromise(
     import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
   { cacheRejections: true },
 );
-const loadAgentHarnessSelectionRuntime = createLazyRuntimeModule(
-  () => import("../agents/harness/selection.js"),
+const loadAgentThinkingRuntime = createLazyRuntimeModule(
+  () => import("../agents/thinking-runtime.js"),
 );
+const loadThinkingLevelRuntime = createLazyRuntimeModule(() => import("../auto-reply/thinking.js"));
 const loadStatusSubagentsRuntime = createLazyRuntimeModule(
   () => import("./status-subagents.runtime.js"),
 );
@@ -175,11 +183,7 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
     if (!credential) {
       return undefined;
     }
-    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
-    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
-    return resolvedProvider === "openai" ||
-      credentialProvider === "openai-codex" ||
-      credentialProvider === "codex-cli"
+    return normalizeOptionalLowercaseString(credential.provider) === "openai"
       ? normalizedProfileId
       : undefined;
   } catch {
@@ -214,22 +218,42 @@ async function resolveStatusHarnessId(params: {
   sessionEntry?: SessionEntry;
 }): Promise<string | undefined> {
   try {
-    const { selectAgentHarness } = await loadAgentHarnessSelectionRuntime();
-    const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
       provider: params.provider,
       entry: params.sessionEntry,
       cfg: params.cfg,
     });
-    const selected = selectAgentHarness({
+    const configuredRuntime = resolveAgentHarnessPolicy({
       provider: params.provider,
       modelId: params.model,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      agentHarnessRuntimeOverride,
+    }).runtime;
+    const runtime = sessionRuntime ?? configuredRuntime;
+    if (runtime !== "auto") {
+      return normalizeOptionalLowercaseString(runtime) || undefined;
+    }
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    if (
+      registeredHarnesses.every(
+        ({ harness }) =>
+          resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }) !==
+          undefined,
+      )
+    ) {
+      return "openclaw";
+    }
+    const { resolveEffectiveAgentRuntime } = await loadAgentThinkingRuntime();
+    const id = resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
     });
-    const id = normalizeOptionalLowercaseString(selected.id);
-    return id || undefined;
+    return normalizeOptionalLowercaseString(id) || undefined;
   } catch {
     // Harness selection is nice-to-have for display. Status should still render
     // if dynamic harness modules are unavailable.
@@ -292,6 +316,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider,
     model,
     contextTokens,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
     resolvedVerboseLevel,
@@ -419,6 +444,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     shouldUseCodexSyntheticUsageForRuntime({
       provider: usageStatusProvider,
       effectiveHarness,
+      // A runtime fallback does not erase the session's Codex binding or its rate limits.
+      sessionHarnessId: sessionEntry?.agentHarnessId,
     });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({
@@ -595,12 +622,41 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     (await resolveDefaultThinkingLevel()) ??
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
     "off";
-  const effectiveThinkLevel = resolveSupportedThinkingLevel({
-    provider: selectedLookupProvider,
-    model: selectedLookupModel,
-    level: requestedThinkLevel,
-    agentRuntime: effectiveHarness,
-  });
+  // Active profiles can forbid `off` (for example, always-thinking models). Absence means
+  // there is no prepared policy fact, so status must not fall back to manifest discovery.
+  const activeThinkingProfile =
+    requestedThinkLevel === "off"
+      ? resolveActiveProviderThinkingProfile({
+          provider: selectedLookupProvider,
+          context: {
+            provider: selectedLookupProvider,
+            modelId: selectedLookupModel,
+            agentRuntime: effectiveHarness,
+          },
+        })
+      : undefined;
+  const activeProfileSupportsOff = activeThinkingProfile?.levels.some(
+    (level) => level.id === "off",
+  );
+  const effectiveThinkLevel =
+    requestedThinkLevel === "off" &&
+    (activeThinkingProfile == null || activeProfileSupportsOff === true)
+      ? "off"
+      : (await loadThinkingLevelRuntime()).resolveSupportedThinkingLevel({
+          provider: selectedLookupProvider,
+          model: selectedLookupModel,
+          level: requestedThinkLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: effectiveHarness,
+          // Status uses loaded provider facts unless Codex needs OpenAI's static thinking contract.
+          providerPolicySource:
+            normalizeOptionalLowercaseString(effectiveHarness) === "codex" &&
+            ["codex", "openai"].includes(
+              normalizeOptionalLowercaseString(selectedLookupProvider) ?? "",
+            )
+              ? "active-or-bundled"
+              : "active",
+        });
   return buildStatusMessage({
     config: cfg,
     agent: {

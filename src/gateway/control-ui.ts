@@ -1,5 +1,3 @@
-// Gateway Control UI HTTP handler.
-// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -15,19 +13,20 @@ import {
 } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
-import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { probeMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
 import {
   resolveMediaReferenceLocalPath,
   resolveMediaReferenceLocalPathInfo,
@@ -39,6 +38,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -50,6 +50,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
+  type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
@@ -75,15 +76,18 @@ import {
   sendControlUiHtmlBody,
   serveControlUiAsset,
 } from "./control-ui-static.js";
+import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
   resolveTrustedHttpOperatorScopes,
+  setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -94,18 +98,6 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
-
-function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
-  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
-  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
-  const extended = encodeURIComponent(filename).replace(
-    /[\x27()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  const kind = kindFromMime(mime);
-  const inline = kind === "image" || kind === "audio" || kind === "video";
-  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
-}
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -135,17 +127,18 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-/** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
+/** Anchors bundled public assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  if (!normalized) {
-    return html;
-  }
   let next = html;
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const rootHref = `href="/${asset}"`;
-    const baseHref = `href="${normalized}/${asset}"`;
-    next = next.split(rootHref).join(baseHref);
+    const assetHref = `href="${normalized}/${asset}"`;
+    // Vite's portable ./ base emits relative hrefs, which the browser starts
+    // resolving against a nested route before the UI can correct them.
+    next = next.replaceAll(`href="./${asset}"`, assetHref);
+    if (normalized) {
+      next = next.replaceAll(`href="/${asset}"`, assetHref);
+    }
   }
   return next;
 }
@@ -186,9 +179,12 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  // The active Gateway may differ from the server that delivered this UI.
-  // Exact sandbox policies and iframe allow attributes still narrow delegation.
-  res.setHeader("Permissions-Policy", "camera=*, microphone=*, geolocation=*, clipboard-write=*");
+  // Browser Talk is owned by this same-origin Control UI document. Keep camera
+  // access here; the Gateway's default policy continues to deny it elsewhere.
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -283,9 +279,11 @@ async function authorizeControlUiReadRequest(
     rateLimiter?: AuthRateLimiter;
     allowQueryToken?: boolean;
     requiredOperatorMethod?: string;
+    onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
   },
 ): Promise<boolean> {
   if (!opts?.auth) {
+    opts?.onPluginFrameGrants?.([]);
     return true;
   }
 
@@ -306,7 +304,12 @@ async function authorizeControlUiReadRequest(
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
+  const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
+    opts.auth,
+    opts.trustedProxies,
+  );
   let resolvedAuthResult = authResult;
+  let verifiedDeviceScopes: string[] | undefined;
   if (
     !resolvedAuthResult.ok &&
     token &&
@@ -322,18 +325,17 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
-        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
-          opts.auth,
-          opts.trustedProxies,
-        ),
-      });
-      if (deviceTokenOk) {
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, sharedAuthGeneration);
+      const deviceScopes = deviceTokenOk
+        ? await resolveControlUiDeviceReadTokenScopes(token)
+        : null;
+      if (deviceScopes) {
+        verifiedDeviceScopes = deviceScopes;
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
-        opts.rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+        await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       }
     }
   }
@@ -342,7 +344,20 @@ async function authorizeControlUiReadRequest(
     return false;
   }
 
-  const trustDeclaredOperatorScopes = resolvedAuthResult.method === "trusted-proxy";
+  const authMethod = resolvedAuthResult.method;
+  const trustDeclaredOperatorScopes = authMethod === "trusted-proxy" || authMethod === "tailscale";
+  if (opts.onPluginFrameGrants) {
+    opts.onPluginFrameGrants(
+      setPluginAuthCookie(
+        req,
+        res,
+        authMethod,
+        trustDeclaredOperatorScopes,
+        sharedAuthGeneration,
+        verifiedDeviceScopes,
+      ),
+    );
+  }
   if (!trustDeclaredOperatorScopes) {
     return true;
   }
@@ -364,7 +379,7 @@ async function authorizeControlUiReadRequest(
 
 async function authorizeControlUiDeviceReadToken(
   token: string,
-  opts: { requiredSharedGatewaySessionGeneration?: string },
+  requiredSharedGatewaySessionGeneration: string | undefined,
 ): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
@@ -380,7 +395,7 @@ async function authorizeControlUiDeviceReadToken(
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
+      requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;
@@ -389,8 +404,27 @@ async function authorizeControlUiDeviceReadToken(
   return false;
 }
 
+async function resolveControlUiDeviceReadTokenScopes(token: string): Promise<string[] | null> {
+  const pairing = await listDevicePairing();
+  for (const device of pairing.paired) {
+    const operatorBearer = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
+    if (
+      operatorBearer &&
+      !operatorBearer.revokedAtMs &&
+      verifyPairingToken(token, operatorBearer.token)
+    ) {
+      return operatorBearer.scopes;
+    }
+  }
+  return null;
+}
+
 type AssistantMediaAvailability =
-  | { available: true }
+  | ({
+      available: true;
+      mimeType?: string;
+      sizeBytes?: number;
+    } & MediaProbeResult)
   | { available: false; reason: string; code: string };
 
 type AssistantMediaTicketPayload = {
@@ -513,8 +547,37 @@ async function resolveAssistantMediaAvailability(
     const localPath = await resolveMediaReferenceLocalPath(source);
     await assertLocalMediaAllowed(localPath, localRoots);
     const opened = await openLocalFileSafely({ filePath: localPath });
-    await opened.handle.close();
-    return { available: true };
+    try {
+      const sizeBytes = opened.stat.size;
+      let mimeType: string | undefined;
+      try {
+        const sniffLength = Math.min(sizeBytes, 8192);
+        const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
+        const bytesRead = sniffBuffer
+          ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+          : 0;
+        mimeType =
+          (await detectMime({
+            buffer: sniffBuffer?.subarray(0, bytesRead),
+            filePath: localPath,
+          })) ?? undefined;
+      } catch {
+        // Availability is authoritative; optional metadata remains best-effort.
+      }
+      const mediaKind = kindFromMime(mimeType);
+      const probe =
+        mediaKind === "audio" || mediaKind === "video"
+          ? await probeMediaFileDescriptor(opened.handle.fd, mediaKind)
+          : {};
+      return {
+        available: true,
+        ...(mimeType ? { mimeType } : {}),
+        sizeBytes,
+        ...probe,
+      };
+    } finally {
+      await opened.handle.close().catch(() => {});
+    }
   } catch (err) {
     return classifyAssistantMediaError(err);
   }
@@ -615,8 +678,23 @@ export async function handleControlUiAssistantMediaRequest(
       buildAssistantMediaContentDisposition(filename, contentType),
     );
     res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Content-Length", String(opened.stat.size));
-    const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
+    const byteResponse = resolveByteResponse({
+      file: opened.stat,
+      method: req.method,
+      rangeHeader: req.headers.range,
+      ifRangeHeader: req.headers["if-range"],
+    });
+    writeByteHeaders(res, byteResponse);
+    if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
+      await closeOpenedHandle();
+      res.end();
+      return true;
+    }
+    const stream = opened.handle.createReadStream({
+      start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
+      end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
+      autoClose: false,
+    });
     const finishClose = () => {
       void closeOpenedHandle();
     };
@@ -887,10 +965,10 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
-  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
-  // for an explicitly enabled terminal so the default policy stays strict.
-  const terminalEnabled =
-    opts?.terminalEnabled ?? opts?.config?.gateway?.terminal?.enabled === true;
+  // The embedded terminal ships ghostty-web (WASM); the index CSP carries the
+  // WASM relaxation whenever the terminal is enabled (the default) and stays
+  // strict once operators opt out with gateway.terminal.enabled: false.
+  const terminalEnabled = opts?.terminalEnabled ?? isTerminalConfigEnabled(opts?.config);
   const route = classifyControlUiRequest({
     basePath,
     pathname,
@@ -916,12 +994,16 @@ export async function handleControlUiHttpRequest(
   applyControlUiSecurityHeaders(res);
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
+    let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
         trustedProxies: opts?.trustedProxies,
         allowRealIpFallback: opts?.allowRealIpFallback,
         rateLimiter: opts?.rateLimiter,
+        onPluginFrameGrants: (grants) => {
+          pluginFrameGrants = grants;
+        },
       }))
     ) {
       return true;
@@ -934,12 +1016,15 @@ export async function handleControlUiHttpRequest(
       return true;
     }
     const config = opts?.config;
-    const identity = config
+    const resolvedIdentity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-      : DEFAULT_ASSISTANT_IDENTITY;
-    const avatarProjection = config
-      ? resolveGatewayAssistantAvatar({ cfg: config, identity })
-      : { avatar: identity.avatar, resolution: null };
+      : undefined;
+    const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
+    const assistantAgentId = resolvedIdentity?.agentId;
+    const avatarProjection =
+      config && resolvedIdentity
+        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
       basePath,
@@ -948,10 +1033,10 @@ export async function handleControlUiHttpRequest(
       assistantAvatarSource: avatarMeta.avatarSource,
       assistantAvatarStatus: avatarMeta.avatarStatus,
       assistantAvatarReason: avatarMeta.avatarReason,
-      assistantAgentId: identity.agentId,
+      ...(assistantAgentId ? { assistantAgentId } : {}),
       serverVersion: resolveRuntimeServiceVersion(process.env),
       devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
-      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
+      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, assistantAgentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"
           ? "trusted"
@@ -959,10 +1044,14 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
-      timeFormat: config?.agents?.defaults?.timeFormat,
+      timeFormat: "auto",
       terminalEnabled,
+      pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
+        pluginId,
+        path: grantPath,
+        match,
+      })),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

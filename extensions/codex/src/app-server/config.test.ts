@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
+  codexSandboxPolicyForTurn,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -124,7 +125,9 @@ describe("Codex app-server config", () => {
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
           codeModeOnly: true,
+          loopDetectionPreToolUseRelay: false,
           turnCompletionIdleTimeoutMs: 120_000,
+          turnAssistantCompletionIdleTimeoutMs: 30_000,
           postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
@@ -141,7 +144,9 @@ describe("Codex app-server config", () => {
       approvalsReviewer: "guardian_subagent",
       serviceTier: "flex",
       codeModeOnly: true,
+      loopDetectionPreToolUseRelay: false,
       turnCompletionIdleTimeoutMs: 120_000,
+      turnAssistantCompletionIdleTimeoutMs: 30_000,
       postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
@@ -149,6 +154,14 @@ describe("Codex app-server config", () => {
       url: "ws://127.0.0.1:39175",
       headers: { "X-Test": "yes" },
     });
+  });
+
+  it("keeps the Codex loop-detection PreToolUse relay enabled by default", () => {
+    expect(resolveRuntimeForTest().loopDetectionPreToolUseRelay).toBe(true);
+  });
+
+  it("keeps the existing assistant completion idle timeout by default", () => {
+    expect(resolveRuntimeForTest().turnAssistantCompletionIdleTimeoutMs).toBe(10_000);
   });
 
   it("builds Codex permissions-profile config for app-server network proxy", () => {
@@ -250,6 +263,7 @@ describe("Codex app-server config", () => {
         appServer: {
           requestTimeoutMs: Number.MAX_SAFE_INTEGER,
           turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          turnAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
           postToolRawAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
         },
       },
@@ -258,6 +272,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       turnCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      turnAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       postToolRawAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });
@@ -268,6 +283,7 @@ describe("Codex app-server config", () => {
         appServer: {
           requestTimeoutMs: 0,
           turnCompletionIdleTimeoutMs: -1,
+          turnAssistantCompletionIdleTimeoutMs: 0,
         },
       },
     });
@@ -275,6 +291,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
+      turnAssistantCompletionIdleTimeoutMs: 10_000,
     });
   });
 
@@ -500,6 +517,30 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it.each([
+    ["ws://localhost:4242", "local-loopback"],
+    ["ws://127.0.0.1:4242", "local-loopback"],
+    ["ws://127.0.0.2:4242", "local-loopback"],
+    ["ws://127.255.255.254:4242", "local-loopback"],
+    ["ws://[::1]:4242", "local-loopback"],
+    ["ws://[::ffff:127.0.0.2]:4242", "local-loopback"],
+    ["wss://128.0.0.1:4242", "remote"],
+    ["wss://10.0.0.1:4242", "remote"],
+    ["wss://127.0.0.1.evil.com:4242", "remote"],
+  ] as const)("classifies app-server URL %s as %s", (url, connectionClass) => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url,
+          ...(connectionClass === "remote" ? { authToken: "capability-token" } : {}),
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", { connectionClass });
+  });
+
   it("rejects remote websocket app-servers without identity-bearing auth", () => {
     expect(() =>
       resolveRuntimeForTest({
@@ -532,6 +573,176 @@ describe("Codex app-server config", () => {
       homeScope: "agent",
     });
   });
+
+  it("does not let private-QA environment flags override native sandbox policy", () => {
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        },
+      },
+      env: privateQaCodexEnv,
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
+      {
+        type: "dangerFullAccess",
+      },
+    );
+  });
+
+  it("honors explicitly configured native workspace temporary-root exclusions", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "workspace-write",
+          args: [
+            "app-server",
+            "-c",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+          ],
+        },
+      },
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
+      {
+        type: "workspaceWrite",
+        writableRoots: ["/qa/workspace"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    );
+  });
+
+  it("preserves an explicitly read-only sandbox for forced private-QA Codex runtime", () => {
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalPolicy: "never",
+          sandbox: "read-only",
+        },
+      },
+      env: privateQaCodexEnv,
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
+      {
+        type: "readOnly",
+        networkAccess: false,
+      },
+    );
+  });
+
+  it.each([
+    { label: "ordinary production", env: {} },
+    { label: "private build without a forced runtime", env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } },
+    {
+      label: "forced runtime without a private build",
+      env: { OPENCLAW_QA_FORCE_RUNTIME: "codex" },
+    },
+    {
+      label: "forced private-QA Codex runtime without explicit sandbox configuration",
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "codex" },
+    },
+    {
+      label: "forced private-QA OpenClaw runtime",
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "openclaw" },
+    },
+  ])("preserves production yolo filesystem policy for $label", ({ env }) => {
+    const runtime = resolveRuntimeForTest({ pluginConfig: {}, env });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    expect(
+      codexSandboxPolicyForTurn("workspace-write", "/qa/workspace", runtime.start.args),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it.each([
+    {
+      label: "long config arguments",
+      args: [
+        "--config",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+    {
+      label: "inline config arguments",
+      args: [
+        "--config=sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+    {
+      label: "the last native config override",
+      args: [
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=false",
+        "-c",
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: true,
+    },
+  ])(
+    "preserves native workspace root policy from $label",
+    ({ args, excludeTmpdirEnvVar, excludeSlashTmp }) => {
+      expect(codexSandboxPolicyForTurn("workspace-write", "/qa/workspace", args)).toEqual({
+        type: "workspaceWrite",
+        writableRoots: ["/qa/workspace"],
+        networkAccess: false,
+        excludeTmpdirEnvVar,
+        excludeSlashTmp,
+      });
+    },
+  );
 
   it("does not change ordinary harness connection defaults when supervision is enabled", () => {
     const runtime = resolveRuntimeForTest({
@@ -2860,7 +3071,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
-  it("does not schema-default mode-derived policy fields", async () => {
+  it("publishes stable defaults without schema-defaulting mode-derived policy fields", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
     ) as {
@@ -2879,6 +3090,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
+    expect(appServerProperties.loopDetectionPreToolUseRelay?.default).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

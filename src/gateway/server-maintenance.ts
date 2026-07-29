@@ -7,9 +7,9 @@ import {
   resolveWorktreeCleanupLimits,
   WORKTREE_GC_INTERVAL_MS,
 } from "../agents/worktrees/service.js";
-import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
+import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia } from "../media/store.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -20,6 +20,7 @@ import {
 } from "./chat-abort.js";
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import type { HealthSummary } from "./health/types.js";
 import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -32,6 +33,10 @@ import {
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+// Hourly sweep plus a one-day grace bounds orphan storage without racing the
+// stage-before-row-commit window.
+const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -54,18 +59,7 @@ export function startGatewayMaintenanceTimers(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  chatRunState: Pick<
-    ChatRunState,
-    | "abortedRuns"
-    | "bufferUpdatedAt"
-    | "clearRun"
-    | "deltaLastBroadcastText"
-    | "agentDeltaSentAt"
-    | "bufferedAgentEvents"
-  >;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatRunState: ChatRunState;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -76,6 +70,7 @@ export function startGatewayMaintenanceTimers(params: {
   mediaCleanupTtlMs?: number;
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
+  runDeliveryQueueMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
   registerSkillUsageTracking?: () => () => void;
@@ -126,7 +121,7 @@ export function startGatewayMaintenanceTimers(params: {
         // worktree activity so idle GC cannot remove a checkout still used by the session.
         shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
         // Read limits per run so a config edit applies at the next hourly sweep.
-        limits: resolveWorktreeCleanupLimits(cfg.worktrees),
+        limits: resolveWorktreeCleanupLimits(),
       });
     });
   const performWorktreeGc = () =>
@@ -135,6 +130,31 @@ export function startGatewayMaintenanceTimers(params: {
     });
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   void performWorktreeGc();
+
+  // Queue media has its own reference-aware retention policy and runs even when
+  // the general media TTL sweep is disabled.
+  const runDeliveryQueueMediaGc =
+    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+  let deliveryQueueMediaGcInFlight: Promise<void> | null = null;
+  let deliveryQueueMediaGcStartedAtMs = 0;
+  const performDeliveryQueueMediaGc = () => {
+    if (deliveryQueueMediaGcInFlight) {
+      return deliveryQueueMediaGcInFlight;
+    }
+    deliveryQueueMediaGcStartedAtMs = Date.now();
+    deliveryQueueMediaGcInFlight = Promise.resolve()
+      .then(async () => {
+        await runDeliveryQueueMediaGc();
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`delivery queue media cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        deliveryQueueMediaGcInFlight = null;
+      });
+    return deliveryQueueMediaGcInFlight;
+  };
+  void performDeliveryQueueMediaGc();
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
@@ -149,6 +169,9 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
+      void performDeliveryQueueMediaGc();
+    }
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return undefined;
@@ -230,16 +253,6 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
-    const resolveAgentThrottleRunId = (key: string) => {
-      if (key.endsWith(":assistant")) {
-        return key.slice(0, -":assistant".length);
-      }
-      if (key.endsWith(":thinking")) {
-        return key.slice(0, -":thinking".length);
-      }
-      return key;
-    };
-
     for (const [runId, entry] of params.chatAbortControllers) {
       if (entry.projectSessionTerminalPending === true) {
         continue;
@@ -275,14 +288,6 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
-    for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
-      if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunState.clearRun(runId);
-    }
-
     // Prune expired control-plane rate-limit buckets to prevent unbounded
     // growth when many unique clients connect over time.
     pruneStaleControlPlaneBuckets(now);
@@ -290,42 +295,26 @@ export function startGatewayMaintenanceTimers(params: {
     // Sweep stale buffers for runs that were never explicitly aborted.
     // Only reap orphaned buffers after the abort controller is gone; active
     // runs can legitimately sit idle while tools/models work.
-    for (const [runId, lastSentAt] of params.chatDeltaSentAt) {
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue; // already handled above
-      }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.clearRun(runId);
-    }
-    for (const [runId, lastUpdatedAt] of params.chatRunState.bufferUpdatedAt) {
-      if (params.chatRunState.abortedRuns.has(runId)) {
+    for (const [runId, record] of params.chatRunState.runs) {
+      if (record.abortMarker !== undefined) {
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
+          params.chatRunState.deleteAbortMarker(runId);
+          params.chatRunState.clearRun(runId);
+        }
         continue;
       }
       if (params.chatAbortControllers.has(runId)) {
         continue;
       }
-      if (now - lastUpdatedAt <= ABORTED_RUN_TTL_MS) {
-        continue;
+      const staleTimestamp = [
+        record.deltaSentAt,
+        record.bufferUpdatedAt,
+        record.agentText?.assistant?.lastSentAt,
+        record.agentText?.thinking?.lastSentAt,
+      ].some((timestamp) => timestamp !== undefined && now - timestamp > ABORTED_RUN_TTL_MS);
+      if (staleTimestamp) {
+        params.chatRunState.clearRun(runId);
       }
-      params.chatRunState.clearRun(runId);
-    }
-    for (const [key, lastSentAt] of params.chatRunState.agentDeltaSentAt) {
-      const runId = resolveAgentThrottleRunId(key);
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue;
-      }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

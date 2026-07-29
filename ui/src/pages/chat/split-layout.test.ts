@@ -1,5 +1,7 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  applyUiCommandToSplitLayout,
   closePane,
   findPane,
   insertPane,
@@ -127,6 +129,37 @@ describe("chat split layout", () => {
     expect(activeChanged.activePaneId).toBe("p1");
     expect(layout.columns.at(0)?.panes.at(0)?.sessionKey).toBe("main");
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
+  });
+
+  it("maps UI split, focus, and close commands onto pane state", () => {
+    const initial = setActivePane(setPaneSession(createSplitLayout("main"), "p2", "source"), "p1");
+    const split = applyUiCommandToSplitLayout(
+      initial,
+      {
+        kind: "split",
+        direction: "down",
+        sessionKey: "agent:main:new",
+      },
+      "source",
+    );
+    expect(split && panesOf(split).map((pane) => pane.sessionKey)).toEqual([
+      "main",
+      "source",
+      "agent:main:new",
+    ]);
+    expect(split?.activePaneId).toBe("p3");
+
+    const focused = applyUiCommandToSplitLayout(split!, {
+      kind: "focus",
+      sessionKey: "main",
+    });
+    expect(focused?.activePaneId).toBe("p1");
+
+    const closed = applyUiCommandToSplitLayout(focused!, {
+      kind: "close-pane",
+      sessionKey: "agent:main:new",
+    });
+    expect(closed && panesOf(closed).map((pane) => pane.sessionKey)).toEqual(["main", "source"]);
   });
 
   it("resizes only a boundary pair and clamps each side to fifteen percent", () => {

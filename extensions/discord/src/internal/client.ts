@@ -1,5 +1,6 @@
 // Discord plugin module implements client behavior.
 import type { APIInteraction } from "discord-api-types/v10";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
 import type { BaseCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
@@ -46,7 +47,7 @@ interface ClientOptions {
   disableDeployRoute?: boolean;
   disableInteractionsRoute?: boolean;
   disableEventsRoute?: boolean;
-  commandDeployHashStorePath?: string;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
   devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
   restCacheTtlMs?: number;
@@ -99,7 +100,7 @@ export class Client {
       clientId: this.options.clientId,
       commands: this.commands,
       devGuilds: this.options.devGuilds,
-      hashStorePath: this.options.commandDeployHashStorePath,
+      hashStore: this.options.commandDeployHashStore,
       rest: () => this.rest,
     });
     for (const component of handlers.components ?? []) {

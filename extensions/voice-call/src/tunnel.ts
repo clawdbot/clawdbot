@@ -1,5 +1,5 @@
 // Voice Call plugin module implements tunnel behavior.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -13,6 +13,49 @@ const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
 const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
 const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
+const NGROK_STOP_GRACE_MS = 2_000;
+const NGROK_FORCE_KILL_WAIT_MS = 1_000;
+
+async function terminateNgrokProcess(
+  proc: Pick<ChildProcess, "kill" | "once" | "off">,
+  isClosed: () => boolean,
+): Promise<void> {
+  if (isClosed()) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    let forceKillWaitTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      if (forceKillWaitTimer) {
+        clearTimeout(forceKillWaitTimer);
+      }
+      proc.off("close", finish);
+      resolve();
+    };
+    proc.once("close", finish);
+    // Give ngrok a graceful window before forcing termination. The final bounded
+    // close wait avoids returning before SIGKILL normally reaps the child without
+    // letting an unobservable close event hang cleanup forever.
+    const forceKillTimer = setTimeout(() => {
+      forceKillWaitTimer = setTimeout(finish, NGROK_FORCE_KILL_WAIT_MS);
+      if (!isClosed()) {
+        proc.kill("SIGKILL");
+      }
+    }, NGROK_STOP_GRACE_MS);
+    proc.kill("SIGTERM");
+    if (isClosed()) {
+      finish();
+    }
+  });
+}
 
 function listenForChildStreamErrors(
   proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
@@ -86,8 +129,10 @@ async function startNgrokTunnel(config: {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let resolved = false;
-    let closed = false;
+    // Startup settlement and OS process closure are separate: the deadline can
+    // win before the child has been reaped.
+    let startupSettled = false;
+    let childClosed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
     // Keep only enough UTF-16-safe suffix to recognize an error marker split
@@ -95,18 +140,21 @@ async function startNgrokTunnel(config: {
     let stderrTail = "";
 
     const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        proc.kill("SIGTERM");
-        reject(new Error("ngrok startup timed out (30s)"));
+      if (!startupSettled) {
+        startupSettled = true;
+        void terminateNgrokProcess(proc, () => childClosed).then(() => {
+          reject(new Error("ngrok startup timed out (30s)"));
+        });
       }
     }, 30000);
+    // Do not keep the host process alive solely waiting on ngrok startup.
+    timeout.unref();
 
     const rejectIfPending = (message: string, kill = false) => {
-      if (!resolved) {
-        resolved = true;
+      if (!startupSettled) {
+        startupSettled = true;
         clearTimeout(timeout);
-        if (kill && !closed) {
+        if (kill && !childClosed) {
           proc.kill("SIGKILL");
         }
         reject(new Error(message));
@@ -128,8 +176,8 @@ async function startNgrokTunnel(config: {
         }
 
         // Check for ready state
-        if (publicUrl && !resolved) {
-          resolved = true;
+        if (publicUrl && !startupSettled) {
+          startupSettled = true;
           clearTimeout(timeout);
 
           // Add path to the public URL
@@ -141,31 +189,7 @@ async function startNgrokTunnel(config: {
             publicUrl: fullUrl,
             provider: "ngrok",
             stop: async () => {
-              if (closed) {
-                return;
-              }
-              await new Promise<void>((res) => {
-                let finished = false;
-                const finish = () => {
-                  if (finished) {
-                    return;
-                  }
-                  finished = true;
-                  clearTimeout(fallback);
-                  proc.off("close", finish);
-                  res();
-                };
-                if (closed) {
-                  res();
-                  return;
-                }
-                proc.once("close", finish);
-                const fallback = setTimeout(finish, 2000);
-                proc.kill("SIGTERM");
-                if (closed) {
-                  finish();
-                }
-              });
+              await terminateNgrokProcess(proc, () => childClosed);
             },
           });
         }
@@ -174,8 +198,12 @@ async function startNgrokTunnel(config: {
       }
     };
 
-    proc.stdout.on("data", (data: Buffer) => {
-      const lines = (outputBuffer + data.toString()).split("\n");
+    // Decode pipes statefully so a multibyte UTF-8 code point split across
+    // chunk boundaries does not become U+FFFD in startup logs / ERR_NGROK text.
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      const lines = (outputBuffer + chunk).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
         // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
@@ -189,8 +217,8 @@ async function startNgrokTunnel(config: {
         }
       }
     });
-    proc.stderr.on("data", (data: Buffer) => {
-      const combined = stderrTail + data.toString();
+    proc.stderr.on("data", (chunk: string) => {
+      const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
         rejectIfPending(
           `ngrok error: ${formatBoundedChildOutput(
@@ -210,9 +238,9 @@ async function startNgrokTunnel(config: {
     });
 
     proc.on("close", (code) => {
-      closed = true;
-      if (!resolved) {
-        resolved = true;
+      childClosed = true;
+      if (!startupSettled) {
+        startupSettled = true;
         clearTimeout(timeout);
         reject(new Error(`ngrok exited unexpectedly with code ${code}`));
       }

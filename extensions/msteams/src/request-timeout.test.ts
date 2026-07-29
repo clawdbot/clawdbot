@@ -26,7 +26,7 @@ describe("withMSTeamsRequestDeadline", () => {
 });
 
 describe("resolveMSTeamsSharePointUploadTimeoutMs", () => {
-  it("adds transfer budget to the base file-consent upload deadline", () => {
+  it("adds transfer budget to the base SharePoint upload deadline", () => {
     const oneHundredMiB = 100 * 1024 * 1024;
 
     expect(resolveMSTeamsSharePointUploadTimeoutMs(0)).toBe(300_000);

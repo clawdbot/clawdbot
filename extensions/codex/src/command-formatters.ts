@@ -378,6 +378,7 @@ export function buildHelp(): string {
     "- /codex status",
     "- /codex models",
     "- /codex threads [filter]",
+    "- /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
     "- /codex sessions --host <node> [filter]",
     "- /codex resume <thread-id>",
     "- /codex resume <session-id> --host <node> --bind here",

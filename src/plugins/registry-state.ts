@@ -1,4 +1,4 @@
-import type { registerInternalHook } from "../hooks/internal-hooks.js";
+import type { LegacyPluginInternalHookRegistration } from "./legacy-internal-hook-state.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -83,10 +83,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
       string,
       Array<{
         name: string;
-        previousRegistrations: Array<{
-          event: string;
-          handler: Parameters<typeof registerInternalHook>[1];
-        }>;
+        previousRegistrations: LegacyPluginInternalHookRegistration[];
       }>
     >(),
     pluginsWithChannelRegistrationConflict: new Set<string>(),

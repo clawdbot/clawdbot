@@ -3,17 +3,17 @@ import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listQaRunnerCliContributions, runSlack, runTelegram, runWhatsApp } = vi.hoisted(() => ({
-  listQaRunnerCliContributions: vi.fn<() => QaRunnerCliContribution[]>(() => []),
-  runSlack: vi.fn(),
-  runTelegram: vi.fn(),
-  runWhatsApp: vi.fn(),
-}));
+const { listQaRunnerCliContributions, runLiveTransportQaSuiteCommand, runTelegram } = vi.hoisted(
+  () => ({
+    listQaRunnerCliContributions: vi.fn<() => QaRunnerCliContribution[]>(() => []),
+    runLiveTransportQaSuiteCommand: vi.fn(),
+    runTelegram: vi.fn(),
+  }),
+);
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({ listQaRunnerCliContributions }));
-vi.mock("./slack/cli.runtime.js", () => ({ runQaSlackCommand: runSlack }));
+vi.mock("./shared/live-transport-suite.runtime.js", () => ({ runLiveTransportQaSuiteCommand }));
 vi.mock("./telegram/cli.runtime.js", () => ({ runQaTelegramCommand: runTelegram }));
-vi.mock("./whatsapp/cli.runtime.js", () => ({ runQaWhatsAppCommand: runWhatsApp }));
 
 import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistrations } from "./cli.js";
 
@@ -23,30 +23,47 @@ describe("live transport QA contributions", () => {
     listQaRunnerCliContributions.mockReturnValue([]);
   });
 
-  it("discovers all four shared live adapter factories without changing CLI ownership", () => {
+  it("discovers all five shared live adapter factories without changing CLI ownership", () => {
     expect(listLiveTransportQaAdapterFactories().map((factory) => factory.id)).toEqual([
       "telegram",
+      "discord",
       "matrix",
       "slack",
       "whatsapp",
     ]);
   });
 
-  it.each([
-    ["telegram", runTelegram],
-    ["slack", runSlack],
-    ["whatsapp", runWhatsApp],
-  ] as const)("keeps the shipped %s command runner", async (commandName, runCommand) => {
+  it.each(["discord", "slack", "whatsapp"] as const)(
+    "routes the shipped %s command through the shared suite host",
+    async (commandName) => {
+      const registration = listLiveTransportQaCliRegistrations().find(
+        (candidate) => candidate.commandName === commandName,
+      );
+      const qa = new Command();
+      registration?.register(qa);
+
+      await qa.parseAsync(["node", "openclaw", commandName, "--scenario", `${commandName}-canary`]);
+
+      expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: commandName,
+          options: expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }),
+        }),
+      );
+    },
+  );
+
+  it("keeps the specialized Telegram command runner", async () => {
     const registration = listLiveTransportQaCliRegistrations().find(
-      (candidate) => candidate.commandName === commandName,
+      (candidate) => candidate.commandName === "telegram",
     );
     const qa = new Command();
     registration?.register(qa);
 
-    await qa.parseAsync(["node", "openclaw", commandName, "--scenario", `${commandName}-canary`]);
+    await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", "telegram-canary"]);
 
-    expect(runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }),
+    expect(runTelegram).toHaveBeenCalledWith(
+      expect.objectContaining({ scenarioIds: ["telegram-canary"] }),
     );
   });
 });

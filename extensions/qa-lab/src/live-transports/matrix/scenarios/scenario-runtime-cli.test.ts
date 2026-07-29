@@ -36,7 +36,7 @@ async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<n
         return pid;
       }
     } catch {}
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
 }
@@ -47,7 +47,7 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
     if (!isProcessRunning(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`Timed out waiting for process ${pid} to exit`);
 }

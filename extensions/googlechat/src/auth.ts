@@ -120,6 +120,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   });
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
     const certs = await readGoogleChatCertsResponse(response);

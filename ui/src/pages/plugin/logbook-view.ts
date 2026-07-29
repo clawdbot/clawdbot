@@ -28,6 +28,8 @@ type LogbookProps = {
   onRequestUpdate?: () => void;
 };
 
+type LogbookControllerState = ReturnType<typeof getLogbookState>;
+
 function formatClock(ms: number, timeZone: string): string {
   return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
 }
@@ -95,7 +97,7 @@ function renderStatusChips(status: LogbookStatusPayload): TemplateResult {
 }
 
 function renderCard(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   card: LogbookCardPayload,
   timeZone: string,
@@ -246,7 +248,10 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
   `;
 }
 
-function renderStandup(state: LogbookUiState, client: GatewayBrowserClient | null): TemplateResult {
+function renderStandup(
+  state: LogbookControllerState,
+  client: GatewayBrowserClient | null,
+): TemplateResult {
   return html`
     <section class="card logbook-side__card">
       <div class="logbook-side__card-header">
@@ -273,7 +278,10 @@ function renderStandup(state: LogbookUiState, client: GatewayBrowserClient | nul
   `;
 }
 
-function renderAsk(state: LogbookUiState, client: GatewayBrowserClient | null): TemplateResult {
+function renderAsk(
+  state: LogbookControllerState,
+  client: GatewayBrowserClient | null,
+): TemplateResult {
   return html`
     <section class="card logbook-side__card">
       <div class="card-title">${t("logbook.ask.title")}</div>

@@ -60,7 +60,6 @@ const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
 const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
 const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
-const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
 const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
 const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
@@ -159,19 +158,42 @@ vi.mock("./model-switch-eval.js", () => ({
   hasModelSwitchContinuitySignal,
 }));
 
-vi.mock("./runtime-api.js", () => ({
-  qaChannelPlugin,
-}));
-
 vi.mock("./gateway-log-sentinel.js", () => ({
   scanGatewayLogSentinels,
   assertNoGatewayLogSentinels,
 }));
 
-import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 describe("qa suite runtime flow", () => {
+  it("records intentional scenario skips without running later steps", async () => {
+    const laterStep = vi.fn();
+    const result = await runQaSuiteScenarioSteps("requires group credentials", [
+      {
+        name: "Prepare WhatsApp",
+        run: async () => {
+          throw new QaSuiteScenarioSkipError("requires groupJid in the credential payload");
+        },
+      },
+      { name: "Run scenario", run: laterStep },
+    ]);
+
+    expect(result).toMatchObject({
+      status: "skip",
+      details: "requires groupJid in the credential payload",
+      steps: [
+        {
+          name: "Prepare WhatsApp",
+          status: "skip",
+          details: "requires groupJid in the credential payload",
+        },
+      ],
+    });
+    expect(laterStep).not.toHaveBeenCalled();
+  });
+
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
     const env = {
       lab: { baseUrl: "http://127.0.0.1:4444" },
@@ -269,7 +291,6 @@ describe("qa suite runtime flow", () => {
           envArg: typeof env,
           configArg: Record<string, unknown>,
         ) => Promise<unknown>;
-        qaChannelPlugin: typeof qaChannelPlugin;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
       constants: {
@@ -303,7 +324,6 @@ describe("qa suite runtime flow", () => {
         ensureImageGenerationConfigured,
       },
     );
-    expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",

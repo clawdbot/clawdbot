@@ -1,6 +1,7 @@
 import { createConfigIoContext } from "./io.context.js";
 import { loadConfigFromContext } from "./io.load.js";
 import {
+  preserveConfigSnapshotAsClobbered,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
 } from "./io.observe-recovery.js";
@@ -46,6 +47,8 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
         snapshot: params.snapshot,
         reason: params.reason,
       }),
+    preserveConfigSnapshotAsClobbered: (snapshot: ConfigFileSnapshot) =>
+      preserveConfigSnapshotAsClobbered({ deps: context.deps, snapshot }),
     recoverConfigFromJsonRootSuffix: (snapshot: ConfigFileSnapshot) =>
       recoverConfigFromJsonRootSuffixWithContext(context, snapshot),
     writeConfigFile: (

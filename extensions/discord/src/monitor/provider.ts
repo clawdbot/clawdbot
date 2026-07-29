@@ -1,4 +1,3 @@
-import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
@@ -16,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -55,6 +55,7 @@ export type MonitorDiscordOpts = {
   historyLimit?: number;
   replyToMode?: ReplyToMode;
   setStatus?: DiscordMonitorStatusSink;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
 };
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
@@ -98,9 +99,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const rawDiscordCfg = account.config;
-  const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
-  const discordAccountThreadBindings =
-    cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
   const dmConfig = rawDiscordCfg.dm;
   const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
@@ -145,17 +143,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     await discordProviderRuntime.loadDiscordProviderSessionRuntime();
   const threadBindingIdleTimeoutMs =
     discordProviderSessionRuntime.resolveThreadBindingIdleTimeoutMs({
-      channelIdleHoursRaw:
-        discordAccountThreadBindings?.idleHours ?? discordRootThreadBindings?.idleHours,
+      channelIdleHoursRaw: discordCfg.threadBindings?.idleHours,
       sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
     });
   const threadBindingMaxAgeMs = discordProviderSessionRuntime.resolveThreadBindingMaxAgeMs({
-    channelMaxAgeHoursRaw:
-      discordAccountThreadBindings?.maxAgeHours ?? discordRootThreadBindings?.maxAgeHours,
+    channelMaxAgeHoursRaw: discordCfg.threadBindings?.maxAgeHours,
     sessionMaxAgeHoursRaw: cfg.session?.threadBindings?.maxAgeHours,
   });
   const threadBindingsEnabled = discordProviderSessionRuntime.resolveThreadBindingsEnabled({
-    channelEnabledRaw: discordAccountThreadBindings?.enabled ?? discordRootThreadBindings?.enabled,
+    channelEnabledRaw: discordCfg.threadBindings?.enabled,
     sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
   });
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
@@ -170,7 +166,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
@@ -284,7 +280,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let lifecycleStarted = false;
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
-  let deactivateMessageHandler: (() => void) | undefined;
+  let deactivateMessageHandler: (() => Promise<void>) | undefined;
   let autoPresenceController: Awaited<
     ReturnType<typeof createDiscordMonitorClient>
   >["autoPresenceController"] = null;
@@ -292,15 +288,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
-    if (nativeEnabled && commandSpecs.some((command) => command.name === "think")) {
-      // Autocomplete cannot defer. Warm opportunistically before interactions begin,
-      // but never let provider discovery block Discord startup.
-      void loadModelCatalog({ config: cfg });
-    }
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
+      applicationId,
       token,
       commandSpecs,
       nativeEnabled,
@@ -319,7 +311,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       abortSignal: opts.abortSignal,
       createNativeCommand: discordProviderRuntime.createDiscordNativeCommand,
     });
-
     const {
       client,
       gateway,
@@ -336,6 +327,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceEnabled,
       discordConfig: discordCfg,
       runtime,
+      commandDeployHashStore: opts.commandDeployHashStore,
       createClient: discordProviderRuntime.createClient,
       createGatewayPlugin: createDiscordGatewayPlugin,
       createGatewaySupervisor: createDiscordGatewaySupervisor,
@@ -378,7 +370,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<
       string,
-      import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
+      import("./message-handler.history.js").DiscordHistoryEntry[]
     >();
     const { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
@@ -423,6 +415,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
+      client,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -506,11 +499,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef,
       threadBindings,
       gatewaySupervisor,
-      gatewayReadyTimeoutMs: account.config.gatewayReadyTimeoutMs,
-      gatewayRuntimeReadyTimeoutMs: account.config.gatewayRuntimeReadyTimeoutMs,
     });
   } finally {
-    cleanupDiscordProviderStartup({
+    await cleanupDiscordProviderStartup({
       deactivateMessageHandler,
       autoPresenceController,
       setStatus: opts.setStatus,

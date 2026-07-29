@@ -84,9 +84,9 @@ export function syncExecutionAttemptMetadata(
     id: existingAttempt?.id ?? key,
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
-    engine: execution.engine,
     mode: execution.mode,
-    model: execution.model,
+    ...(execution.engine ? { engine: execution.engine } : {}),
+    ...(execution.model ? { model: execution.model } : {}),
     ...(execution.sessionKey ? { sessionKey: execution.sessionKey } : {}),
     ...(execution.runId ? { runId: execution.runId } : {}),
     ...(attemptStatus !== "running" && { endedAt: execution.updatedAt || now }),
@@ -394,6 +394,9 @@ export function mergeDiagnostics(
 }
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  if (card.metadata?.archivedAt) {
+    return [];
+  }
   const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
   const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;

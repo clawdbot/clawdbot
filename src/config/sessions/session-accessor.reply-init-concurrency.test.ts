@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -79,7 +79,10 @@ type ConcurrencyWorkerMessage =
   | { phase: "ready"; requestId: number; value: unknown }
   | { phase: "result"; requestId: number; value: unknown };
 
-const WAIT_TIMEOUT_MS = 10_000;
+// Cold tsx/module loading competes with other CI shards. Pay that cost once
+// with a process-start budget, while keeping each concurrency handshake tight.
+const WORKER_BOOT_TIMEOUT_MS = 30_000;
+const SCENARIO_TIMEOUT_MS = 10_000;
 const SESSION_KEY = "agent:main:main";
 const AGENT_ID = "main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -112,6 +115,7 @@ function waitForProceed(requestId) {
 
 async function runReplyInit(request) {
   const snapshot = loadReplySessionInitializationSnapshot({
+    agentId: AGENT_ID,
     sessionKey: SESSION_KEY,
     storePath: request.storePath,
   });
@@ -266,7 +270,7 @@ async function waitForWorkerBoot(child: ReturnType<typeof spawn>): Promise<void>
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("timeout waiting for concurrency worker startup"));
-    }, WAIT_TIMEOUT_MS);
+    }, WORKER_BOOT_TIMEOUT_MS);
     const cleanup = () => {
       clearTimeout(timeout);
       child.off("error", onError);
@@ -336,7 +340,7 @@ async function runConcurrencyScenario<TRequest extends ConcurrencyWorkerRequest>
     let readyHandled = false;
     const timeout = setTimeout(() => {
       fail(new Error(`timeout waiting for concurrency worker ${request.kind}`));
-    }, WAIT_TIMEOUT_MS);
+    }, SCENARIO_TIMEOUT_MS);
     const cleanup = () => {
       clearTimeout(timeout);
       child.off("error", onError);
@@ -426,6 +430,10 @@ async function waitForChild(child: ReturnType<typeof spawn>, label: string): Pro
 }
 
 describe("session accessor cross-process concurrency", () => {
+  beforeAll(async () => {
+    await getConcurrencyWorker();
+  }, WORKER_BOOT_TIMEOUT_MS + 5_000);
+
   afterAll(async () => {
     const child = concurrencyWorker;
     concurrencyWorker = undefined;

@@ -147,9 +147,8 @@ describe("openshell backend exec workdir validation", () => {
       cwd: workspaceDir,
     });
     expect(backend.runtimeId).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
-    expect(backend.runtimeId).toContain("somalley-alice");
-    expect(backend.runtimeId).not.toContain("_");
-    expect(backend.runtimeId.length).toBeLessThanOrEqual(63);
+    expect(backend.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
+    expect(backend.runtimeId).toHaveLength(19);
     expect(execSpec.env.OPENAI_API_KEY).toBeUndefined();
     expect(execSpec.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(execSpec.env.LANG).toBe("en_US.UTF-8");

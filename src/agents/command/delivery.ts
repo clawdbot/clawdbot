@@ -1,6 +1,7 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -50,7 +51,7 @@ import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
-import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
+import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
@@ -98,7 +99,7 @@ type AgentCommandDeliveryStatus = {
 /** Agent command result after payload normalization and optional delivery. */
 type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
+  meta: EmbeddedAgentRunMeta;
   didSendViaMessagingTool?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -131,6 +132,7 @@ type DeliverAgentCommandResultParams = {
   result: RunResult;
   payloads: RunResult["payloads"];
   assertDeliveryCurrent?: () => void;
+  onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
 } & FreshSessionDeliveryRefreshParams;
 
 function normalizeDeliverySessionId(value: string | undefined): string | undefined {
@@ -181,23 +183,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function mergeResultMetaOverrides(
-  meta: EmbeddedAgentRunMeta,
-  overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides {
-  if (!overrides) {
-    return meta;
-  }
-  return {
-    ...meta,
-    ...overrides,
-  };
-}
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasNonEmptyStringArray(value: unknown): value is string[] {
@@ -851,7 +836,12 @@ export async function deliverAgentCommandResult(
   params.assertDeliveryCurrent?.();
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
-  const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
+  const captureDeliveryResult = (
+    deliveryResult: AgentCommandDeliveryResult,
+  ): AgentCommandDeliveryResult => {
+    params.onDeliveryResult?.(deliveryResult);
+    return deliveryResult;
+  };
   const emitJsonEnvelope = (status?: AgentCommandDeliveryStatus) => {
     if (!opts.json) {
       return;
@@ -859,13 +849,21 @@ export async function deliverAgentCommandResult(
     writeRuntimeJson(runtime, {
       ...buildOutboundResultEnvelope({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
       }),
       ...(status ? { deliveryStatus: status } : {}),
     });
   };
   if (strictPreDeliveryError) {
     emitJsonEnvelope(deliveryStatus);
+    captureDeliveryResult(
+      buildDeliveryResult({
+        payloads: normalizedPayloads,
+        meta: result.meta,
+        result,
+        deliveryStatus,
+      }),
+    );
     throw toErrorObject(strictPreDeliveryError, "Non-Error thrown");
   }
 
@@ -874,13 +872,15 @@ export async function deliverAgentCommandResult(
     deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
     const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
     emitJsonEnvelope(deliveryStatus);
-    return buildDeliveryResult({
-      payloads: normalizedPayloads,
-      meta: resultMeta,
-      result,
-      deliverySucceeded,
-      deliveryStatus,
-    });
+    return captureDeliveryResult(
+      buildDeliveryResult({
+        payloads: normalizedPayloads,
+        meta: result.meta,
+        result,
+        deliverySucceeded,
+        deliveryStatus,
+      }),
+    );
   }
 
   let deliverySucceeded = false;
@@ -903,7 +903,9 @@ export async function deliverAgentCommandResult(
       logPayload(payload);
     }
     emitJsonEnvelope();
-    return buildDeliveryResult({ payloads: normalizedPayloads, meta: resultMeta, result });
+    return captureDeliveryResult(
+      buildDeliveryResult({ payloads: normalizedPayloads, meta: result.meta, result }),
+    );
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
@@ -918,6 +920,19 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           session: outboundSession,
+          replyPayloadSendingHook: {
+            kind: "final",
+            channel: deliveryChannel,
+            ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+            ...(opts.runId ? { runId: opts.runId } : {}),
+            context: {
+              channelId: deliveryChannel,
+              ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+              conversationId: deliveryTarget,
+              ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+              ...(opts.runId ? { runId: opts.runId } : {}),
+            },
+          },
           replyToId: resolvedReplyToId ?? null,
           threadId: resolvedThreadTarget ?? null,
           bestEffort: bestEffortDeliver,
@@ -937,6 +952,15 @@ export async function deliverAgentCommandResult(
       deliveryStatus = deliveryStatusFromDurableSend(send);
       if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
         emitJsonEnvelope(deliveryStatus);
+        captureDeliveryResult(
+          buildDeliveryResult({
+            payloads: normalizedPayloads,
+            meta: result.meta,
+            result,
+            deliverySucceeded: false,
+            deliveryStatus,
+          }),
+        );
         throw send.error;
       }
       deliverySucceeded = send.status === "sent" || send.status === "suppressed";
@@ -958,12 +982,14 @@ export async function deliverAgentCommandResult(
   }
 
   emitJsonEnvelope(deliveryStatus);
-  return buildDeliveryResult({
-    payloads: normalizedPayloads,
-    meta: resultMeta,
-    result,
-    deliverySucceeded,
-    deliveryStatus,
-  });
+  return captureDeliveryResult(
+    buildDeliveryResult({
+      payloads: normalizedPayloads,
+      meta: result.meta,
+      result,
+      deliverySucceeded,
+      deliveryStatus,
+    }),
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

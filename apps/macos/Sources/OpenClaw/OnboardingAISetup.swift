@@ -7,8 +7,8 @@ import OpenClawProtocol
 /// Structured "Connect your AI" onboarding step.
 ///
 /// Drives the gateway's `openclaw.setup.detect` / `openclaw.setup.activate`
-/// RPCs: detect reusable AI access (Claude Code, Codex, Gemini logins, API
-/// keys), live-test candidates in the detected order, and automatically fall
+/// RPCs: detect reusable AI access (CLI logins, provider credentials, and local model
+/// servers), live-test candidates in the detected order, and automatically fall
 /// through when one fails. Config is only written server-side after a
 /// candidate actually answered, so this page can never strand the user with a
 /// broken model.
@@ -25,7 +25,9 @@ final class OnboardingAISetupModel {
             OnboardingController.shared.busyReason = if self.phase == .testing {
                 "OpenClaw is testing your AI connection."
             } else if self.activeAuthOption != nil {
-                "OpenClaw is completing provider sign-in."
+                self.isPreparingModel
+                    ? "OpenClaw is preparing a local model."
+                    : "OpenClaw is completing provider sign-in."
             } else {
                 nil
             }
@@ -33,15 +35,22 @@ final class OnboardingAISetupModel {
     }
 
     private(set) var candidates: [Candidate] = []
+    private(set) var unavailableCandidates: [UnavailableCandidate] = []
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
+    private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var prepareAvailable = false
+    private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
+    private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
     private(set) var authBusy = false {
         didSet {
             if self.activeAuthOption != nil {
-                OnboardingController.shared.busyReason = "OpenClaw is completing provider sign-in."
+                OnboardingController.shared.busyReason = self.isPreparingModel
+                    ? "OpenClaw is preparing a local model."
+                    : "OpenClaw is completing provider sign-in."
             } else if self.phase != .testing {
                 OnboardingController.shared.busyReason = nil
             }
@@ -73,6 +82,19 @@ final class OnboardingAISetupModel {
 
     var selectedManualProvider: ManualProvider? {
         self.manualProviders.first { $0.id == self.manualProviderID }
+    }
+
+    var prepareOptions: [PrepareOption] {
+        guard self.prepareAvailable else { return [] }
+        return Self.prepareOptions(
+            candidates: self.candidates,
+            manualProviders: self.manualProviders,
+            authOptions: self.authOptions,
+            recommendedInstalls: self.recommendedInstalls)
+    }
+
+    var isPreparingModel: Bool {
+        self.providerWizardKind == .prepare
     }
 
     var connected: Bool {
@@ -148,6 +170,8 @@ final class OnboardingAISetupModel {
 
     private struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
+            let icon: String?
+            let website: String?
             let kind: String
             let label: String
             let detail: String
@@ -156,8 +180,10 @@ final class OnboardingAISetupModel {
         }
 
         let candidates: [DetectedCandidate]
+        let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
+        let recommendedInstalls: [RecommendedInstall]?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -598,9 +624,14 @@ final class OnboardingAISetupModel {
         self.started = false
         self.phase = .idle
         self.candidates = []
+        self.unavailableCandidates = []
         self.manualProviders = []
         self.authOptions = []
+        self.recommendedInstalls = []
+        self.prepareAvailable = false
+        self.candidatePresentation = [:]
         self.activeAuthOption = nil
+        self.providerWizardKind = nil
         self.authStep = nil
         self.authError = nil
         self.authBusy = false
@@ -671,11 +702,25 @@ extension OnboardingAISetupModel {
                   !Task.isCancelled
             else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
+            let prepareAvailable = await self.gateway.supportsServerMethod(
+                "openclaw.setup.prepare.start",
+                ifCurrentServerLease: lease) == true
+            guard await self.gateway.isCurrentServerLease(lease),
+                  self.isCurrentAttempt(context),
+                  !Task.isCancelled
+            else { return }
             self.serverLease = lease
+            self.prepareAvailable = prepareAvailable
             self.lastDetectedActivationState = result.persistedActivationState
             let manualProviders = result.manualProviders ?? []
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
+            self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.candidatePresentation = Dictionary(
+                result.candidates.map { candidate in
+                    (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
+                },
+                uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
             self.providerAuthReconciliationPending = false
             if Self.canAcceptProviderAuthReconciliation(
@@ -708,6 +753,7 @@ extension OnboardingAISetupModel {
             if result.manualProviders == nil {
                 self.providerCatalogError = OnboardingAISetupError.providerCatalogUnavailable.localizedDescription
             }
+            self.unavailableCandidates = result.unavailableCandidates ?? []
             if !manualProviders.contains(where: { $0.id == self.manualProviderID }) {
                 self.manualProviderID = manualProviders.first?.id ?? ""
             }
@@ -1059,8 +1105,27 @@ extension OnboardingAISetupModel {
 
 extension OnboardingAISetupModel {
     func startProviderAuth(_ option: AuthOption) {
+        self.startProviderWizard(option, kind: .auth)
+    }
+
+    func startProviderPrepare(_ option: PrepareOption) {
+        self.startProviderWizard(
+            AuthOption(
+                id: option.id,
+                label: option.label,
+                hint: option.hint,
+                groupLabel: nil,
+                icon: option.icon,
+                website: option.website,
+                kind: "prepare",
+                featured: false),
+            kind: .prepare)
+    }
+
+    private func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
         guard !self.isBusy, self.activeAuthOption == nil, let serverLease else { return }
         self.activeAuthOption = option
+        self.providerWizardKind = kind
         self.authStep = nil
         self.authError = nil
         self.authText = ""
@@ -1074,7 +1139,7 @@ extension OnboardingAISetupModel {
         Task {
             do {
                 let data = try await self.gateway.request(
-                    method: "openclaw.setup.auth.start",
+                    method: kind.startMethod,
                     params: [
                         "sessionId": AnyCodable(authSessionID),
                         "authChoice": AnyCodable(option.id),
@@ -1259,7 +1324,7 @@ extension OnboardingAISetupModel {
             return
         }
         if done || status == "done" {
-            self.providerAuthReconciliationPending = true
+            self.providerAuthReconciliationPending = self.providerWizardKind == .auth
             self.clearProviderAuth()
             self.scheduleDetection()
             return
@@ -1279,6 +1344,13 @@ extension OnboardingAISetupModel {
         self.authSelection = max(0, options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
         } ?? 0)
+        // Gateway-executed steps render progress and expose no input control, so
+        // no user action would ever ask for the next frame. Keep polling; the
+        // session long-polls until the next update or the terminal result, so a
+        // download reports live instead of freezing on its first frame.
+        if let step, wizardStepExecutor(step) == "gateway" {
+            self.advanceProviderAuth(stepID: nil, value: nil)
+        }
     }
 
     private func reconcileProviderAuthAfterUnknownOutcome(
@@ -1326,6 +1398,7 @@ extension OnboardingAISetupModel {
 
     private func clearProviderAuth() {
         self.activeAuthOption = nil
+        self.providerWizardKind = nil
         self.authSessionID = nil
         self.authStep = nil
         self.authError = nil

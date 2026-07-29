@@ -9,7 +9,7 @@ type TerminalSessionPickerProps = {
   currentSessionIds: ReadonlySet<string>;
   onToggle: () => void;
   onRefresh: () => void;
-  onAttach: (sessionId: string) => void;
+  onAttach: (sessionId: string, owner: TerminalSessionInfo["owner"]) => void;
 };
 
 export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
@@ -60,7 +60,7 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
                       type="button"
                       ?disabled=${current}
                       title=${current ? state : t("terminal.attachSession")}
-                      @click=${() => props.onAttach(session.sessionId)}
+                      @click=${() => props.onAttach(session.sessionId, session.owner)}
                     >
                       <span class="tp-session__agent">${session.agentId}</span>
                       <span class="tp-session__cwd">${session.cwd}</span>

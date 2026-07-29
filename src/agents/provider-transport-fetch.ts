@@ -4,6 +4,8 @@
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
+import { emitModelTransportDebug } from "@openclaw/ai/transports";
+import { formatModelTransportDebugUrl } from "@openclaw/ai/transports";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -36,8 +38,6 @@ import {
   SECRET_SENTINEL_PATTERN,
   swapSecretSentinelsInText,
 } from "../secrets/sentinel.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
-import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
 import {
   ensureModelProviderLocalService,
@@ -96,6 +96,15 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
+async function cancelReaderBestEffort(
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+  reason?: unknown,
+): Promise<void> {
+  // Reader cancellation is cleanup. An upstream cancel failure must not replace
+  // the wrapper's authoritative stream error or downstream cancellation.
+  await reader?.cancel(reason).catch(() => undefined);
+}
+
 function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
   const source = response.body;
   if (!source) {
@@ -123,18 +132,18 @@ function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Respo
           }
           total = maxBytes;
           controller.close();
-          void reader?.cancel().catch(() => undefined);
+          void cancelReaderBestEffort(reader);
           return;
         }
         total += chunk.value.byteLength;
         controller.enqueue(chunk.value);
       } catch (error) {
         controller.error(error);
-        void reader?.cancel(error).catch(() => undefined);
+        void cancelReaderBestEffort(reader, error);
       }
     },
     async cancel(reason) {
-      await reader?.cancel(reason).catch(() => undefined);
+      await cancelReaderBestEffort(reader, reason);
     },
   });
   return new Response(capped, response);
@@ -189,12 +198,12 @@ function sanitizeOpenAISdkSseResponse(
             buffer += decoder.decode(chunk.value, { stream: true });
           }
         } catch (error) {
-          await reader?.cancel(error).catch(() => {});
+          await cancelReaderBestEffort(reader, error);
           controller.error(error);
         }
       },
       async cancel(reason) {
-        await reader?.cancel(reason);
+        await cancelReaderBestEffort(reader, reason);
       },
     });
     const headers = new Headers(response.headers);
@@ -277,12 +286,12 @@ function sanitizeOpenAISdkSseResponse(
           }
         }
       } catch (error) {
-        await reader?.cancel(error).catch(() => {});
+        await cancelReaderBestEffort(reader, error);
         controller.error(error);
       }
     },
     async cancel(reason) {
-      await reader?.cancel(reason);
+      await cancelReaderBestEffort(reader, reason);
     },
   });
 
@@ -361,7 +370,7 @@ async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISd
     text += decoder.decode();
     return classifyOpenAISdkStreamBodyPrefix(text);
   } finally {
-    void reader.cancel().catch(() => undefined);
+    void cancelReaderBestEffort(reader);
   }
 }
 
@@ -424,10 +433,10 @@ async function normalizeOpenAISdkStreamContentType(params: {
   });
 }
 
-async function requestBodyHasStreamTrue(
+function requestBodyHasStreamTrue(
   request: Request | undefined,
   init: RequestInit | undefined,
-): Promise<boolean> {
+): boolean {
   const method = request?.method ?? init?.method;
   if (method && method.toUpperCase() !== "POST") {
     return false;
@@ -837,7 +846,6 @@ export function buildGuardedModelFetch(
     const baseInit =
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
-    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
     const baseSignal = baseInit?.signal ?? undefined;
     const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
@@ -904,7 +912,11 @@ export function buildGuardedModelFetch(
         headers,
       });
     }
-    if (synthesizeJsonAsSse && options?.sanitizeSse !== false) {
+    const synthesizeJsonAsSse =
+      options?.sanitizeSse !== false &&
+      !/\btext\/event-stream\b/i.test(response.headers.get("content-type") ?? "") &&
+      requestBodyHasStreamTrue(request, baseInit);
+    if (synthesizeJsonAsSse) {
       response = await normalizeOpenAISdkStreamContentType({
         response,
         model,

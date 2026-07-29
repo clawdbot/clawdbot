@@ -16,6 +16,7 @@ import type {
   WhatsAppStatus,
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/openclaw-mascot.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -26,6 +27,7 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelArt } from "./hub-meta.ts";
 import { renderChannelDetail } from "./view.detail.ts";
+import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
@@ -58,6 +60,7 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
+      ${renderChannelPairingQueue(props)}
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
@@ -81,7 +84,13 @@ export function renderChannels(props: ChannelsProps) {
           `,
         },
         connected.length === 0
-          ? renderSettingsEmpty(t("channels.hub.noneConnected"))
+          ? html`
+              <div class="channels-empty">
+                <!-- No configured transports is a true empty state, so Clawd rests here. -->
+                <openclaw-mascot mood="sleepy" .size=${80}></openclaw-mascot>
+                ${renderSettingsEmpty(t("channels.hub.noneConnected"))}
+              </div>
+            `
           : connected.map((key) => renderConnectedRow(key, props)),
       )}
       ${renderSettingsSection(
@@ -91,19 +100,6 @@ export function renderChannels(props: ChannelsProps) {
         },
         html`
           ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
-        `,
-      )}
-      ${renderSettingsSection(
-        {
-          title: t("channels.health.title"),
-          description: t("channels.health.subtitle"),
-        },
-        html`
-          <div class="settings-row settings-row--stacked">
-            <pre class="code-block">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-            </pre>
-          </div>
         `,
       )}
     `)}
@@ -131,6 +127,7 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.
       onWhatsAppStart: props.onWhatsAppStart,
       onWhatsAppWait: props.onWhatsAppWait,
     })}
+    ${renderChannelPairingPrompt(props)}
   `;
 }
 

@@ -1,7 +1,10 @@
 // QA runner runtime helpers expose plugin QA scenarios through the CLI command surface.
 import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  loadPluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync,
@@ -22,6 +25,7 @@ type QaRunnerTransportPolicy = {
 };
 
 type QaRunnerAdapterOptions = {
+  explicitScenarioSelection?: boolean;
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
@@ -43,7 +47,11 @@ type QaRunnerTransportFlowPreparationInput = {
     tempRoot: string;
     workspaceDir: string;
     runtimeEnv: NodeJS.ProcessEnv;
-    call: (method: string, params?: unknown, options?: { timeoutMs?: number }) => Promise<unknown>;
+    call: (
+      method: string,
+      params?: unknown,
+      options?: { expectFinal?: boolean; timeoutMs?: number },
+    ) => Promise<unknown>;
     restartAfterStateMutation?: (
       mutateState: (context: {
         configPath: string;
@@ -52,8 +60,14 @@ type QaRunnerTransportFlowPreparationInput = {
         tempRoot: string;
       }) => Promise<void>,
     ) => Promise<void>;
+    stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   };
+  waitForConfigRestartSettle: (options?: {
+    restartDelayMs?: number;
+    timeoutMs?: number;
+  }) => Promise<void>;
   outputDir: string;
+  primaryModel?: string;
   timeoutMs: number;
 };
 
@@ -124,7 +138,8 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
-  scenarioIds?: readonly string[];
+  /** Each create() call owns isolated runtime state and may run concurrently. */
+  isolatesInstances?: boolean;
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;
@@ -225,8 +240,11 @@ function listDeclaredQaRunnerPlugins(
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
 > {
-  return loadPluginManifestRegistry(env ? { env } : {})
-    .plugins.filter(
+  // Private QA is a source-checkout harness. Its command tree must be derived
+  // from repo-owned manifests before Commander pre-action hooks can run.
+  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  return registry.plugins
+    .filter(
       (
         plugin,
       ): plugin is PluginManifestRecord & {
@@ -319,6 +337,8 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
+          (adapterFactory.isolatesInstances !== undefined &&
+            typeof adapterFactory.isolatesInstances !== "boolean") ||
           typeof adapterFactory.matches !== "function" ||
           typeof adapterFactory.create !== "function")
       ) {

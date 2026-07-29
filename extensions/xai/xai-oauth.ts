@@ -22,10 +22,10 @@ const XAI_OAUTH_METHOD_ID = "oauth";
 const XAI_OAUTH_CHOICE_ID = "xai-oauth";
 const XAI_DEVICE_CODE_METHOD_ID = "device-code";
 const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
-export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_ISSUER = "https://auth.x.ai";
-export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
+const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 const XAI_LEGACY_OAUTH_TOKEN_ENDPOINT = `${XAI_OAUTH_ISSUER}/oauth/token`;
 
 const XAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
@@ -94,7 +94,7 @@ function getFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
   return fetchImpl ?? fetch;
 }
 
-export function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
+function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
   try {
     const url = new URL(endpoint);
     if (url.protocol !== "https:") {
@@ -158,7 +158,7 @@ async function fetchXaiOAuthDiscoveryDocument(
   return readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
 }
 
-export async function fetchXaiOAuthDiscovery(
+async function fetchXaiOAuthDiscovery(
   options: XaiOAuthFetchOptions = {},
 ): Promise<XaiOAuthDiscovery> {
   const json = await fetchXaiOAuthDiscoveryDocument(options);
@@ -612,7 +612,7 @@ async function noteXaiDeviceCode(
   );
 }
 
-export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
+async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting xAI OAuth...");
   try {
     const discovery = await fetchXaiDeviceCodeDiscovery(

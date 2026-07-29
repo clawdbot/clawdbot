@@ -22,7 +22,6 @@ scenario:
     suiteIsolation: isolated
     summary: Exercise Matrix observer-role allowlist hot reload through normalized transport state.
     config:
-      requiredChannelDriver: live
       accountId: sut
 
 flow:

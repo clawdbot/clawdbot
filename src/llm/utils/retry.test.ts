@@ -51,6 +51,10 @@ describe("isRetryableAssistantError", () => {
     "429 temporary provider response",
     "HTTP 500 temporary provider response",
     "503: temporary provider response",
+    "524 status code (no body)",
+    "The socket connection was closed unexpectedly by fetch",
+    "ResourceExhausted: Worker local total request limit reached",
+    "resource_exhausted: transient worker capacity exhausted",
   ])("retries explicit transient HTTP statuses: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });
@@ -108,6 +112,52 @@ describe("isRetryableAssistantError", () => {
       isRetryableAssistantError(
         errorMessage(
           "429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric requests per minute; please retry your request",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
+    "Azure OpenAI API error (502): Bad gateway from upstream",
+    "Mistral API error (503): service temporarily unavailable",
+    "Provider API error (504): gateway timeout",
+  ])("retries built-in provider-wrapped transient 5xx: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it("does not treat permanent provider-wrapped 4xx as retryable", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage("OpenAI API error (400): 400 Model Id [gpt-5.4-nano] not found"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["authentication failure", "OpenAI API error (401): Invalid authentication credentials"],
+    [
+      "authorization failure",
+      "Azure OpenAI API error (403): OAuth authentication is currently not allowed for this organization",
+    ],
+    ["model not found", "Mistral API error (404): model not found"],
+    [
+      "quota exhausted",
+      "OpenAI API error (429): insufficient_quota: Your account has insufficient quota balance to run this request.",
+    ],
+    [
+      "envelope embedded in user text",
+      'Invalid request: user text contained "OpenAI API error (500): invalid input"',
+    ],
+  ])("does not retry permanent provider-wrapped errors (%s): %s", (_label, text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it("retries a provider-wrapped short-window rate limit", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage(
+          "OpenAI API error (429): RESOURCE_EXHAUSTED: Quota exceeded for requests per minute; please retry your request",
         ),
       ),
     ).toBe(true);

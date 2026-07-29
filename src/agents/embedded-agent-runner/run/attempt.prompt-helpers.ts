@@ -14,7 +14,6 @@ import type {
   PluginAgentTurnPrepareResult,
   PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -38,11 +37,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptBuildHookRunner = {
   hasHooks: (
-    hookName:
-      | "agent_turn_prepare"
-      | "heartbeat_prompt_contribution"
-      | "before_prompt_build"
-      | "before_agent_start",
+    hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
   ) => boolean;
   runAgentTurnPrepare?: (
     event: {
@@ -60,10 +55,6 @@ type PromptBuildHookRunner = {
     event: { prompt: string; messages: unknown[] },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
-  runBeforeAgentStart: (
-    event: { prompt: string; messages: unknown[] },
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
 // Cache drained next-turn injections by runId so retry attempts within the
@@ -110,7 +101,6 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
@@ -136,7 +126,7 @@ export async function resolvePromptBuildHookResult(params: {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
-  // then prepare/heartbeat contributions, then prompt-build and legacy start hooks.
+  // then prepare/heartbeat contributions, then prompt-build hooks.
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
       ? await params.hookRunner
@@ -186,48 +176,22 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
-  const beforeAgentStartResult =
-    params.beforeAgentStartResult ??
-    (params.hookRunner?.hasHooks("before_agent_start")
-      ? await params.hookRunner
-          .runBeforeAgentStart(
-            {
-              prompt: params.prompt,
-              messages: params.messages,
-            },
-            params.hookCtx,
-          )
-          .catch((hookErr: unknown) => {
-            log.warn(
-              `deprecated before_agent_start hook failed during prompt build: ${String(hookErr)}`,
-            );
-            return undefined;
-          })
-      : undefined);
   return {
-    systemPrompt: promptBuildResult?.systemPrompt ?? beforeAgentStartResult?.systemPrompt,
+    systemPrompt: promptBuildResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,
       heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
-      beforeAgentStartResult?.prependContext,
     ]),
     appendContext: joinPresentTextSegments([
       queuedContext.appendContext,
       turnPrepareResult?.appendContext,
       heartbeatContribution?.appendContext,
       promptBuildResult?.appendContext,
-      beforeAgentStartResult?.appendContext,
     ]),
-    prependSystemContext: joinPresentTextSegments([
-      wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
-      wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
-    ]),
-    appendSystemContext: joinPresentTextSegments([
-      wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
-      wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
-    ]),
+    prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
+    appendSystemContext: wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
   };
 }
 

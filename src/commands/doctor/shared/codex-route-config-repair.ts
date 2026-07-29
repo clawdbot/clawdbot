@@ -1,6 +1,7 @@
 import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   maybeMigrateLegacyLosslessCompactionConfig,
   rewriteAgentCompactionRefs,
@@ -14,8 +15,13 @@ import {
   readAgentPrimaryModelRef,
   readLegacyDefaultsRuntime,
   resolveRuntime,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
-import { rewriteModelConfigSlot, rewriteModelsMap } from "./codex-route-model-slots.js";
+import {
+  recordCodexModelHit,
+  rewriteModelConfigSlot,
+  rewriteModelsMap,
+} from "./codex-route-model-slots.js";
 import {
   clearConfigLegacyAgentRuntimePolicies,
   ensureCodexRuntimePolicy,
@@ -29,7 +35,30 @@ import type {
   SharedDefaultCompactionOverrideConsumers,
 } from "./codex-route-types.js";
 
-const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
+function rewriteModelPolicyAllowRefs(params: {
+  hits: CodexRouteHit[];
+  agent: MutableRecord;
+  path: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): void {
+  const modelPolicy = asMutableRecord(params.agent.modelPolicy);
+  if (!Array.isArray(modelPolicy?.allow)) {
+    return;
+  }
+  modelPolicy.allow = modelPolicy.allow.map((entry, index) => {
+    if (typeof entry !== "string") {
+      return entry;
+    }
+    return (
+      recordCodexModelHit({
+        hits: params.hits,
+        path: `${params.path}.modelPolicy.allow.${index}`,
+        model: entry.trim(),
+        blockedModelIdentities: params.blockedModelIdentities,
+      }) ?? entry
+    );
+  });
+}
 
 function rewriteAgentModelRefs(params: {
   cfg: OpenClawConfig;
@@ -48,6 +77,7 @@ function rewriteAgentModelRefs(params: {
   rewrittenInheritedCompactionModels?: Map<string, string>;
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): void {
   if (!params.agent) {
@@ -78,6 +108,7 @@ function rewriteAgentModelRefs(params: {
         key,
         path: `${params.path}.${key}`,
         runtime: params.currentRuntime,
+        blockedModelIdentities: params.blockedModelIdentities,
       });
       preserveCodexRuntimePolicyForNewHits(start);
     } else {
@@ -88,6 +119,7 @@ function rewriteAgentModelRefs(params: {
         container: params.agent,
         key,
         path: `${params.path}.${key}`,
+        blockedModelIdentities: params.blockedModelIdentities,
         env: params.env,
       });
     }
@@ -99,6 +131,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(params.agent.heartbeat),
     key: "model",
     path: `${params.path}.heartbeat.model`,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
   rewriteModelConfigSlotIfCanonicalCodexRuntime({
@@ -108,6 +141,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(params.agent.subagents),
     key: "model",
     path: `${params.path}.subagents.model`,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
   rewriteAgentCompactionRefs({
@@ -126,22 +160,34 @@ function rewriteAgentModelRefs(params: {
     rewrittenInheritedCompactionModels: params.rewrittenInheritedCompactionModels,
     runtimePolicyChanges: params.runtimePolicyChanges,
     unsupportedCompactionChanges: params.unsupportedCompactionChanges,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
-  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+  const mediaModels = asMutableRecord(params.agent.mediaModels);
+  for (const key of ["image", "video"] as const) {
     rewriteModelConfigSlot({
       hits: params.hits,
-      container: params.agent,
+      container: mediaModels ?? {},
       key,
-      path: `${params.path}.${key}`,
+      path: `${params.path}.mediaModels.${key}`,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
+  const modelPolicyStart = params.hits.length;
+  rewriteModelPolicyAllowRefs({
+    hits: params.hits,
+    agent: params.agent,
+    path: params.path,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
+  preserveCodexRuntimePolicyForNewHits(modelPolicyStart);
   if (params.rewriteModelsMap) {
     const start = params.hits.length;
     rewriteModelsMap({
       hits: params.hits,
       models: asMutableRecord(params.agent.models),
       path: `${params.path}.models`,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
     preserveCodexRuntimePolicyForNewHits(start);
   }
@@ -151,6 +197,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
   cfg: OpenClawConfig;
   preserveSharedDefaultCompactionOverrides: SharedDefaultCompactionOverrideConsumers;
   ignoreLegacyAgentRuntimePins?: boolean;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): ConfigRouteRepairResult {
   const nextConfig = structuredClone(params.cfg);
@@ -159,7 +206,11 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
   const unsupportedCompactionChanges: string[] = [];
   const ignoreLegacyAgentRuntimePins =
     params.ignoreLegacyAgentRuntimePins ??
-    configRepairWouldClearLegacyRuntimePins({ cfg: nextConfig, env: params.env });
+    configRepairWouldClearLegacyRuntimePins({
+      cfg: nextConfig,
+      blockedModelIdentities: params.blockedModelIdentities,
+      env: params.env,
+    });
   unsupportedCompactionChanges.push(
     ...maybeMigrateLegacyLosslessCompactionConfig({
       cfg: nextConfig,
@@ -191,23 +242,19 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     rewrittenInheritedCompactionModels,
     runtimePolicyChanges,
     unsupportedCompactionChanges,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
   const inheritedModelRef = readAgentPrimaryModelRef(nextConfig.agents?.defaults);
-  const agents = Array.isArray(nextConfig.agents?.list) ? nextConfig.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  const agents = listMutableCodexRouteAgentEntries(nextConfig);
+  for (const { agent: agentRecord, agentId, path } of agents) {
     rewriteAgentModelRefs({
       cfg: nextConfig,
       preRepairCfg: params.cfg,
       hits,
       agent: agentRecord,
-      path: `agents.list.${id}`,
-      agentId: id,
+      path,
+      agentId,
       currentRuntime: resolveRuntime({
         agentRuntime: ignoreLegacyAgentRuntimePins
           ? undefined
@@ -222,11 +269,20 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       rewrittenInheritedCompactionModels,
       runtimePolicyChanges,
       unsupportedCompactionChanges,
+      blockedModelIdentities: params.blockedModelIdentities,
       env: params.env,
     });
   }
-  rewriteNonAgentModelRefs({ cfg: nextConfig, hits, env: params.env });
-  const shouldClearRuntimePins = hits.some((hit) => !isCompactionOnlyRouteHit(hit));
+  rewriteNonAgentModelRefs({
+    cfg: nextConfig,
+    hits,
+    blockedModelIdentities: params.blockedModelIdentities,
+    env: params.env,
+  });
+  // A retained legacy provider can still own config, session, or cron refs that need these pins.
+  // Keep global pins intact until the manual provider conflict is reconciled as one unit.
+  const shouldClearRuntimePins =
+    !params.blockedModelIdentities?.size && hits.some((hit) => !isCompactionOnlyRouteHit(hit));
   const runtimePinChanges = shouldClearRuntimePins
     ? clearConfigLegacyAgentRuntimePolicies(nextConfig)
     : [];
@@ -248,6 +304,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
 function rewriteNonAgentModelRefs(params: {
   cfg: OpenClawConfig;
   hits: CodexRouteHit[];
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): void {
   const channelsModelByChannel = asMutableRecord(params.cfg.channels?.modelByChannel);
@@ -263,6 +320,7 @@ function rewriteNonAgentModelRefs(params: {
         container: targets,
         key: targetId,
         path: `channels.modelByChannel.${channelId}.${targetId}`,
+        blockedModelIdentities: params.blockedModelIdentities,
         env: params.env,
       });
     }
@@ -274,6 +332,7 @@ function rewriteNonAgentModelRefs(params: {
       container: mapping as MutableRecord,
       key: "model",
       path: `hooks.mappings.${index}.model`,
+      blockedModelIdentities: params.blockedModelIdentities,
       env: params.env,
     });
   }
@@ -283,14 +342,16 @@ function rewriteNonAgentModelRefs(params: {
     container: asMutableRecord(params.cfg.hooks?.gmail),
     key: "model",
     path: "hooks.gmail.model",
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
     hits: params.hits,
-    container: asMutableRecord(params.cfg.messages?.tts),
+    container: asMutableRecord(params.cfg.tts),
     key: "summaryModel",
-    path: "messages.tts.summaryModel",
+    path: "tts.summaryModel",
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -299,26 +360,30 @@ function rewriteNonAgentModelRefs(params: {
     container: asMutableRecord(asMutableRecord(params.cfg.channels?.discord)?.voice),
     key: "model",
     path: "channels.discord.voice.model",
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
 }
 
 export function configRepairWouldClearLegacyRuntimePins(params: {
   cfg: OpenClawConfig;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): boolean {
   const dryRun = rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
     preserveSharedDefaultCompactionOverrides: { model: true, provider: true },
     ignoreLegacyAgentRuntimePins: false,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
-  return dryRun.changes.some((hit) => !isCompactionOnlyRouteHit(hit));
+  return dryRun.runtimePinChanges.length > 0;
 }
 
 export function rewriteConfigModelRefs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): ConfigRouteRepairResult {
   const preserveSharedDefaultCompactionOverrides = getSharedDefaultCompactionOverrideConsumers({
     cfg: params.cfg,
@@ -328,6 +393,7 @@ export function rewriteConfigModelRefs(params: {
   return rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
     preserveSharedDefaultCompactionOverrides,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
 }
@@ -337,8 +403,4 @@ function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
     hit.path.startsWith("agents.") &&
     (hit.path.endsWith(".compaction.model") || hit.path.endsWith(".compaction.memoryFlush.model"))
   );
-}
-
-function readAgentPathId(agent: MutableRecord, index: number): string {
-  return typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
 }

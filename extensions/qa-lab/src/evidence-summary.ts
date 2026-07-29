@@ -1,8 +1,10 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
 import { z } from "zod";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
+import { qaRuntimePairLaneSchema, type QaRuntimePairLane } from "./scenario-catalog.js";
 import {
   qaScorecardEvidenceModeSchema,
   readQaScorecardProfileOptions,
@@ -19,7 +21,6 @@ const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
-const qaEvidenceIdSchema = z.strictObject({ id: nonEmptyStringSchema });
 
 const qaEvidenceProviderSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -82,7 +83,8 @@ const qaEvidenceRefSchema = z.strictObject({
   path: nonEmptyStringSchema,
 });
 
-const qaEvidenceCoverageSchema = qaEvidenceIdSchema.extend({
+const qaEvidenceCoverageSchema = z.strictObject({
+  id: qaCoverageIdSchema,
   role: nonEmptyStringSchema,
 });
 
@@ -150,7 +152,7 @@ const qaEvidenceSummaryEntrySchema = z.strictObject({
   coverage: z.array(qaEvidenceCoverageSchema),
   posture: qaEvidencePostureSchema.optional(),
   refs: z.array(qaEvidenceRefSchema).optional(),
-  runtimeParityTier: nonEmptyStringSchema.optional(),
+  runtimePairLane: qaRuntimePairLaneSchema.optional(),
   execution: qaEvidenceExecutionSchema.optional(),
   result: qaEvidenceResultSchema,
 });
@@ -186,7 +188,7 @@ type QaEvidenceScenarioDefinitionInput = {
     primary?: readonly string[];
     secondary?: readonly string[];
   };
-  runtimeParityTier?: string;
+  runtimePairLane?: QaRuntimePairLane;
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
 };
@@ -200,21 +202,6 @@ type QaEvidenceScenarioResultInput = {
   rttMeasurement?: {
     finalMatchedReplyRttMs?: number;
   };
-};
-
-type QaEvidenceLiveTransportCheckInput = {
-  id: string;
-  title: string;
-  status: QaEvidenceStatusInput;
-  details: string;
-  posture?: z.infer<typeof qaEvidencePostureSchema>;
-  timing?: QaEvidenceTiming;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs?: number;
-  };
-  coverageIds?: readonly string[];
-  artifactPaths?: Readonly<Record<string, string>>;
 };
 
 type QaEvidenceRttInput = Pick<
@@ -300,14 +287,6 @@ function buildQaEvidenceArtifacts(paths: readonly QaEvidenceArtifactInput[], sou
   return paths.map((artifact) => ({
     kind: artifact.kind,
     path: artifact.path,
-    source,
-  }));
-}
-
-function buildQaEvidenceNamedArtifacts(paths: Readonly<Record<string, string>>, source: string) {
-  return Object.entries(paths).map(([kind, artifactPath]) => ({
-    kind,
-    path: artifactPath,
     source,
   }));
 }
@@ -532,7 +511,7 @@ export function buildQaSuiteEvidenceSummary(
       ...(scenario?.coverage?.primary ?? []),
       ...(scenario?.coverage?.secondary ?? []),
     ]);
-    const runtimeParityTier = scenario?.runtimeParityTier;
+    const runtimePairLane = scenario?.runtimePairLane;
     const testId = scenario?.id ?? `scenario-${index + 1}`;
     const refs = buildQaEvidenceRefs({
       docsRefs: scenario?.docsRefs,
@@ -553,14 +532,14 @@ export function buildQaSuiteEvidenceSummary(
         ),
       }),
       refs: refs.length > 0 ? refs : undefined,
-      runtimeParityTier,
+      runtimePairLane,
       execution: {
         runner,
         environment,
         provider,
         channel: {
           id: params.channelId,
-          live: false,
+          live: channelDriver?.id === "live",
           driver: channelDriver?.id,
         },
         packageSource,
@@ -683,79 +662,5 @@ export function buildScriptEvidenceSummary(
     defaultRunner: "script",
     testKind: "script-test",
     runner: params.runner ?? "script",
-  });
-}
-
-export function buildLiveTransportEvidenceSummary(
-  params: QaEvidenceBuildBase & {
-    checks: readonly QaEvidenceLiveTransportCheckInput[];
-    transportId: string;
-  },
-): QaEvidenceSummaryJson {
-  const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment({
-    env: params.env,
-    repoRoot: params.repoRoot,
-  });
-  const packageSource = resolveQaEvidenceBuildPackageSource(params);
-  const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
-  const profile = resolveQaEvidenceProfile({
-    env: params.env,
-    explicit: params.profile,
-  });
-  const channelDriver = resolveQaEvidenceChannelDriver({
-    env: params.env,
-    fallback: params.channelDriver ?? "native",
-  }) ?? { id: "native" };
-  const entries = params.checks.map((check): QaEvidenceSummaryEntry => {
-    const testId = check.id;
-    const liveCoverageId = `channels.${params.transportId}.live`;
-    const coverage = [
-      {
-        id: liveCoverageId,
-        role: "live-transport",
-      },
-      ...uniqueSortedStrings(check.coverageIds ?? [])
-        .filter((coverageId) => coverageId !== liveCoverageId)
-        .map((coverageId) => ({
-          id: coverageId,
-          role: "live-transport-coverage",
-        })),
-    ];
-    const timing = timingForRttResult(check);
-    return {
-      test: {
-        kind: "live-transport-check",
-        id: testId,
-        title: check.title,
-      },
-      coverage,
-      posture: check.posture,
-      execution: {
-        runner,
-        environment,
-        provider,
-        channel: {
-          id: params.transportId,
-          live: true,
-          driver: channelDriver.id,
-        },
-        packageSource,
-        artifacts: [
-          ...buildQaEvidenceArtifacts(params.artifactPaths, `${params.transportId}-live-transport`),
-          ...buildQaEvidenceNamedArtifacts(
-            check.artifactPaths ?? {},
-            `${params.transportId}-live-transport:${testId}`,
-          ),
-        ],
-      },
-      result: resultForEvidence(check, timing),
-    };
-  });
-  return buildQaEvidenceSummary({
-    entries,
-    evidenceMode: params.evidenceMode,
-    generatedAt: params.generatedAt,
-    profile,
   });
 }

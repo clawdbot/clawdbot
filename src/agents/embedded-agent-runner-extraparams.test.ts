@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),

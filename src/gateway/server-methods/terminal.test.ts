@@ -7,7 +7,15 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import type { TerminalSessionSummary } from "../terminal/session-types.js";
 import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const policyMocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
@@ -65,6 +73,7 @@ function makeOpts(
       seq: 6,
     })),
     snapshot: vi.fn(() => "10%\r100%"),
+    list: vi.fn((): TerminalSessionSummary[] => []),
     upload: vi.fn(async () => ({ path: "/tmp/upload/report.pdf", size: 4 })),
   };
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
@@ -115,6 +124,38 @@ afterEach(() => {
 });
 
 describe("terminal gateway policy", () => {
+  it("lists agent-owned sessions with their owner marker", async () => {
+    const { opts, sessions, respond } = makeOpts({}, { enabled: true });
+    sessions.list.mockReturnValue([
+      {
+        sessionId: "terminal-agent",
+        agentId: "main",
+        shell: "/bin/zsh",
+        cwd: "/work",
+        attached: true,
+        owner: "agent:agent:main:main",
+        createdAtMs: 42,
+      },
+    ]);
+
+    await expectDefined(terminalHandlers["terminal.list"], "terminal.list")(opts);
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      sessions: [
+        {
+          sessionId: "terminal-agent",
+          agentId: "main",
+          shell: "/bin/zsh",
+          cwd: "/work",
+          confined: false,
+          attached: true,
+          owner: "agent:agent:main:main",
+          createdAtMs: 42,
+        },
+      ],
+    });
+  });
+
   it("returns the attach snapshot offset to capable clients", async () => {
     const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
     opts.client!.connect.caps = [GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ];
@@ -289,7 +330,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(openTerminal).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
     isConnectionActive.mockReturnValue(false);
     plan.resolve({ kind: "local", argv: ["codex", "resume", "thread"] });
     await opening;
@@ -317,7 +358,7 @@ describe("terminal gateway policy", () => {
     sessions.open.mockImplementationOnce(async () => await created.promise);
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(sessions.open).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(sessions.open).toHaveBeenCalledOnce());
     isConnectionActive.mockReturnValue(false);
     created.resolve({
       ok: true,
@@ -354,7 +395,7 @@ describe("terminal gateway policy", () => {
       });
 
       const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-      await vi.waitFor(() => expect(openSignal).toBeDefined());
+      await waitForFast(() => expect(openSignal).toBeDefined());
       await vi.advanceTimersByTimeAsync(TERMINAL_OPEN_DEADLINE_MS);
       await opening;
 
@@ -371,7 +412,7 @@ describe("terminal gateway policy", () => {
         shell: "/bin/zsh",
         cwd: "/work",
       });
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-late"),
       );
     } finally {
@@ -399,7 +440,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(openTerminal).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
     isTerminalEnabled.mockReturnValue(false);
     plan.resolve({ kind: "local", argv: ["codex", "resume", "thread"] });
     await opening;
@@ -432,7 +473,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(openTerminal).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
     resolveTerminalLaunchPolicy.mockReturnValue({
       ok: true,
       plan: { agentId: "main", cwd: process.cwd(), shell: "/bin/refreshed", args: [] },
@@ -530,7 +571,12 @@ describe("terminal gateway policy", () => {
         paramsJSON: JSON.stringify({ threadId: "thread" }),
       }),
     });
-    const node = { nodeId: "node-1", connId: "conn-node", commands: [command] };
+    const node = {
+      nodeId: "node-1",
+      connId: "conn-node",
+      pairingGeneration: "generation-node",
+      commands: [command],
+    };
     const invoke = vi.fn((rawParams: unknown) => {
       const params = rawParams as { onInvokeId?: (id: string) => void };
       params.onInvokeId?.("invoke-1");
@@ -569,7 +615,11 @@ describe("terminal gateway policy", () => {
     )?.at(0);
     await openRequest?.createBackend?.();
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: "node-1", expectedConnId: "conn-node" }),
+      expect.objectContaining({
+        nodeId: "node-1",
+        expectedConnId: "conn-node",
+        expectedPairingGeneration: "generation-node",
+      }),
     );
   });
 
@@ -602,7 +652,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(policyMocks.applyPluginNodeInvokePolicy).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(policyMocks.applyPluginNodeInvokePolicy).toHaveBeenCalledOnce());
     node = { nodeId: "node-1", connId: "conn-new", commands: [] };
     policy.resolve(null);
     await opening;
@@ -754,6 +804,7 @@ describe("terminal gateway policy", () => {
     const node = {
       nodeId: "node-1",
       connId: "conn-node",
+      pairingGeneration: "generation-node",
       commands: [command, uploadCommand],
     };
     const invoke = vi.fn(async () => ({
@@ -783,6 +834,7 @@ describe("terminal gateway policy", () => {
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
       expectedConnId: "conn-node",
+      expectedPairingGeneration: "generation-node",
       command: uploadCommand,
       params: { name: "report.pdf", contentBase64: "dGVzdA==" },
       timeoutMs: 120_000,

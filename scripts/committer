@@ -6,9 +6,9 @@ set -f
 usage() {
   local exit_code=${1:-2}
   if [ "$exit_code" -eq 0 ]; then
-    printf 'Usage: %s [--force] [--fast] "commit message" "file" ["file" ...]\n' "$(basename "$0")"
+    printf 'Usage: %s [--force] [--fast] [--no-verify-formatted] "commit message" "file" ["file" ...]\n' "$(basename "$0")"
   else
-    printf 'Usage: %s [--force] [--fast] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
+    printf 'Usage: %s [--force] [--fast] [--no-verify-formatted] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
   fi
   exit "$exit_code"
 }
@@ -23,6 +23,7 @@ fi
 
 force_delete_lock=false
 fast_commit=false
+no_verify_formatted=false
 while [[ "${1:-}" == --* ]]; do
   case "${1:-}" in
     --force)
@@ -31,6 +32,10 @@ while [[ "${1:-}" == --* ]]; do
       ;;
     --fast)
       fast_commit=true
+      shift
+      ;;
+    --no-verify-formatted)
+      no_verify_formatted=true
       shift
       ;;
     --help|-h)
@@ -207,6 +212,51 @@ for file in "${files[@]}"; do
   fi
 done
 
+committer_requires_repo_formatter() {
+  local root="$1"
+  local filter="$root/scripts/pre-commit/filter-staged-files.mjs"
+  [ -f "$filter" ] || return 1
+
+  local filter_output selected
+  filter_output=$(mktemp "${TMPDIR:-/tmp}/openclaw-committer-filter.XXXXXX") || {
+    echo "Unable to create temporary output for formatter applicability check." >&2
+    return 2
+  }
+  if ! node "$filter" format -- "${files[@]}" >"$filter_output"; then
+    rm -f "$filter_output"
+    echo "Unable to determine formatter applicability: filter-staged-files.mjs failed." >&2
+    return 2
+  fi
+  if IFS= read -r -d '' selected <"$filter_output"; then
+    rm -f "$filter_output"
+    return 0
+  fi
+  rm -f "$filter_output"
+  return 1
+}
+
+repo_root=$(git rev-parse --show-toplevel)
+if [ "$fast_commit" = false ] && [ "$no_verify_formatted" = false ] && \
+  [ -f "$repo_root/pnpm-lock.yaml" ] && \
+  command -v pnpm >/dev/null 2>&1 && \
+  [ ! -e "$repo_root/node_modules" ]
+then
+  if committer_requires_repo_formatter "$repo_root"; then
+    formatter_requirement=0
+  else
+    formatter_requirement=$?
+  fi
+  if [ "$formatter_requirement" = 2 ]; then
+    exit 1
+  fi
+  if [ "$formatter_requirement" = 0 ]; then
+    echo "Missing repo dependencies: cannot run oxfmt without node_modules." >&2
+    echo "Run pnpm install in a normal checkout, or bypass the hook only after separate formatting proof." >&2
+    echo "After that proof, pass --no-verify-formatted to commit explicitly with --no-verify." >&2
+    exit 1
+  fi
+fi
+
 run_git_with_lock_retry "unstaging files" git restore --staged :/
 run_git_with_lock_retry "staging files" git add --all --force -- "${files[@]}"
 
@@ -219,6 +269,11 @@ committed=false
 if [ "$fast_commit" = true ]; then
   declare -a commit_env=(FAST_COMMIT=1)
   if run_git_with_lock_retry "commit" env "${commit_env[@]}" git commit --no-verify -m "$commit_message"; then
+    committed=true
+  fi
+elif [ "$no_verify_formatted" = true ]; then
+  echo "Notice: --no-verify-formatted asserts separate formatting proof; committing with --no-verify."
+  if run_git_with_lock_retry "commit" git commit --no-verify -m "$commit_message"; then
     committed=true
   fi
 else

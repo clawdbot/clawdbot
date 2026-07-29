@@ -219,6 +219,13 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("computer", {})).toBe(false);
   });
 
+  it("classifies mobile UI observation as replay-safe and act as mutating", () => {
+    expect(isReplaySafeToolCall("mobile_ui", { action: "observe" })).toBe(true);
+    expect(isMutatingToolCall("mobile_ui", { action: "observe" })).toBe(false);
+    expect(isReplaySafeToolCall("mobile_ui", { action: "act" })).toBe(false);
+    expect(isMutatingToolCall("mobile_ui", { action: "act" })).toBe(true);
+  });
+
   it("keeps computer input fingerprints stable and target-specific", () => {
     const first = buildToolMutationState(
       "computer",
@@ -246,6 +253,7 @@ describe("tool mutation helpers", () => {
       "image",
       "pdf",
       "read",
+      "conversations_list",
       "sessions_history",
       "sessions_list",
       "sessions_search",
@@ -478,8 +486,12 @@ describe("tool mutation helpers", () => {
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_send")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_turn")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_list")).toBe(false);
     expect(isLikelyMutatingToolName("sessions")).toBe(true);
     expect(isLikelyMutatingToolName("computer")).toBe(true);
+    expect(isLikelyMutatingToolName("mobile_ui")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);
     expect(isLikelyMutatingToolName("browser")).toBe(false);

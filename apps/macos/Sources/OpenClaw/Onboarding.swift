@@ -624,6 +624,7 @@ struct OnboardingView: View {
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var systemAgentState = OnboardingSystemAgentChatState()
     @State var aiSetup = OnboardingAISetupModel()
+    @State var memoryImport = OnboardingMemoryImportModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
@@ -633,6 +634,7 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
+    let memoryImportGateway: GatewayConnection
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -642,6 +644,7 @@ struct OnboardingView: View {
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
+    let memoryImportPageIndex = 4
     let onboardingChatPageIndex = 8
     let readyPageIndex = 9
 
@@ -668,7 +671,8 @@ struct OnboardingView: View {
 
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        requiresCLIInstall: Bool) -> [Int]
+        requiresCLIInstall: Bool,
+        memoryImportEligible: Bool = false) -> [Int]
     {
         switch mode {
         case .remote:
@@ -679,9 +683,31 @@ struct OnboardingView: View {
         case .unconfigured:
             return [0, 1, 9]
         case .local:
-            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
+            let memoryPages = memoryImportEligible ? [4] : []
+            let setupPages = (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + memoryPages + [5]
             return setupPages + [9]
         }
+    }
+
+    static func shouldIncludeMemoryImportPage(
+        for mode: AppState.ConnectionMode,
+        modelEligible: Bool) -> Bool
+    {
+        mode == .local && modelEligible
+    }
+
+    static func reconciledPageCursor(
+        currentPage: Int,
+        previousOrder: [Int],
+        newOrder: [Int]) -> Int
+    {
+        guard !newOrder.isEmpty else { return 0 }
+        guard !previousOrder.isEmpty else { return min(max(0, currentPage), newOrder.count - 1) }
+        let previousCursor = min(max(0, currentPage), previousOrder.count - 1)
+        let previousPage = previousOrder[previousCursor]
+        if let exact = newOrder.firstIndex(of: previousPage) { return exact }
+        if let next = newOrder.firstIndex(where: { $0 > previousPage }) { return next }
+        return newOrder.count - 1
     }
 
     static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
@@ -700,9 +726,14 @@ struct OnboardingView: View {
     }
 
     var pageOrder: [Int] {
-        Self.pageOrder(
+        let requiresCLIInstall = !self.cliInstalled
+        let includeMemoryImport = Self.shouldIncludeMemoryImportPage(
             for: self.state.connectionMode,
-            requiresCLIInstall: !self.cliInstalled)
+            modelEligible: self.memoryImport.pageEligible)
+        return Self.pageOrder(
+            for: self.state.connectionMode,
+            requiresCLIInstall: requiresCLIInstall,
+            memoryImportEligible: includeMemoryImport)
     }
 
     var pageCount: Int {
@@ -751,7 +782,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.memoryImport.isApplying
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -783,6 +814,7 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
+        self.memoryImportGateway = aiSetupGateway
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

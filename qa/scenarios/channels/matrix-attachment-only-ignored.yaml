@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.mention-gating
+      - matrix.mention-gates
     secondary:
       - channels.inbound-media-normalization
   execution:
@@ -13,7 +13,6 @@ scenario:
     timeoutMs: 8000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

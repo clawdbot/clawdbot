@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.streaming
+      - matrix.message-presentation-metadata
   docsRefs:
     - docs/concepts/streaming.md
   execution:
@@ -13,7 +13,6 @@ scenario:
     timeoutMs: 45000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         streaming: partial
 

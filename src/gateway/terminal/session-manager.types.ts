@@ -7,10 +7,16 @@ export type TerminalEventSink = (connId: string, event: string, payload: unknown
 
 export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
+export type TerminalOwner =
+  | { kind: "conn"; connId: string }
+  | { kind: "agent"; agentSessionKey: string };
+
 export type TerminalSession = {
   id: string;
-  /** Owning connection; null while the session is detached. */
-  connId: string | null;
+  /** Null only while a connection-owned session is detached. */
+  owner: TerminalOwner | null;
+  /** Operator connections co-attached to an agent-owned session. */
+  viewers: Set<string>;
   agentId: string;
   cwd: string;
   shell: string;
@@ -38,7 +44,7 @@ export type TerminalSessionManagerOptions = {
 };
 
 export type TerminalOpenRequest = {
-  connId: string;
+  owner: TerminalOwner;
   agentId: string;
   cwd: string;
   shell: string;

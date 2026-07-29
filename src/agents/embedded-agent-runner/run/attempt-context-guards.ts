@@ -1,9 +1,12 @@
 /** Installs attempt-local context engine, tool-result, image, and frame guards. */
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
@@ -29,6 +32,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   attempt: EmbeddedRunAttemptParams;
   computerContextEpoch: { value: number };
   effectiveCwd: string;
+  effectiveFsWorkspaceOnly: boolean;
   effectiveWorkspace: string;
   getPrePromptMessageCount: () => number;
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
@@ -39,6 +43,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sessionAgentId: string;
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
+  sandbox?: SandboxContext | null;
 }): {
   getAfterTurnCheckpoint: () => number | null;
   remove: () => void;
@@ -56,8 +61,6 @@ export function installEmbeddedAttemptContextGuards(input: {
   );
   const toolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
-    cfg: attempt.config,
-    agentId: input.sessionAgentId,
   });
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
   let afterTurnCheckpoint: number | null = null;
@@ -152,6 +155,17 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
     activeSession.agent,
+    {
+      workspaceDir: input.effectiveWorkspace,
+      model: attempt.model,
+      maxBytes: MAX_IMAGE_BYTES,
+      maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
+      workspaceOnly: input.effectiveFsWorkspaceOnly,
+      sandbox:
+        input.sandbox?.enabled && input.sandbox.fsBridge
+          ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+          : undefined,
+    },
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {

@@ -12,6 +12,7 @@ type QaRuntimeGatewayClient = {
   getProcessRssBytes?: () => number | null;
   logs?: () => string;
   restart?: () => Promise<void>;
+  stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   restartAfterStateMutation?: (
     mutateState: (context: {
       configPath: string;
@@ -24,6 +25,7 @@ type QaRuntimeGatewayClient = {
     method: string,
     params?: unknown,
     options?: {
+      expectFinal?: boolean;
       timeoutMs?: number;
     },
   ) => Promise<unknown>;

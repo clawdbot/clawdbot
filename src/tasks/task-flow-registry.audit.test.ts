@@ -15,16 +15,16 @@ import {
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  configureTaskFlowRegistryRuntime,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 

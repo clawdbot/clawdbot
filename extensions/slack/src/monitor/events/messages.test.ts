@@ -7,6 +7,8 @@ import {
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
+const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
+
 const { messageQueueMock, messageAllowMock, inboundInfoSpy } = vi.hoisted(() => ({
   messageQueueMock: vi.fn(),
   messageAllowMock: vi.fn(),
@@ -85,6 +87,7 @@ function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemE
     handleSlackMessage,
   });
   return {
+    ctx: harness.ctx,
     handler: harness.getHandler(eventName) as MessageHandler | null,
     handleSlackMessage,
   };
@@ -241,6 +244,47 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 }
 
 describe("registerSlackMessageEvents", () => {
+  it("forwards durable ingress ownership and propagates dispatch failure", async () => {
+    const harness = createSlackSystemEventTestHarness();
+    const dispatchError = new Error("transient dispatch failure");
+    const handleSlackMessage = vi.fn(async () => {
+      throw dispatchError;
+    });
+    registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage });
+    const handler = requireMessageHandler(harness.getHandler("message") as MessageHandler | null);
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+
+    await expect(
+      handler({
+        event: {
+          type: "message",
+          channel: "D1",
+          channel_type: "im",
+          user: "U1",
+          text: "hello",
+          ts: "123.456",
+        },
+        body: {},
+        context: { [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: turnAdoptionLifecycle },
+      }),
+    ).rejects.toBe(dispatchError);
+
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "D1", ts: "123.456" }),
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        turnAdoptionLifecycle,
+      }),
+    );
+  });
+
   it("accepts two org workspaces and preserves each listener scope", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
     const clients = [{ id: "one" }, { id: "two" }];
@@ -672,6 +716,73 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
     // Dropped DM app_mention (already handled via message.im) must not log a receipt.
+    expect(inboundLogLines()).toEqual([]);
+  });
+
+  it.each(["C0MPDM42", "G0MPDM42"])(
+    "skips typeless app_mention events for metadata-resolved MPIM %s",
+    async (channel) => {
+      const { handleSlackMessage } = await invokeRegisteredHandler({
+        eventName: "app_mention",
+        overrides: { dmPolicy: "open", channelType: "mpim" },
+        event: { ...makeAppMentionEvent({ channel }), channel_type: undefined },
+      });
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      // Handled via message.mpim; must not log a duplicate receipt.
+      expect(inboundLogLines()).toEqual([]);
+    },
+  );
+
+  it("uses a remembered MPIM type without loading channel metadata", async () => {
+    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention", {
+      dmPolicy: "open",
+    });
+    const resolveChannelName = vi.fn(async () => ({ type: "channel" as const }));
+    ctx.recallSlackChannelType = () => "mpim";
+    ctx.resolveChannelName = resolveChannelName;
+
+    await requireMessageHandler(handler)({
+      event: { ...makeAppMentionEvent({ channel: "C0MPDM42" }), channel_type: undefined },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(resolveChannelName).not.toHaveBeenCalled();
+    expect(inboundLogLines()).toEqual([]);
+  });
+
+  it.each([
+    { channel: "C123", resolvedType: "channel" as const },
+    { channel: "G123", resolvedType: "group" as const },
+  ])("routes typeless app_mention after resolving $resolvedType metadata", async (testCase) => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open", channelType: testCase.resolvedType },
+      event: { ...makeAppMentionEvent({ channel: testCase.channel }), channel_type: undefined },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: testCase.channel }),
+      expect.objectContaining({ source: "app_mention", wasMentioned: true }),
+    );
+  });
+
+  it("drops typeless app_mention when metadata lookup fails", async () => {
+    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention", {
+      dmPolicy: "open",
+    });
+    ctx.resolveChannelName = vi.fn(async () => {
+      throw new Error("missing_scope");
+    });
+
+    await requireMessageHandler(handler)({
+      event: { ...makeAppMentionEvent({ channel: "C123" }), channel_type: undefined },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(inboundLogLines()).toEqual([]);
   });
 

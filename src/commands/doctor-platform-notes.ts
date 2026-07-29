@@ -12,6 +12,8 @@ import { resolveGatewayService, type GatewayService } from "../daemon/service.js
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 
+const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
+
 function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
@@ -104,7 +106,10 @@ export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
-    const result = await runExec("/bin/launchctl", ["getenv", name], { logOutput: false });
+    const result = await runExec("/bin/launchctl", ["getenv", name], {
+      logOutput: false,
+      timeoutMs: DOCTOR_LAUNCHCTL_TIMEOUT_MS,
+    });
     const value = normalizeOptionalString(result.stdout) ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
@@ -161,10 +166,10 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
     "- Host-wide launchctl gateway auth overrides detected.",
     "- Current managed Gateway installs do not need these values unless config intentionally references the env var.",
     envToken && envTokenKey
-      ? `- \`${envTokenKey}\` is set; it can make local clients use a different token than gateway.auth.token.`
+      ? `- \`${envTokenKey}\` is set; explicit environment URL or node-host targets can use a different token than gateway.auth.token.`
       : undefined,
     envPassword
-      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; it can make local clients use a different password than gateway.auth.password.`
+      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; explicit environment URL or node-host targets can use a different password than gateway.auth.password.`
       : undefined,
     "- Clear overrides and restart the app/gateway:",
     envTokenKey ? `  launchctl unsetenv ${envTokenKey}` : undefined,

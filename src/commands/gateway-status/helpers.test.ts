@@ -252,6 +252,32 @@ describe("probe reachability classification", () => {
     );
   });
 
+  it("uses structured missing-scope probe details before the display message", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "permission denied",
+      missingScopeErrorDetails: {
+        code: "MISSING_SCOPE" as const,
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+      close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable" as const,
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isScopeLimitedProbeFailure(probe)).toBe(true);
+  });
+
   it("treats post-connect read failures as reachable with failed diagnostics", () => {
     const probe = {
       ok: false,

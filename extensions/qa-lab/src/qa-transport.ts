@@ -22,6 +22,7 @@ export type QaTransportGatewayClient = {
     method: string,
     params?: unknown,
     options?: {
+      expectFinal?: boolean;
       timeoutMs?: number;
     },
   ) => Promise<unknown>;
@@ -183,7 +184,9 @@ function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
 
 type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
->;
+> & {
+  cleanupAfterGatewayStop?: () => Promise<void>;
+};
 
 export type QaTransportAdapter = Omit<
   QaTransportAdapterDefinition,
@@ -359,6 +362,9 @@ export function createQaStateBackedTransportAdapter(
       : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
+    ...(params.cleanupAfterGatewayStop
+      ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
+      : {}),
   });
   return adapter;
 }

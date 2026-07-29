@@ -4,12 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAuthHealthSummary } from "../../../agents/auth-health.js";
-import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.js";
+import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.test-support.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
-import {
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../../../agents/auth-profiles/paths.js";
 import {
   resolveAuthProfileDatabasePath,
   resolveAuthProfileDatabaseFilePaths,
@@ -17,7 +13,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../../../agents/provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "../../../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -25,10 +21,14 @@ import {
 } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import {
+  resolveLegacyAuthProfilesPath as resolveAuthStorePath,
+  resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
+} from "../../doctor-auth-legacy-paths.js";
+import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
-  repairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
+import { repairStaleConfiguredAuthOrders } from "./stale-auth-order.test-support.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {
@@ -494,6 +494,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -578,6 +579,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         JSON.stringify(tokenStore({ profileId: "anthropic:legacy", provider: "anthropic" })),
       );
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -599,6 +601,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         path.join(stateDir, "agents", "retained", "agent"),
       );
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -679,6 +682,34 @@ describe("repairStaleConfiguredAuthOrders", () => {
       }
     },
   );
+
+  it("uses OPENCLAW_AGENT_DIR as the inherited shared-main auth store", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-auth-order-"));
+    try {
+      const sharedMainAgentDir = path.join(stateDir, "relocated-main-agent");
+      writePersistedAuthProfileStoreRaw(
+        tokenStore({ profileId: "anthropic:relocated-main", provider: "anthropic" }),
+        sharedMainAgentDir,
+      );
+      const cfg = {
+        auth: { order: { anthropic: ["anthropic:missing"] } },
+      } satisfies OpenClawConfig;
+
+      const result = maybeRepairStaleConfiguredAuthOrders({
+        cfg,
+        env: {
+          OPENCLAW_AGENT_DIR: sharedMainAgentDir,
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+      });
+
+      expect(result.config.auth?.order?.anthropic).toBeUndefined();
+      expect(result.changes).toHaveLength(1);
+      expect(result.warnings).toBeUndefined();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 
   it("preserves an order that selects a runtime-only external profile", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-auth-order-"));
@@ -994,6 +1025,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -1145,6 +1177,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -1284,6 +1317,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(databasePath);
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 

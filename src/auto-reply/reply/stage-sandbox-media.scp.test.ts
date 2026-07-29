@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./stage-sandbox-media.js";
+import { testing } from "./stage-sandbox-media.test-support.js";
 
 const SCP_STDERR_TAIL_CHARS = 16_384;
 

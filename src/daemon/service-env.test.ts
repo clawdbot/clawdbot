@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
+import { inspectGatewayHeapLimit } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -722,6 +723,46 @@ describe("buildServiceEnvironment", () => {
     expect(env.PATH).toBe(
       "/opt/homebrew/Cellar/node/22.19.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
+  });
+});
+
+describe("buildServiceEnvironment NODE_OPTIONS", () => {
+  it("sets the adaptive default heap flag", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe(
+      `--max-old-space-size=${inspectGatewayHeapLimit(undefined).maxOldSpaceSizeMiB}`,
+    );
+  });
+
+  it("drops ambient NODE_OPTIONS", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).not.toContain("--require");
+    expect(env.NODE_OPTIONS).not.toContain("16384");
+  });
+
+  it("keeps an explicit heap flag from the existing service only", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      existingNodeOptions: "--require /tmp/preload.js --max_old_space_size=6144",
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
+  });
+
+  it("does not apply the Gateway heap policy to node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.NODE_OPTIONS).toBeUndefined();
   });
 });
 

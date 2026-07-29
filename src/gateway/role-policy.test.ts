@@ -25,6 +25,7 @@ describe("gateway role policy", () => {
   test("authorizes roles against node vs operator methods", () => {
     expect(isRoleAuthorizedForMethod("node", "node.event")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "node.pluginSurface.refresh")).toBe(true);
+    expect(isRoleAuthorizedForMethod("node", "plugin.surface.refresh")).toBe(false);
     expect(isRoleAuthorizedForMethod("node", "node.pluginTools.update")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "node.skills.update")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "node.pending.drain")).toBe(true);
@@ -32,6 +33,7 @@ describe("gateway role policy", () => {
     expect(isRoleAuthorizedForMethod("node", "status")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "status")).toBe(true);
     expect(isRoleAuthorizedForMethod("operator", "system-event")).toBe(true);
+    expect(isRoleAuthorizedForMethod("operator", "plugin.surface.refresh")).toBe(true);
     expect(isRoleAuthorizedForMethod("operator", "node.pluginSurface.refresh")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.pluginTools.update")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.skills.update")).toBe(false);

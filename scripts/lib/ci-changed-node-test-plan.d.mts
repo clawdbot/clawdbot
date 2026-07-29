@@ -1,6 +1,7 @@
 export type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  planConcurrency?: number;
   requiresDist: boolean;
   runner: string;
   shardName: string;
@@ -13,5 +14,10 @@ export function createChangedNodeTestShards(
 ): ChangedNodeTestShard[] | null;
 
 export function hasBuildArtifactAffectingChange(changedPaths: string[]): boolean;
+
+export function hasPromptSnapshotAffectingChange(
+  changedPaths: string[],
+  options?: { cwd?: string },
+): boolean;
 
 export function hasQaSmokeAffectingChange(changedPaths: string[]): boolean;

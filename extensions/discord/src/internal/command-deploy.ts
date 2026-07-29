@@ -1,9 +1,7 @@
 // Discord plugin module implements command deploy behavior.
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -25,35 +23,16 @@ type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 
 const DISCORD_APPLICATION_COMMAND_LIMIT_REACHED = 30032;
 
-/**
- * Per-`command-deploy-cache.json` path async mutex. `server-channels.ts` can
- * start several Discord deployers concurrently in the same Node.js process;
- * each one shares the same on-disk cache file. Without this lock, two
- * deployers can run `persistHashes` in parallel, both read the same on-disk
- * snapshot before either writes, and the later `rename` then overwrites the
- * earlier writer's entries — defeating the rate-limit cache.
- *
- * This is an in-process lock; cross-process serialization would need an OS
- * file lock. Discord deployers only run inside the gateway process, so an
- * in-process mutex is sufficient for the documented concurrency surface.
- */
-const cachePersistLocks = new KeyedAsyncQueue();
-
-async function withCachePersistLock<T>(storePath: string, fn: () => Promise<T>): Promise<T> {
-  return await cachePersistLocks.enqueue(storePath, fn);
-}
-
 export class DiscordCommandDeployer {
   private readonly hashes = new Map<string, string>();
-  private readonly pendingHashes = new Map<string, string>();
-  private hashesLoaded = false;
+  private readonly loadedKeys = new Set<string>();
 
   constructor(
     private readonly params: {
       clientId: string;
       commands: BaseCommand[];
       devGuilds?: string[];
-      hashStorePath?: string;
+      hashStore?: DiscordCommandDeployHashStore;
       rest: () => RequestClient;
     },
   ) {}
@@ -124,7 +103,7 @@ export class DiscordCommandDeployer {
 
   /**
    * Scope cache keys by Discord application id so multi-bot setups that share a
-   * single deploy-cache file still reconcile each application separately. The
+   * single command-deploy store still reconcile each application separately. The
    * prior unscoped `global:reconcile` / `guild:<id>` keys let a later account
    * with an identical command set reuse the first account's hash and skip its
    * own application's reconcile entirely (#77359).
@@ -177,105 +156,31 @@ export class DiscordCommandDeployer {
     options: { force?: boolean },
   ): Promise<void> {
     const hash = stableCommandSetHash(commands);
-    await this.loadPersistedHashes();
+    await this.loadPersistedHash(key);
     if (!options.force && this.hashes.get(key) === hash) {
       return;
     }
     await deploy();
     this.hashes.set(key, hash);
-    this.pendingHashes.set(key, hash);
-    await this.persistHashes();
+    try {
+      await this.params.hashStore?.register(key, hash);
+    } catch {
+      // Cache persistence must not turn a successful Discord deploy into a startup failure.
+    }
   }
 
-  private async loadPersistedHashes(): Promise<void> {
-    if (this.hashesLoaded) {
+  private async loadPersistedHash(key: string): Promise<void> {
+    if (this.loadedKeys.has(key)) {
       return;
     }
-    this.hashesLoaded = true;
-    const storePath = this.params.hashStorePath;
-    if (!storePath) {
-      return;
-    }
+    this.loadedKeys.add(key);
     try {
-      const parsed = await privateFileStore(path.dirname(storePath)).readJsonIfExists<{
-        hashes?: unknown;
-      }>(path.basename(storePath));
-      if (!parsed?.hashes || typeof parsed.hashes !== "object") {
-        return;
-      }
-      for (const [key, value] of Object.entries(parsed.hashes)) {
-        if (typeof value === "string" && key.trim() && value.trim()) {
-          this.hashes.set(key, value);
-        }
+      const hash = await this.params.hashStore?.lookup(key);
+      if (typeof hash === "string" && hash.trim()) {
+        this.hashes.set(key, hash);
       }
     } catch {
-      // Best-effort cache only. A corrupt or missing file should never block startup.
-    }
-  }
-
-  private async persistHashes(): Promise<void> {
-    const storePath = this.params.hashStorePath;
-    if (!storePath) {
-      return;
-    }
-    // Serialize concurrent persists for the same on-disk path. The earlier
-    // "re-read inside persistHashes" merge alone is not enough — two
-    // deployers running `persistHashes` in true parallel would both read the
-    // same snapshot before either writes, and the later `rename` would still
-    // overwrite the earlier one's `app:<id>:...` entries. The mutex makes the
-    // read-merge-write cycle atomic for in-process callers.
-    await withCachePersistLock(storePath, async () => {
-      await this.persistHashesLocked(storePath);
-    });
-  }
-
-  private async persistHashesLocked(storePath: string): Promise<void> {
-    try {
-      // Re-read the on-disk hashes immediately before writing and merge only
-      // keys this deployer changed. Previously loaded hashes can be stale when
-      // sibling deployers update the same file, so on-disk wins for untouched
-      // keys while pending keys win because this deployer just produced them.
-      const storeFile = path.basename(storePath);
-      const fileStore = privateFileStore(path.dirname(storePath));
-      const merged = new Map<string, string>();
-      let onDisk: { hashes?: unknown } | null = null;
-      try {
-        onDisk = await fileStore.readJsonIfExists<{
-          hashes?: unknown;
-        }>(storeFile);
-      } catch {
-        // A corrupt cache should not become permanent. Treat the re-read as
-        // empty and replace it with the fresh pending hashes after deploy.
-      }
-      if (onDisk?.hashes && typeof onDisk.hashes === "object") {
-        for (const [key, value] of Object.entries(onDisk.hashes)) {
-          if (typeof value === "string" && key.trim() && value.trim()) {
-            merged.set(key, value);
-          }
-        }
-      }
-      for (const [key, value] of this.pendingHashes.entries()) {
-        merged.set(key, value);
-      }
-      await fileStore.writeJson(
-        storeFile,
-        {
-          version: 1,
-          updatedAt: new Date().toISOString(),
-          hashes: Object.fromEntries(
-            [...merged.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-          ),
-        },
-        { trailingNewline: true },
-      );
-      // Refresh in-memory state so future writes from the same deployer also
-      // see entries that other deployers added concurrently.
-      for (const [key, value] of merged.entries()) {
-        this.hashes.set(key, value);
-      }
-      this.pendingHashes.clear();
-    } catch {
-      // The cache is only an optimization to avoid redundant Discord writes.
+      // Cache lookup failure is a miss. Reconcile repairs the canonical row after success.
     }
   }
 

@@ -1,4 +1,10 @@
 import type {
+  QaLabExecutionKind,
+  QaLabResolvedRunPlan,
+  QaLabRunnerSnapshot,
+  QaLabRunSelection,
+} from "../../runner-contract.js";
+import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
   QaEvidenceGalleryModel,
@@ -10,6 +16,7 @@ import type {
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
 export type Conversation = {
+  accountId: string;
   id: string;
   kind: "direct" | "channel";
   title?: string;
@@ -31,15 +38,17 @@ export type Attachment = {
 };
 
 export type Thread = {
+  accountId: string;
   id: string;
   conversationId: string;
   title: string;
 };
 
 export type Message = {
+  accountId: string;
   id: string;
   direction: "inbound" | "outbound";
-  conversation: Conversation;
+  conversation: Omit<Conversation, "accountId">;
   senderId: string;
   senderName?: string;
   text: string;
@@ -52,7 +61,7 @@ export type Message = {
   reactions: Array<{ emoji: string; senderId: string }>;
 };
 
-export type BusEvent =
+type BusEvent =
   | { cursor: number; kind: "thread-created"; thread: Thread }
   | { cursor: number; kind: string; message?: Message; emoji?: string };
 
@@ -79,6 +88,11 @@ export type SeedScenario = {
   successCriteria: string[];
   docsRefs?: string[];
   codeRefs?: string[];
+  execution?: {
+    kind?: QaLabExecutionKind;
+    channel?: string;
+  };
+  runtimePairLane?: "core" | "extended" | "soak";
 };
 
 export type Bootstrap = {
@@ -98,10 +112,17 @@ export type Bootstrap = {
   runnerCatalog: {
     status: "loading" | "ready" | "failed";
     real: RunnerModelOption[];
+    channels: string[];
+    profiles: Array<{
+      id: string;
+      evidenceMode: "full" | "slim";
+      channelDriver: "qa-channel" | "crabline" | "live";
+      categoryIds: string[];
+    }>;
   };
 };
 
-export type ScenarioStep = {
+type ScenarioStep = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
@@ -117,7 +138,7 @@ export type ScenarioOutcome = {
   finishedAt?: string;
 };
 
-export type ScenarioRun = {
+type ScenarioRun = {
   kind: "suite" | "self-check";
   status: "idle" | "running" | "completed";
   startedAt?: string;
@@ -133,28 +154,9 @@ export type ScenarioRun = {
   };
 };
 
-export type RunnerSelection = {
-  providerMode: "mock-openai" | "live-frontier";
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  scenarioIds: string[];
-};
-
-export type RunnerSnapshot = {
-  status: "idle" | "running" | "completed" | "failed";
-  selection: RunnerSelection;
-  startedAt?: string;
-  finishedAt?: string;
-  artifacts: null | {
-    evidencePath: string;
-    outputDir: string;
-    reportPath: string;
-    summaryPath: string;
-    watchUrl: string;
-  };
-  error: string | null;
-};
+export type RunnerSelection = QaLabRunSelection;
+export type RunnerResolvedPlan = QaLabResolvedRunPlan;
+type RunnerSnapshot = QaLabRunnerSnapshot;
 
 export type RunnerModelOption = {
   key: string;
@@ -168,7 +170,7 @@ export type OutcomesEnvelope = {
   run: ScenarioRun | null;
 };
 
-export type CaptureSessionSummary = {
+type CaptureSessionSummary = {
   id: string;
   startedAt: number;
   endedAt?: number;
@@ -223,12 +225,12 @@ export type CaptureQueryEnvelope = {
   rows: Array<Record<string, string | number | null>>;
 };
 
-export type CaptureObservedDimension = {
+type CaptureObservedDimension = {
   value: string;
   count: number;
 };
 
-export type CaptureCoverageSummary = {
+type CaptureCoverageSummary = {
   sessionId: string;
   totalEvents: number;
   unlabeledEventCount: number;
@@ -260,13 +262,13 @@ export type CaptureStartupStatusEnvelope = {
   status: CaptureStartupStatus;
 };
 
-export type EvidenceStatus = QaEvidenceGalleryEntryView["status"];
+type EvidenceStatus = QaEvidenceGalleryEntryView["status"];
 export type EvidenceArtifactView = QaEvidenceArtifactView;
 export type EvidenceEntryView = QaEvidenceGalleryEntryView;
 export type EvidenceProducerContextFile = QaEvidenceProducerContextFile;
 export type EvidenceMatrixCell = QaEvidenceMatrixCellView;
 export type EvidenceProducerContext = QaEvidenceProducerContext;
-export type EvidenceGalleryModel = QaEvidenceGalleryModel;
+type EvidenceGalleryModel = QaEvidenceGalleryModel;
 
 export type EvidenceEnvelope = {
   evidence: EvidenceGalleryModel | null;
@@ -361,12 +363,13 @@ export type UiState = {
   selectedCaptureSessionIds: string[];
   selectedCaptureEventKey: string | null;
   selectedEvidenceEntryId: string | null;
-  selectedConversationId: string | null;
+  selectedConversationKey: string | null;
   selectedThreadId: string | null;
   selectedScenarioId: string | null;
   activeTab: TabId;
   runnerDraft: RunnerSelection | null;
   runnerDraftDirty: boolean;
+  runnerPlanOverride: RunnerResolvedPlan | null;
   composer: {
     conversationKind: "direct" | "channel";
     conversationId: string;

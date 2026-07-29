@@ -1,5 +1,6 @@
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  type AgentPlanStep,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   resolveChannelProgressDraftConfig,
@@ -12,6 +13,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements message handlerraft preview behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   convertMarkdownTables,
   stripInlineDirectiveTagsForDelivery,
@@ -44,6 +46,13 @@ export function createDiscordDraftPreviewController(params: {
   log: (message: string) => void;
 }) {
   const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
+  // can rewrite or cancel so the original payload cannot flash before durable delivery.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   const draftMaxChars = Math.min(params.textLimit, 2000);
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
@@ -51,6 +60,7 @@ export function createDiscordDraftPreviewController(params: {
   const canStreamProgressDraftForToolOnlySource =
     params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
+    allowProviderPreview &&
     (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
@@ -213,6 +223,9 @@ export function createDiscordDraftPreviewController(params: {
       options?: { toolName?: string },
     ) {
       await progressDraft.pushToolProgress(line, options);
+    },
+    async pushPlanProgress(steps?: AgentPlanStep[], options?: { explanation?: string }) {
+      await progressDraft.pushPlanProgress(steps, options);
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       await progressDraft.pushReasoningProgress(text, options);

@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.reconnect
+      - matrix.conversation-routing-and-delivery
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 60000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         autoJoin: always
         groupPolicy: open

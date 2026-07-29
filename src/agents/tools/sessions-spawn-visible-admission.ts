@@ -1,7 +1,7 @@
 /** Process-local admission for visible child starts awaiting registry insertion. */
 const pendingVisibleChildren = new Map<string, number>();
 
-export type VisibleChildReservation =
+type VisibleChildReservation =
   | { ok: false; activeChildren: number }
   | { ok: true; release: () => void };
 

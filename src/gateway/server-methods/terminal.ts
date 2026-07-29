@@ -9,7 +9,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type TerminalOpenParams,
   type TerminalUploadResult,
   validateTerminalAttachParams,
@@ -20,7 +19,6 @@ import {
   validateTerminalTextParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { toErrorObject } from "../../infra/errors.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
@@ -28,6 +26,11 @@ import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { renderTerminalBufferText } from "../terminal/buffer-text.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
+import {
+  createTerminalOpenDeadline,
+  TerminalOpenDeadlineError,
+  waitForTerminalOpenDeadline,
+} from "../terminal/open-deadline.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeCatalogTerminalNode,
@@ -36,6 +39,7 @@ import {
 } from "./terminal-open-plan.js";
 import { terminalUploadHandlers } from "./terminal-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
@@ -54,86 +58,7 @@ function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): bool
   return context.isTerminalEnabled();
 }
 
-export const TERMINAL_OPEN_DEADLINE_MS = 30_000;
-
-class TerminalOpenDeadlineError extends Error {
-  constructor() {
-    super("terminal open timed out");
-    this.name = "TerminalOpenDeadlineError";
-  }
-}
-
-type TerminalOpenDeadline = {
-  expiresAtMs: number;
-  controller: AbortController;
-};
-
-function createTerminalOpenDeadline(): TerminalOpenDeadline {
-  return {
-    expiresAtMs: Date.now() + TERMINAL_OPEN_DEADLINE_MS,
-    controller: new AbortController(),
-  };
-}
-
-function expireTerminalOpenDeadline(deadline: TerminalOpenDeadline): Error {
-  if (!deadline.controller.signal.aborted) {
-    deadline.controller.abort(new TerminalOpenDeadlineError());
-  }
-  return toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
-}
-
-async function waitForTerminalOpenDeadline<T>(
-  run: () => Promise<T>,
-  deadline: TerminalOpenDeadline,
-): Promise<T> {
-  if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-    throw expireTerminalOpenDeadline(deadline);
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(expireTerminalOpenDeadline(deadline));
-    };
-    const timer = setTimeout(
-      () => expireTerminalOpenDeadline(deadline),
-      Math.max(0, deadline.expiresAtMs - Date.now()),
-    );
-    deadline.controller.signal.addEventListener("abort", onAbort, { once: true });
-    let promise: Promise<T>;
-    try {
-      promise = run();
-    } catch (error) {
-      if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-        expireTerminalOpenDeadline(deadline);
-        return;
-      }
-      clearTimeout(timer);
-      deadline.controller.signal.removeEventListener("abort", onAbort);
-      reject(toErrorObject(error, "Terminal open failed"));
-      return;
-    }
-    void promise.then(
-      (value) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "Terminal open failed"));
-      },
-    );
-  });
-}
+export { TERMINAL_OPEN_DEADLINE_MS } from "../terminal/open-deadline.js";
 
 function respondTerminalOpenTimeout(respond: GatewayRequestHandlerOptions["respond"]): void {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal open timed out"));
@@ -162,6 +87,9 @@ async function stageNodeTerminalUpload(
   const result = await context.nodeRegistry.invoke({
     nodeId,
     expectedConnId: access.node.connId,
+    ...(access.node.pairingGeneration
+      ? { expectedPairingGeneration: access.node.pairingGeneration }
+      : {}),
     command: NODE_TERMINAL_UPLOAD_COMMAND,
     params: file,
     timeoutMs: 120_000,
@@ -208,11 +136,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
   ...terminalUploadHandlers,
   "terminal.open": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalOpenParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.open params: ${formatValidationErrors(validateTerminalOpenParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalOpenParams, "terminal.open", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -365,6 +289,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           registry: context.nodeRegistry,
           nodeId: relay.plan.nodeId,
           expectedConnId: access.node.connId,
+          expectedPairingGeneration: access.node.pairingGeneration,
           command: relay.plan.command,
           params: relay.params,
         });
@@ -381,7 +306,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
     try {
       outcome = await waitForTerminalOpenDeadline(() => {
         openingTerminal = manager.open({
-          connId,
+          owner: { kind: "conn", connId },
           agentId: spawnPlan.agentId,
           cwd: spawnPlan.cwd,
           shell: spawnPlan.shell,
@@ -441,11 +366,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.input": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalInputParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.input params: ${formatValidationErrors(validateTerminalInputParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalInputParams, "terminal.input", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -467,11 +388,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.resize": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalResizeParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.resize params: ${formatValidationErrors(validateTerminalResizeParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalResizeParams, "terminal.resize", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -490,11 +407,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.close": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalCloseParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.close params: ${formatValidationErrors(validateTerminalCloseParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalCloseParams, "terminal.close", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -508,11 +421,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.attach": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalAttachParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.attach params: ${formatValidationErrors(validateTerminalAttachParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalAttachParams, "terminal.attach", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -571,6 +480,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
             // Mirrors terminal.open: only unconfined host shells exist today.
             confined: false,
             attached: session.attached,
+            owner: session.owner,
             createdAtMs: session.createdAtMs,
           }))
         : [];
@@ -579,11 +489,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.text": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalTextParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.text params: ${formatValidationErrors(validateTerminalTextParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalTextParams, "terminal.text", respond)) {
       return;
     }
     const connId = requireConnId(opts);

@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.media-rich-content
+      - matrix.media-and-rich-content
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 90000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

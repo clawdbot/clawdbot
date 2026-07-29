@@ -133,6 +133,7 @@ export function startMatrixQaOpenClawCli(params: {
   let timedOut = false;
   let forceKillTimeout: NodeJS.Timeout | undefined;
   let forceSettleTimeout: NodeJS.Timeout | undefined;
+  let streamFailure: Error | undefined;
   let settleWait:
     | {
         reject: (error: Error) => void;
@@ -191,6 +192,10 @@ export function startMatrixQaOpenClawCli(params: {
       finishTimeout(result);
       return;
     }
+    if (streamFailure) {
+      finish(result, streamFailure);
+      return;
+    }
     finishResult(result);
   };
   const scheduleForcedCleanup = () => {
@@ -218,13 +223,34 @@ export function startMatrixQaOpenClawCli(params: {
     killMatrixQaCliChild(child, "SIGTERM");
     scheduleForcedCleanup();
   }, params.timeoutMs);
+  const handleStreamError = (stream: "stderr" | "stdout", error: Error) => {
+    if (closed || timedOut || killRequested) {
+      return;
+    }
+    clearTimeout(timeout);
+    killRequested = true;
+    streamFailure = new Error(`${stream} stream error: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+    // Keep stream failures on the normal kill path so detached descendants are gone
+    // before the session reports the parent-side pipe failure.
+    killMatrixQaCliChild(child, "SIGTERM");
+    scheduleForcedCleanup();
+  };
 
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+  child.stdout.on("error", (error) => handleStreamError("stdout", error));
   child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  child.stderr.on("error", (error) => handleStreamError("stderr", error));
   if (params.stdin !== undefined) {
     child.stdin.end(params.stdin);
   }
   child.on("error", (error) => {
+    if (streamFailure) {
+      // Forced cleanup owns settlement after a stream failure. Finishing here could
+      // reject before detached descendants are proven gone.
+      return;
+    }
     clearTimeout(timeout);
     clearForcedTimeouts();
     finish(
@@ -410,7 +436,7 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_DISABLE_AUTO_UPDATE: "1",
+    OPENCLAW_NO_AUTO_UPDATE: "1",
     OPENCLAW_STATE_DIR: stateDir,
   };
   return {

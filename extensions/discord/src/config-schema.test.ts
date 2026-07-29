@@ -39,19 +39,48 @@ describe("discord config schema", () => {
     expect(issues[0]?.path.join(".")).toBe("allowFrom");
   });
 
-  it('rejects legacy dm.policy="open" with empty dm.allowFrom', () => {
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    const issues = expectInvalidDiscordConfig({ dmPolicy: "allowlist" });
+    expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectValidDiscordConfig({
+      allowFrom: ["123456789"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+  });
+
+  it("accepts progress commentary in streaming config", () => {
+    expectValidDiscordConfig({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+    });
+  });
+
+  it("rejects retired subagent progress config", () => {
+    expectInvalidDiscordConfig({ subagentProgress: true });
+    expectInvalidDiscordConfig({ subagentProgress: { enabled: true } });
+  });
+
+  it("validates mention aliases at channel and account scope", () => {
+    expectValidDiscordConfig({
+      mentionAliases: { opslead: "123456789012345678" },
+      accounts: {
+        work: { mentionAliases: { vladislava: "234567890123456789" } },
+      },
+    });
+    expectInvalidDiscordConfig({ mentionAliases: { opslead: "not-a-user-id" } });
+  });
+
+  it("rejects legacy nested DM access keys", () => {
     const issues = expectInvalidDiscordConfig({
       dm: { policy: "open", allowFrom: [] },
     });
 
-    expect(issues[0]?.path.join(".")).toBe("dm.allowFrom");
-  });
-
-  it('accepts legacy dm.policy="open" with top-level allowFrom alias', () => {
-    expectValidDiscordConfig({
-      dm: { policy: "open", allowFrom: ["123"] },
-      allowFrom: ["*"],
-    });
+    expect(issues[0]?.path.join(".")).toBe("dm");
   });
 
   it("accepts textChunkLimit without reviving legacy message limits", () => {
@@ -130,9 +159,9 @@ describe("discord config schema", () => {
   it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,
+      allowFrom: ["steipete"],
       dm: {
         enabled: true,
-        allowFrom: ["steipete"],
         groupEnabled: true,
         groupChannels: ["openclaw-dm"],
       },
@@ -309,7 +338,7 @@ describe("discord config schema", () => {
   it("coerces safe-integer numeric allowlist entries to strings", () => {
     const cfg = expectValidDiscordConfig({
       allowFrom: [123],
-      dm: { allowFrom: [456], groupChannels: [789] },
+      dm: { groupChannels: [789] },
       guilds: {
         "123": {
           users: [111],
@@ -323,7 +352,6 @@ describe("discord config schema", () => {
     });
 
     expect(cfg.allowFrom).toEqual(["123"]);
-    expect(cfg.dm?.allowFrom).toEqual(["456"]);
     expect(cfg.dm?.groupChannels).toEqual(["789"]);
     expect(cfg.guilds?.["123"]?.users).toEqual(["111"]);
     expect(cfg.guilds?.["123"]?.roles).toEqual(["222"]);
@@ -369,7 +397,6 @@ describe("discord config schema", () => {
           enabled: true,
           intervalMs: 30000,
           minUpdateIntervalMs: 15000,
-          exhaustedText: "token exhausted",
         },
       },
     },

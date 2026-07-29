@@ -130,6 +130,96 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
+  it("keeps expired OAuth when it is the sole profile for a provider", () => {
+    const resolved = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:sole-expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "fake",
+          refresh: "sample",
+          expires: Date.now() - 3600_000,
+        },
+      },
+    });
+
+    expect(resolved.openai).toEqual({
+      type: "oauth",
+      access: "fake",
+      refresh: "sample",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("uses canonical mode and expiry ordering instead of profile insertion order", () => {
+    const resolved = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:key": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-key",
+        },
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "dummy",
+          refresh: "placeholder",
+          expires: Date.now() - 3600_000,
+        },
+        "openai:valid": {
+          type: "oauth",
+          provider: "openai",
+          access: "fake",
+          refresh: "sample",
+          expires: Date.now() + 3600_000,
+        },
+      },
+    });
+
+    expect(resolved.openai).toEqual({
+      type: "oauth",
+      access: "fake",
+      refresh: "sample",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("passes configured auth order through discovery selection", async () => {
+    await withAgentDir(async (agentDir) => {
+      writeAuthProfilesSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            access: "fake",
+            refresh: "sample",
+            expires: Date.now() + 3600_000,
+          },
+          "openai:key": {
+            type: "api_key",
+            provider: "openai",
+            key: "test-key",
+          },
+        },
+      });
+      const authStorage = discoverAuthStorage(agentDir, {
+        skipExternalAuthProfiles: true,
+        env: {},
+        config: {
+          auth: { order: { openai: ["openai:key", "openai:oauth"] } },
+        },
+      });
+
+      expect(authStorage.get("openai")).toEqual({
+        type: "api_key",
+        key: "test-key",
+      });
+    });
+  });
+
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
@@ -209,6 +299,53 @@ describe("discoverAuthStorage", () => {
 
       expect(readOnlyStorage.hasAuth("fixture-ref-provider")).toBe(true);
       expect(runtimeStorage.hasAuth("fixture-ref-provider")).toBe(false);
+    });
+  });
+
+  it("uses the lifecycle owner's explicit inherited auth directory", async () => {
+    await withAgentDir(async (inheritedAuthDir) => {
+      await withAgentDir(async (agentDir) => {
+        writeAuthProfilesSqlite(inheritedAuthDir, {
+          version: 1,
+          profiles: {
+            "inherited-provider:default": {
+              type: "api_key",
+              provider: "inherited-provider",
+              key: "inherited-key",
+            },
+            "shared-provider:inherited": {
+              type: "api_key",
+              provider: "shared-provider",
+              key: "inherited-shared-key",
+            },
+          },
+        });
+        writeAuthProfilesSqlite(agentDir, {
+          version: 1,
+          profiles: {
+            "shared-provider:local": {
+              type: "api_key",
+              provider: "shared-provider",
+              key: "local-shared-key",
+            },
+          },
+        });
+
+        const storage = discoverAuthStorage(agentDir, {
+          inheritedAuthDir,
+          skipExternalAuthProfiles: true,
+          env: {},
+        });
+
+        expect(storage.get("inherited-provider")).toEqual({
+          type: "api_key",
+          key: "inherited-key",
+        });
+        expect(storage.get("shared-provider")).toEqual({
+          type: "api_key",
+          key: "local-shared-key",
+        });
+      });
     });
   });
 

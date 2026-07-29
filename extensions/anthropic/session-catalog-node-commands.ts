@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   decodeNodePtyResumeParams,
-  resolveExecutableFromPathEnv,
   runNodePtyCommand,
   validateClaudeSessionId,
 } from "openclaw/plugin-sdk/node-host";
@@ -11,6 +10,8 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
+import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
@@ -63,9 +64,12 @@ async function requireLocalResumableClaudeSession(
       }
       break;
     }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor || seenCursors.has(nextCursor)) {
+    const nextCursor = page.nextCursor;
+    if (nextCursor === undefined || seenCursors.has(nextCursor)) {
       break;
+    }
+    if (!isExactClaudeSessionCursor(nextCursor)) {
+      throw new Error("Claude session catalog returned an invalid cursor");
     }
     seenCursors.add(nextCursor);
     cursor = nextCursor;
@@ -97,29 +101,14 @@ export function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCom
       dangerous: false,
       duplex: true,
       isAvailable: ({ env }) =>
-        claudeProjectsAvailable(env) &&
-        Boolean(
-          resolveExecutableFromPathEnv("claude", env.PATH ?? "", env, {
-            fallbackToLoginShell: true,
-            preferLoginShell: true,
-          }),
-        ),
+        claudeProjectsAvailable(env) && Boolean(resolveClaudeTerminalExecutable(env)),
       handle: async (paramsJSON, io) => {
         if (!io) {
           throw new Error("Claude terminal command requires duplex transport");
         }
         const params = decodeNodePtyResumeParams(paramsJSON, validateClaudeSessionId);
         const record = await requireLocalResumableClaudeSession(params.threadId);
-        const resolution = resolveExecutableFromPathEnv(
-          "claude",
-          process.env.PATH ?? "",
-          process.env,
-          {
-            fallbackToLoginShell: true,
-            preferLoginShell: true,
-            withPathEnv: true,
-          },
-        );
+        const resolution = resolveClaudeTerminalExecutable();
         if (!resolution) {
           throw new Error("Claude CLI is unavailable");
         }

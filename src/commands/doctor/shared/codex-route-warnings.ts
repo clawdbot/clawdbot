@@ -17,22 +17,23 @@ import {
   rewriteConfigModelRefs,
 } from "./codex-route-config-repair.js";
 import {
-  codexPluginIsBlockedOutsideEntry,
+  codexPluginRepairIsBlocked,
   collectConfigModelRefs,
   collectDisabledCodexPluginRouteHits,
   collectDisabledCodexPluginRouteIssues,
   enableCodexPluginForRequiredRoutes,
 } from "./codex-route-config-scan.js";
-import {
-  maybeRepairCodexSessionRoutes,
-  repairCodexSessionStoreRoutes,
-} from "./codex-route-session-repair.js";
+import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import type {
   CodexRouteHit,
   DisabledCodexPluginRouteHit,
   LegacyLosslessCompactionConfig,
   UnsupportedCodexCompactionOverride,
 } from "./codex-route-types.js";
+import {
+  collectBlockedLegacyOpenAICodexProviderPlan,
+  type BlockedLegacyOpenAICodexProviderPlan,
+} from "./legacy-config-migrations.runtime.models.js";
 
 function formatCodexRouteChange(hit: CodexRouteHit): string {
   return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}.`;
@@ -81,10 +82,10 @@ function formatLegacyLosslessCompactionWarning(params: {
 
 function formatDisabledCodexPluginWarning(params: {
   hits: DisabledCodexPluginRouteHit[];
-  blockedOutsideEntry: boolean;
+  repairBlocked: boolean;
 }): string {
-  const fixHint = params.blockedOutsideEntry
-    ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to an OpenClaw runtime policy."
+  const fixHint = params.repairBlocked
+    ? "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy."
     : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.";
   return [
     "- Codex runtime is selected, but the Codex plugin is disabled.",
@@ -166,12 +167,17 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): string[] {
   const env = params.env ?? process.env;
-  const hits = collectConfigModelRefs(params.cfg);
+  const blockedProviderPlan =
+    params.blockedProviderPlan ?? collectBlockedLegacyOpenAICodexProviderPlan(params.cfg);
+  const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
+  const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
   const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins({
     cfg: params.cfg,
+    blockedModelIdentities,
     env,
   });
   const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
@@ -201,13 +207,14 @@ export function collectCodexRouteWarnings(params: {
       env,
     });
   const warnings = [
+    ...(blockedProviderPlan.warning ? [blockedProviderPlan.warning] : []),
     ...collectCodexAppServerCommandWarnings(params.cfg),
     ...collectCodexComputerUseWarnings(params.cfg),
   ];
   if (hits.length > 0) {
     warnings.push(
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Legacy `codex/*` and `openai-codex/*` model refs should be rewritten to `openai/*`.",
         ...hits.map(
           (hit) =>
             `- ${hit.path}: ${hit.model} should become ${hit.canonicalModel}${
@@ -238,7 +245,7 @@ export function collectCodexRouteWarnings(params: {
     warnings.push(
       formatDisabledCodexPluginWarning({
         hits: disabledCodexPluginHits,
-        blockedOutsideEntry: codexPluginIsBlockedOutsideEntry(params.cfg),
+        repairBlocked: codexPluginRepairIsBlocked(params.cfg),
       }),
     );
   }
@@ -279,12 +286,17 @@ export function maybeRepairCodexRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
+  blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;
-  const hits = collectConfigModelRefs(params.cfg);
+  const blockedProviderPlan =
+    params.blockedProviderPlan ?? collectBlockedLegacyOpenAICodexProviderPlan(params.cfg);
+  const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
+  const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
   const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins({
     cfg: params.cfg,
+    blockedModelIdentities,
     env,
   });
   const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
@@ -301,23 +313,36 @@ export function maybeRepairCodexRoutes(params: {
     hits.length === 0 &&
     disabledCodexPluginHits.length === 0 &&
     unsupportedCompactionOverrides.length === 0 &&
-    legacyLosslessCompactionConfigs.length === 0
+    legacyLosslessCompactionConfigs.length === 0 &&
+    !blockedProviderPlan.warning
   ) {
     return { cfg: params.cfg, warnings: [], changes: [] };
   }
   if (!params.shouldRepair) {
     return {
       cfg: params.cfg,
-      warnings: collectCodexRouteWarnings({ cfg: params.cfg, env }),
+      warnings: collectCodexRouteWarnings({
+        cfg: params.cfg,
+        env,
+        blockedProviderPlan,
+      }),
       changes: [],
     };
   }
-  const repaired = rewriteConfigModelRefs({ cfg: params.cfg, env });
+  const repaired = rewriteConfigModelRefs({
+    cfg: params.cfg,
+    env,
+    blockedModelIdentities,
+  });
   const codexPluginRepair = enableCodexPluginForRequiredRoutes({
     cfg: repaired.cfg,
     routeHits: collectDisabledCodexPluginRouteHits(repaired.cfg, env),
   });
-  const warnings = collectCodexRouteWarnings({ cfg: codexPluginRepair.cfg, env });
+  const warnings = collectCodexRouteWarnings({
+    cfg: codexPluginRepair.cfg,
+    env,
+    blockedProviderPlan,
+  });
   const routeChanges =
     repaired.changes.length > 0
       ? [
@@ -339,8 +364,4 @@ export function maybeRepairCodexRoutes(params: {
   };
 }
 
-export {
-  collectDisabledCodexPluginRouteIssues,
-  maybeRepairCodexSessionRoutes,
-  repairCodexSessionStoreRoutes,
-};
+export { collectDisabledCodexPluginRouteIssues, maybeRepairCodexSessionRoutes };

@@ -114,7 +114,7 @@ export class OpenClawChannelBridge {
       { GatewayClient: GatewayClientCtor },
       { startGatewayClientWhenEventLoopReady },
       { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
-      { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
+      { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
@@ -145,6 +145,7 @@ export class OpenClawChannelBridge {
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {

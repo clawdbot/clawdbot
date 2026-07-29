@@ -42,7 +42,7 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     });
   });
 
-  it("uses the object form for system prompt capture", () => {
+  it("rejects the retired object form of content capture", () => {
     expect(
       resolveDiagnosticModelContentCapturePolicy({
         diagnostics: {
@@ -60,15 +60,15 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
         },
       }),
     ).toMatchObject({
-      inputMessages: true,
+      inputMessages: false,
       outputMessages: false,
-      systemPrompt: true,
-      toolDefinitions: true,
-      anyModelContent: true,
+      systemPrompt: false,
+      toolDefinitions: false,
+      anyModelContent: false,
     });
   });
 
-  it("gates tool definitions independently from input messages", () => {
+  it("does not honor retired per-field capture switches", () => {
     expect(
       resolveDiagnosticModelContentCapturePolicy({
         diagnostics: {
@@ -84,9 +84,9 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
         },
       }),
     ).toMatchObject({
-      inputMessages: true,
+      inputMessages: false,
       toolDefinitions: false,
-      anyModelContent: true,
+      anyModelContent: false,
     });
 
     expect(
@@ -105,8 +105,8 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
       }),
     ).toMatchObject({
       inputMessages: false,
-      toolDefinitions: true,
-      anyModelContent: true,
+      toolDefinitions: false,
+      anyModelContent: false,
     });
   });
 
@@ -121,7 +121,7 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
 
     // Tool input only: tool content on, model content off.
     expect(base({ toolInputs: true })).toMatchObject({
-      toolInputs: true,
+      toolInputs: false,
       toolOutputs: false,
       anyModelContent: false,
     });
@@ -129,14 +129,14 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     // Tool output only.
     expect(base({ toolOutputs: true })).toMatchObject({
       toolInputs: false,
-      toolOutputs: true,
+      toolOutputs: false,
     });
 
     // Model content only: tool flags stay off.
     expect(base({ inputMessages: true })).toMatchObject({
       toolInputs: false,
       toolOutputs: false,
-      anyModelContent: true,
+      anyModelContent: false,
     });
 
     // captureContent: true enables both families.

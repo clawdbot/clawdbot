@@ -1,15 +1,12 @@
 // OpenClaw rescue messages expose approved setup-helper commands over message channels.
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { tryReadJson, writeJson } from "../infra/json-files.js";
+import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
@@ -30,11 +27,8 @@ import { resolveSystemAgentRescuePolicy } from "./rescue-policy.js";
  * command output without exposing local TUI or plugin-install flows remotely.
  */
 type RescuePendingOperation = {
-  id: string;
-  createdAt: string;
-  expiresAt: string;
+  version: 1;
   operation: SystemAgentOperation;
-  auditDetails: Record<string, unknown>;
 };
 
 /** Input required to process one possible `/openclaw` rescue message. */
@@ -49,6 +43,8 @@ type SystemAgentRescueMessageInput = {
 };
 
 const SYSTEM_AGENT_COMMAND = "/openclaw";
+const RESCUE_PENDING_NAMESPACE = "rescue-pending";
+const RESCUE_PENDING_MAX_ENTRIES = 1_024;
 
 function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
   const lines: string[] = [];
@@ -77,56 +73,141 @@ export function extractSystemAgentRescueMessage(commandBody: string): string | n
   return normalized.slice(SYSTEM_AGENT_COMMAND.length).trim();
 }
 
-function resolvePendingDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "openclaw", "rescue-pending");
-}
-
-function resolvePendingPath(input: SystemAgentRescueMessageInput): string {
-  // Pending approval is scoped by sender/channel identity so unrelated chats cannot approve it.
+function resolvePendingKey(input: SystemAgentRescueMessageInput): string {
+  // Pending approval is scoped by account, channel, and sender identity so one
+  // owner route cannot approve a capability proposed through another route.
   const key = JSON.stringify({
+    accountId: resolveAccountDiscriminator(input.command),
     channel: input.command.channelId ?? input.command.channel,
     from: input.command.from,
     senderId: input.command.senderId,
   });
-  const digest = createHash("sha256").update(key).digest("hex").slice(0, 32);
-  return path.join(resolvePendingDir(input.env), `${digest}.json`);
+  return createHash("sha256").update(key).digest("hex").slice(0, 32);
 }
 
-async function readPending(
-  pendingPath: string,
-  now = new Date(),
-): Promise<RescuePendingOperation | null> {
-  try {
-    const parsed = await tryReadJson<RescuePendingOperation>(pendingPath);
-    if (!parsed) {
-      return null;
-    }
-    const expiresAtMs = asDateTimestampMs(Date.parse(parsed.expiresAt));
-    const nowMs = asDateTimestampMs(now.getTime());
-    if (expiresAtMs === undefined || nowMs === undefined || expiresAtMs <= nowMs) {
-      // Expired rescue approvals are deleted before returning so stale writes cannot linger.
-      await fs.rm(pendingPath, { force: true });
-      return null;
-    }
-    return parsed;
-  } catch {
+function resolveAccountDiscriminator(command: CommandContext): string {
+  return command.accountId?.trim() || command.to?.trim() || "default";
+}
+
+function openPendingStore(env?: NodeJS.ProcessEnv) {
+  return createCorePluginStateSyncKeyedStore<unknown>({
+    ownerId: "core:system-agent",
+    namespace: RESCUE_PENDING_NAMESPACE,
+    maxEntries: RESCUE_PENDING_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+    ...(env ? { env } : {}),
+  });
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return (
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key))
+  );
+}
+
+function hasOptionalString(value: Record<string, unknown>, key: string): boolean {
+  return !Object.hasOwn(value, key) || isNonEmptyString(value[key]);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parsePendingOperation(value: unknown): SystemAgentOperation | null {
+  if (!isPlainRecord(value) || value.version !== 1 || !isPlainRecord(value.operation)) {
     return null;
   }
-}
-
-async function writePending(pendingPath: string, pending: RescuePendingOperation): Promise<void> {
-  await writeJson(pendingPath, pending, {
-    dirMode: 0o700,
-    mode: 0o600,
-    trailingNewline: true,
-  });
+  const operation = value.operation;
+  if (typeof operation.kind !== "string") {
+    return null;
+  }
+  switch (operation.kind) {
+    case "set-default-model":
+      if (!hasExactKeys(operation, ["kind", "model"]) || !isNonEmptyString(operation.model)) {
+        return null;
+      }
+      break;
+    case "config-set":
+      if (
+        !hasExactKeys(operation, ["kind", "path", "value"]) ||
+        !isNonEmptyString(operation.path) ||
+        !isNonEmptyString(operation.value)
+      ) {
+        return null;
+      }
+      break;
+    case "config-set-ref":
+      if (
+        !hasExactKeys(operation, ["kind", "path", "source", "id"], ["provider"]) ||
+        !isNonEmptyString(operation.path) ||
+        (operation.source !== "env" &&
+          operation.source !== "file" &&
+          operation.source !== "exec") ||
+        !isNonEmptyString(operation.id) ||
+        !hasOptionalString(operation, "provider")
+      ) {
+        return null;
+      }
+      break;
+    case "setup":
+      if (
+        !hasExactKeys(operation, ["kind"], ["workspace", "model"]) ||
+        !hasOptionalString(operation, "workspace") ||
+        !hasOptionalString(operation, "model")
+      ) {
+        return null;
+      }
+      break;
+    case "plugin-install":
+      if (!hasExactKeys(operation, ["kind", "spec"]) || !isNonEmptyString(operation.spec)) {
+        return null;
+      }
+      break;
+    case "create-agent":
+      if (
+        !hasExactKeys(operation, ["kind", "agentId"], ["workspace", "model"]) ||
+        !isNonEmptyString(operation.agentId) ||
+        !hasOptionalString(operation, "workspace") ||
+        !hasOptionalString(operation, "model")
+      ) {
+        return null;
+      }
+      break;
+    case "gateway-start":
+    case "gateway-stop":
+    case "gateway-restart":
+      if (!hasExactKeys(operation, ["kind"])) {
+        return null;
+      }
+      break;
+    default:
+      return null;
+  }
+  return isPersistentSystemAgentOperation(operation as SystemAgentOperation)
+    ? (operation as SystemAgentOperation)
+    : null;
 }
 
 function buildAuditDetails(input: SystemAgentRescueMessageInput): Record<string, unknown> {
   return {
     rescue: true,
     channel: input.command.channelId ?? input.command.channel,
-    accountId: input.command.to,
+    accountId: resolveAccountDiscriminator(input.command),
     senderId: input.command.senderId,
     from: input.command.from,
   };
@@ -158,6 +239,12 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
       "Run `openclaw onboard` locally; it live-tests the candidate route before saving it.",
     ].join(" ");
   }
+  if (operation.kind === "doctor-fix") {
+    return [
+      "OpenClaw rescue cannot run doctor repairs from a message channel because they can change the inference route powering this session.",
+      "Exit OpenClaw and run `openclaw doctor --fix` in a terminal.",
+    ].join(" ");
+  }
   if (operation.kind === "plugin-install") {
     return [
       "OpenClaw rescue cannot install plugins from a message channel by default because plugin install downloads executable code.",
@@ -185,37 +272,43 @@ export async function runSystemAgentRescueMessage(
     return policy.message;
   }
 
-  const pendingPath = resolvePendingPath(input);
+  const pendingStore = openPendingStore(input.env);
+  const pendingKey = resolvePendingKey(input);
+  const approvalIntent = classifySystemAgentApprovalText(rescueMessage);
   // Remote rescue never consults a model (a broken/compromised agent path must
   // not become a config editor); approval stays on the closed deterministic list.
-  if (classifySystemAgentApprovalText(rescueMessage) === "approve") {
-    const pending = await readPending(pendingPath);
-    if (!pending) {
+  if (approvalIntent === "approve") {
+    // Consume before any async execution. Concurrent approvals get at most one
+    // capability, and a failed execution cannot leave a replayable write.
+    const operation = parsePendingOperation(pendingStore.consume(pendingKey));
+    if (!operation) {
       return "No pending OpenClaw rescue change is waiting for approval.";
     }
-    const unsupported = formatUnsupportedRemoteOperation(pending.operation);
+    const unsupported = formatUnsupportedRemoteOperation(operation);
     if (unsupported) {
-      await fs.rm(pendingPath, { force: true });
       return unsupported;
     }
     const capture = createCaptureRuntime();
-    await executeSystemAgentOperation(pending.operation, capture.runtime, {
+    await executeSystemAgentOperation(operation, capture.runtime, {
       approved: true,
-      auditDetails: pending.auditDetails,
+      auditDetails: buildAuditDetails(input),
       deps: input.deps,
     });
-    await fs.rm(pendingPath, { force: true });
     return capture.read() || "OpenClaw rescue change applied.";
   }
 
-  if (classifySystemAgentApprovalText(rescueMessage) === "decline") {
-    const pending = await readPending(pendingPath);
-    await fs.rm(pendingPath, { force: true });
+  if (approvalIntent === "decline") {
+    const pending = parsePendingOperation(pendingStore.consume(pendingKey));
     return pending
       ? "Dropped the pending OpenClaw rescue change."
       : "No pending OpenClaw rescue change is waiting for approval.";
   }
 
+  // Any fresh command revokes the previous capability for this exact route.
+  // Persistent commands below replace it with their newly rendered plan.
+  // Keep parse and registration below synchronous: invocation order must stay
+  // publication order. Async validation begins only after approval consumes the row.
+  pendingStore.delete(pendingKey);
   const operation = parseSystemAgentOperation(rescueMessage);
   const unsupported = formatUnsupportedRemoteOperation(operation);
   if (unsupported) {
@@ -229,16 +322,18 @@ export async function runSystemAgentRescueMessage(
       nowMs === undefined
         ? undefined
         : resolveExpiresAtMsFromDurationMs(policy.pendingTtlMinutes * 60_000, { nowMs });
-    if (expiresAtMs === undefined) {
+    if (nowMs === undefined || expiresAtMs === undefined) {
       return "OpenClaw rescue could not create a pending approval because the expiry clock is invalid.";
     }
-    await writePending(pendingPath, {
-      id: randomUUID(),
-      createdAt: now.toISOString(),
-      expiresAt: new Date(expiresAtMs).toISOString(),
-      operation,
-      auditDetails: buildAuditDetails(input),
-    });
+    const ttlMs = expiresAtMs - nowMs;
+    pendingStore.register(
+      pendingKey,
+      {
+        version: 1,
+        operation,
+      } satisfies RescuePendingOperation,
+      { ttlMs },
+    );
     return formatPersistentPlan(operation);
   }
 

@@ -1,7 +1,7 @@
 // OpenCode catalog terminal ownership: validated resume commands and terminal plans.
 import {
   decodeNodePtyResumeParams,
-  resolveExecutableFromPathEnv,
+  resolveNodeHostExecutable,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
@@ -60,14 +60,18 @@ export function createOpenCodeTerminalNodeHostCommand(
       }
       const params = decodeNodePtyResumeParams(paramsJSON, validateOpenCodeThreadId);
       const record = await requireLocalOpenCodeSession(params.threadId);
-      const file = resolveExecutableFromPathEnv("opencode", process.env.PATH ?? "");
-      if (!file) {
+      const resolution = resolveNodeHostExecutable("opencode", {
+        env: process.env,
+        pathEnv: process.env.PATH ?? process.env.Path ?? "",
+        strategy: "direct",
+      });
+      if (!resolution) {
         throw new Error("OpenCode CLI is unavailable");
       }
       return JSON.stringify(
         await runNodePtyCommand(
           {
-            file,
+            file: resolution.executable,
             args: ["--session", params.threadId],
             cwd: record.cwd,
             cols: params.cols,
@@ -112,12 +116,11 @@ export async function openOpenCodeCatalogTerminal(
   const title = `opencode --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === OPENCODE_LOCAL_SESSION_HOST_ID) {
     const record = await requireLocalOpenCodeSession(params.threadId);
-    const resolution = resolveExecutableFromPathEnv(
-      "opencode",
-      process.env.PATH ?? "",
-      process.env,
-      { fallbackToLoginShell: true, withPathEnv: true },
-    );
+    const resolution = resolveNodeHostExecutable("opencode", {
+      env: process.env,
+      pathEnv: process.env.PATH ?? "",
+      strategy: "fallback",
+    });
     if (!resolution) {
       throw new Error("OpenCode CLI is unavailable");
     }

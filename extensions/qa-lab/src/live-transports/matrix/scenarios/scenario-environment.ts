@@ -24,6 +24,24 @@ type MatrixQaScenarioEnvironmentParams = {
   provisioning: MatrixQaProvisionResult;
 };
 
+type MatrixQaConfigPatchResult = {
+  hash?: string;
+  noop?: boolean;
+  sentinel?: {
+    payload?: {
+      stats?: {
+        requiresRestart?: boolean;
+      };
+    };
+  };
+};
+
+type MatrixQaConfigApplyStatus = {
+  appliedConfigHash?: string | null;
+  configRevisionHash?: string;
+  hash?: string;
+};
+
 function readMatrixConfigOverrides(
   config: Record<string, unknown>,
 ): MatrixQaConfigOverrides | undefined {
@@ -31,6 +49,19 @@ function readMatrixConfigOverrides(
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as MatrixQaConfigOverrides)
     : undefined;
+}
+
+function resolveMatrixQaReplacePaths(overrides: MatrixQaConfigOverrides | undefined) {
+  const replacePaths = ["channels.matrix", "messages"];
+  // Replacing an untouched root drops config.get-omitted runtime policy and can
+  // invalidate lifecycle-owned state while the Matrix account is restarting.
+  if (overrides?.agentDefaults) {
+    replacePaths.push("agents.defaults");
+  }
+  if (overrides?.toolProfile || overrides?.audio) {
+    replacePaths.push("tools");
+  }
+  return replacePaths;
 }
 
 function isStaleConfigPatchError(error: unknown) {
@@ -51,7 +82,7 @@ async function patchGatewayConfig(params: {
       throw new Error("Matrix QA config patch requires config.get hash");
     }
     try {
-      await params.gateway.call(
+      const result = (await params.gateway.call(
         "config.patch",
         {
           raw: JSON.stringify(params.patch, null, 2),
@@ -60,8 +91,8 @@ async function patchGatewayConfig(params: {
           restartDelayMs: params.restartDelayMs ?? 0,
         },
         { timeoutMs: 60_000 },
-      );
-      return;
+      )) as MatrixQaConfigPatchResult;
+      return result.noop === true ? { ...result, hash: snapshot.hash } : result;
     } catch (error) {
       if (attempt === 0 && isStaleConfigPatchError(error)) {
         continue;
@@ -69,6 +100,7 @@ async function patchGatewayConfig(params: {
       throw error;
     }
   }
+  throw new Error("Matrix QA config patch exhausted retries");
 }
 
 async function waitForMatrixAccountReady(params: {
@@ -101,6 +133,38 @@ async function waitForMatrixAccountReady(params: {
   }
   throw new Error(
     `matrix account "${params.accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,
+  );
+}
+
+async function waitForGatewayConfigApplied(params: {
+  expectedHash: string;
+  gateway: FlowPreparationInput["gateway"];
+  timeoutMs: number;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  let lastStatus: MatrixQaConfigApplyStatus | undefined;
+  while (Date.now() < deadline) {
+    try {
+      const status = (await params.gateway.call(
+        "config.get",
+        {},
+        { timeoutMs: Math.max(1, Math.min(5_000, deadline - Date.now())) },
+      )) as MatrixQaConfigApplyStatus;
+      lastStatus = status;
+      if (
+        status.hash === params.expectedHash &&
+        typeof status.configRevisionHash === "string" &&
+        status.configRevisionHash === status.appliedConfigHash
+      ) {
+        return;
+      }
+    } catch {
+      // A restart may temporarily disconnect the control client; retry until the deadline.
+    }
+    await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+  }
+  throw new Error(
+    `Matrix QA config was not applied by the active Gateway; last status: ${JSON.stringify(lastStatus ?? {})}`,
   );
 }
 
@@ -148,12 +212,38 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutUserId: params.provisioning.sut.userId,
       topology: params.provisioning.topology,
     });
-    await patchGatewayConfig({
+    const patchStartedAt = Date.now();
+    const accountStartAtBeforePatch = (
+      await readMatrixAccountStatuses(input.gateway).catch(() => [])
+    ).find((account) => account.accountId === params.accountId)?.lastStartAt;
+    const patchResult = await patchGatewayConfig({
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
-      replacePaths: ["channels.matrix", "messages", "agents.defaults", "tools"],
+      replacePaths: resolveMatrixQaReplacePaths(configOverrides),
+    });
+    if (patchResult.noop !== true) {
+      await input.waitForConfigRestartSettle({
+        restartDelayMs: 0,
+        timeoutMs: input.timeoutMs,
+      });
+    }
+    if (!patchResult.hash) {
+      throw new Error("Matrix QA config patch returned no persisted hash");
+    }
+    // A changed or no-op write can observe persisted config before an earlier
+    // reload installs that revision. Do not run against the previous snapshot.
+    await waitForGatewayConfigApplied({
+      expectedHash: patchResult.hash,
+      gateway: input.gateway,
+      timeoutMs: input.timeoutMs,
     });
     await waitForMatrixAccountReady({
+      // Restart-required writes acknowledge before SIGUSR1 completes. Require a
+      // fresh Matrix account start so the scenario cannot race the old gateway.
+      afterStartAt:
+        patchResult.sentinel?.payload?.stats?.requiresRestart === true
+          ? (accountStartAtBeforePatch ?? patchStartedAt - 1)
+          : undefined,
       accountId: params.accountId,
       gateway: input.gateway,
       timeoutMs: input.timeoutMs,
@@ -179,7 +269,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       gatewayCall: async (
         method: string,
         callParams?: Record<string, unknown>,
-        opts?: { timeoutMs?: number },
+        opts?: { expectFinal?: boolean; timeoutMs?: number },
       ) => await input.gateway.call(method, callParams ?? {}, opts),
       outputDir: input.outputDir,
       registrationToken: params.harness.registrationToken,
@@ -243,13 +333,14 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       patchGatewayConfig: async (
         patch: Record<string, unknown>,
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
-      ) =>
+      ) => {
         await patchGatewayConfig({
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,
           restartDelayMs: opts?.restartDelayMs,
-        }),
+        });
+      },
       readGatewayAccountStartAt: async (accountId: string) =>
         (await readMatrixAccountStatuses(input.gateway)).find(
           (account) => account.accountId === accountId,

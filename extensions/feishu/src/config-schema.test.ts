@@ -62,10 +62,18 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.groupPolicy).toBe("open");
   });
 
+  it("accepts the canonical disabled DM policy", () => {
+    expect(FeishuConfigSchema.parse({ dmPolicy: "disabled" }).dmPolicy).toBe("disabled");
+    expect(
+      FeishuConfigSchema.parse({ accounts: { work: { dmPolicy: "disabled" } } }).accounts?.work
+        ?.dmPolicy,
+    ).toBe("disabled");
+  });
+
   it("exports legacy groupPolicy as a typed config input", () => {
     const expected = {
       anyOf: [
-        { type: "string", enum: ["open", "allowlist", "disabled"] },
+        { type: "string", enum: ["open", "disabled", "allowlist"] },
         { type: "string", const: "allowall" },
       ],
     };
@@ -243,6 +251,23 @@ describe("FeishuConfigSchema optimization flags", () => {
     const result = FeishuConfigSchema.parse({});
     expect(result.typingIndicator).toBe(true);
     expect(result.resolveSenderNames).toBe(true);
+  });
+
+  it("accepts only boolean bot ingress", () => {
+    expect(FeishuConfigSchema.parse({ allowBots: true }).allowBots).toBe(true);
+    expect(() => FeishuConfigSchema.parse({ allowBots: "mentions" })).toThrow();
+  });
+
+  it("keeps VC auto-join default-off without forcing account overrides", () => {
+    const result = FeishuConfigSchema.parse({ accounts: { main: {} } });
+    expect(result.vcAutoJoin).toBeUndefined();
+    expect(result.accounts?.main?.vcAutoJoin).toBeUndefined();
+
+    expect(FeishuConfigSchema.parse({ vcAutoJoin: true }).vcAutoJoin).toBe(true);
+    expect(
+      FeishuConfigSchema.parse({ accounts: { main: { vcAutoJoin: true } } }).accounts?.main
+        ?.vcAutoJoin,
+    ).toBe(true);
   });
 
   it("accepts top-level and account-level nested streaming config", () => {

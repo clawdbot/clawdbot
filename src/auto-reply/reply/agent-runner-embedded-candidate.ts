@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapabilityLifetime,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
@@ -38,6 +39,7 @@ import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -143,6 +145,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           agentId: embeddedContext.agentId,
           runId: params.runId,
           sessionKey: messageActionCapabilitySessionKey,
+          sourceReplySessionKey: embeddedContext.sessionKey,
           sessionId: embeddedContext.sessionId,
           requesterAccountId: embeddedContext.agentAccountId,
           requesterSenderId: senderContext.senderId,
@@ -154,11 +157,12 @@ export async function runEmbeddedFallbackCandidate(params: {
             currentChannelProvider: embeddedContext.currentChannelProvider,
             currentThreadTs: embeddedContext.currentThreadTs,
             currentMessageId: embeddedContext.currentMessageId,
+            currentSourceTurnId: embeddedContext.currentSourceTurnId,
             replyToMode: embeddedContext.replyToMode,
             hasRepliedRef: embeddedContext.hasRepliedRef,
             sameChannelThreadRequired: embeddedContext.sameChannelThreadRequired,
           },
-          ttlMs: runBaseParams.timeoutMs + 60_000,
+          ...resolveMessageActionTurnCapabilityLifetime(runBaseParams.timeoutMs),
         })
       : undefined;
   let attemptCompactionCount = 0;
@@ -208,6 +212,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         sandboxSessionKey: turn.runtimePolicySessionKey,
         prompt: turn.commandBody,
         transcriptPrompt: turn.transcriptCommandBody,
+        media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
@@ -245,6 +250,12 @@ export async function runEmbeddedFallbackCandidate(params: {
           }
         },
         onExecutionPhase: params.signalExecutionPhaseForTyping,
+        onLaneWait: ({ waiting }) => {
+          const replyOperation = turn.replyOperation;
+          if (waiting && replyOperation) {
+            markReplyOperationGlobalLaneWaitProgress(replyOperation);
+          }
+        },
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.

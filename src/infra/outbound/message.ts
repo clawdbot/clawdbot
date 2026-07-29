@@ -8,6 +8,7 @@ import {
   serializeDurableMessagePayloadOutcomes,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -23,6 +24,7 @@ import {
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
@@ -32,6 +34,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
   projectOutboundPayloadPlanForMirror,
+  type NormalizedOutboundPayload,
 } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
@@ -89,7 +92,23 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal Use the active adapter directly when already executing inside the Gateway. */
+  gatewayOwnedDelivery?: boolean;
+  /** @internal Stable producer id for idempotent durable queue creation. */
+  deliveryIntentId?: string;
+  /** @internal Serializable owner state finalized by live send or recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Override provider unknown-send reconciliation independently from queue durability. */
+  requireUnknownSendReconciliation?: boolean;
+  /** @internal Runs after queue persistence and before platform I/O. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Runs on identified platform evidence before queue acknowledgement. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   mirror?: OutboundMirror;
+  /** @internal Reports the effective payload only after an identified direct send. */
+  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
   parseMode?: "HTML";
@@ -364,7 +383,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
-  if (deliveryMode !== "gateway") {
+  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
@@ -390,7 +409,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     });
     // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
     // Lower-level queue-required callers must leave this internal opt-in unset.
-    const requireUnknownSendReconciliation = params.queuePolicy === "required";
+    const requireUnknownSendReconciliation =
+      params.requireUnknownSendReconciliation ?? params.queuePolicy === "required";
     if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
@@ -422,6 +442,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       silent: params.silent,
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
+      preparedMessageId: params.preparedMessageId,
+      deliveryIntentId: params.deliveryIntentId,
+      deliveryCompletion: params.deliveryCompletion,
+      ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
+      ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
+      ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       mirror: params.mirror
         ? {
             ...params.mirror,

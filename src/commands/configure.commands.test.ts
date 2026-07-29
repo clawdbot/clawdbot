@@ -83,7 +83,21 @@ describe("configureCommandFromSectionsArg", () => {
     );
   });
 
-  it("fails closed for a mixed valid/invalid section list on a non-interactive terminal", async () => {
+  it("rejects a lone invalid section before unrestricted wizard dispatch", async () => {
+    const runtime = makeRuntime();
+
+    await expect(
+      configureCommandFromSectionsArg(["bogus"], runtime, { interactive: true }),
+    ).rejects.toThrow("exit 1");
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error.mock.calls[0]?.[0]).toBe(
+      "Invalid --section: bogus. Expected one of: workspace, model, web, gateway, daemon, channels, plugins, skills, health. Run openclaw configure without --section to use the full wizard.",
+    );
+    expect(runConfigureWizardMock).not.toHaveBeenCalled();
+  });
+
+  it("validates invalid sections before the interactive-terminal guard", async () => {
     const runtime = makeRuntime();
 
     await expect(
@@ -92,9 +106,8 @@ describe("configureCommandFromSectionsArg", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    // Non-TTY guard fires before any section validation, so the wizard never runs.
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("interactive terminal (TTY)");
+    expect(runtime.error.mock.calls[0]?.[0]).toContain("Invalid --section: bogus");
     expect(runConfigureWizardMock).not.toHaveBeenCalled();
   });
 });

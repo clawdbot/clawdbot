@@ -5,15 +5,12 @@ scenario:
   coverage:
     primary:
       - channels.inbound-media-normalization
-    secondary:
-      - runtime.delivery
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 45000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

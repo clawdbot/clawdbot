@@ -9,11 +9,22 @@ const qaFlowModuleSchema = z.object({
 const qaFlowExecutionShape = {
   providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
   retryCount: z.number().int().min(0).max(1).optional(),
+  runtime: z.enum(["openclaw", "codex"]).optional(),
   timeoutMs: z.number().int().positive().optional(),
 };
 
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
 type QaScenarioFlowShape = { steps: unknown[] };
+
+function resolveRequiredChannelDriver(
+  flow: QaScenarioFlowShape | QaScenarioModuleFlow | undefined,
+): "live" | undefined {
+  // Modules under live-transports consume adapter-prepared runtime context.
+  // Crabline implements normalized transport only and cannot supply that context.
+  return flow && "module" in flow && flow.module.startsWith("./live-transports/")
+    ? "live"
+    : undefined;
+}
 
 function normalizeQaScenarioFileMetadata<
   T extends { objective?: string; successCriteria?: string[] },
@@ -70,5 +81,6 @@ export const qaScenarioModuleFlow = {
   moduleSchema: qaFlowModuleSchema,
   executionShape: qaFlowExecutionShape,
   normalizeMetadata: normalizeQaScenarioFileMetadata,
+  resolveRequiredChannelDriver,
   resolveFlow: resolveQaScenarioFileFlow,
 };

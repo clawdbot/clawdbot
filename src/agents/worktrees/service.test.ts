@@ -6,7 +6,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree } from "./registry.js";
+import {
+  getRegistryWorktree,
+  getRegistryWorktreeProvisionedChunk,
+  getRegistryWorktreeProvisionedPaths,
+  getRegistryWorktreeProvisionedState,
+} from "./registry.js";
 import {
   IDLE_GC_MS,
   ManagedWorktreeService,
@@ -409,17 +414,18 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, "cache", "keep.txt"), "keep\n", { mode: 0o744 });
     await fs.writeFile(path.join(repo, "cache", "skip.bin"), "skip\n");
     const outside = path.join(root, "outside.txt");
-    await fs.writeFile(outside, "secret\n");
+    await fs.writeFile(outside, "outside\n");
     await fs.symlink(outside, path.join(repo, "linked"));
     const outsideDir = path.join(root, "outside-dir");
     await fs.mkdir(outsideDir);
-    await fs.writeFile(path.join(outsideDir, "escape.txt"), "secret\n");
+    await fs.writeFile(path.join(outsideDir, "escape.txt"), "outside\n");
     await fs.symlink(outsideDir, path.join(repo, "linked-dir"));
 
     const created = await service.create({ repoRoot: repo, name: "includes" });
     const copied = path.join(created.path, "cache", "keep.txt");
     expect(await fs.readFile(copied, "utf8")).toBe("keep\n");
     expect((await fs.stat(copied)).mode & 0o777).toBe(0o744);
+    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(["cache/keep.txt"]);
     await expect(fs.stat(path.join(created.path, "cache", "skip.bin"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -432,7 +438,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("never overwrites a base-ref file with an ignored source candidate", async () => {
-    await fs.writeFile(path.join(repo, "collision.txt"), "from base\n");
+    await fs.writeFile(path.join(repo, "collision.txt"), "from base\n", { mode: 0o644 });
     await git(repo, "add", "collision.txt");
     await git(repo, "commit", "-m", "base collision");
     await git(repo, "checkout", "-b", "source");
@@ -440,7 +446,7 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "collision.txt\n");
     await git(repo, "add", ".gitignore");
     await git(repo, "commit", "-m", "ignore local collision");
-    await fs.writeFile(path.join(repo, "collision.txt"), "from source\n");
+    await fs.writeFile(path.join(repo, "collision.txt"), "from source\n", { mode: 0o755 });
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "collision.txt\n");
 
     const created = await service.create({
@@ -450,6 +456,8 @@ describe("ManagedWorktreeService", () => {
     });
 
     expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
+    expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
+    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
   });
 
   it("runs an executable setup script with source and worktree paths", async () => {
@@ -498,12 +506,13 @@ describe("ManagedWorktreeService", () => {
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
   });
 
-  it("restores tracked and untracked state while reprovisioning ignored files", async () => {
+  it("restores tracked, untracked, and provisioned ignored files from the snapshot", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "ignored.txt\nprovisioned.env\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "provisioned.env\n");
     await git(repo, "add", ".gitignore", ".worktreeinclude");
     await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, "provisioned.env"), "source secret\n");
+    await fs.writeFile(path.join(repo, "provisioned.env"), "source value\n");
+    const mode = (await fs.stat(path.join(repo, "provisioned.env"))).mode & 0o7777;
     const created = await service.create({ repoRoot: repo, name: "roundtrip" });
     const originalHead = await git(created.path, "rev-parse", "HEAD");
     await fs.writeFile(path.join(created.path, "README.md"), "changed\n");
@@ -514,9 +523,12 @@ describe("ManagedWorktreeService", () => {
     expect(removed).toMatchObject({ removed: true, snapshotRef: expect.any(String) });
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show-ref", "--verify", removed.snapshotRef!)).not.toBe("");
+    const provisionedState = getRegistryWorktreeProvisionedState(env, created.id)!;
+    expect(provisionedState).toEqual([{ path: "provisioned.env", mode, chunks: 1 }]);
     const snapshotFiles = await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!);
     expect(snapshotFiles).not.toContain("ignored.txt");
     expect(snapshotFiles).not.toContain("provisioned.env");
+    await fs.writeFile(path.join(repo, "provisioned.env"), "new source value\n");
 
     now += IDLE_GC_MS + 1;
     const restored = await service.restore({ id: created.id });
@@ -533,8 +545,15 @@ describe("ManagedWorktreeService", () => {
       "untracked\n",
     );
     expect(await fs.readFile(path.join(restored.path, "provisioned.env"), "utf8")).toBe(
-      "source secret\n",
+      "source value\n",
     );
+    expect(
+      getRegistryWorktreeProvisionedChunk(env, {
+        worktreeId: created.id,
+        path: "provisioned.env",
+        chunkIndex: 0,
+      }),
+    ).toBeDefined();
     await expect(fs.stat(path.join(restored.path, "ignored.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -544,6 +563,64 @@ describe("ManagedWorktreeService", () => {
     ]);
     expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
     expect(await git(restored.path, "diff", "--name-only")).toBe("README.md");
+  });
+
+  it("captures tracked executable-bit changes when core.filemode is disabled", async () => {
+    const script = path.join(repo, "tool.sh");
+    await fs.writeFile(script, "#!/bin/sh\n", { mode: 0o755 });
+    await git(repo, "add", "tool.sh");
+    await git(repo, "update-index", "--chmod=+x", "tool.sh");
+    await git(repo, "commit", "-m", "add executable");
+    await git(repo, "config", "core.filemode", "false");
+
+    const created = await service.create({ repoRoot: repo, name: "filemode" });
+    await fs.chmod(path.join(created.path, "tool.sh"), 0o644);
+    await fs.writeFile(path.join(created.path, "README.md"), "changed\n");
+    const removed = await service.remove({ id: created.id, reason: "test" });
+
+    expect(await git(repo, "ls-tree", removed.snapshotRef!, "tool.sh")).toMatch(/^100644 /);
+  });
+
+  it("snapshots modified tracked files marked assume-unchanged", async () => {
+    const created = await service.create({ repoRoot: repo, name: "assume-unchanged" });
+    await git(created.path, "update-index", "--assume-unchanged", "README.md");
+    await fs.writeFile(path.join(created.path, "README.md"), "hidden local change\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+
+    await service.remove({ id: created.id, reason: "test" });
+    const restored = await service.restore({ id: created.id });
+
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "hidden local change\n",
+    );
+  });
+
+  it("snapshots materialized tracked files marked skip-worktree", async () => {
+    const created = await service.create({ repoRoot: repo, name: "skip-worktree" });
+    await git(created.path, "update-index", "--skip-worktree", "README.md");
+    await fs.writeFile(path.join(created.path, "README.md"), "hidden sparse change\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+
+    await service.remove({ id: created.id, reason: "test" });
+    const restored = await service.restore({ id: created.id });
+
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "hidden sparse change\n",
+    );
+  });
+
+  it("snapshots deletions hidden by skip-worktree outside sparse checkout", async () => {
+    const created = await service.create({ repoRoot: repo, name: "skip-worktree-deleted" });
+    await git(created.path, "update-index", "--skip-worktree", "README.md");
+    await fs.rm(path.join(created.path, "README.md"));
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+
+    await service.remove({ id: created.id, reason: "test" });
+    const restored = await service.restore({ id: created.id });
+
+    await expect(fs.stat(path.join(restored.path, "README.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("refuses to overwrite a branch recreated before restore", async () => {
@@ -559,18 +636,38 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("fails closed when a nested repository cannot be captured in full", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure worktree provisioning");
+    await fs.writeFile(path.join(repo, ".env.local"), "value=source\n");
+    await fs.mkdir(path.join(repo, "tracked"));
+    await fs.writeFile(path.join(repo, "tracked", "outer.txt"), "tracked\n");
+    await git(repo, "add", "tracked/outer.txt");
+    await git(repo, "commit", "-m", "add tracked parent");
     const created = await service.create({ repoRoot: repo, name: "nested-repository" });
-    const nested = await initializeRepository(created.path, gitTemplate, "nested");
-    await fs.writeFile(path.join(nested, "untracked-secret.txt"), "do not lose\n");
+    const nested = await initializeRepository(
+      path.join(created.path, "tracked"),
+      gitTemplate,
+      "nested",
+    );
+    await fs.writeFile(path.join(nested, "untracked-local.txt"), "do not lose\n");
 
     await expect(service.remove({ id: created.id, reason: "test" })).rejects.toThrow(
       "nested git repositories cannot be snapshotted losslessly",
     );
 
-    expect(await fs.readFile(path.join(nested, "untracked-secret.txt"), "utf8")).toBe(
+    expect(await fs.readFile(path.join(nested, "untracked-local.txt"), "utf8")).toBe(
       "do not lose\n",
     );
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(
+      getRegistryWorktreeProvisionedChunk(env, {
+        worktreeId: created.id,
+        path: ".env.local",
+        chunkIndex: 0,
+      }),
+    ).toBeUndefined();
   });
 
   it("rematerializes a named workboard checkout from its retained snapshot", async () => {
@@ -619,6 +716,101 @@ describe("ManagedWorktreeService", () => {
     expect(await service.removeIfLossless(committed.id)).toBe(false);
   });
 
+  it("snapshots provisioned ignored file state independently of the source", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nnode_modules/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure worktree provisioning");
+    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
+    await addRemote(root, repo);
+
+    const rotated = await service.create({ repoRoot: repo, name: "rotated-local" });
+    await service.acquire(rotated.id);
+    expect(await fs.readFile(path.join(rotated.path, ".env.local"), "utf8")).toBe(
+      "value=old-source\n",
+    );
+    await fs.writeFile(path.join(rotated.path, ".env.local"), "value=rotated-only-copy\n");
+
+    expect(await service.removeIfLossless(rotated.id)).toBe(true);
+    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
+    const restoredRotated = await service.restore({ id: rotated.id });
+    expect(await fs.readFile(path.join(restoredRotated.path, ".env.local"), "utf8")).toBe(
+      "value=rotated-only-copy\n",
+    );
+
+    const rebuildable = await service.create({ repoRoot: repo, name: "rebuildable" });
+    await service.acquire(rebuildable.id);
+    await fs.mkdir(path.join(rebuildable.path, "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(rebuildable.path, "node_modules", "cache.js"), "cache\n");
+    expect(await service.removeIfLossless(rebuildable.id)).toBe(true);
+
+    const deleted = await service.create({ repoRoot: repo, name: "deleted-local" });
+    await service.acquire(deleted.id);
+    const deletedCopy = path.join(deleted.path, ".env.local");
+    await fs.rm(deletedCopy);
+    expect(await service.removeIfLossless(deleted.id)).toBe(true);
+    const restoredDeleted = await service.restore({ id: deleted.id });
+    await expect(fs.stat(path.join(restoredDeleted.path, ".env.local"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "snapshots regular provisioned file modes and protects changed file types",
+    async () => {
+      await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
+      await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+      await git(repo, "add", ".gitignore", ".worktreeinclude");
+      await git(repo, "commit", "-m", "configure worktree provisioning");
+      const sourcePath = path.join(repo, ".env.local");
+      await fs.writeFile(sourcePath, "value=source\n", { mode: 0o644 });
+      await addRemote(root, repo);
+
+      const executable = await service.create({ repoRoot: repo, name: "executable-local" });
+      await service.acquire(executable.id);
+      const executableCopy = path.join(executable.path, ".env.local");
+      await fs.chmod(executableCopy, 0o755);
+      expect(await git(executable.path, "status", "--porcelain")).toBe("");
+      expect(await service.removeIfLossless(executable.id)).toBe(true);
+      const restoredExecutable = await service.restore({ id: executable.id });
+      expect((await fs.lstat(path.join(restoredExecutable.path, ".env.local"))).mode & 0o777).toBe(
+        0o755,
+      );
+
+      const specialMode = await service.create({ repoRoot: repo, name: "special-mode-local" });
+      await service.acquire(specialMode.id);
+      const specialModeCopy = path.join(specialMode.path, ".env.local");
+      await fs.chmod(specialModeCopy, 0o1644);
+      expect(await service.removeIfLossless(specialMode.id)).toBe(true);
+      const restoredSpecialMode = await service.restore({ id: specialMode.id });
+      expect(
+        (await fs.lstat(path.join(restoredSpecialMode.path, ".env.local"))).mode & 0o7777,
+      ).toBe(0o1644);
+
+      const linked = await service.create({ repoRoot: repo, name: "linked-local" });
+      await service.acquire(linked.id);
+      const linkedCopy = path.join(linked.path, ".env.local");
+      await fs.rm(linkedCopy);
+      await fs.symlink(sourcePath, linkedCopy);
+      expect(await git(linked.path, "status", "--porcelain")).toBe("");
+      expect(await service.removeIfLossless(linked.id)).toBe(false);
+      expect((await fs.lstat(linkedCopy)).isSymbolicLink()).toBe(true);
+
+      const sourceLinked = await service.create({ repoRoot: repo, name: "source-linked-local" });
+      await service.acquire(sourceLinked.id);
+      const outside = path.join(root, "same-local-value");
+      await fs.writeFile(outside, "value=source\n");
+      await fs.rm(sourcePath);
+      await fs.symlink(outside, sourcePath);
+      expect(await git(sourceLinked.path, "status", "--porcelain")).toBe("");
+      expect(await service.removeIfLossless(sourceLinked.id)).toBe(true);
+      const restoredSourceLinked = await service.restore({ id: sourceLinked.id });
+      expect((await fs.lstat(path.join(restoredSourceLinked.path, ".env.local"))).isFile()).toBe(
+        true,
+      );
+    },
+  );
+
   it("exempts manual worktrees and garbage collects idle run-owned worktrees", async () => {
     const manual = await service.create({ repoRoot: repo, name: "manual-idle" });
     const created = await service.create({
@@ -634,6 +826,30 @@ describe("ManagedWorktreeService", () => {
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(manual.path)).toBeTruthy();
+  });
+
+  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure worktree provisioning");
+    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "idle-rotated",
+      ownerKind: "workboard",
+    });
+    await fs.rm(path.join(repo, ".worktreeinclude"));
+    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
+    now += IDLE_GC_MS + 1;
+
+    expect((await service.gc()).removed).toEqual([created.id]);
+    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
+      "value=rotated-only-copy\n",
+    );
   });
 
   it("uses owner activity to protect only active idle session worktrees", async () => {
@@ -896,17 +1112,8 @@ describe("ManagedWorktreeService", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("maps cleanup config onto limits with 0 and unset disabling each bound", () => {
-    expect(resolveWorktreeCleanupLimits(undefined)).toEqual({});
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 0, maxTotalSizeGb: 0 } })).toEqual(
-      {},
-    );
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 25, maxTotalSizeGb: 50 } })).toEqual(
-      { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
-    );
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxTotalSizeGb: 0.5 } })).toEqual({
-      maxTotalSizeBytes: 512 * 1024 ** 2,
-    });
+  it("uses the fixed no-limit cleanup policy", () => {
+    expect(resolveWorktreeCleanupLimits()).toEqual({});
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

@@ -4,21 +4,20 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.native-approval-prompts
+      - channels.channel-native-approval-prompts
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 75000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         approvalForwarding:
           exec: true
         dm:
           enabled: true
         execApprovals:
-          enabled: true
+          enabled: auto
           target: channel
 
 flow:

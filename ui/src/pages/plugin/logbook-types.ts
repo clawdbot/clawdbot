@@ -1,5 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-
 export type LogbookStatusPayload = {
   captureEnabled: boolean;
   capturePaused: boolean;
@@ -54,11 +52,6 @@ export type LogbookDaysPayload = {
   days: Array<{ day: string; cards: number; firstMs: number; lastMs: number }>;
 };
 
-export type LogbookBackgroundRefresh = {
-  client: GatewayBrowserClient;
-  lifecycleGeneration: number;
-};
-
 export type LogbookUiState = {
   day: string;
   /** True once the user navigated to a specific day; unpinned views follow the gateway's today. */
@@ -78,16 +71,5 @@ export type LogbookUiState = {
   askAnswer: string | null;
   askLoading: boolean;
   actionPending: boolean;
-  actionGeneration: number;
-  actionPendingGeneration: number | null;
-  // Every load advances result ownership; foreground loading state has its own
-  // owner so a superseded request cannot clear a newer spinner.
-  loadGeneration: number;
-  loadingGeneration: number | null;
-  lifecycleGeneration: number;
-  backgroundRefresh: Promise<void> | null;
-  backgroundRefreshQueued: LogbookBackgroundRefresh | null;
-  pollTimer: ReturnType<typeof globalThis.setInterval> | null;
-  pollClient: GatewayBrowserClient | null;
   requestUpdate: (() => void) | null;
 };

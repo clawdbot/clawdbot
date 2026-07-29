@@ -31,6 +31,9 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../agents/auth-profiles/doctor.js", () => ({
+  formatAuthDoctorHint: vi.fn(async () => "Re-authenticate this profile."),
+}));
 
 import { note } from "../../packages/terminal-core/src/note.js";
 import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./doctor-auth.js";
@@ -106,6 +109,101 @@ describe("noteAuthProfileHealth", () => {
         message: "Auth profile openai:default is expired (0m).",
         path: expectedAuthStorePath(mainDir),
         target: "openai:default",
+      }),
+    ]);
+  });
+
+  it("does not warn while Claude CLI owns refresh of an expiring access token", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 3 * 60 * 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("keeps expiring warnings for static and custom Claude CLI profiles", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "token",
+          provider: "claude-cli",
+          token: "token",
+          expires: now + 3 * 60 * 60_000,
+        },
+        "anthropic:custom-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 3 * 60 * 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings.map((finding) => finding.target)).toEqual([
+      "anthropic:claude-cli",
+      "anthropic:custom-cli",
+    ]);
+  });
+
+  it("still warns once a Claude CLI access token is expired", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now - 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile anthropic:claude-cli is expired (0m).",
+        target: "anthropic:claude-cli",
       }),
     ]);
   });
@@ -271,7 +369,10 @@ describe("noteAuthProfileHealth", () => {
   });
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
-      cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
+      cfg: {
+        agents: { entries: { main: { default: true } } },
+        channels: { telegram: { enabled: true } },
+      } as OpenClawConfig,
       prompter: {} as DoctorPrompter,
       allowKeychainPrompt: false,
     });

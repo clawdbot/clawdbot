@@ -6,6 +6,7 @@ import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_DEVICE_APPS_COMMAND,
   NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
@@ -69,6 +70,11 @@ type NodeInvokeInputTarget = {
   // Buffer spawn-window input so its sequence cannot wedge before PTY registration.
   pendingInput: BoundedBuffer<string>;
   inputFailed: boolean;
+};
+
+type ActiveNodeInvoke = {
+  controller: AbortController;
+  input?: NodeInvokeInputTarget;
 };
 
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
@@ -232,6 +238,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableAgentRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
+  installedAppsSharingEnabled?: boolean;
+  platform?: NodeJS.Platform;
 }): Promise<PreparedNodeHostRuntime> {
   void ensureTerminalUploadCleanup();
   const config = params?.config ?? getRuntimeConfig();
@@ -241,6 +249,9 @@ export async function prepareNodeHostRuntime(params?: {
   env.PATH = pathEnv;
   const duplexEnabled =
     params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
+  const platform = params?.platform ?? process.platform;
+  const installedAppsSharingEnabled =
+    platform === "darwin" && params?.installedAppsSharingEnabled === true;
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
     listRegisteredNodeHostCapsAndCommands(availabilityContext, {
@@ -255,7 +266,14 @@ export async function prepareNodeHostRuntime(params?: {
       : null;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
-    caps: [...new Set(["system", "mcp", ...pluginManifest.caps])].toSorted(),
+    caps: [
+      ...new Set([
+        "system",
+        "mcp",
+        ...(installedAppsSharingEnabled ? ["device"] : []),
+        ...pluginManifest.caps,
+      ]),
+    ].toSorted(),
     commands: [
       ...new Set([
         ...NODE_SYSTEM_RUN_COMMANDS,
@@ -263,6 +281,7 @@ export async function prepareNodeHostRuntime(params?: {
         NODE_FS_LIST_DIR_COMMAND,
         NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
+        ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
         ...pluginManifest.commands,
       ]),
@@ -281,10 +300,7 @@ export async function prepareNodeHostRuntime(params?: {
     start({ client, onInventoryChanged, onManifestChanged }) {
       const mcpAbort = new AbortController();
       const skillBins = new SkillBinsCache(client, pathEnv);
-      const activeInvokes = new Map<
-        string,
-        NodeInvokeInputTarget & { controller: AbortController }
-      >();
+      const activeInvokes = new Map<string, ActiveNodeInvoke>();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
@@ -332,49 +348,48 @@ export async function prepareNodeHostRuntime(params?: {
       return {
         async invoke(frame) {
           const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
-          const controller =
-            (claudePath && frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) || duplexCommand
-              ? new AbortController()
-              : undefined;
-          const active: (NodeInvokeInputTarget & { controller: AbortController }) | undefined =
-            controller
-              ? {
-                  controller,
-                  nextInputSeq: 0,
-                  pendingInput: new BoundedBuffer<string>(
-                    MAX_PENDING_INVOKE_INPUT_BYTES,
-                    {
-                      mode: "fail-closed",
-                      onOverflow: () =>
-                        controller.abort(
-                          new Error("terminal input exceeded the 64 KiB pre-spawn buffer"),
-                        ),
-                    },
-                    (payload) => Buffer.byteLength(payload, "utf8"),
-                  ),
-                  inputFailed: false,
-                }
-              : undefined;
-          if (active) {
-            activeInvokes.set(frame.id, active);
-          }
+          const controller = new AbortController();
+          // Every command must remain cancellable after dispatch; only duplex
+          // commands own ordered input and its pre-spawn buffer.
+          const input: NodeInvokeInputTarget | undefined = duplexCommand
+            ? {
+                nextInputSeq: 0,
+                pendingInput: new BoundedBuffer<string>(
+                  MAX_PENDING_INVOKE_INPUT_BYTES,
+                  {
+                    mode: "fail-closed",
+                    onOverflow: () =>
+                      controller.abort(
+                        new Error("terminal input exceeded the 64 KiB pre-spawn buffer"),
+                      ),
+                  },
+                  (payload) => Buffer.byteLength(payload, "utf8"),
+                ),
+                inputFailed: false,
+              }
+            : undefined;
+          const active: ActiveNodeInvoke = { controller, ...(input ? { input } : {}) };
+          // Redelivered IDs must not orphan the original command's process or
+          // let its cleanup unregister the replacement invocation.
+          activeInvokes.get(frame.id)?.controller.abort();
+          activeInvokes.set(frame.id, active);
           const progress = duplexCommand
             ? createNodeInvokeProgressWriter({
                 client,
                 frame,
                 idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
-                onError: () => controller?.abort(),
+                onError: () => controller.abort(),
               })
             : undefined;
           progress?.startHeartbeats();
           const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
-            controller && active && progress
+            input && progress
               ? {
                   signal: controller.signal,
                   emitChunk: async (chunk) => await progress.write(chunk),
                   onInput: (callback) => {
                     if (activeInvokes.get(frame.id) === active) {
-                      registerNodeInvokeInputHandler(active, callback);
+                      registerNodeInvokeInputHandler(input, callback);
                     }
                   },
                 }
@@ -382,21 +397,23 @@ export async function prepareNodeHostRuntime(params?: {
           try {
             await handleInvoke(frame, client, skillBins, manager, {
               ...(claudePath ? { claudePath } : {}),
-              ...(controller ? { signal: controller.signal } : {}),
+              signal: controller.signal,
               ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              installedAppsSharingEnabled,
+              installedAppsPlatform: platform,
               pluginCommandContext,
             });
           } finally {
             progress?.stop();
             await progress?.flush();
-            if (active && activeInvokes.get(frame.id) === active) {
+            if (activeInvokes.get(frame.id) === active) {
               activeInvokes.delete(frame.id);
             }
           }
         },
         handleInput(invokeId, seq, payloadJSON) {
-          const active = activeInvokes.get(invokeId);
-          if (!dispatchNodeInvokeInput(active, seq, payloadJSON)) {
+          const input = activeInvokes.get(invokeId)?.input;
+          if (!dispatchNodeInvokeInput(input, seq, payloadJSON)) {
             logDebug(`node-host: dropped inactive or duplicate input for invoke ${invokeId}`);
           }
         },

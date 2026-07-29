@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
@@ -168,6 +169,33 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("omits the loop-detection PreToolUse subprocess when Codex config disables it", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = { tools: { loopDetection: { enabled: true } } } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { loopDetectionPreToolUseRelay: false },
+      },
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
+  });
+
   it("forwards command approval requests through the active native hook relay", async () => {
     const approvalSpy = vi
       .spyOn(approvalBridge, "handleCodexAppServerApprovalRequest")
@@ -177,7 +205,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
+    params.agentAccountId = "operations";
     params.currentChannelId = "channel:target";
+    params.memberRoleIds = ["maintainer-role"];
+    params.senderId = "maintainer-user";
+    params.senderIsOwner = false;
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
@@ -224,6 +256,13 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
       channelId: "target",
+      requester: {
+        channel: "discord",
+        accountId: "operations",
+        senderId: "maintainer-user",
+        senderIsOwner: false,
+        roleIds: ["maintainer-role"],
+      },
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -850,7 +889,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     const result = await run;
 
-    expect(result.aborted).toBe(true);
+    expect(readAttemptTerminal(result).aborted).toBe(true);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     await expect(
       invokeNativeHookRelay({
