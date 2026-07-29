@@ -51,14 +51,23 @@ function readMatrixConfigOverrides(
     : undefined;
 }
 
-function resolveMatrixQaReplacePaths(overrides: MatrixQaConfigOverrides | undefined) {
-  const replacePaths = ["channels.matrix", "messages"];
+function resolveMatrixQaReplacePaths(params: {
+  accountId: string;
+  overrides: MatrixQaConfigOverrides | undefined;
+}) {
+  // Scenario topology rebuilds groupAllowFrom and may shrink it. The Gateway
+  // requires the exact array path so a parent replacement cannot bypass its guard.
+  const replacePaths = [
+    "channels.matrix",
+    `channels.matrix.accounts.${params.accountId}.groupAllowFrom`,
+    "messages",
+  ];
   // Replacing an untouched root drops config.get-omitted runtime policy and can
   // invalidate lifecycle-owned state while the Matrix account is restarting.
-  if (overrides?.agentDefaults) {
+  if (params.overrides?.agentDefaults) {
     replacePaths.push("agents.defaults");
   }
-  if (overrides?.toolProfile || overrides?.audio) {
+  if (params.overrides?.toolProfile || params.overrides?.audio) {
     replacePaths.push("tools");
   }
   return replacePaths;
@@ -219,7 +228,10 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     const patchResult = await patchGatewayConfig({
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
-      replacePaths: resolveMatrixQaReplacePaths(configOverrides),
+      replacePaths: resolveMatrixQaReplacePaths({
+        accountId: params.accountId,
+        overrides: configOverrides,
+      }),
     });
     if (patchResult.noop !== true) {
       await input.waitForConfigRestartSettle({
