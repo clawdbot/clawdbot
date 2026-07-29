@@ -1100,6 +1100,31 @@ describe("qa mock openai server", () => {
     expect(JSON.stringify(payload)).not.toContain("STALE_PROGRESS_OK");
   });
 
+  it.each([
+    {
+      name: "quiet streaming",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_QUIET_OK`.",
+    },
+    {
+      name: "tool progress",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+    },
+  ])("does not resurrect stale Matrix $name across an ordinary turn", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(fixture.stalePrompt),
+        makeUserInput("Reply exactly `CURRENT_ORDINARY_OK`."),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ORDINARY_OK");
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
   it("uses the current tool result marker after stale streaming history", async () => {
     const server = await startMockServer();
     const currentPrompt =
