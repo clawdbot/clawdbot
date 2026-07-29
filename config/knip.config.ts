@@ -379,9 +379,6 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
-    // Provider tool-schema cache test seams (reset/max-entries/stats) are
-    // consumed only by the tool-schema-runtime tests.
-    "src/agents/embedded-agent-runner/tool-schema-runtime.ts": ["exports"],
   },
   workspaces: {
     ".": {

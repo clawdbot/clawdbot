@@ -6,11 +6,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveModelCatalogScope } from "../agents/model-discovery-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizeDeepSeekToolSchemas,
-  normalizeGeminiToolSchemas,
-  normalizeOpenAIToolSchemas,
-} from "../plugin-sdk/provider-tools.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   PluginLruCache,
@@ -28,7 +23,6 @@ import {
   getPluginRegistryState,
 } from "./runtime-state.js";
 import type {
-  ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
   ProviderPrepareExtraParamsContext,
@@ -90,37 +84,6 @@ function resolveProviderRuntimePluginCacheKey(
     pluginRegistryKey: registryState?.key ?? null,
     pluginRegistryVersion: registryState?.activeVersion ?? null,
   });
-}
-
-export function resolveProviderToolSchemaNormalizeCacheKey(
-  params: ProviderRuntimePluginHandleParams & {
-    context: ProviderNormalizeToolSchemasContext;
-  },
-): string | null {
-  const runtimeHandle = ensureProviderRuntimePluginHandle(params);
-  const plugin = runtimeHandle.plugin;
-  return resolveBundledToolSchemaNormalizeCacheKey(plugin, params.context);
-}
-
-function resolveBundledToolSchemaNormalizeCacheKey(
-  plugin: ProviderPlugin | undefined,
-  context: ProviderNormalizeToolSchemasContext,
-): string | null {
-  switch (plugin?.normalizeToolSchemas) {
-    case normalizeDeepSeekToolSchemas:
-      return "compat:deepseek";
-    case normalizeGeminiToolSchemas:
-      return "compat:gemini";
-    case normalizeOpenAIToolSchemas:
-      return JSON.stringify({
-        family: "openai",
-        provider: normalizeLowercaseStringOrEmpty(context.model?.provider ?? context.provider),
-        api: normalizeLowercaseStringOrEmpty(context.model?.api ?? context.modelApi),
-        baseUrl: normalizeOptionalString(context.model?.baseUrl) ?? "",
-      });
-    default:
-      return null;
-  }
 }
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
