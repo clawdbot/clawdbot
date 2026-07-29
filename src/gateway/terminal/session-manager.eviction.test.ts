@@ -111,6 +111,43 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toBe(true);
   });
 
+  it("holds the cap when concurrent opens complete out of order", async () => {
+    const gates: Array<(pty: FakeTerminalPty) => void> = [];
+    const spawned: FakeTerminalPty[] = [];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => {
+        const pty = await new Promise<FakeTerminalPty>((resolve) => {
+          gates.push(resolve);
+        });
+        spawned.push(pty);
+        return pty;
+      },
+      maxSessions: 2,
+    });
+    const seeded = manager.open(baseOpenRequest({ owner: agentOwner }));
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    gates[0]?.(makeFakePty());
+    const seededOutcome = await seeded;
+    expect(seededOutcome.ok).toBe(true);
+
+    // A reserves the free slot; B sees the reservation and claims the seeded
+    // session for eviction. B's spawn completes first.
+    const openA = manager.open(baseOpenRequest({ owner: agentOwner }));
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    const openB = manager.open(baseOpenRequest({ owner: agentOwner }));
+    await vi.waitFor(() => expect(gates).toHaveLength(3));
+    gates[2]?.(makeFakePty());
+    const outcomeB = await openB;
+    gates[1]?.(makeFakePty());
+    const outcomeA = await openA;
+
+    expect(outcomeA.ok).toBe(true);
+    expect(outcomeB.ok).toBe(true);
+    // The hard cap survives the out-of-order completion.
+    expect(manager.size).toBeLessThanOrEqual(2);
+  });
+
   it("keeps the claimed victim alive when the replacement spawn fails", async () => {
     const pty = makeFakePty();
     let failNextSpawn = false;

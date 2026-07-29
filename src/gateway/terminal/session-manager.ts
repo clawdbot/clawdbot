@@ -185,7 +185,11 @@ export class TerminalSessionManager {
       const claimed = evictionCandidate;
       evictionCandidate = undefined;
       claimed.evictionClaimed = false;
-      if (this.sessions.size >= this.maxSessions) {
+      // Count other opens' outstanding reservations (our own was released
+      // above): skipping eviction against sessions.size alone lets concurrent
+      // spawns that finish out of order register past the hard cap. Evicting
+      // for a reservation whose spawn later fails is the safer direction.
+      if (this.sessions.size + this.opening >= this.maxSessions) {
         const victim =
           !claimed.closed && claimed.viewers.size === 0
             ? claimed
