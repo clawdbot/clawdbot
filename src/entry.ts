@@ -269,7 +269,14 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
   }
 }
 
-async function runMainOrRootHelp(argv: string[]): Promise<void> {
+type RunMainOrRootHelpDeps = {
+  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
+};
+
+export async function runMainOrRootHelp(
+  argv: string[],
+  deps: RunMainOrRootHelpDeps = {},
+): Promise<void> {
   await runCliWithExitFinalization({
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
@@ -289,7 +296,7 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
-        () => import("./cli/run-main.js"),
+        deps.loadRunCli ?? (() => import("./cli/run-main.js")),
       );
       await runCli(argv, {
         additionalStartupTrace: gatewayEntryStartupTrace,
