@@ -34,6 +34,12 @@ const PERMISSION_VALUE_MAX_LENGTH = 48;
 const COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH = 80;
 const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
 const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
+// Automatic approval is limited to concrete calls. A before_tool_call allow
+// covers the evaluated call, not future scope; new or grant-shaped methods stay human-gated.
+const CONCRETE_TOOL_AUTO_APPROVAL_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+]);
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
   String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
   "g",
@@ -87,10 +93,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
   if (!matchesCurrentTurn(requestParams, params.threadId, params.turnId)) {
     return undefined;
   }
-  if (!isSupportedAppServerApprovalMethod(params.method)) {
-    return unsupportedApprovalResponse();
-  }
-
   const context = buildApprovalContext({
     method: params.method,
     requestParams,
@@ -135,7 +137,12 @@ export async function handleCodexAppServerApprovalRequest(params: {
       });
       return buildApprovalResponse(params.method, context.requestParams, policyOutcome.outcome);
     }
-    if (params.autoApproveOpenClawToolPolicy === true && policyOutcome?.outcome === "allowed") {
+    const canAutoApproveConcreteToolCall = CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method);
+    if (
+      canAutoApproveConcreteToolCall &&
+      params.autoApproveOpenClawToolPolicy === true &&
+      policyOutcome?.outcome === "allowed"
+    ) {
       emitApprovalEvent(params.paramsForRun, {
         phase: "resolved",
         kind: context.kind,
@@ -147,7 +154,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       });
       return buildApprovalResponse(params.method, context.requestParams, "approved-once");
     }
-    if (params.autoApprove === true) {
+    if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
       emitApprovalEvent(params.paramsForRun, {
         phase: "resolved",
         kind: context.kind,
@@ -1254,14 +1261,6 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
     return "plugin";
   }
   return "unknown";
-}
-
-function isSupportedAppServerApprovalMethod(method: string): boolean {
-  return (
-    method === "item/commandExecution/requestApproval" ||
-    method === "item/fileChange/requestApproval" ||
-    method === "item/permissions/requestApproval"
-  );
 }
 
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {

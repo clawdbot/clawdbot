@@ -232,6 +232,51 @@ describe("Codex app-server approval bridge", () => {
     },
   );
 
+  it.each([
+    ["promoted tool policy", { autoApproveOpenClawToolPolicy: true }],
+    ["full-auto runtime policy", { autoApprove: true }],
+  ] as const)("keeps permission grants on the human path under %s", async (_label, policy) => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:permission-policy-allow", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:permission-policy-allow",
+        decision: "allow-once",
+      });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "permission-policy-allow",
+        permissions: {
+          network: { enabled: true },
+          fileSystem: { write: ["/workspace"] },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      ...policy,
+    });
+
+    expect(result).toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { write: ["/workspace"] },
+      },
+      scope: "turn",
+    });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_permission_approval" }),
+    );
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
     const params = createParams();
     mockCallGatewayTool
@@ -2465,8 +2510,11 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
-  it("fails closed for unsupported native approval methods without requesting plugin approval", async () => {
+  it("routes unknown approval methods to the human path and still fails closed", async () => {
     const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:future-approval", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:future-approval", decision: "deny" });
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "future/requestApproval",
@@ -2484,8 +2532,15 @@ describe("Codex app-server approval bridge", () => {
       decision: "decline",
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-    expect(params.onAgentEvent).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    findApprovalEvent(params, {
+      status: "denied",
+      approvalId: "plugin:future-approval",
+    });
   });
   it("labels permission approvals explicitly with permission detail", async () => {
     const params = createParams();
