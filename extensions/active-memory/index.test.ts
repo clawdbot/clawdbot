@@ -2638,82 +2638,165 @@ describe("active-memory plugin", () => {
       persistedDetailsTruncated: true,
       originalDetailKeys: ["results"],
     };
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord({
+    type MemoryResultCase = {
+      toolName: string;
+      details: Record<string, unknown>;
+      text: string | string[];
+      expected: boolean;
+    };
+    const cases: MemoryResultCase[] = [
+      {
+        toolName: "memory_search",
+        details: cappedDetails,
+        text: '{\n  "results": [\n    {"text": "ramen"}\n  ]\n}',
+        expected: true,
+      },
+      {
+        toolName: "memory_search",
+        details: cappedDetails,
+        text: '{\n  "results": []\n}',
+        expected: false,
+      },
+      {
+        toolName: "memory_recall",
+        details: cappedDetails,
+        text: "Found 2 memories:\n\n1. ramen\n2. chili crisp",
+        expected: true,
+      },
+      {
+        toolName: "memory_recall",
+        details: cappedDetails,
+        text: "No relevant memories found.",
+        expected: false,
+      },
+      {
+        toolName: "memory_get",
+        details: { path: "memory/food.md", text: "User usually orders ramen." },
+        text: '{"text":"User usually orders ramen."}',
+        expected: true,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: {},
+        text: "User usually orders ramen.",
+        expected: true,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: { results: [] },
+        text: "No memories found.",
+        expected: false,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: {},
+        text: ['{"status":"aborted"}', "The memory lookup was cancelled."],
+        expected: false,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: {},
+        text: ['{"status":"not_found"}', "No memories found."],
+        expected: false,
+      },
+      { toolName: "memory_lookup_custom", details: {}, text: "[]", expected: false },
+      {
+        toolName: "memory_lookup_custom",
+        details: {},
+        text: ['{"results":[]}', "No matching memories were found."],
+        expected: false,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: { results: [{ id: "ramen" }] },
+        text: '{"results":[{"content":"User usually orders ramen."}]}',
+        expected: true,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: cappedDetails,
+        text: '{"results":[{"content":"User usually orders ramen."}]}',
+        expected: true,
+      },
+      {
+        toolName: "memory_lookup_custom",
+        details: cappedDetails,
+        text: '{"results":[]}',
+        expected: false,
+      },
+      {
+        toolName: "lcm_grep",
+        details: { totalMatches: 1, messageCount: 1, summaryCount: 0 },
+        text: "User usually orders ramen.",
+        expected: true,
+      },
+      {
+        toolName: "lcm_grep",
+        details: { totalMatches: 0, messageCount: 0, summaryCount: 0 },
+        text: "No matches found.",
+        expected: false,
+      },
+      {
+        toolName: "lcm_describe",
+        details: { id: "sum_123", type: "summary", summary: { tokenCount: 12 } },
+        text: "User usually orders ramen.",
+        expected: true,
+      },
+      {
+        toolName: "lcm_expand_query",
+        details: {
+          answer: "User usually orders ramen.",
+          expandedSummaryCount: 1,
+          citedIds: ["sum_123"],
+        },
+        text: '{"answer":"User usually orders ramen."}',
+        expected: true,
+      },
+      {
+        toolName: "lcm_grep",
+        details: {
+          persistedDetailsTruncated: true,
+          originalDetailKeys: ["totalMatches", "messages", "summaries"],
+        },
+        text: "## LCM Grep Results\n**Pattern:** `ramen`\n**Total matches:** 2\n\n### Messages",
+        expected: true,
+      },
+      {
+        toolName: "lcm_expand_query",
+        details: {
+          persistedDetailsTruncated: true,
+          originalDetailKeys: ["answer", "expandedSummaryCount"],
+        },
+        text: JSON.stringify({
+          answer: "User usually orders ramen.",
+          expandedSummaryCount: 1,
+          citedIds: ["sum_123"],
+        }),
+        expected: true,
+      },
+    ];
+    const expectMemoryResult = ({ toolName, details, text, expected }: MemoryResultCase) => {
+      const record = {
         message: {
           role: "toolResult",
-          toolName: "memory_search",
-          details: cappedDetails,
-          content: [{ type: "text", text: '{\n  "results": [\n    {"text": "ramen"}\n  ]\n}' }],
+          toolName,
+          details,
+          content: (Array.isArray(text) ? text : [text]).map((value) => ({
+            type: "text",
+            text: value,
+          })),
         },
-      }),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord({
-        message: {
-          role: "toolResult",
-          toolName: "memory_search",
-          details: cappedDetails,
-          content: [{ type: "text", text: '{\n  "results": []\n}' }],
-        },
-      }),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord({
-        message: {
-          role: "toolResult",
-          toolName: "memory_recall",
-          details: cappedDetails,
-          content: [{ type: "text", text: "Found 2 memories:\n\n1. ramen\n2. chili crisp" }],
-        },
-      }),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord({
-        message: {
-          role: "toolResult",
-          toolName: "memory_recall",
-          details: cappedDetails,
-          content: [{ type: "text", text: "No relevant memories found." }],
-        },
-      }),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord({
-        message: {
-          role: "toolResult",
-          toolName: "memory_get",
-          details: { path: "memory/food.md", text: "User usually orders ramen." },
-          content: [{ type: "text", text: '{"text":"User usually orders ramen."}' }],
-        },
-      }),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {},
-            content: [{ type: "text", text: "User usually orders ramen." }],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: { results: [] },
-            content: [{ type: "text", text: "No memories found." }],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(false);
+      };
+      const toolsAllow = toolName.startsWith("memory_")
+        ? toolName === "memory_lookup_custom"
+          ? [toolName]
+          : undefined
+        : [toolName];
+      expect(testing.hasUsableMemoryResultInSessionRecord(record, toolsAllow)).toBe(expected);
+    };
+    for (const testCase of cases) {
+      expectMemoryResult(testCase);
+    }
     for (const status of [
       "failed",
       "error",
@@ -2733,268 +2816,29 @@ describe("active-memory plugin", () => {
       "forbidden",
       "blocked",
     ]) {
-      expect(
-        testing.hasUsableMemoryResultInSessionRecord(
-          {
-            message: {
-              role: "toolResult",
-              toolName: "memory_lookup_custom",
-              details: { status },
-              content: [{ type: "text", text: "The memory backend is unavailable." }],
-            },
-          },
-          ["memory_lookup_custom"],
-        ),
-      ).toBe(false);
+      expectMemoryResult({
+        toolName: "memory_lookup_custom",
+        details: { status },
+        text: "The memory backend is unavailable.",
+        expected: false,
+      });
     }
     for (const status of ["ok", "error_free", "not_failed", "not_cancelled"]) {
-      expect(
-        testing.hasUsableMemoryResultInSessionRecord(
-          {
-            message: {
-              role: "toolResult",
-              toolName: "memory_lookup_custom",
-              details: { status },
-              content: [{ type: "text", text: "User usually orders ramen." }],
-            },
-          },
-          ["memory_lookup_custom"],
-        ),
-      ).toBe(true);
+      expectMemoryResult({
+        toolName: "memory_lookup_custom",
+        details: { status },
+        text: "User usually orders ramen.",
+        expected: true,
+      });
     }
     for (const status of ["not_found", "empty", "no_results", "no_matches"]) {
-      expect(
-        testing.hasUsableMemoryResultInSessionRecord(
-          {
-            message: {
-              role: "toolResult",
-              toolName: "memory_lookup_custom",
-              details: { status },
-              content: [{ type: "text", text: "No memories found." }],
-            },
-          },
-          ["memory_lookup_custom"],
-        ),
-      ).toBe(false);
+      expectMemoryResult({
+        toolName: "memory_lookup_custom",
+        details: { status },
+        text: "No memories found.",
+        expected: false,
+      });
     }
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {},
-            content: [
-              { type: "text", text: '{"status":"aborted"}' },
-              { type: "text", text: "The memory lookup was cancelled." },
-            ],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {},
-            content: [
-              { type: "text", text: '{"status":"not_found"}' },
-              { type: "text", text: "No memories found." },
-            ],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {},
-            content: [{ type: "text", text: "[]" }],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {},
-            content: [
-              { type: "text", text: '{"results":[]}' },
-              { type: "text", text: "No matching memories were found." },
-            ],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: { results: [{ id: "ramen" }] },
-            content: [
-              {
-                type: "text",
-                text: '{"results":[{"content":"User usually orders ramen."}]}',
-              },
-            ],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {
-              persistedDetailsTruncated: true,
-              originalDetailKeys: ["results"],
-            },
-            content: [
-              {
-                type: "text",
-                text: '{"results":[{"content":"User usually orders ramen."}]}',
-              },
-            ],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_lookup_custom",
-            details: {
-              persistedDetailsTruncated: true,
-              originalDetailKeys: ["results"],
-            },
-            content: [{ type: "text", text: '{"results":[]}' }],
-          },
-        },
-        ["memory_lookup_custom"],
-      ),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "lcm_grep",
-            details: { totalMatches: 1, messageCount: 1, summaryCount: 0 },
-            content: [{ type: "text", text: "User usually orders ramen." }],
-          },
-        },
-        ["lcm_grep"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "lcm_grep",
-            details: { totalMatches: 0, messageCount: 0, summaryCount: 0 },
-            content: [{ type: "text", text: "No matches found." }],
-          },
-        },
-        ["lcm_grep"],
-      ),
-    ).toBe(false);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "lcm_describe",
-            details: { id: "sum_123", type: "summary", summary: { tokenCount: 12 } },
-            content: [{ type: "text", text: "User usually orders ramen." }],
-          },
-        },
-        ["lcm_describe"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "lcm_expand_query",
-            details: {
-              answer: "User usually orders ramen.",
-              expandedSummaryCount: 1,
-              citedIds: ["sum_123"],
-            },
-            content: [{ type: "text", text: '{"answer":"User usually orders ramen."}' }],
-          },
-        },
-        ["lcm_expand_query"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "lcm_grep",
-            details: {
-              persistedDetailsTruncated: true,
-              originalDetailKeys: ["totalMatches", "messages", "summaries"],
-            },
-            content: [
-              {
-                type: "text",
-                text: "## LCM Grep Results\n**Pattern:** `ramen`\n**Total matches:** 2\n\n### Messages",
-              },
-            ],
-          },
-        },
-        ["lcm_grep"],
-      ),
-    ).toBe(true);
-    expect(
-      testing.hasUsableMemoryResultInSessionRecord(
-        {
-          message: {
-            role: "toolResult",
-            toolName: "lcm_expand_query",
-            details: {
-              persistedDetailsTruncated: true,
-              originalDetailKeys: ["answer", "expandedSummaryCount"],
-            },
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  answer: "User usually orders ramen.",
-                  expandedSummaryCount: 1,
-                  citedIds: ["sum_123"],
-                }),
-              },
-            ],
-          },
-        },
-        ["lcm_expand_query"],
-      ),
-    ).toBe(true);
   });
 
   it("replaces stale structured active-memory lines on a later empty run", async () => {
@@ -3063,94 +2907,48 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
   });
 
-  it("skips the recall subagent when no registered memory tools match", async () => {
-    const sessionKey = "agent:main:missing-memory-tools";
-    seedSession(sessionKey, "s-missing-memory-tools", 0);
-    const error = makeMemoryToolAllowlistError("no registered tools matched");
-    expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
-    runEmbeddedAgent.mockRejectedValueOnce(error);
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order? missing memory tools" },
-      { sessionKey },
-    );
-
-    expect(result).toBeUndefined();
-    expect(hasDebugLine("no configured memory tools available")).toBe(true);
-    expect(hasWarnLine("No callable tools remain")).toBe(false);
-    const lines = getActiveMemoryLines(sessionKey);
-    expect(lines).toHaveLength(1);
-    expectLinesToContain(lines, "🧩 Active Memory: status=unavailable");
-  });
-
-  it("skips missing memory tools when the allowlist error includes inherited sources", async () => {
-    const sessionKey = "agent:main:missing-memory-tools-with-policy-source";
-    seedSession(sessionKey, "s-missing-memory-tools-with-policy-source", 0);
-    const error = makeMemoryToolAllowlistError(
-      "no registered tools matched",
-      "tools.allow: *, lobster; runtime toolsAllow: memory_search, memory_get",
-    );
-    expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
-    runEmbeddedAgent.mockRejectedValueOnce(error);
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order? missing memory tools with policy" },
-      { sessionKey },
-    );
-
-    expect(result).toBeUndefined();
-    expect(hasDebugLine("no configured memory tools available")).toBe(true);
-    expect(hasWarnLine("No callable tools remain")).toBe(false);
-    const lines = getActiveMemoryLines(sessionKey);
-    expect(lines).toHaveLength(1);
-    expectLinesToContain(lines, "🧩 Active Memory: status=unavailable");
-  });
-
-  it("skips missing custom memory tools using the resolved custom allowlist", async () => {
-    registerPluginConfig({
+  it.each([
+    {
+      name: "skips the recall subagent when no registered memory tools match",
+      suffix: "missing-memory-tools",
+      prompt: "what wings should i order? missing memory tools",
+    },
+    {
+      name: "skips missing memory tools when the allowlist error includes inherited sources",
+      suffix: "missing-memory-tools-with-policy-source",
+      prompt: "what wings should i order? missing memory tools with policy",
+      sources: "tools.allow: *, lobster; runtime toolsAllow: memory_search, memory_get",
+    },
+    {
+      name: "skips missing custom memory tools using the resolved custom allowlist",
+      suffix: "missing-custom-memory-tools",
+      prompt: "what did we decide? missing custom memory tools",
       toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
-      logging: true,
-    });
-    const sessionKey = "agent:main:missing-custom-memory-tools";
-    seedSession(sessionKey, "s-missing-custom-memory-tools", 0);
-    const toolsAllow = ["lcm_grep", "lcm_describe", "lcm_expand_query"];
+    },
+    {
+      name: "skips memory-tool allowlist errors when upstream policy filters memory tools",
+      suffix: "memory-tools-filtered-by-policy",
+      prompt: "what wings should i order? memory tools filtered by policy",
+      sources: "tools.allow: read, exec; runtime toolsAllow: memory_search, memory_get",
+    },
+  ])("$name", async ({ suffix, prompt, sources, toolsAllow }) => {
+    if (toolsAllow) {
+      registerPluginConfig({ toolsAllow, logging: true });
+    }
+    const sessionKey = `agent:main:${suffix}`;
+    seedSession(sessionKey, `s-${suffix}`, 0);
     const error = makeMemoryToolAllowlistError(
       "no registered tools matched",
-      `runtime toolsAllow: ${toolsAllow.join(", ")}`,
+      sources ?? (toolsAllow ? `runtime toolsAllow: ${toolsAllow.join(", ")}` : undefined),
     );
     expect(testing.isMissingRegisteredMemoryToolsError(error, toolsAllow)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
 
-    const result = await runPromptBuild(
-      { prompt: "what did we decide? missing custom memory tools" },
-      { sessionKey },
-    );
-
-    expect(result).toBeUndefined();
+    expect(await runPromptBuild({ prompt }, { sessionKey })).toBeUndefined();
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
-    const lines = getActiveMemoryLines(sessionKey);
-    expect(lines).toHaveLength(1);
-    expectLinesToContain(lines, "🧩 Active Memory: status=unavailable");
-  });
-
-  it("skips memory-tool allowlist errors when upstream policy filters memory tools", async () => {
-    const sessionKey = "agent:main:memory-tools-filtered-by-policy";
-    seedSession(sessionKey, "s-memory-tools-filtered-by-policy", 0);
-    const error = makeMemoryToolAllowlistError(
-      "no registered tools matched",
-      "tools.allow: read, exec; runtime toolsAllow: memory_search, memory_get",
-    );
-    expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
-    runEmbeddedAgent.mockRejectedValueOnce(error);
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order? memory tools filtered by policy" },
-      { sessionKey },
-    );
-
-    expect(result).toBeUndefined();
-    expect(hasDebugLine("no configured memory tools available")).toBe(true);
-    expect(hasWarnLine("No callable tools remain")).toBe(false);
+    if (!toolsAllow) {
+      expect(hasWarnLine("No callable tools remain")).toBe(false);
+    }
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(1);
     expectLinesToContain(lines, "🧩 Active Memory: status=unavailable");
