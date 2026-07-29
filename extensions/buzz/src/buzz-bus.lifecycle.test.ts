@@ -66,10 +66,10 @@ import { sendBuzzTextOneShot, startBuzzBus } from "./buzz-bus.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   BUZZ_INBOUND_MESSAGE_KINDS,
-  BUZZ_RICH_MESSAGE_KIND,
   type BuzzInboundMessage,
 } from "./message-event.js";
 
+const BUZZ_RICH_MESSAGE_KIND = 40_002;
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const ACCOUNT_ID = "default";

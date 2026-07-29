@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   BUZZ_NORMAL_MESSAGE_KIND,
-  BUZZ_RICH_MESSAGE_KIND,
   buildBuzzMessageTags,
   formatBuzzMessageForAgent,
   parseBuzzMessageEvent,
 } from "./message-event.js";
 import { parseBuzzAuthTag } from "./relay-auth.js";
 
+const BUZZ_RICH_MESSAGE_KIND = 40_002;
 const SECRET_KEY = Uint8Array.from(
   Buffer.from("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "hex"),
 );

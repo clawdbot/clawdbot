@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { Event } from "nostr-tools";
 
 export const BUZZ_NORMAL_MESSAGE_KIND = 9;
-export const BUZZ_RICH_MESSAGE_KIND = 40_002;
+const BUZZ_RICH_MESSAGE_KIND = 40_002;
 export const BUZZ_DIFF_MESSAGE_KIND = 40_008;
 export const BUZZ_INBOUND_MESSAGE_KINDS = [
   BUZZ_NORMAL_MESSAGE_KIND,
@@ -10,7 +10,7 @@ export const BUZZ_INBOUND_MESSAGE_KINDS = [
   BUZZ_DIFF_MESSAGE_KIND,
 ] as const;
 
-export type BuzzInboundMessageKind = (typeof BUZZ_INBOUND_MESSAGE_KINDS)[number];
+type BuzzInboundMessageKind = (typeof BUZZ_INBOUND_MESSAGE_KINDS)[number];
 
 // Buzz relay ingest accepts up to 256 KiB generally; diff events have their
 // own stricter validator. Keep inbound admission aligned with those limits.
@@ -20,7 +20,7 @@ const BUZZ_MENTION_MAX_COUNT = 50;
 const BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS = 1_024;
 const BUZZ_INBOUND_MESSAGE_KIND_SET = new Set<number>(BUZZ_INBOUND_MESSAGE_KINDS);
 
-export interface BuzzDiffMetadata {
+interface BuzzDiffMetadata {
   repoUrl: string;
   commitSha: string;
   filePath?: string;
