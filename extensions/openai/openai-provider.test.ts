@@ -379,6 +379,9 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI static provider catalog");
     }
     const gpt55 = result.providers.openai?.models.find((model) => model.id === "gpt-5.5");
+    const gpt54Models = result.providers.openai?.models.filter((model) =>
+      model.id.startsWith("gpt-5.4"),
+    );
     const gpt56Models = result.providers.openai?.models.filter((model) =>
       model.id.startsWith("gpt-5.6"),
     );
@@ -403,6 +406,44 @@ describe("buildOpenAIProvider", () => {
     expect(gpt56Models?.map((model) => model.compat?.supportedReasoningEfforts)).toEqual(
       Array.from({ length: 4 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
     );
+    expect(gpt54Models).toMatchObject([
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      },
+      {
+        id: "gpt-5.4-pro",
+        name: "GPT-5.4 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      },
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+      },
+      {
+        id: "gpt-5.4-nano",
+        name: "GPT-5.4 Nano",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+      },
+    ]);
     expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6");
     expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
