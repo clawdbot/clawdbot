@@ -57,6 +57,11 @@ type BoundModelResult<T> =
   | { client: GatewayBrowserClient; value: T }
   | { client: GatewayBrowserClient; error: unknown };
 
+type ActivationTaskResult = {
+  result: SystemAgentSetupActivateResult;
+  refreshError: string | null;
+};
+
 async function captureModelResult<T>(
   client: GatewayBrowserClient,
   load: () => Promise<T>,
@@ -141,19 +146,37 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private readonly activationTask = new Task<
     readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
-    BoundModelResult<SystemAgentSetupActivateResult>
+    BoundModelResult<ActivationTaskResult>
   >(this, {
     autoRun: false,
     args: () => [null, null],
-    task: ([client, params], { signal }) =>
-      client && params
-        ? captureModelResult(client, () =>
-            client.request<SystemAgentSetupActivateResult>("openclaw.setup.activate", params, {
+    task: ([client, params], { signal }) => {
+      if (!client || !params) {
+        return initialState;
+      }
+      return captureModelResult(client, async () => {
+        const mutation = await this.context.runtimeConfig.runExternalMutation((mutationClient) => {
+          if (mutationClient !== client) {
+            throw new Error("Connection changed before model activation started.");
+          }
+          return mutationClient.request<SystemAgentSetupActivateResult>(
+            "openclaw.setup.activate",
+            params,
+            {
               timeoutMs: activationTimeoutForKind(params.kind),
               signal,
-            }),
-          )
-        : initialState,
+            },
+          );
+        });
+        if (!mutation.ok) {
+          throw new Error(mutation.error);
+        }
+        return {
+          result: mutation.value,
+          refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
+        };
+      });
+    },
     onComplete: (outcome) => {
       const current = this.activationState;
       if (current.phase !== "testing" || this.context.gateway.snapshot.client !== outcome.client) {
@@ -168,11 +191,15 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         };
         return;
       }
-      this.activationState = mapActivationResult({
-        result: outcome.value,
+      const activationState = mapActivationResult({
+        result: outcome.value.result,
         targetId: current.targetId,
         fallbackError: t("modelSetup.errors.activationFailed"),
       });
+      this.activationState =
+        activationState.phase === "success" && outcome.value.refreshError
+          ? { ...activationState, warning: outcome.value.refreshError }
+          : activationState;
       if (this.activationState.phase === "success") {
         this.manualApiKey = "";
       }
