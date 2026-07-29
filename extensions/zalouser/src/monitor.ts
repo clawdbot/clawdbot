@@ -1041,11 +1041,20 @@ async function resolveInboundMediaFacts(params: {
       filePathHint: `zalouser-inbound-${Date.now()}.jpg`,
       maxBytes: 25 * 1024 * 1024,
     });
+    // Zalo CDN returns `application/octet-stream` for photos (verified
+    // 2026-05-21 on photo-stal-*.zdn.vn). The kernel's
+    // `resolveCurrentTurnImages` requires `MediaType` to start with
+    // `image/` to attach the photo as a vision content block, so we
+    // override to a real image MIME derived from the URL extension when
+    // saveRemoteMedia's detected contentType is missing or
+    // octet-stream. extractInboundMedia gated us here so we KNOW this
+    // bytes represent an image (`params.media.kind === "image"`).
+    const contentType = resolveInboundImageContentType(saved.contentType, params.media.url);
     return toInboundMediaFacts([
       {
         path: saved.path,
         url: saved.path,
-        contentType: saved.contentType,
+        contentType,
         kind: params.media.kind,
       },
     ]);
@@ -1054,6 +1063,30 @@ async function resolveInboundMediaFacts(params: {
     params.logVerbose(`zalouser: inbound media fetch failed for ${params.media.url}: ${reason}`);
     return [];
   }
+}
+
+/**
+ * Resolve a real `image/*` MIME for an inbound Zalo photo even when the CDN
+ * returns `application/octet-stream`. Picks from the URL extension first,
+ * falls back to `image/jpeg` (most common Zalo photo format).
+ *
+ * Exported via __testing only; not part of the public plugin surface.
+ */
+export function resolveInboundImageContentType(detected: string | undefined, url: string): string {
+  if (detected && detected.startsWith("image/")) {
+    return detected;
+  }
+  const match = url.match(/\.([a-z]+)(?:\?|$)/i);
+  const ext = (match?.[1] ?? "jpg").toLowerCase();
+  const extMap: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    bmp: "image/bmp",
+  };
+  return extMap[ext] ?? "image/jpeg";
 }
 
 // Re-export internal helper for unit tests only - keep out of public surface
