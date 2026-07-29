@@ -653,7 +653,7 @@ function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
   };
 }
 
-const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
+const GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT = {
   marketplaces: [
     {
       name: "openai-curated",
@@ -675,8 +675,12 @@ const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
     },
   ],
   marketplaceLoadErrors: [],
+} satisfies v2.PluginInstalledResponse;
+
+const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
+  ...GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT,
   featuredPluginIds: [],
-} as const;
+} satisfies v2.PluginListResponse;
 
 const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
   plugin: {
@@ -701,7 +705,7 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
         name: "Google Calendar",
         description: null,
         installUrl: null,
-        needsAuth: false,
+        category: null,
       },
     ],
     mcpServers: ["google-calendar"],
@@ -711,9 +715,23 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
 function createGoogleCalendarRequest(
   appInventory?: (method: "app/installed" | "app/read") => unknown,
 ) {
-  return vi.fn(async (method: string) => {
+  let threadAppEnabled = false;
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (method === "config/read") {
+      expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
+      return { config: {}, layers: [] };
+    }
+    if (
+      method === "app/installed" &&
+      typeof (params as { threadId?: unknown } | undefined)?.threadId === "string"
+    ) {
+      return codexAppInventoryResponse("app/installed", [googleCalendarAppInfo(threadAppEnabled)]);
+    }
     if ((method === "app/installed" || method === "app/read") && appInventory) {
       return appInventory(method);
+    }
+    if (method === "plugin/installed") {
+      return GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT;
     }
     if (method === "plugin/list") {
       return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
@@ -722,6 +740,9 @@ function createGoogleCalendarRequest(
       return GOOGLE_CALENDAR_PLUGIN_READ_RESULT;
     }
     if (method === "thread/start") {
+      const config = (params as { config?: { apps?: Record<string, { enabled?: boolean }> } })
+        ?.config;
+      threadAppEnabled = config?.apps?.["google-calendar-app"]?.enabled === true;
       return threadStartResult("thread-1");
     }
     if (method === "turn/start") {
@@ -4226,8 +4247,8 @@ describe("runCodexAppServerAttempt", () => {
         _meta: null,
       });
     const request = vi.fn(async (method: string) => {
-      if (method === "plugin/list") {
-        return {
+      if (method === "plugin/installed" || method === "plugin/list") {
+        const installed = {
           marketplaces: [
             {
               name: "openai-bundled",
@@ -4247,8 +4268,10 @@ describe("runCodexAppServerAttempt", () => {
             },
           ],
           marketplaceLoadErrors: [],
-          featuredPluginIds: [],
-        };
+        } satisfies v2.PluginInstalledResponse;
+        return method === "plugin/installed"
+          ? installed
+          : ({ ...installed, featuredPluginIds: [] } satisfies v2.PluginListResponse);
       }
       if (method === "plugin/read") {
         return {
@@ -4461,7 +4484,7 @@ describe("runCodexAppServerAttempt", () => {
       expectedAppEnabled: true,
     },
     {
-      name: "does not expose a cached disabled app when runtime callability is unknown",
+      name: "provisionally enables a cached disabled plugin app after thread attestation",
       cachedEnabled: false,
       cacheKey: ({ appServer, agentDir }: GoogleCalendarCacheKeyInput) =>
         buildCodexPluginAppCacheKey({
@@ -4471,8 +4494,8 @@ describe("runCodexAppServerAttempt", () => {
         }),
       appInventory: (method: "app/installed" | "app/read") =>
         codexAppInventoryResponse(method, [googleCalendarAppInfo(false)]),
-      expectsAppInventory: true,
-      expectedAppEnabled: undefined,
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
     },
     {
       name: "keys plugin app inventory by inherited API key fallback credentials",
@@ -4527,12 +4550,31 @@ describe("runCodexAppServerAttempt", () => {
       expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(
         expectedAppEnabled,
       );
+      const globalAppInventoryRequests = requests.filter(
+        (entry) =>
+          entry.method === "app/installed" &&
+          typeof (entry.params as { threadId?: unknown } | undefined)?.threadId !== "string",
+      );
       if (expectsAppInventory) {
-        expect(requests.map((entry) => entry.method)).toContain("app/installed");
+        expect(globalAppInventoryRequests).not.toHaveLength(0);
         expect(requests.map((entry) => entry.method)).toContain("app/read");
       } else {
-        expect(requests.map((entry) => entry.method)).not.toContain("app/installed");
+        expect(globalAppInventoryRequests).toHaveLength(0);
         expect(requests.map((entry) => entry.method)).not.toContain("app/read");
+      }
+      if (!cachedEnabled) {
+        expect(
+          requests.filter(
+            (entry) =>
+              entry.method === "app/installed" &&
+              typeof (entry.params as { threadId?: unknown } | undefined)?.threadId === "string",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            method: "app/installed",
+            params: { threadId: "thread-1", forceRefresh: false },
+          }),
+        ]);
       }
     },
   );

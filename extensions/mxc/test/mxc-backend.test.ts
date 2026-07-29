@@ -741,6 +741,20 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
         Buffer.from("hello mxc"),
       );
+      await expect(
+        bridge?.readFile({
+          filePath: "notes/one.txt",
+          cwd: workdir,
+          maxBytes: "hello mxc".length,
+        }),
+      ).resolves.toEqual(Buffer.from("hello mxc"));
+      await expect(
+        bridge?.readFile({
+          filePath: "notes/one.txt",
+          cwd: workdir,
+          maxBytes: "hello mxc".length - 1,
+        }),
+      ).rejects.toThrow();
       expect(await bridge?.stat({ filePath: "notes/one.txt", cwd: workdir })).toMatchObject({
         type: "file",
         size: "hello mxc".length,

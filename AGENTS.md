@@ -73,6 +73,7 @@ Skills own workflows; root owns hard policy and routing.
 - Tests may use observed examples, but prod literals need a short contract reason.
 - Compatibility is opt-in. "Shipped" means reachable from a release Git tag; main/GitHub/PR/unreleased code is not shipped.
 - Refactor default: one canonical path. Delete the old path unless user explicitly wants compat or the shipped public contract is obvious and cited.
+- Reuse the canonical non-array record guard instead of adding local `isRecord` copies. Core, UI, scripts with workspace package resolution, and packages that already depend on normalization-core import `@openclaw/normalization-core/record-coerce`; plugins import `openclaw/plugin-sdk/string-coerce-runtime`. Keep a local guard only when the semantics intentionally differ or the file must remain dependency-free, browser-serialized, generated, or runnable outside workspace package resolution.
 - Core runtime consumes only current canonical shapes/config/data. Legacy or retired shapes normalize only in doctor/migration code before runtime; no runtime shims, aliases, or fallback readers.
 - State/storage migrations are database-first. Runtime reads/writes the canonical store only. Old file stores, sidecars, aliases, and fallback readers belong in `openclaw doctor --fix` migration code only, never steady-state runtime.
 - Storage default: SQLite only. Do not add JSON/JSONL/TXT/sidecar files for OpenClaw-owned runtime state, caches, queues, registries, indexes, cursors, checkpoints, or plugin scratch data.

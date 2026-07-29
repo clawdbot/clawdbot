@@ -982,6 +982,60 @@ describe("agentLoop tool termination", () => {
     };
   }
 
+  it.each([
+    { source: "network" as const, tainted: true },
+    { source: undefined, tainted: false },
+  ])(
+    "persists $source tool-result taint through the assistant turn",
+    async ({ source, tainted }) => {
+      let turn = 0;
+      const tool: AgentTool = {
+        ...makeTool("fetch", []),
+        ...(source ? { resultContentSource: source } : {}),
+      };
+      const streamFn: StreamFn = () => {
+        turn += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message =
+            turn === 1
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "call-fetch", name: tool.name, arguments: {} },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "stored result" }]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+
+      const stream = agentLoop(
+        [{ role: "user", content: "fetch", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        config,
+        undefined,
+        streamFn,
+      );
+      await collectEvents(stream);
+      const messages = await stream.result();
+      const toolResult = messages.find((message) => message.role === "toolResult");
+      const assistant = messages.findLast(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      const metadata = (message: AgentMessage | undefined) =>
+        message ? (message as unknown as Record<string, unknown>)["__openclaw"] : undefined;
+
+      expect(metadata(toolResult)).toEqual(
+        tainted ? { resultContentSource: "network" } : undefined,
+      );
+      expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
+    },
+  );
+
   it("persists and passes a local turn id when the provider omits one", async () => {
     let turn = 0;
     const toolCall = { type: "toolCall" as const, id: "call_0", name: "exec", arguments: {} };

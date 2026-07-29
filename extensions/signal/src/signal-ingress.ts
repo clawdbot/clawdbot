@@ -12,10 +12,6 @@ import { normalizeNullableString as normalizeRawString } from "openclaw/plugin-s
 import type { SignalSseEvent } from "./client-adapter.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
-const SIGNAL_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES = 1000;
-const SIGNAL_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_FAILED_MAX_ENTRIES = 1000;
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 
 type SignalIngressEnvelope = {
@@ -185,10 +181,8 @@ export async function startSignalIngressMonitor(params: {
     retention: {
       // Signal previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      completedTtlMs: SIGNAL_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SIGNAL_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SIGNAL_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     drain: {

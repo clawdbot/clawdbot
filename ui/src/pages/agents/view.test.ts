@@ -153,11 +153,27 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onIdentityAvatarSelect: () => undefined,
     onIdentitySave: () => undefined,
     onTogglePinnedAgent: () => undefined,
+    onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
 }
 
 describe("renderAgents", () => {
+  it("opens global Agent defaults before the per-agent tabs", () => {
+    const container = document.createElement("div");
+    const onOpenAgentDefaults = vi.fn();
+    render(renderAgents(createProps({ onOpenAgentDefaults })), container);
+
+    const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
+    const tabs = container.querySelector(".agent-tabs");
+    expect(defaultsRow?.textContent).toContain("Agent defaults");
+    expect(defaultsRow?.textContent).toContain("Defaults every agent inherits unless overridden.");
+    expect(defaultsRow?.compareDocumentPosition(tabs!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    defaultsRow?.click();
+    expect(onOpenAgentDefaults).toHaveBeenCalledOnce();
+  });
+
   it("prefills the identity editor from the fetched agent identity", () => {
     const container = document.createElement("div");
     render(
@@ -270,6 +286,73 @@ describe("renderAgents", () => {
     expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
     );
+  });
+
+  it("shows canonical model names alongside configured aliases in agent options", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { alias: "opus" },
+            "anthropic/claude-sonnet-5": { alias: "sonnet" },
+            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            "local/unlisted-model": { alias: "My local model" },
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            {
+              id: "claude-opus-4-8",
+              alias: "opus",
+              name: "Opus 4.8",
+              provider: "anthropic",
+            },
+            {
+              id: "claude-sonnet-5",
+              alias: "sonnet",
+              name: "Sonnet 5",
+              provider: "anthropic",
+            },
+            {
+              id: "moonshotai/kimi-k2.5",
+              alias: "Kimi K2.5 (NVIDIA)",
+              name: "Kimi K2.5",
+              provider: "nvidia",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const candidate = container.querySelector<HTMLSelectElement>("select.settings-select");
+      expect(candidate?.value).toBe("anthropic/claude-opus-4-8");
+      return candidate;
+    });
+    const options = new Map(
+      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+    );
+
+    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
+    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
+    expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
+    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
   });
 
   it.each([

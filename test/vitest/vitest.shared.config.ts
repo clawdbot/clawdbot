@@ -483,6 +483,16 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
       },
       {
+        find: "@openclaw/normalization-core/stable-node-path",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "stable-node-path.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/string-coerce",
         replacement: path.join(
           repoRoot,

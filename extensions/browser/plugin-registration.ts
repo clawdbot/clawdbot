@@ -89,6 +89,7 @@ function createLazyBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
+    resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     outputSchema: BrowserToolOutputSchema,

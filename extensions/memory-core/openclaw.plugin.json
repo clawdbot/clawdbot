@@ -1,5 +1,6 @@
 {
   "id": "memory-core",
+  "name": "OpenClaw Memory",
   "activation": {
     "onStartup": false
   },

@@ -490,6 +490,9 @@ export interface AgentToolResult<T> {
 /** Callback used by tools to stream partial execution updates. */
 export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
 
+/** Origin class for tool output that can taint later model-authored content in the same turn. */
+export type ToolResultContentSource = "network";
+
 /** Tool definition used by the agent runtime. */
 export interface AgentTool<
   TParameters extends TSchema = TSchema,
@@ -501,6 +504,8 @@ export interface AgentTool<
   outputSchema?: TSchema;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Tool results contain externally controlled network content. */
+  resultContentSource?: ToolResultContentSource;
   /**
    * Optional compatibility shim for raw tool-call arguments before schema validation.
    * Must return an object that matches `TParameters`.

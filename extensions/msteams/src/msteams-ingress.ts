@@ -17,9 +17,6 @@ const MSTEAMS_INGRESS_VERSION = 1;
 const MSTEAMS_INGRESS_DRAIN_INTERVAL_MS = 500;
 const MSTEAMS_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
 const MSTEAMS_INGRESS_SCAN_LIMIT = 100;
-const MSTEAMS_INGRESS_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
-const MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const MSTEAMS_INGRESS_FAILED_MAX_ENTRIES = 4096;
 
 type MSTeamsIngressActivity = MSTeamsTurnContext["activity"];
 
@@ -181,10 +178,7 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     pollIntervalMs: MSTEAMS_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-      completedMaxEntries: MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-      failedMaxEntries: MSTEAMS_INGRESS_FAILED_MAX_ENTRIES,
+      failedMaxEntries: 4096,
     },
     appendRetryDelaysMs: [0],
     waitForDeliveryIdleBeforeRepump: false,

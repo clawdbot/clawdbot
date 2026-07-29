@@ -83,7 +83,7 @@ Non-goals for v1:
   - SecretRef-managed token: resolve the external secret provider, or export `OPENCLAW_GATEWAY_TOKEN` in this shell and rerun `openclaw dashboard`
   - Runtime token generated because no shared secret was configured: run `openclaw doctor --generate-gateway-token`, restart the Gateway, then use the configured token
 - In the dashboard settings, paste the token or password into the auth field, then connect.
-- The UI language picker lives in **Settings -> General -> Language**, not under Appearance.
+- The UI language picker lives in **Settings → Appearance → Language**.
 
 ## Related
 

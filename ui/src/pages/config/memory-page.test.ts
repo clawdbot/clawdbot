@@ -38,10 +38,10 @@ function memoryTabRoute(tab: "overview" | "memories" | "dreams" | "settings") {
   return memoryRoute(`/settings/memory${tab === "overview" ? "" : `/${tab}`}`);
 }
 
-function engine(id: string, enabled: boolean): PluginCatalogItem {
+function engine(id: string, enabled: boolean, name = id): PluginCatalogItem {
   return {
     id,
-    name: id,
+    name,
     installed: true,
     enabled,
     state: enabled ? "enabled" : "disabled",
@@ -68,6 +68,7 @@ function createPage(params: {
   catalog?: readonly PluginCatalogItem[];
   mutationAllowed?: boolean;
   patchForm?: (path: Array<string | number>, value: unknown) => void;
+  waitForPendingWrites?: () => Promise<void>;
   setEnabled?: (pluginId: string, enabled: boolean) => Promise<unknown>;
   refresh?: () => Promise<void>;
   navigate?: (routeId: string, options?: ApplicationNavigationOptions) => void;
@@ -157,6 +158,7 @@ function createPage(params: {
     ),
     patchForm: params.patchForm ?? vi.fn(),
     removeFormValue: vi.fn(),
+    waitForPendingWrites: params.waitForPendingWrites ?? (() => Promise.resolve()),
     refresh: vi.fn(params.refresh ?? (() => Promise.resolve())),
     ensureLoaded: () => Promise.resolve(),
   };
@@ -285,12 +287,22 @@ describe("MemorySettingsPage engine slot", () => {
     // regardless of catalog enablement, so the page must not report lancedb.
     const { element } = createPage({
       configObject: {},
-      catalog: [engine("memory-core", false), engine("memory-lancedb", true)],
+      catalog: [
+        engine("memory-lancedb", true, "Memory LanceDB"),
+        engine("memory-core", false, "OpenClaw Memory"),
+      ],
     });
     document.body.append(element);
     try {
       await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
       expect(element.textContent).toContain("falls back to its default owner");
+      expect(
+        [
+          ...(element
+            .querySelector("wa-radio-group.settings-segmented")
+            ?.querySelectorAll("wa-radio") ?? []),
+        ].map((radio) => radio.textContent?.trim()),
+      ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
     } finally {
       element.remove();
     }
@@ -333,13 +345,15 @@ describe("MemorySettingsPage engine slot", () => {
     }
   });
 
-  it("persists Off as the none slot so it survives a config refresh", async () => {
+  it("persists Off and drains its autosave before re-enabling memory", async () => {
+    const pendingWrites = deferred<void>();
     const patchForm = vi.fn();
     const setEnabled = vi.fn(() => Promise.resolve({}));
     const { element } = createPage({
       configObject: { plugins: { slots: { memory: "memory-lancedb" } } },
       catalog: [engine("memory-core", false), engine("memory-lancedb", true)],
       patchForm,
+      waitForPendingWrites: () => pendingWrites.promise,
       setEnabled,
     });
     document.body.append(element);
@@ -357,6 +371,13 @@ describe("MemorySettingsPage engine slot", () => {
       await element.updateComplete;
       expect(activeEngine(element)).toBe("");
       expect(element.textContent).toContain("switched off");
+
+      selectEngine(element, "memory-core");
+      await Promise.resolve();
+      expect(setEnabled).not.toHaveBeenCalled();
+
+      pendingWrites.resolve();
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
     } finally {
       element.remove();
     }
