@@ -2653,4 +2653,94 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });
+
+describe("codex exec JSONL tool events", () => {
+  function parseCodexToolEvents(events: Array<Record<string, unknown>>) {
+    const starts: CliToolUseStartDelta[] = [];
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "codex", output: "jsonl" },
+      providerId: "codex-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (event) => starts.push(event),
+      onToolResult: (event) => results.push(event),
+    });
+    parser.push(`${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+    parser.finish();
+    return { starts, results };
+  }
+
+  it("correlates started and completed items and synthesizes terminal-only starts", () => {
+    const parsed = parseCodexToolEvents([
+      {
+        type: "item.started",
+        item: {
+          id: "mcp-1",
+          type: "mcp_tool_call",
+          server: "finance-data",
+          tool: "lookup",
+          arguments: { symbol: "AAPL" },
+          status: "in_progress",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "mcp-1",
+          type: "mcp_tool_call",
+          server: "finance-data",
+          tool: "lookup",
+          status: "completed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "mcp-2",
+          type: "mcp_tool_call",
+          server: "",
+          tool: "lookup",
+          status: "failed",
+          error: { message: "fixture failure" },
+        },
+      },
+    ]);
+
+    expect(parsed.starts.map(({ toolCallId, name }) => ({ toolCallId, name }))).toEqual([
+      { toolCallId: "mcp-1", name: "finance-data.lookup" },
+      { toolCallId: "mcp-2", name: "lookup" },
+    ]);
+    expect(
+      parsed.results.map(({ toolCallId, name, isError }) => ({ toolCallId, name, isError })),
+    ).toEqual([
+      { toolCallId: "mcp-1", name: "finance-data.lookup", isError: false },
+      { toolCallId: "mcp-2", name: "lookup", isError: true },
+    ]);
+  });
+
+  it("uses the native builtin names from the Codex item contract", () => {
+    const parsed = parseCodexToolEvents([
+      {
+        type: "item.completed",
+        item: {
+          id: "command",
+          type: "command_execution",
+          command: "pwd",
+          status: "failed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: { id: "patch", type: "file_change", changes: [], status: "completed" },
+      },
+      {
+        type: "item.completed",
+        item: { id: "search", type: "web_search", query: "fixture" },
+      },
+    ]);
+
+    expect(parsed.starts.map((event) => event.name)).toEqual(["bash", "apply_patch", "web_search"]);
+    expect(parsed.results.map((event) => event.isError)).toEqual([true, false, false]);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -21,6 +21,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
@@ -76,6 +77,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   >();
   const cliLoopbackCalls: CliLoopbackCall[] = [];
   const activeCliTools = new Map<string, ActiveCliTool>();
+  const summaryCalls = new Map<string, { name: string; failed: boolean }>();
+  const summaryTools: string[] = [];
+  const summaryToolNames = new Set<string>();
+  let summaryFailures = 0;
   let cliLoopbackCorrelationOverflowed = false;
   const messagingToolSentTexts: string[] = [];
   const messagingToolSentTextKeys = new Set<string>();
@@ -84,6 +89,20 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const messagingToolSentTargets: MessagingToolSend[] = [];
   const messagingToolSentTargetKeys = new Set<string>();
   const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
+  const trackSummaryCall = (toolCallId: string, rawName: string) => {
+    const current = summaryCalls.get(toolCallId);
+    if (current) {
+      return current;
+    }
+    const name = rawName.trim();
+    const created = { name, failed: false };
+    summaryCalls.set(toolCallId, created);
+    if (name && !summaryToolNames.has(name)) {
+      summaryToolNames.add(name);
+      summaryTools.push(name);
+    }
+    return created;
+  };
   const matchesCliLoopbackCall = (
     toolName: string,
     toolArgs: Record<string, unknown>,
@@ -418,6 +437,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     });
   };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
+    trackSummaryCall(event.toolCallId, event.name);
     if (event.kind !== "server_tool_use") {
       const activeTool: ActiveCliTool = {
         toolName: event.name,
@@ -479,6 +499,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     isError: boolean;
     result?: unknown;
   }) => {
+    const summaryCall = trackSummaryCall(event.toolCallId, event.name);
+    if (event.isError && !summaryCall.failed) {
+      summaryCall.failed = true;
+      summaryFailures += 1;
+    }
     const activeTool = activeCliTools.get(event.toolCallId);
     activeCliTools.delete(event.toolCallId);
     retireCliLoopbackCorrelation(event.toolCallId, activeTool);
@@ -583,6 +608,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     messagingToolSentTargets,
     messagingToolSourceReplyPayloads,
   });
+  const toolSummary = (): ToolSummaryTrace => ({
+    calls: summaryCalls.size,
+    tools: summaryTools.slice(),
+    failures: summaryFailures,
+  });
   return {
     beginGatewayCapture,
     handleCliToolUseStart,
@@ -594,6 +624,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       const current = evidence();
       return {
         ...output,
+        ...(context.params.provider.trim().toLowerCase() === "codex-cli"
+          ? { toolSummary: toolSummary() }
+          : {}),
         ...(yielded ? { yielded: true as const } : {}),
         ...(current.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
         ...(current.didDeliverSourceReplyViaMessageTool

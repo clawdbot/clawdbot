@@ -14,6 +14,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
+import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = {
   input?: number;
@@ -63,6 +64,7 @@ export type CliOutput = {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  toolSummary?: ToolSummaryTrace;
   yielded?: true;
 };
 
@@ -152,6 +154,10 @@ function isClaudeCliProvider(providerId: string): boolean {
 
 function isGeminiCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "google-gemini-cli";
+}
+
+function isCodexCliProvider(providerId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(providerId) === "codex-cli";
 }
 
 function isGeminiStreamJsonDialect(params: {
@@ -1161,6 +1167,83 @@ function dispatchGeminiCliStreamingToolEvent(params: {
   }
 }
 
+function readCodexCliToolItem(item: Record<string, unknown>): {
+  toolCallId: string;
+  name: string;
+  kind: CliToolUseStartDelta["kind"];
+  args: Record<string, unknown>;
+  isError: boolean;
+  result?: unknown;
+} | null {
+  const toolCallId = typeof item.id === "string" ? item.id.trim() : "";
+  if (!toolCallId) {
+    return null;
+  }
+  const itemType = normalizeLowercaseStringOrEmpty(item.type);
+  let name: string;
+  if (itemType === "mcp_tool_call") {
+    const tool = typeof item.tool === "string" ? item.tool.trim() : "";
+    if (!tool) {
+      return null;
+    }
+    const server = typeof item.server === "string" ? item.server.trim() : "";
+    name = server ? `${server}.${tool}` : tool;
+  } else if (itemType === "command_execution") {
+    name = "bash";
+  } else if (itemType === "file_change") {
+    name = "apply_patch";
+  } else if (itemType === "web_search") {
+    name = "web_search";
+  } else {
+    return null;
+  }
+  return {
+    toolCallId,
+    name,
+    kind: itemType === "mcp_tool_call" ? "mcp_tool_use" : "tool_use",
+    args: itemType === "mcp_tool_call" && isRecord(item.arguments) ? item.arguments : {},
+    isError: item.status === "failed" || item.status === "error",
+    result: item.result ?? item.error ?? item.aggregated_output,
+  };
+}
+
+function dispatchCodexCliStreamingToolEvent(params: {
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ToolUseTracker;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+}): void {
+  if (
+    !isCodexCliProvider(params.providerId) ||
+    (params.parsed.type !== "item.started" && params.parsed.type !== "item.completed") ||
+    !isRecord(params.parsed.item)
+  ) {
+    return;
+  }
+  const item = readCodexCliToolItem(params.parsed.item);
+  if (!item) {
+    return;
+  }
+  emitToolStartOnce(
+    params.tracker,
+    item.toolCallId,
+    item.name,
+    item.kind,
+    item.args,
+    params.onToolUseStart,
+  );
+  if (params.parsed.type === "item.completed") {
+    emitToolResultOnce(
+      params.tracker,
+      item.toolCallId,
+      item.isError,
+      item.result,
+      params.onToolResult,
+    );
+  }
+}
+
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
 const GEMINI_CLI_RESULT_ERROR_FALLBACK = "Gemini CLI result status was error.";
 
@@ -1392,6 +1475,13 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     if (params.onToolUseStart || params.onToolResult) {
+      dispatchCodexCliStreamingToolEvent({
+        providerId: params.providerId,
+        parsed,
+        tracker: toolTracker,
+        onToolUseStart: params.onToolUseStart,
+        onToolResult: params.onToolResult,
+      });
       dispatchGeminiCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,

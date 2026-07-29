@@ -1187,6 +1187,9 @@ export async function runPreparedCliAgent(
           : {}),
         systemPromptReport: context.systemPromptReport,
         ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
+        ...(resultParams.output.toolSummary
+          ? { toolSummary: resultParams.output.toolSummary }
+          : {}),
         executionTrace: {
           winnerProvider: params.provider,
           winnerModel: context.modelId,

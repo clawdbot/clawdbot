@@ -62,9 +62,9 @@ export function hasCompletedModelProgressForIdleBreaker(
 export function buildTraceToolSummary(params: {
   toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
   fallbackHadFailure: boolean;
-}): ToolSummaryTrace | undefined {
+}): ToolSummaryTrace {
   if (!params.toolMetas?.length) {
-    return undefined;
+    return { calls: 0, tools: [], failures: 0 };
   }
   const tools: string[] = [];
   const seen = new Set<string>();
