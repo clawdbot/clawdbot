@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getPwToolsCoreNavigationGuardMocks,
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
@@ -238,6 +239,36 @@ describe("pw-tools-core", () => {
     });
   });
 
+  it("preserves missing-file errors from the download producer", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const targetPath = path.join(tempDir, "file.bin");
+      const producerError = Object.assign(new Error("download source disappeared"), {
+        code: "ENOENT",
+      });
+      const saveAs = vi.fn(async () => {
+        throw producerError;
+      });
+
+      const pending = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 1000,
+      });
+
+      await Promise.resolve();
+      harness.trigger({
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+      });
+
+      await expect(pending).rejects.toBe(producerError);
+      await expectPathMissing(targetPath);
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not write outside the output root when a download parent is swapped after save",
     async () => {
@@ -316,6 +347,81 @@ describe("pw-tools-core", () => {
     expect(harness.activeHandlerCount()).toBe(0);
   });
 
+  it("rejects blocked wait/download sources before writing the file", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const navigationGuard = getPwToolsCoreNavigationGuardMocks();
+      const targetPath = path.join(tempDir, "blocked.bin");
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "private-content", "utf8");
+      });
+      navigationGuard.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+        new Error("Navigation blocked: private IP address"),
+      );
+      const pending = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 1000,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "http://127.0.0.1/private.bin",
+        suggestedFilename: () => "private.bin",
+        saveAs,
+      });
+
+      await expect(pending).rejects.toThrow(/blocked|private|ssrf/i);
+      expect(navigationGuard.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+        url: "http://127.0.0.1/private.bin",
+        ssrfPolicy: { allowPrivateNetwork: false },
+        browserProxyMode: undefined,
+      });
+      expect(saveAs).not.toHaveBeenCalled();
+      await expectPathMissing(targetPath);
+    });
+  });
+
+  it("blocks wait/download navigation before a download event is emitted", async () => {
+    const harness = createDownloadEventHarness();
+    const blocked = new Error("Navigation blocked: private IP address");
+    blocked.name = "SsrFBlockedError";
+    sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
+      async ({
+        action,
+        onPolicyDenied,
+        page,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        onPolicyDenied?: (event: { state: "detected"; error: unknown }) => void;
+        page: { url: () => string };
+      }) => {
+        const pending = action(page.url());
+        onPolicyDenied?.({ state: "detected", error: blocked });
+        return await pending;
+      },
+    );
+
+    const pending = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    await expect(pending).rejects.toBe(blocked);
+    expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page: expect.anything(),
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
+    expect(harness.activeHandlerCount()).toBe(0);
+  });
+
   it("lets only the latest overlapping explicit waiter save the download", async () => {
     const harness = createDownloadEventHarness();
     const state = sessionMocks.ensurePageState();
@@ -348,6 +454,61 @@ describe("pw-tools-core", () => {
     expect(saveAs).toHaveBeenCalledOnce();
     expect(state.downloadWaiterDepth).toBe(0);
     expect(harness.activeHandlerCount()).toBe(0);
+  });
+
+  it("rechecks waiter ownership after asynchronous download URL validation", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const navigationGuard = getPwToolsCoreNavigationGuardMocks();
+      let releaseValidation!: () => void;
+      const validationPending = new Promise<void>((resolve) => {
+        releaseValidation = resolve;
+      });
+      navigationGuard.assertBrowserNavigationResultAllowed.mockImplementationOnce(
+        async () => await validationPending,
+      );
+
+      const firstSaveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "stale-content", "utf8");
+      });
+      const first = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: path.join(tempDir, "stale.bin"),
+        timeoutMs: 1000,
+      });
+      await Promise.resolve();
+      harness.trigger({
+        url: () => "https://example.com/stale.bin",
+        suggestedFilename: () => "stale.bin",
+        saveAs: firstSaveAs,
+      });
+      await vi.waitFor(() =>
+        expect(navigationGuard.assertBrowserNavigationResultAllowed).toHaveBeenCalledOnce(),
+      );
+
+      const latestSaveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "latest-content", "utf8");
+      });
+      const latest = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: path.join(tempDir, "latest.bin"),
+        timeoutMs: 1000,
+      });
+
+      releaseValidation();
+      await expect(first).rejects.toThrow("superseded by another waiter");
+      expect(firstSaveAs).not.toHaveBeenCalled();
+
+      harness.trigger({
+        url: () => "https://example.com/latest.bin",
+        suggestedFilename: () => "latest.bin",
+        saveAs: latestSaveAs,
+      });
+      await expect(latest).resolves.toMatchObject({ suggestedFilename: "latest.bin" });
+      expect(latestSaveAs).toHaveBeenCalledOnce();
+    });
   });
 
   it("clicks a ref and atomically finalizes explicit download paths", async () => {
@@ -387,8 +548,156 @@ describe("pw-tools-core", () => {
     });
   });
 
+  it("rejects blocked click download sources before writing the file", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const navigationGuard = getPwToolsCoreNavigationGuardMocks();
+      const click = vi.fn(async () => {});
+      setPwToolsCoreCurrentRefLocator({ click });
+      const targetPath = path.join(tempDir, "blocked.pdf");
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "private-content", "utf8");
+      });
+      navigationGuard.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+        new Error("Navigation blocked: private IP address"),
+      );
+      const pending = mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "e12",
+        path: targetPath,
+        timeoutMs: 1000,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "http://127.0.0.1/private.pdf",
+        suggestedFilename: () => "private.pdf",
+        saveAs,
+      });
+
+      await expect(pending).rejects.toThrow(/blocked|private|ssrf/i);
+      expect(navigationGuard.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+        url: "http://127.0.0.1/private.pdf",
+        ssrfPolicy: { allowPrivateNetwork: false },
+        browserProxyMode: undefined,
+      });
+      expect(saveAs).not.toHaveBeenCalled();
+      await expectPathMissing(targetPath);
+    });
+  });
+
+  it("guards the explicit download click before dispatch", async () => {
+    const harness = createDownloadEventHarness();
+    const blocked = new Error("Navigation blocked: private IP address");
+    blocked.name = "SsrFBlockedError";
+    const click = vi.fn(async () => {});
+    setPwToolsCoreCurrentRefLocator({ click });
+    sessionMocks.withPageNavigationRequestGuard.mockRejectedValueOnce(blocked);
+
+    const pending = mod.downloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "e12",
+      path: "/tmp/blocked.pdf",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    await expect(pending).rejects.toThrow(/blocked|private|ssrf/i);
+    expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
+    expect(click).not.toHaveBeenCalled();
+    expect(harness.activeHandlerCount()).toBe(0);
+  });
+
+  it("keeps the explicit request guard active after the click window", async () => {
+    const harness = createDownloadEventHarness();
+    const blocked = new Error("Navigation blocked: private IP address");
+    blocked.name = "SsrFBlockedError";
+    const click = vi.fn(async () => {});
+    setPwToolsCoreCurrentRefLocator({ click });
+    sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
+      async ({
+        action,
+        onPolicyDenied,
+        page,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        onPolicyDenied?: (event: { state: "detected"; error: unknown }) => void;
+        page: { url: () => string };
+      }) => {
+        const pending = action(page.url());
+        await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 300);
+        });
+        onPolicyDenied?.({ state: "detected", error: blocked });
+        return await pending;
+      },
+    );
+
+    const pending = mod.downloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "e12",
+      path: "/tmp/blocked-delayed.pdf",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    await expect(pending).rejects.toBe(blocked);
+    expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledTimes(2);
+    expect(harness.activeHandlerCount()).toBe(0);
+  });
+
+  it("does not save after a click failure cancels pending URL validation", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const navigationGuard = getPwToolsCoreNavigationGuardMocks();
+      let releaseValidation!: () => void;
+      const validationPending = new Promise<void>((resolve) => {
+        releaseValidation = resolve;
+      });
+      navigationGuard.assertBrowserNavigationResultAllowed.mockImplementationOnce(
+        async () => await validationPending,
+      );
+
+      const targetPath = path.join(tempDir, "cancelled.bin");
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "late-content", "utf8");
+      });
+      const click = vi.fn(async () => {
+        harness.trigger({
+          url: () => "https://example.com/cancelled.bin",
+          suggestedFilename: () => "cancelled.bin",
+          saveAs,
+        });
+        await Promise.resolve();
+        throw new Error("click failed");
+      });
+      setPwToolsCoreCurrentRefLocator({ click });
+
+      const pending = mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "e12",
+        path: targetPath,
+        timeoutMs: 1000,
+      });
+
+      await expect(pending).rejects.toThrow("click failed");
+      expect(navigationGuard.assertBrowserNavigationResultAllowed).toHaveBeenCalledOnce();
+      releaseValidation();
+      await Promise.resolve();
+      expect(saveAs).not.toHaveBeenCalled();
+      await expectPathMissing(targetPath);
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
-    "does not overwrite outside files when explicit output path is a hardlink alias",
+    "replaces an in-root hardlink name without overwriting the outside file",
     async () => {
       await withTempDir(async (tempDir) => {
         const outsidePath = path.join(tempDir, "outside.txt");
@@ -415,9 +724,10 @@ describe("pw-tools-core", () => {
           saveAs,
         });
 
-        await expect(p).rejects.toThrow(/alias escape blocked|Hardlinked path is not allowed/i);
-        expect(await fs.readFile(linkedPath, "utf8")).toBe("outside-before");
+        await expect(p).resolves.toMatchObject({ path: linkedPath });
+        expect(await fs.readFile(linkedPath, "utf8")).toBe("download-content");
         expect(await fs.readFile(outsidePath, "utf8")).toBe("outside-before");
+        expect((await fs.stat(linkedPath)).ino).not.toBe((await fs.stat(outsidePath)).ino);
       });
     },
   );
@@ -433,7 +743,7 @@ describe("pw-tools-core", () => {
       path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
-    expect(path.dirname(outPath)).not.toBe(expectedRootedDownloadsDir);
+    expect(path.dirname(outPath)).toBe(await fs.realpath(expectedRootedDownloadsDir));
     expect(path.basename(outPath)).toContain(path.basename(res.path));
     expect(path.basename(outPath)).toMatch(/\.part$/);
     await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
@@ -448,8 +758,10 @@ describe("pw-tools-core", () => {
       suggestedFilename: "../../../../etc/passwd",
     });
     expect(typeof outPath).toBe("string");
-    expect(path.dirname(outPath)).not.toBe(
-      path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
+    expect(path.dirname(outPath)).toBe(
+      await fs.realpath(
+        path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
+      ),
     );
     expect(path.basename(outPath)).toContain(path.basename(res.path));
     expect(path.basename(outPath)).toMatch(/\.part$/);

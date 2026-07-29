@@ -798,6 +798,7 @@ describe("browser control server", () => {
     const waitCall = requireMockArg(requirePwMock("waitForDownloadViaPlaywright"));
     expect(typeof waitCall.cdpUrl).toBe("string");
     expectRecordFields(waitCall, "wait download call", {
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       targetId: "abcd1234",
     });
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
@@ -815,6 +816,7 @@ describe("browser control server", () => {
     expectRecordFields(downloadCall, "download call", {
       targetId: "abcd1234",
       ref: "e12",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(String(downloadCall.path)).toContain("safe-download.pdf");
   });

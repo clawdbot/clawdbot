@@ -7,7 +7,10 @@ import type { FileChooser, Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadResult } from "./download-types.js";
-import type { BrowserNavigationPolicyOptions } from "./navigation-guard.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
+} from "./navigation-guard.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
@@ -18,11 +21,13 @@ import {
   refLocator,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
+  withPageNavigationRequestGuard,
 } from "./pw-session.js";
 import {
   clickViaPlaywright,
   setFileChooserFilesViaPlaywright,
 } from "./pw-tools-core.interactions.js";
+import { awaitNavigationGuardedInteraction } from "./pw-tools-core.interactions.navigation.js";
 import {
   bumpDownloadArmId,
   bumpUploadArmId,
@@ -43,29 +48,83 @@ type ActiveAtomicUpload = {
 const activeAtomicUploads = new Map<string, ActiveAtomicUpload>();
 const pendingUploadClaims = new Map<string, number>();
 
-function createExplicitDownloadCapture(params: {
-  page: Page;
-  state: ReturnType<typeof ensurePageState>;
-  timeoutMs: number;
-  outPath?: string;
-  rootDir?: string;
-}) {
+function createExplicitDownloadCapture(
+  params: {
+    page: Page;
+    state: ReturnType<typeof ensurePageState>;
+    timeoutMs: number;
+    outPath?: string;
+    rootDir?: string;
+  } & BrowserNavigationPolicyOptions,
+) {
   params.state.armIdDownload = bumpDownloadArmId();
   const armId = params.state.armIdDownload;
-  return createDownloadCaptureForPage(params.page, params.state, params.timeoutMs, {
+  const capture = createDownloadCaptureForPage(params.page, params.state, params.timeoutMs, {
     mode: "explicit",
     outputPath: params.outPath,
     outputRoot: params.rootDir,
-    beforeSave: () => {
+    beforeSave: async (candidate) => {
+      if (params.state.armIdDownload !== armId) {
+        throw new Error("Download was superseded by another waiter");
+      }
+      const url = candidate.url;
+      if (!url) {
+        throw new Error("Download URL is unavailable");
+      }
+      await assertBrowserNavigationResultAllowed({
+        url,
+        ssrfPolicy: params.ssrfPolicy,
+        browserProxyMode: params.browserProxyMode,
+      });
+      // URL validation is asynchronous; a newer waiter may take ownership while
+      // it runs. Recheck before save so the superseded download cannot persist.
       if (params.state.armIdDownload !== armId) {
         throw new Error("Download was superseded by another waiter");
       }
     },
   });
+  return {
+    ...capture,
+    cancel: () => {
+      if (params.state.armIdDownload === armId) {
+        params.state.armIdDownload = bumpDownloadArmId();
+      }
+      capture.cancel();
+    },
+  };
 }
 
 function resolveImplicitDownloadRoot(): string {
   return path.join(resolvePreferredOpenClawTmpDir(), "downloads");
+}
+
+async function waitForGuardedDownload(
+  params: {
+    capture: ReturnType<typeof createExplicitDownloadCapture>;
+    page: Page;
+    start?: () => Promise<void>;
+  } & BrowserNavigationPolicyOptions,
+): Promise<BrowserDownloadResult> {
+  let rejectPolicyDenied!: (reason: unknown) => void;
+  const policyDenied = new Promise<never>((_resolve, reject) => {
+    rejectPolicyDenied = reject;
+  });
+  void policyDenied.catch(() => {});
+
+  return await withPageNavigationRequestGuard({
+    page: params.page,
+    ssrfPolicy: params.ssrfPolicy,
+    browserProxyMode: params.browserProxyMode,
+    onPolicyDenied: (event) => {
+      if (event.state === "detected") {
+        rejectPolicyDenied(event.error);
+      }
+    },
+    action: async () => {
+      await params.start?.();
+      return await Promise.race([params.capture.promise, policyDenied]);
+    },
+  });
 }
 
 /** Arms the next page file chooser and fills it with strict existing paths. */
@@ -354,13 +413,15 @@ export async function armDialogViaPlaywright(opts: {
 }
 
 /** Waits for the next page download and writes it under the configured output root. */
-export async function waitForDownloadViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  path?: string;
-  rootDir?: string;
-  timeoutMs?: number;
-}): Promise<BrowserDownloadResult> {
+export async function waitForDownloadViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    path?: string;
+    rootDir?: string;
+    timeoutMs?: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
@@ -371,9 +432,16 @@ export async function waitForDownloadViaPlaywright(opts: {
     timeoutMs: timeout,
     outPath: opts.path,
     rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
+    ssrfPolicy: opts.ssrfPolicy,
+    browserProxyMode: opts.browserProxyMode,
   });
   try {
-    return await capture.promise;
+    return await waitForGuardedDownload({
+      page,
+      capture,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+    });
   } catch (err) {
     capture.cancel();
     throw err;
@@ -381,14 +449,16 @@ export async function waitForDownloadViaPlaywright(opts: {
 }
 
 /** Clicks an element ref and saves the download triggered by that click. */
-export async function downloadViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-  path: string;
-  rootDir?: string;
-  timeoutMs?: number;
-}): Promise<BrowserDownloadResult> {
+export async function downloadViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+    path: string;
+    rootDir?: string;
+    timeoutMs?: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -406,17 +476,37 @@ export async function downloadViaPlaywright(opts: {
     timeoutMs: timeout,
     outPath,
     rootDir: opts.rootDir,
+    ssrfPolicy: opts.ssrfPolicy,
+    browserProxyMode: opts.browserProxyMode,
   });
+  // The request guard keeps a short post-click window. Observe capture failure
+  // immediately so a denied download cannot reject before the guarded click settles.
+  void capture.promise.catch(() => {});
   try {
     const locator = refLocator(page, ref);
-    try {
-      await locator.click({ timeout });
-    } catch (err) {
-      throw toAIFriendlyError(err, ref);
-    }
-    return await capture.promise;
+    return await waitForGuardedDownload({
+      page,
+      capture,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      start: async () => {
+        try {
+          await awaitNavigationGuardedInteraction({
+            action: async () => await locator.click({ timeout }),
+            cdpUrl: opts.cdpUrl,
+            page,
+            targetId: opts.targetId,
+            ssrfPolicy: opts.ssrfPolicy,
+            browserProxyMode: opts.browserProxyMode,
+          });
+        } catch (err) {
+          throw toAIFriendlyError(err, ref);
+        }
+      },
+    });
   } catch (err) {
     capture.cancel();
+    void capture.promise.catch(() => {});
     throw err;
   }
 }

@@ -24,12 +24,21 @@ export async function writeExternalFileWithinOutputRoot(params: {
     : path.dirname(path.resolve(outputPath));
   await ensureOutputDirectory(rootDir);
 
+  let writeCompleted = false;
   const result = await writeExternalFileWithinRoot({
     rootDir,
     path: outputPath,
-    write: params.write,
+    write: async (filePath) => {
+      await params.write(filePath);
+      writeCompleted = true;
+    },
   }).catch((err: unknown) => {
-    if (err instanceof Error && /file not found/i.test(err.message)) {
+    if (
+      writeCompleted &&
+      err instanceof Error &&
+      (((err as NodeJS.ErrnoException).code ?? "") === "ENOENT" ||
+        /file not found|no such file or directory/i.test(err.message))
+    ) {
       throw new Error("output directory changed while writing file");
     }
     throw err;
