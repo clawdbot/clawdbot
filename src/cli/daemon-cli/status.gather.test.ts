@@ -1191,12 +1191,19 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
+    inspectPortUsages.mockResolvedValueOnce(
+      new Map([
+        [
+          19001,
+          {
+            port: 19001,
+            status: "busy",
+            listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+            hints: [],
+          },
+        ],
+      ]),
+    );
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://127.0.0.1:19001",
@@ -1227,12 +1234,6 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("does not read local gateway errors for an explicit probe URL", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",
@@ -1257,12 +1258,6 @@ describe("gatherDaemonStatus", () => {
         auth: { token: "daemon-token" },
       },
     };
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",
