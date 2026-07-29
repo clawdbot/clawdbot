@@ -64,8 +64,12 @@ final class RemotePortTunnel: @unchecked Sendable {
         case terminate
     }
 
-    private struct ProcessStartFailure: Error, Sendable {
+    private struct ProcessStartFailure: LocalizedError, Sendable {
         let message: String
+
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     private final class ProcessStartSignal: @unchecked Sendable {
@@ -90,8 +94,8 @@ final class RemotePortTunnel: @unchecked Sendable {
             self.resolve(.success(processIdentifier))
         }
 
-        func fail(_ error: any Error) {
-            self.resolve(.failure(ProcessStartFailure(message: error.localizedDescription)))
+        func fail(_ error: ProcessStartFailure) {
+            self.resolve(.failure(error))
         }
 
         private func resolve(_ result: Result<pid_t, ProcessStartFailure>) {
@@ -272,7 +276,12 @@ final class RemotePortTunnel: @unchecked Sendable {
                     }
                     state.finish(status: result.terminationStatus)
                 } catch {
-                    startSignal.fail(error)
+                    let message = if let subprocessError = error as? SubprocessError {
+                        subprocessError.description
+                    } else {
+                        error.localizedDescription
+                    }
+                    startSignal.fail(ProcessStartFailure(message: message))
                     state.finish(status: nil)
                 }
             }
