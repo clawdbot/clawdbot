@@ -20,8 +20,6 @@ scenario:
     agents:
       defaults:
         compaction:
-          reserveTokens: 64
-          reserveTokensFloor: 0
           keepRecentTokens: 64
   docsRefs:
     - docs/tools/goal.md

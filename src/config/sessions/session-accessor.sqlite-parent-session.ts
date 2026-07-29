@@ -35,7 +35,8 @@ import {
 import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
-  formatSqliteSessionMarkerForScope,
+  formatLegacySqliteSessionMarkerForScope,
+  formatSqliteSessionReferenceForScope,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
   resolveSqliteStoreScope,
@@ -94,7 +95,7 @@ export async function forkSqliteSessionTranscriptFromParent(
   if (!source) {
     return { status: "failed" };
   }
-  const parentSessionFile = formatSqliteSessionMarkerForScope({
+  const parentSessionFile = formatLegacySqliteSessionMarkerForScope({
     ...resolved,
     sessionId: params.parentEntry.sessionId,
     sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
@@ -106,7 +107,7 @@ export async function forkSqliteSessionTranscriptFromParent(
       sessionId,
       sessionKey: normalizeSqliteSessionKey(params.sessionKey),
     };
-    const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+    const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
     runOpenClawAgentWriteTransaction((database) => {
       writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
         parentSessionFile,
@@ -224,7 +225,6 @@ export async function forkSqliteSessionEntryFromParentTarget(
           sessionId: freshParent.sessionId,
         },
         forkedFromParent: true,
-        sessionFile: fork.transcript.sessionFile,
         sessionId: fork.transcript.sessionId,
       });
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
@@ -364,12 +364,12 @@ function forkSqliteParentTranscriptInTransaction(
     sessionId,
     sessionKey: normalizeSqliteSessionKey(params.targetSessionKey),
   };
-  const parentSessionFile = formatSqliteSessionMarkerForScope({
+  const parentSessionFile = formatLegacySqliteSessionMarkerForScope({
     ...resolved,
     sessionId: params.parentEntry.sessionId,
     sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
   });
-  const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+  const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
   writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
     parentSessionFile,
     source,

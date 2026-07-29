@@ -9,6 +9,7 @@ import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 export type WebSearchToolPolicyParams = {
+  webSearchEnabled?: boolean;
   config?: OpenClawConfig;
   modelProvider?: string;
   modelId?: string;
@@ -39,6 +40,9 @@ type WebSearchToolPolicyResolution = {
 export function resolveWebSearchToolPolicy(
   params: WebSearchToolPolicyParams,
 ): WebSearchToolPolicyResolution {
+  if (params.webSearchEnabled === false) {
+    return { allowed: false, persistentAllowed: false };
+  }
   const {
     agentId,
     globalPolicy,

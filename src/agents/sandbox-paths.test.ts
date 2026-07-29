@@ -135,7 +135,7 @@ describe("assertSandboxPath", () => {
         const escapedRead = `${root}/sub/up/../outside/secret.txt`;
         await expect(fs.readFile(escapedRead, "utf8")).resolves.toBe("outside");
         await expect(assertSandboxPath({ filePath: escapedRead, cwd: root, root })).rejects.toThrow(
-          /escapes sandbox root/i,
+          /(?:resolves outside|escapes) sandbox root/i,
         );
         await expect(
           assertSandboxPath({
@@ -143,10 +143,10 @@ describe("assertSandboxPath", () => {
             cwd: root,
             root,
           }),
-        ).rejects.toThrow(/escapes sandbox root/i);
+        ).rejects.toThrow(/(?:resolves outside|escapes) sandbox root/i);
         await expect(
           assertSandboxPath({ filePath: `${root}/sub/up/../..`, cwd: root, root }),
-        ).rejects.toThrow(/escapes sandbox root/i);
+        ).rejects.toThrow(/(?:resolves outside|escapes) sandbox root/i);
 
         await fs.mkdir(path.join(root, "a"));
         await fs.mkdir(path.join(root, "b"));

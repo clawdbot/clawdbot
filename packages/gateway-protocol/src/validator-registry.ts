@@ -237,6 +237,8 @@ import {
   SkillsProposalReviseParamsSchema,
   SkillsProposalRequestRevisionParamsSchema,
   SkillsProposalActionParamsSchema,
+  SkillsProposalEvaluateParamsSchema,
+  SkillsProposalEventsListParamsSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSkillCardParamsSchema,
   CronListParamsSchema,
@@ -300,7 +302,7 @@ import {
   UiCommandParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
-} from "./schema.js";
+} from "./schema-modules.js";
 import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
@@ -621,6 +623,10 @@ export const validateSkillsProposalRequestRevisionParams = lazyCompile(
   SkillsProposalRequestRevisionParamsSchema,
 );
 export const validateSkillsProposalActionParams = lazyCompile(SkillsProposalActionParamsSchema);
+export const validateSkillsProposalEvaluateParams = lazyCompile(SkillsProposalEvaluateParamsSchema);
+export const validateSkillsProposalEventsListParams = lazyCompile(
+  SkillsProposalEventsListParamsSchema,
+);
 export const validateSkillsSecurityVerdictsParams = lazyCompile(SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = lazyCompile(SkillsSkillCardParamsSchema);
 export const validateCronListParams = lazyCompile(CronListParamsSchema);

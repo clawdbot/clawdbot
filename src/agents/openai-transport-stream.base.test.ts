@@ -959,6 +959,7 @@ describe("openai transport stream", () => {
   });
 
   it("enforces the code mode responses tool surface before requests leave OpenClaw", () => {
+    const visibleToolNames = new Set(["exec", "wait", "computer"]);
     const payload = {
       tools: [
         { type: "function", name: "exec" },
@@ -968,8 +969,8 @@ describe("openai transport stream", () => {
       ],
     };
 
-    testing.enforceCodeModeResponsesToolSurface(payload);
-    testing.assertCodeModeResponsesToolSurface(payload);
+    testing.enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
+    testing.assertCodeModeResponsesToolSurface(payload, visibleToolNames);
     expect(payload.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "computer" },
@@ -978,6 +979,7 @@ describe("openai transport stream", () => {
   });
 
   it("skips unreadable code mode response payload tool names", () => {
+    const visibleToolNames = new Set(["exec", "wait"]);
     const payload = {
       tools: [
         { type: "function", name: "exec" },
@@ -999,8 +1001,8 @@ describe("openai transport stream", () => {
       ],
     };
 
-    testing.enforceCodeModeResponsesToolSurface(payload);
-    testing.assertCodeModeResponsesToolSurface(payload);
+    testing.enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
+    testing.assertCodeModeResponsesToolSurface(payload, visibleToolNames);
     expect(payload.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", function: { name: "wait" } },
@@ -1008,6 +1010,7 @@ describe("openai transport stream", () => {
   });
 
   it("rejects duplicate direct-only tools in a code mode payload", () => {
+    const visibleToolNames = new Set(["exec", "wait", "computer"]);
     const payload = {
       tools: [
         { type: "function", name: "exec" },
@@ -1017,16 +1020,20 @@ describe("openai transport stream", () => {
       ],
     };
 
-    expect(() => testing.assertCodeModeResponsesToolSurface(payload)).toThrow(
+    expect(() => testing.assertCodeModeResponsesToolSurface(payload, visibleToolNames)).toThrow(
       /tool surface violation/,
     );
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
+    const visibleToolNames = new Set(["exec", "wait"]);
     expect(() =>
-      testing.assertCodeModeResponsesToolSurface({
-        tools: [{ type: "function", name: "exec" }, { type: "web_search_preview" }],
-      }),
+      testing.assertCodeModeResponsesToolSurface(
+        {
+          tools: [{ type: "function", name: "exec" }, { type: "web_search_preview" }],
+        },
+        visibleToolNames,
+      ),
     ).toThrow(/Code mode payload tool surface violation/);
   });
 

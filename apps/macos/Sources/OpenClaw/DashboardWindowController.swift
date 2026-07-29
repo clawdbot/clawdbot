@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import OpenClawKit
 import WebKit
@@ -1039,6 +1040,67 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void)
+    {
+        guard webView === self.webView else {
+            decisionHandler(.deny)
+            return
+        }
+        let mediaTypes: [AVMediaType]
+        switch type {
+        case .camera:
+            mediaTypes = [.video]
+        case .microphone:
+            mediaTypes = [.audio]
+        case .cameraAndMicrophone:
+            mediaTypes = [.video, .audio]
+        @unknown default:
+            decisionHandler(.deny)
+            return
+        }
+        guard frame.isMainFrame,
+              Self.isTrustedMediaCaptureOrigin(
+                  protocol: origin.protocol,
+                  host: origin.host,
+                  port: origin.port,
+                  dashboardURL: self.currentURL)
+        else {
+            decisionHandler(.prompt)
+            return
+        }
+        let authorized = mediaTypes.allSatisfy { AVCaptureDevice.authorizationStatus(for: $0) == .authorized }
+        decisionHandler(authorized ? .grant : .prompt)
+    }
+
+    static func isTrustedMediaCaptureOrigin(
+        protocol scheme: String,
+        host: String,
+        port: Int,
+        dashboardURL: URL) -> Bool
+    {
+        guard scheme.caseInsensitiveCompare(dashboardURL.scheme ?? "") == .orderedSame,
+              host.caseInsensitiveCompare(dashboardURL.host ?? "") == .orderedSame
+        else {
+            return false
+        }
+        let requestedPort = port == 0 ? Self.defaultPort(for: scheme) : port
+        let dashboardPort = dashboardURL.port ?? Self.defaultPort(for: dashboardURL.scheme)
+        return requestedPort == dashboardPort
+    }
+
+    private static func defaultPort(for scheme: String?) -> Int? {
+        switch scheme?.lowercased() {
+        case "http": 80
+        case "https": 443
+        default: nil
+        }
+    }
+
     static func shouldReloadDashboard(
         currentURL: URL,
         newURL: URL,

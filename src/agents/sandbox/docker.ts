@@ -84,6 +84,7 @@ export async function execDockerRaw(
 }
 
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -95,7 +96,7 @@ import {
 } from "./constants.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
-import { resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
@@ -110,6 +111,7 @@ import {
 const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
+const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
 
 type ExecDockerOptions = ExecDockerRawOptions;
 
@@ -493,18 +495,30 @@ async function readContainerConfigHash(containerName: string): Promise<string | 
   return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
-export async function ensureSandboxContainer(params: {
-  sessionKey: string;
+type EnsureSandboxContainerParams = {
+  scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
-}) {
-  const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
-  const name = `${params.cfg.docker.containerPrefix}${slug}`;
-  const containerName = name.slice(0, 63);
+};
+
+export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
+  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
+  const containerName = buildSandboxContainerName(params.cfg.docker.containerPrefix, slug);
+
+  // Independent agent runs can converge on one Docker resource. Serialize the
+  // full lifecycle so followers re-read state after create, start, or replace.
+  return await sandboxContainerLifecycleQueue.enqueue(containerName, async () => {
+    return await ensureSandboxContainerLifecycle(params, containerName);
+  });
+}
+
+async function ensureSandboxContainerLifecycle(
+  params: EnsureSandboxContainerParams,
+  containerName: string,
+) {
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
@@ -552,7 +566,7 @@ export async function ensureSandboxContainer(params: {
         handleHotSandboxConfigMismatch({
           containerName,
           scope: params.cfg.scope,
-          sessionKey: scopeKey,
+          sessionKey: params.scopeKey,
           ...(params.requireCurrentConfig !== undefined
             ? { requireCurrentConfig: params.requireCurrentConfig }
             : {}),
@@ -572,7 +586,7 @@ export async function ensureSandboxContainer(params: {
       workspaceAccess: params.cfg.workspaceAccess,
       agentWorkspaceDir: params.agentWorkspaceDir,
       skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey,
+      scopeKey: params.scopeKey,
       configHash: expectedHash,
       readOnlyWorkspaceSkillMounts,
     });
@@ -583,7 +597,7 @@ export async function ensureSandboxContainer(params: {
     containerName,
     backendId: "docker",
     runtimeLabel: containerName,
-    sessionKey: scopeKey,
+    sessionKey: params.scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,

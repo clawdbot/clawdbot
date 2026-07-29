@@ -191,10 +191,18 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
   });
   if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
+    const fallbackNotice = fallbackTransition.nextState.selectedModel
+      ? {
+          kind: "active" as const,
+          selectedModel: fallbackTransition.nextState.selectedModel,
+          activeModel: fallbackTransition.nextState.activeModel!,
+          ...(fallbackTransition.nextState.reason
+            ? { reason: fallbackTransition.nextState.reason }
+            : {}),
+        }
+      : undefined;
     if (fallbackStateEntry) {
-      fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
-      fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
-      fallbackStateEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+      fallbackStateEntry.fallbackNotice = fallbackNotice;
       fallbackStateEntry.updatedAt = Date.now();
       activeSessionEntry = fallbackStateEntry;
     }
@@ -202,18 +210,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       activeSessionStore[sessionKey] = fallbackStateEntry;
     }
     if (sessionKey && storePath) {
-      await updateSessionEntry(
-        { storePath, sessionKey },
-        () => ({
-          fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
-          fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
-          fallbackNoticeReason: fallbackTransition.nextState.reason,
-        }),
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        },
-      );
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ fallbackNotice }), {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      });
     }
   }
   const usedCliProvider = isCliProvider(providerUsed, cfg);
@@ -354,7 +354,7 @@ export async function accountFollowupTurn(params: {
       key: queueKey,
       previousSessionId: turn.queued.run.sessionId,
       nextSessionId: entry?.sessionId ?? turn.queued.run.sessionId,
-      nextSessionFile: entry?.sessionFile,
+      nextSessionFile: queueKey,
       nextProvider: accounting.providerUsed,
       nextModel: accounting.modelUsed,
       nextModelOverrideSource: entry?.modelOverrideSource,
@@ -366,6 +366,7 @@ export async function accountFollowupTurn(params: {
   if (accounting.autoCompactionCount > 0) {
     const previousSessionId = turn.queued.run.sessionId;
     const count = await incrementRunCompactionCount({
+      agentId: turn.queued.run.agentId,
       cfg: turn.config,
       sessionEntry: turn.session.current(),
       sessionStore: turn.sessionStore,
@@ -376,7 +377,6 @@ export async function accountFollowupTurn(params: {
       lastCallUsage: accounting.runResult.meta?.agentMeta?.lastCallUsage,
       contextTokensUsed: accounting.contextTokensUsed,
       newSessionId: accounting.runResult.meta?.agentMeta?.sessionId,
-      newSessionFile: accounting.runResult.meta?.agentMeta?.sessionFile,
     });
     const refreshed = turn.session.current();
     if (refreshed) {
@@ -385,7 +385,7 @@ export async function accountFollowupTurn(params: {
         key: queueKey ?? "",
         previousSessionId,
         nextSessionId: refreshed.sessionId,
-        nextSessionFile: refreshed.sessionFile,
+        nextSessionFile: queueKey ?? sessionKey,
       });
     }
     if (accounting.verboseEnabled) {

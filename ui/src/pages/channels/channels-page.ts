@@ -11,6 +11,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
@@ -27,9 +28,6 @@ type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | nu
 
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 
-const NOSTR_PROFILE_TIMEOUT_ERROR =
-  "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.";
-
 type NostrOperation = {
   generation: number;
   gateway: ApplicationContext["gateway"];
@@ -42,8 +40,8 @@ type NostrOperation = {
 
 function formatNostrProfileOperationError(error: unknown, prefix: string): string {
   return error instanceof DOMException && error.name === "TimeoutError"
-    ? NOSTR_PROFILE_TIMEOUT_ERROR
-    : `${prefix}: ${String(error)}`;
+    ? t("channels.nostr.notices.timeout")
+    : t("channels.nostr.notices.operationFailed", { prefix, error: String(error) });
 }
 
 class ChannelsPage extends OpenClawLightDomElement {
@@ -70,6 +68,9 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   @state()
   private pairingNotice: string | null = null;
+
+  @state()
+  private showAdvancedSettings = false;
 
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
@@ -149,6 +150,16 @@ class ChannelsPage extends OpenClawLightDomElement {
           }
           this.applyGatewaySnapshot(snapshot, false);
         });
+      },
+    )
+    // The advanced tier is one global display pref; theme republishes every
+    // appearance setting, so this keeps the channel forms in sync with the
+    // toggle on the config pages.
+    .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
+      () => {
+        this.showAdvancedSettings = loadSettings().showAdvancedSettings === true;
       },
     );
 
@@ -258,6 +269,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.schemaLoadStarted = false;
     super.disconnectedCallback();
+  }
+
+  private setShowAdvancedSettings(enabled: boolean) {
+    patchSettings({ showAdvancedSettings: enabled });
+    // Republish so the config pages and this page read the same pref without a
+    // reload; patchSettings alone only writes storage and the server pref.
+    this.context.theme.refresh();
   }
 
   private async saveChannelConfig() {
@@ -416,7 +434,11 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: data?.error ?? `Profile update failed (${response.status})`,
+          error:
+            data?.error ??
+            t("channels.nostr.notices.updateFailedStatus", {
+              status: String(response.status),
+            }),
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -427,7 +449,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: "Profile publish failed on all relays.",
+          error: t("channels.nostr.notices.publishFailed"),
           success: null,
         };
         return;
@@ -437,7 +459,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         ...currentForm,
         saving: false,
         error: null,
-        success: "Profile published to relays.",
+        success: t("channels.nostr.notices.published"),
         fieldErrors: {},
         original: { ...form.values },
       };
@@ -450,7 +472,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         saving: false,
-        error: formatNostrProfileOperationError(err, "Profile update failed"),
+        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.updateFailed")),
         success: null,
       };
     }
@@ -485,7 +507,11 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error: data?.error ?? `Profile import failed (${response.status})`,
+          error:
+            data?.error ??
+            t("channels.nostr.notices.importFailedStatus", {
+              status: String(response.status),
+            }),
           success: null,
         };
         return;
@@ -499,8 +525,8 @@ class ChannelsPage extends OpenClawLightDomElement {
         values,
         error: null,
         success: data.saved
-          ? "Profile imported from relays. Review and publish."
-          : "Profile imported. Review and publish.",
+          ? t("channels.nostr.notices.importedFromRelays")
+          : t("channels.nostr.notices.imported"),
         showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
       };
 
@@ -515,7 +541,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
-        error: formatNostrProfileOperationError(err, "Profile import failed"),
+        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.importFailed")),
         success: null,
       };
     }
@@ -662,6 +688,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           configUiHints: config.configUiHints,
           configSaving: config.configSaving,
           configFormDirty: config.configFormDirty,
+          showAdvancedSettings: this.showAdvancedSettings,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,
@@ -696,6 +723,7 @@ class ChannelsPage extends OpenClawLightDomElement {
             void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
           onWhatsAppLogout: () =>
             void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
+          onShowAdvancedSettings: (enabled) => this.setShowAdvancedSettings(enabled),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),

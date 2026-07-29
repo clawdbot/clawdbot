@@ -43,7 +43,11 @@ import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
-    async () => ({ ok: true, sessionFile: "x", messageId: "m" }),
+    async () => ({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "m",
+    }),
   ),
 }));
 const hookMocks = vi.hoisted(() => ({
@@ -113,7 +117,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
-vi.mock("./delivery-queue.js", () => ({
+vi.mock("./delivery-queue-storage.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
   ackDelivery: queueMocks.ackDelivery,
@@ -123,6 +127,15 @@ vi.mock("./delivery-queue.js", () => ({
   markDeliveryPlatformOutcomeUnknown: queueMocks.markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
+}));
+vi.mock("./delivery-queue.js", () => ({
+  enqueueDelivery: queueMocks.enqueueDelivery,
+  enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
+  ackDelivery: queueMocks.ackDelivery,
+  failDelivery: queueMocks.failDelivery,
+  failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend: queueMocks.failDeliveryBeforePlatformSend,
+  markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("./delivery-completion.js", () => ({
@@ -283,7 +296,7 @@ const matrixOutboundForTest: ChannelOutboundAdapter = {
 };
 
 type MatrixDeliveryArgs = Omit<DeliverOutboundArgs, "cfg" | "channel" | "to" | "payloads"> &
-  Partial<Pick<DeliverOutboundArgs, "cfg" | "payloads">>;
+  Partial<Pick<DeliverOutboundArgs, "cfg" | "to" | "payloads">>;
 
 function deliverMatrix(params: MatrixDeliveryArgs) {
   return deliverOutboundPayloads({
@@ -2456,9 +2469,7 @@ describe("deliverOutboundPayloads", () => {
     }));
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "fallback" }, { text: "explicit", replyToId: "payload-reply" }],
       replyToId: "fallback-reply",
@@ -2487,9 +2498,7 @@ describe("deliverOutboundPayloads", () => {
     }));
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "explicit", replyToId: "payload-reply" }, { text: "fallback" }],
       replyToId: "fallback-reply",
@@ -2519,9 +2528,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room",
       payloads: [{ text: "redact me" }],
     });
@@ -2569,14 +2576,34 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "original" }],
     });
 
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
+  });
+
+  it("strips complete inline runtime context blocks before channel delivery", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "clean-inline-runtime-context",
+      roomId: "!room",
+    });
+    setTestOutbound({ sendText });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private runtime metadata<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("before  after");
   });
 
   it("runs reply payload hooks before the final message_sending policy pass", async () => {
@@ -2600,9 +2627,7 @@ describe("deliverOutboundPayloads", () => {
       roomId: "!room",
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "secret", replyToId: "original-reply" }],
       deps: { matrix: sendText },
@@ -2665,9 +2690,7 @@ describe("deliverOutboundPayloads", () => {
       sendPayload,
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "original" }],
     });
@@ -2727,9 +2750,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ normalizePayloadBatch, sendPayload });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "First" }, { text: "Second" }],
     });
@@ -2768,9 +2789,7 @@ describe("deliverOutboundPayloads", () => {
       sendPayload,
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [
         {
@@ -2826,9 +2845,7 @@ describe("deliverOutboundPayloads", () => {
       sendPayload,
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [
         {
@@ -2883,9 +2900,7 @@ describe("deliverOutboundPayloads", () => {
       sendPayload,
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [
         {
@@ -2919,9 +2934,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [
         {
@@ -2947,9 +2960,7 @@ describe("deliverOutboundPayloads", () => {
       afterDeliverPayload,
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "hello" }],
     });
@@ -4462,9 +4473,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "hello" }],
       session: { key: "agent:tank:main" },
@@ -4495,9 +4504,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "hi" }],
       session: {
@@ -4524,9 +4531,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "hi" }],
     });
@@ -4552,9 +4557,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "hello" }],
       session: { key: "agent:tank:main" },
@@ -4579,9 +4582,7 @@ describe("deliverOutboundPayloads", () => {
     });
     setTestOutbound({ sendText });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room",
       payloads: [{ text: "hi" }],
     });
@@ -4636,9 +4637,7 @@ describe("deliverOutboundPayloads", () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     setTestOutbound({ sendPayload, sendText });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "provider exploded", isError: true }],
     });
@@ -4653,9 +4652,7 @@ describe("deliverOutboundPayloads", () => {
     const sendText = vi.fn();
     setTestOutbound({ sendPayload, sendText, sendTextOnlyErrorPayloads: true });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "provider exploded", isError: true }],
     });
@@ -4676,9 +4673,7 @@ describe("deliverOutboundPayloads", () => {
     const sendText = vi.fn();
     setTestOutbound({ sendPayload, sendText, sendTextOnlyErrorPayloads: true });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "provider exploded", isError: true }],
       mirror: {
@@ -4703,9 +4698,7 @@ describe("deliverOutboundPayloads", () => {
       .mockResolvedValueOnce({ channel: "matrix", messageId: "" });
     setTestOutbound({ sendText });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "first" }, { text: "second" }],
     });
@@ -4739,9 +4732,7 @@ describe("deliverOutboundPayloads", () => {
     const sendMedia = vi.fn();
     setTestOutbound({ sendPayload, sendText, sendMedia });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
     });
@@ -4760,9 +4751,7 @@ describe("deliverOutboundPayloads", () => {
     const pinDeliveredMessage = vi.fn().mockRejectedValue(new Error("pin denied"));
     setTestOutbound({ sendText, pinDeliveredMessage });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "hello", delivery: { pin: true } }],
       gatewayClientScopes: ["operator.write"],
@@ -4793,9 +4782,7 @@ describe("deliverOutboundPayloads", () => {
 
     try {
       await expect(
-        deliverOutboundPayloads({
-          cfg: {},
-          channel: "matrix",
+        deliverMatrix({
           to: "!room:1",
           payloads: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
           skipQueue: true,
@@ -4826,9 +4813,7 @@ describe("deliverOutboundPayloads", () => {
 
     try {
       await expect(
-        deliverOutboundPayloads({
-          cfg: {},
-          channel: "matrix",
+        deliverMatrix({
           to: "!room:1",
           payloads: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
           skipQueue: true,
@@ -4863,9 +4848,7 @@ describe("deliverOutboundPayloads", () => {
       pinDeliveredMessage,
     });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "abcd", delivery: { pin: true } }],
     });
@@ -4886,9 +4869,7 @@ describe("deliverOutboundPayloads", () => {
     const pinDeliveredMessage = vi.fn();
     setTestOutbound({ sendText, sendMedia, pinDeliveredMessage });
 
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    await deliverMatrix({
       to: "!room:1",
       payloads: [
         {
@@ -4932,9 +4913,7 @@ describe("deliverOutboundPayloads", () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     setTestOutbound({ sendText });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "caption", mediaUrl: "https://example.com/file.png" }],
     });
@@ -4955,9 +4934,7 @@ describe("deliverOutboundPayloads", () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
     setTestOutbound({ sendText });
 
-    const results = await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
+    const results = await deliverMatrix({
       to: "!room:1",
       payloads: [
         {

@@ -13,6 +13,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -251,7 +252,10 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     opts.sessionKey,
   );
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
-  const pendingFinalDeliveryText = recentSessionEntry?.pendingFinalDeliveryText;
+  const pendingFinalDeliveryText =
+    recentSessionEntry?.pendingFinalDelivery?.kind === "replayable"
+      ? recentSessionEntry.pendingFinalDelivery.text
+      : undefined;
   const pendingFinalDeliveryIsHeartbeatAck =
     typeof pendingFinalDeliveryText === "string" &&
     stripHeartbeatToken(pendingFinalDeliveryText, {
@@ -259,7 +263,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
     }).shouldSkip;
   if (
-    recentSessionEntry?.pendingFinalDelivery === true &&
+    recentSessionEntry?.pendingFinalDelivery !== undefined &&
     !pendingFinalDeliveryIsHeartbeatAck &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
@@ -489,9 +493,9 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         ]
       : [];
     const lifecycleResult = await applySessionEntryLifecycleMutation({
+      activeSessionKey: isolatedSessionKey,
       storePath: isolatedStorePath,
       removals,
-      preserveActiveWork: true,
       upserts: [
         {
           sessionKey: isolatedSessionKey,
@@ -513,7 +517,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           },
         },
       ],
-      restrictArchivedTranscriptsToStoreDir: true,
       captureArtifactCleanupError: true,
     });
     if (lifecycleResult.artifactCleanupError) {
@@ -628,7 +631,13 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
-  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+  const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
+  // Commitment turns are explicit user notifications, not assistant source
+  // replies; keep their owner-marked delivery visible under tool-only policy.
+  const replyPayload =
+    hasDueCommitments && selectedReplyPayload
+      ? markReplyPayloadForSourceSuppressionDelivery(selectedReplyPayload)
+      : selectedReplyPayload;
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&

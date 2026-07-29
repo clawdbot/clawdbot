@@ -13,6 +13,24 @@ type ProjectedObserverDigest = Pick<
   "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
 >;
 
+export function projectSessionObserverDigest(
+  sessionKey: string,
+  digest: ProjectedObserverDigest | null | undefined,
+): SessionObserverDigest | null {
+  if (!digest) {
+    return null;
+  }
+  return {
+    sessionKey,
+    ...(digest.agentId ? { agentId: digest.agentId } : {}),
+    runId: digest.runId,
+    revision: digest.revision,
+    updatedAt: digest.updatedAt,
+    headline: digest.headline,
+    health: digest.health,
+  };
+}
+
 export function isCriticalObserverHealth(health: unknown): health is "stuck" | "waiting-on-user" {
   return health === "stuck" || health === "waiting-on-user";
 }

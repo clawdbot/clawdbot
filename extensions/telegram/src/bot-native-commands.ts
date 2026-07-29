@@ -222,20 +222,14 @@ type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNative
 
 function resolveTelegramCommandSessionFile(params: {
   agentId: string;
-  sessionFile?: string;
   sessionId: string;
   storePath: string;
 }): string {
-  const sqliteMarker = formatSqliteSessionFileMarker({
+  return formatSqliteSessionFileMarker({
     agentId: params.agentId,
     sessionId: params.sessionId,
     storePath: params.storePath,
   });
-  const explicitSessionFile = params.sessionFile?.trim();
-  if (explicitSessionFile === sqliteMarker) {
-    return explicitSessionFile;
-  }
-  return sqliteMarker;
 }
 
 function resolveTelegramProgressPlaceholder(command: {
@@ -267,7 +261,6 @@ async function resolveTelegramCommandTranscriptContext(params: {
     const sessionId = entry?.sessionId?.trim() || randomUUID();
     const sessionFile = resolveTelegramCommandSessionFile({
       agentId: params.agentId,
-      sessionFile: entry?.sessionFile,
       sessionId,
       storePath,
     });
@@ -1657,6 +1650,7 @@ export const registerTelegramNativeCommands = ({
           delivered: false,
           intentionallySuppressed: false,
           skippedNonSilent: 0,
+          failedNonSilent: 0,
         };
 
         const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
@@ -1742,6 +1736,7 @@ export const registerTelegramNativeCommands = ({
               }
             },
             onError: (err, info) => {
+              deliveryState.failedNonSilent += 1;
               runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
             },
           },
@@ -1750,14 +1745,17 @@ export const registerTelegramNativeCommands = ({
             disableBlockStreaming,
           },
         };
-        await (
+        const turnResult = await (
           telegramDeps.dispatchChannelInboundTurn ??
           defaultTelegramNativeCommandDeps.dispatchChannelInboundTurn
         )(turnPlan);
         if (
           !deliveryState.delivered &&
           !deliveryState.intentionallySuppressed &&
-          deliveryState.skippedNonSilent > 0
+          deliveryState.skippedNonSilent > 0 &&
+          (!turnResult.dispatched ||
+            turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" ||
+            deliveryState.failedNonSilent > 0)
         ) {
           await deliverReplies({
             replies: [{ text: EMPTY_RESPONSE_FALLBACK }],

@@ -461,6 +461,9 @@ describe("mcp-app-view localization", () => {
       mcpApp: {
         title: "Aplicativo MCP",
         unavailable: "Aplicativo MCP indisponível: {error}",
+        errors: {
+          gatewayUnavailable: "Gateway do aplicativo MCP indisponível",
+        },
       },
     });
     await i18n.setLocale("pt-BR");
@@ -472,7 +475,7 @@ describe("mcp-app-view localization", () => {
 
     await expect
       .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
-      .toBe("Aplicativo MCP indisponível: MCP App gateway unavailable");
+      .toBe("Aplicativo MCP indisponível: Gateway do aplicativo MCP indisponível");
   });
 
   it.each([

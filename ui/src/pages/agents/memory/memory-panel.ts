@@ -78,7 +78,7 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   const content =
     typeof payload?.content === "string" && payload.content.length > 0
       ? payload.content
-      : "No wiki content available.";
+      : t("dreaming.wiki.noContent");
   const updatedAt =
     typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
       ? payload.updatedAt.trim()

@@ -17,6 +17,7 @@ type BaseAgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHo
 type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
   ctx: BaseAgentEndSideEffectsParams["ctx"] & {
     authProfileId?: string;
+    modelIterations?: number;
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     messageChannel?: string | null;

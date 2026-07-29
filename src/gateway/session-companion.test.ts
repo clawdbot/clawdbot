@@ -82,6 +82,9 @@ describe("session companion asks", () => {
     expect(harness.run).toHaveBeenCalledOnce();
     const call = harness.run.mock.calls[0]?.[0];
     expect(call?.systemPrompt).toContain("read-only companion observing session agent:main:main");
+    expect(call?.systemPrompt).toContain("not the session agent");
+    expect(call?.systemPrompt).toContain("do not perform first-run or identity flows");
+    expect(call?.systemPrompt).toContain("Answer only the operator's current question");
     expect(call?.systemPrompt).toContain("must not attempt any mutation");
     expect(call?.messages).toHaveLength(2);
     expect(JSON.parse(call?.messages[0]?.content ?? "{}")).toEqual({

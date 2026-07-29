@@ -295,7 +295,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
 
   const pendingMidTurnPrecheckRequest = input.lifecycle.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
-    await input.sessionLockController.waitForSessionEvents(activeSession);
     await input.withOwnedSessionWriteLock(() => {
       removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
       const state = input.lifecycle.readState();

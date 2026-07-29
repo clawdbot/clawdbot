@@ -4,6 +4,15 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
+export const SessionToolOverridesSchema = closedObject({
+  mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+  mcpToolsDeny: Type.Optional(
+    Type.Record(Type.String({ minLength: 1 }), Type.Array(NonEmptyString)),
+  ),
+  skills: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+  webSearch: Type.Optional(Type.Boolean()),
+});
+
 /** Projected actor that caused a session node to be created. */
 export const SessionCreatedActorSchema = closedObject({
   type: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
@@ -108,9 +117,11 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },
 );
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;

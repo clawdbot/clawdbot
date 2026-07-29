@@ -5,6 +5,7 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -61,10 +62,6 @@ class IMessageIngressPayloadError extends Error {
     super(message, options);
     this.name = "IMessageIngressPayloadError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
@@ -171,6 +168,7 @@ export function createIMessageDurableIngress(options: {
   accountId: string;
   queue?: ChannelIngressQueue<IMessageIngressPayload>;
   dispatch: IMessageIngressDispatch;
+  dispatchPriority?: IMessageIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   onDurableEnqueue?: (facts: IMessageIngressFacts) => void | Promise<void>;
   onDurableEnqueueFailure?: (rowid: number | null, error: unknown) => void | Promise<void>;
@@ -183,6 +181,7 @@ export function createIMessageDurableIngress(options: {
     });
   const now = options.now ?? Date.now;
   const dispatchAdmissionQueue = new KeyedAsyncQueue();
+  const priorityDispatchQueue = new KeyedAsyncQueue();
   const monitor = createChannelIngressMonitor<
     IMessageIngressRaw,
     IMessageIngressBody,
@@ -215,23 +214,39 @@ export function createIMessageDurableIngress(options: {
       createClaimError: (_kind, claim) =>
         new IMessageIngressPayloadError(`iMessage ingress payload ${claim.id} is invalid.`),
     },
-    deliver: async (event, lifecycle, record) =>
-      await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
-        if (!event.message || event.receivedAt === undefined) {
-          throw new IMessageIngressPayloadError(
-            `iMessage ingress payload ${record.id} is invalid.`,
-          );
-        }
-        if (lifecycle.abortSignal.aborted) {
-          throw lifecycle.abortSignal.reason;
-        }
+    deliver: async (event, lifecycle, record) => {
+      if (!event.message || event.receivedAt === undefined) {
+        throw new IMessageIngressPayloadError(`iMessage ingress payload ${record.id} is invalid.`);
+      }
+      const message = event.message;
+      const receivedAt = event.receivedAt;
+      if (lifecycle.abortSignal.aborted) {
+        throw lifecycle.abortSignal.reason;
+      }
+      // Only a priority handler that proves ownership may bypass the chat lane.
+      // Unrelated polls and reactions fall through and retain ordinary ordering.
+      const priorityResult = await priorityDispatchQueue.enqueue(
+        record.laneKey ?? record.id,
+        async () =>
+          await options.dispatchPriority?.(
+            message,
+            lifecycle,
+            receivedAt,
+            event.catchup ? { catchup: true } : {},
+          ),
+      );
+      if (priorityResult) {
+        return priorityResult;
+      }
+      return await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
         return await options.dispatch(
-          event.message,
+          message,
           lifecycle,
-          event.receivedAt,
+          receivedAt,
           event.catchup ? { catchup: true } : {},
         );
-      }),
+      });
+    },
     pollIntervalMs: IMESSAGE_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: IMESSAGE_INGRESS_PRUNE_INTERVAL_MS,

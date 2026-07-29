@@ -37,6 +37,324 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    // MARK: - Disclosures
+
+    @Test @MainActor func `details fold collapsed and expanded blocks`() throws {
+        let collapsed = try #require(self.segments("""
+        <details>
+        <summary>**Why**</summary>
+
+        Body
+
+        </details>
+        """).first)
+        let expanded = try #require(self.segments("""
+        <details open>
+        <summary>More</summary>
+
+        Body
+
+        </details>
+        """).first)
+
+        #expect(collapsed == .disclosure(ChatMarkdownDisclosure(
+            summary: "**Why**",
+            isExpanded: false,
+            blocks: [.prose("Body")])))
+        #expect(expanded == .disclosure(ChatMarkdownDisclosure(
+            summary: "More",
+            isExpanded: true,
+            blocks: [.prose("Body")])))
+
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "<details>\n<summary>**Why**</summary>\n\nBody\n\n</details>",
+            isComplete: true)
+        guard case let .disclosure(rendered) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected rendered disclosure")
+            return
+        }
+        #expect(String(rendered.summary.attributed.characters) == "Why")
+        #expect(rendered.summary.attributed.runs.contains {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+    }
+
+    @Test func `authored Details summary does not use localized fallback`() throws {
+        guard case let .disclosure(disclosure) = try #require(self.segments(
+            "<details>\n<summary>Details</summary>\n\nBody\n\n</details>").first)
+        else {
+            Issue.record("expected disclosure")
+            return
+        }
+        var fallbackEvaluated = false
+        let rendered = chatMarkdownDisclosureSummarySource(disclosure.summary) {
+            fallbackEvaluated = true
+            return "Localized details"
+        }
+
+        #expect(disclosure.summary == "Details")
+        #expect(rendered == "Details")
+        #expect(!fallbackEvaluated)
+    }
+
+    @Test func `details without summary use localized default label`() throws {
+        guard case let .disclosure(disclosure) = try #require(
+            self.segments("<details>\n\nBody\n\n</details>").first)
+        else {
+            Issue.record("expected disclosure")
+            return
+        }
+
+        #expect(disclosure.summary == nil)
+        #expect(chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" }
+            == "Localized details")
+    }
+
+    @Test @MainActor func `empty details summary after prose uses localized default`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            Intro
+
+            <details>
+            <summary></summary>
+
+            Body
+
+            </details>
+            """,
+            isComplete: true)
+        guard case let .prose(intro) = try #require(snapshot.blocks.first),
+              case let .disclosure(disclosure) = try #require(snapshot.blocks.dropFirst().first)
+        else {
+            Issue.record("expected intro followed by disclosure")
+            return
+        }
+
+        #expect(String(intro.attributed.characters) == "Intro")
+        #expect(String(disclosure.summary.attributed.characters) == String(localized: "Details"))
+    }
+
+    @Test func `details body keeps native list and fence blocks`() throws {
+        let blocks = self.segments("""
+        <details open>
+        <summary>Why</summary>
+
+        - first
+        - second
+
+        ```swift
+        let value = 1
+        ```
+
+        </details>
+        """)
+        guard case let .disclosure(disclosure) = try #require(blocks.first) else {
+            Issue.record("expected disclosure block")
+            return
+        }
+
+        #expect(disclosure.blocks.count == 2)
+        guard case let .list(list) = disclosure.blocks[0] else {
+            Issue.record("expected native list in disclosure")
+            return
+        }
+        #expect(list.items.count == 2)
+        #expect(disclosure.blocks[1] == .code(ChatCodeBlock(
+            language: "swift",
+            code: "let value = 1",
+            isComplete: true)))
+    }
+
+    @Test @MainActor func `details preserve document scoped reference links`() throws {
+        let destination = try #require(URL(string: "https://example.com"))
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            [docs][id]
+
+            <details>
+            <summary>More</summary>
+
+            Body
+
+            </details>
+
+            [id]: https://example.com
+            """,
+            isComplete: true)
+        guard case let .prose(prose) = try #require(snapshot.blocks.first),
+              case .disclosure = try #require(snapshot.blocks.dropFirst().first)
+        else {
+            Issue.record("expected resolved prose followed by a disclosure")
+            return
+        }
+        #expect(prose.attributed.runs.contains { $0.link == destination })
+
+        let nestedSnapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            <details>
+            <summary>More</summary>
+
+            [docs][id]
+
+            [id]: https://example.com
+
+            </details>
+            """,
+            isComplete: true)
+        guard case let .disclosure(disclosure) = try #require(nestedSnapshot.blocks.first),
+              case let .prose(nestedProse) = try #require(disclosure.blocks.first)
+        else {
+            Issue.record("expected resolved prose inside the disclosure")
+            return
+        }
+        #expect(nestedProse.attributed.runs.contains { $0.link == destination })
+    }
+
+    @Test func `unsupported nested details balance without closing outer disclosure`() throws {
+        let blocks = self.segments("""
+        <details>
+        <summary>Outer</summary>
+
+        <details class="legacy">
+
+        unsupported body
+
+        </details>
+
+        still outer
+
+        </details>
+        """)
+        guard case let .disclosure(outer) = try #require(blocks.first) else {
+            Issue.record("expected outer disclosure")
+            return
+        }
+
+        #expect(blocks.count == 1)
+        #expect(outer.blocks.contains(.prose(#"<details class="legacy">"#)))
+        #expect(outer.blocks.contains(.prose("</details>")))
+        #expect(outer.blocks.contains(.prose("still outer")))
+    }
+
+    @Test func `details tags in code stay literal`() {
+        let fenced = "```html\n<details>\n<summary>Code</summary>\n</details>\n```"
+        #expect(self.segments(fenced) == [
+            .code(ChatCodeBlock(
+                language: "html",
+                code: "<details>\n<summary>Code</summary>\n</details>",
+                isComplete: true)),
+        ])
+        #expect(self.segments("`<details>`") == [.prose("`<details>`")])
+    }
+
+    @Test func `details in raw HTML contexts stay literal`() {
+        let commented = """
+        <!--
+        <details>
+        <summary>Example</summary>
+        </details>
+        -->
+        """
+        let preformatted = """
+        <pre>
+        <details>
+        <summary>Example</summary>
+        </details>
+        </pre>
+        """
+
+        #expect(self.segments(commented) == [.prose(commented)])
+        #expect(self.segments(preformatted) == [.prose(preformatted)])
+    }
+
+    @Test func `details after an HTML comment still fold`() {
+        let comment = """
+        <!--
+        <details>
+        </details>
+        -->
+        """
+        #expect(self.segments("""
+        \(comment)
+        <details>
+        <summary>After</summary>
+
+        Body
+
+        </details>
+        """) == [
+            .prose(comment),
+            .disclosure(ChatMarkdownDisclosure(
+                summary: "After",
+                isExpanded: false,
+                blocks: [.prose("Body")])),
+        ])
+    }
+
+    @Test func `raw HTML close markers inside details stay literal`() throws {
+        for (markdown, literal) in [
+            (
+                "<details>\n<summary>X</summary>\n<pre>\n</details>\n</pre>\n</details>",
+                "<pre>\n</details>\n</pre>"),
+            (
+                "<details>\n<summary>X</summary>\n<!--\n</details>\n-->\n</details>",
+                "<!--\n</details>\n-->"),
+            (
+                "<details>\n<summary>X</summary>\n<?pi\n<details>\n?>\n</details>",
+                "<?pi\n<details>\n?>"),
+            (
+                "<details>\n<summary>X</summary>\n<![CDATA[\n<details>\n]]>\n</details>",
+                "<![CDATA[\n<details>\n]]>"),
+            (
+                "<details>\n<summary>X</summary>\n<!DOCTYPE\n<details>\n</details>",
+                "<!DOCTYPE\n<details>"),
+        ] {
+            let blocks = self.segments(markdown)
+            guard blocks.count == 1,
+                  case let .disclosure(disclosure) = try #require(blocks.first)
+            else {
+                Issue.record("expected one outer disclosure")
+                continue
+            }
+            #expect(disclosure.blocks == [.prose(literal)])
+        }
+    }
+
+    @Test func `mid line and over indented details stay literal`() {
+        #expect(self.segments("before <details> after") == [.prose("before <details> after")])
+        #expect(self.segments("    <details>\n    body\n    </details>") == [
+            .prose("    <details>\n    body\n    </details>"),
+        ])
+    }
+
+    @Test func `unclosed streaming details fold available body`() {
+        #expect(self.segments(
+            "<details open>\n<summary>Progress</summary>\n\n- first",
+            isComplete: false) == [
+            .disclosure(ChatMarkdownDisclosure(
+                summary: "Progress",
+                isExpanded: true,
+                blocks: [.prose("- first")])),
+        ])
+    }
+
+    @Test func `details nesting stops at depth cap`() {
+        let depth = ChatMarkdownBlockSegmenter.maxDisclosureDepth + 1
+        let markdown = Array(repeating: "<details>", count: depth).joined(separator: "\n")
+            + "\nbody\n"
+            + Array(repeating: "</details>", count: depth).joined(separator: "\n")
+        var blocks = self.segments(markdown)
+        var structuralDepth = 0
+        while case let .disclosure(disclosure)? = blocks.first {
+            structuralDepth += 1
+            blocks = disclosure.blocks
+        }
+
+        #expect(structuralDepth == ChatMarkdownBlockSegmenter.maxDisclosureDepth)
+        #expect(blocks.contains(.prose("<details>")))
+        #expect(blocks.contains(.prose("</details>")))
+    }
+
     // MARK: - Headings
 
     @Test func `all ATX heading levels become native blocks`() {
@@ -515,24 +833,23 @@ struct ChatMarkdownBlockSegmenterTests {
             snapshot: snapshot,
             context: .assistant,
             variant: .standard,
-            font: OpenClawChatTypography.callout.italic(),
-            textColor: OpenClawChatTheme.assistantText,
-            inlineMathTypography: .callout)
+            typography: .thinking,
+            textColor: OpenClawChatTheme.assistantText)
         let listView = renderer.listView(list)
         let nestedListView = listView.nestedListView(nestedList)
 
-        #expect(renderer.inlineMathTypography == .callout)
-        #expect(listView.inlineMathTypography == .callout)
-        #expect(listView.markdownRenderer("Parent \\(x\\)").inlineMathTypography == .callout)
-        #expect(nestedListView.inlineMathTypography == .callout)
-        #expect(nestedListView.markdownRenderer("Child \\(y\\)").inlineMathTypography == .callout)
+        #expect(renderer.typography == .thinking)
+        #expect(listView.typography == .thinking)
+        #expect(listView.markdownRenderer("Parent \\(x\\)").typography == .thinking)
+        #expect(nestedListView.typography == .thinking)
+        #expect(nestedListView.markdownRenderer("Child \\(y\\)").typography == .thinking)
     }
 
     #if canImport(UIKit)
     @MainActor private func fittedHeight(
         _ view: some View,
         width: CGFloat,
-        maximumHeight: CGFloat = 10_000) -> CGFloat
+        maximumHeight: CGFloat = 10000) -> CGFloat
     {
         let controller = UIHostingController(rootView: view)
         return controller.sizeThatFits(in: CGSize(width: width, height: maximumHeight)).height
@@ -555,7 +872,6 @@ struct ChatMarkdownBlockSegmenterTests {
                 text: markdown,
                 context: .assistant,
                 variant: .standard,
-                font: OpenClawChatTypography.body,
                 textColor: OpenClawChatTheme.assistantText)
                 .environment(\.dynamicTypeSize, .accessibility2)
                 .preferredColorScheme(scheme)
@@ -580,14 +896,12 @@ struct ChatMarkdownBlockSegmenterTests {
                         text: sample,
                         context: .assistant,
                         variant: .standard,
-                        font: OpenClawChatTypography.body,
                         textColor: OpenClawChatTheme.assistantText)
                         .environment(\.dynamicTypeSize, typeSize)
                     let list = ChatMarkdownRenderer(
                         text: "- \(sample)",
                         context: .assistant,
                         variant: .standard,
-                        font: OpenClawChatTypography.body,
                         textColor: OpenClawChatTheme.assistantText)
                         .environment(\.dynamicTypeSize, typeSize)
 

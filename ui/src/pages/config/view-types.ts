@@ -7,7 +7,6 @@ import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
-import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import type { WebPushUiState } from "./notifications-section.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
@@ -59,8 +58,6 @@ export type ConfigProps = {
   applying: boolean;
   /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
-  autoSaveStatus: ConfigAutoSaveStatus;
-  needsApply: boolean;
   connected: boolean;
   schema: unknown;
   schemaLoading: boolean;
@@ -85,7 +82,6 @@ export type ConfigProps = {
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
   onSave: () => void;
-  onApply: () => void;
   onRawDiscard: () => void;
   onOpenFile?: () => void;
   version: string;
@@ -127,6 +123,8 @@ export type ConfigProps = {
   setLobsterPetVisits?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
   setLobsterPetSounds?: (enabled: boolean) => void;
+  lobsterdexHref?: string;
+  onOpenLobsterdex?: () => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;

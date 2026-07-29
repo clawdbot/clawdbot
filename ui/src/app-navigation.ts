@@ -133,6 +133,7 @@ type SettingsNavigationGroup = {
 export type SettingsSearchBlock = {
   routeId: RouteId;
   label: string;
+  pathname?: string;
   search?: string;
   hash: string;
 };
@@ -161,8 +162,8 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value);
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
     return false;
   }
@@ -180,7 +181,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "config", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "nodes"],
+    routes: ["connection", "channels", "communications", "talk", "nodes"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
@@ -196,10 +197,15 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-// Settings subpages render with settings chrome but stay out of the sidebar:
-// model setup is reached from the Models page ("Run setup"). The sidebar
-// highlights nothing for them; search still deep-links via their owning page.
-const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
+// Settings subpages render with settings chrome but stay out of the sidebar.
+// Subpages with a visible owner keep that owner selected so users retain
+// location context while completing the nested flow.
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup", "lobsterdex"];
+const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
+  Readonly<Record<NavigationRouteId, NavigationRouteId>>
+> = {
+  "model-setup": "model-providers",
+};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -231,9 +237,11 @@ const NAVIGATION_ICONS: NavigationItem = {
   profile: "circleUser",
   communications: "send",
   appearance: "palette",
+  lobsterdex: "bug",
   automation: "terminal",
   mcp: "wrench",
   memory: "book",
+  talk: "mic",
   infrastructure: "globe",
   labs: "flaskConical",
   about: "fileText",
@@ -252,6 +260,10 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
+  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -337,9 +349,11 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.communications",
   },
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
+  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
+  talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },

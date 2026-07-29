@@ -4,7 +4,6 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
-import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
@@ -33,15 +32,9 @@ import {
   resetConfigEphemeralState,
   toggleSensitivePathReveal,
 } from "./view-state.ts";
-import {
-  renderBusyButtonContent,
-  renderConfigApplyBanner,
-  renderConfigAutoSaveStatus,
-} from "./view-status.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 export { createConfigViewState } from "./view-state.ts";
-export { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view-status.ts";
 export type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
 // The config editor is where JSON5 text first appears; warm the parser with
@@ -112,28 +105,6 @@ export function renderConfig(props: ConfigProps) {
       configValueExistsAtPath(props.formValue, path),
   );
   const formUnsafe = unsupportedActivePaths.length > 0;
-  const schemaProperties = analysis.schema?.properties ?? {};
-  // Mirror the renderer's tier semantics (splitConfigSchemaByTier: unhinted
-  // leaves default to advanced) so the toolbar toggle appears exactly when the
-  // rendered scope can hide fields behind ghost rows; a mismatched predicate
-  // strands an enabled toggle with no control to turn it off. An active
-  // virtual section (__appearance__/__notifications__) renders no schema form,
-  // so it never offers the toggle.
-  const hasAdvancedInScope = () => {
-    const sectionKeys = props.activeSection
-      ? Object.hasOwn(schemaProperties, props.activeSection)
-        ? [props.activeSection]
-        : []
-      : Object.keys(schemaProperties);
-    return sectionKeys.some((key) => {
-      const node = schemaProperties[key];
-      if (!node) {
-        return false;
-      }
-      const split = splitConfigSchemaByTier({ schema: node, path: [key], hints: props.uiHints });
-      return split.advancedLeafCount > 0;
-    });
-  };
   const effectiveShowAdvanced = props.forceShowAdvanced === true || props.showAdvancedSettings;
   const rawAvailable = props.rawAvailable ?? true;
   // An unsaved raw draft stays authoritative in the capability; hiding the
@@ -320,11 +291,6 @@ export function renderConfig(props: ConfigProps) {
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
   const canRawSave = props.connected && !configBusy && hasRawChanges;
-  const autoSaveStatus = renderConfigAutoSaveStatus({
-    status: props.autoSaveStatus,
-    onRetry: props.onSave,
-    onReload: props.onRawDiscard,
-  });
   const showAppearanceOnRoot =
     includeVirtualSections &&
     formMode === "form" &&
@@ -403,29 +369,9 @@ export function renderConfig(props: ConfigProps) {
         },
       })
     : nothing;
-  const showAdvancedToggle =
-    formMode === "form" && props.forceShowAdvanced !== true && hasAdvancedInScope();
-  const showToolbar =
-    showModeToggle || showSectionTabs || showAdvancedToggle || autoSaveStatus !== nothing;
-  const applyBanner = renderConfigApplyBanner({
-    needsApply: props.needsApply,
-    applying: props.applying,
-    // Applying mid-save/mid-load would race the write that made the banner
-    // appear (or a stale snapshot); a dirty raw draft blocks apply outright
-    // (raw is explicit-save-only); restarting mid-update can corrupt the
-    // install. Wait for quiet.
-    busy:
-      props.saving ||
-      props.loading ||
-      props.updating ||
-      props.autoSaveStatus === "saving" ||
-      hasRawChanges,
-    connected: props.connected,
-    onApply: props.onApply,
-  });
+  const showToolbar = showModeToggle || showSectionTabs;
   const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
-  const showLead =
-    showToolbar || settingsLayout === "accordion" || applyBanner !== nothing || showValidityWarning;
+  const showLead = showToolbar || settingsLayout === "accordion" || showValidityWarning;
 
   const lead = html`<div class="config-lead">
     ${showToolbar
@@ -457,23 +403,9 @@ export function renderConfig(props: ConfigProps) {
               </div>`
             : nothing}
           ${sectionTabs}
-          ${showAdvancedToggle
-            ? html`<button
-                class="btn btn--sm config-show-advanced ${props.showAdvancedSettings
-                  ? "active"
-                  : ""}"
-                aria-pressed=${props.showAdvancedSettings ? "true" : "false"}
-                @click=${() => props.setShowAdvancedSettings(!props.showAdvancedSettings)}
-              >
-                ${t("configForm.showAdvanced")}
-              </button>`
-            : nothing}
-          <div class="config-toolbar__status" role="status" aria-live="polite">
-            ${autoSaveStatus}
-          </div>
         </div>`
       : nothing}
-    ${settingsLayout === "accordion" ? renderAccordionNav() : nothing} ${applyBanner}
+    ${settingsLayout === "accordion" ? renderAccordionNav() : nothing}
     ${showValidityWarning
       ? html`<div class="config-validity-warning">
           <svg
@@ -559,6 +491,9 @@ export function renderConfig(props: ConfigProps) {
                       showAdvanced: effectiveShowAdvanced,
                       forceAdvancedSection: props.forceAdvancedSection,
                       onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                      onHideAdvanced: props.forceShowAdvanced
+                        ? undefined
+                        : () => props.setShowAdvancedSettings(false),
                       sectionActions:
                         props.activeSection === "env"
                           ? html`<button
@@ -615,11 +550,11 @@ export function renderConfig(props: ConfigProps) {
                           aria-busy=${props.saving ? "true" : "false"}
                           @click=${props.onSave}
                         >
-                          ${renderBusyButtonContent(
-                            props.saving,
-                            t("common.save"),
-                            t("common.saving"),
-                          )}
+                          ${props.saving
+                            ? html`<span class="config-action-spinner" aria-hidden="true"
+                                  >${icons.loader}</span
+                                >${t("common.saving")}`
+                            : t("common.save")}
                         </button>
                       </div>
                       <div class="field config-raw-field">

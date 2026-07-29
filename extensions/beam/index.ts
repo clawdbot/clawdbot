@@ -1,5 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createBeamRequestHandler } from "./src/http.js";
+import { createBeamMirrorService } from "./src/mirror.js";
 import { createBeamSessionCatalog } from "./src/session-catalog.js";
 import { createBeamStore } from "./src/store.js";
 
@@ -19,5 +20,6 @@ export default definePluginEntry({
         resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
     });
+    api.registerService(createBeamMirrorService({ runtime: api.runtime }));
   },
 });

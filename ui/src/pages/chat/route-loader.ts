@@ -16,6 +16,7 @@ import {
 import {
   findUiSessionRow,
   SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
@@ -28,13 +29,19 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
+import {
+  findCachedShortSession,
+  incompleteShortSessionResolution,
+  narrowShortResolutionBySlugHint,
+  requireShortSessionResolution,
+  sessionKeyUuid,
+  type ShortSessionResolution as SessionReferenceResolution,
+} from "./route-loader-short-cache.ts";
 
 const SESSION_REF_SEARCH_LIMIT = 20;
 const SESSION_REF_SEARCH_MAX_PAGES = 5;
 // A uuid's first block is the longest run that is contiguous in both the hyphenated
 // stored key and the hyphen-stripped short id used in URLs.
-const UUID_FIRST_BLOCK_LENGTH = 8;
-const SESSION_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 
 type SessionCandidate = {
   agentId: string;
@@ -53,6 +60,7 @@ export type ChatRouteData =
       shortId?: string;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
+      canonicalLocationSource?: RouteLocation;
     }
   | {
       kind: "ambiguous";
@@ -77,11 +85,6 @@ export function locationWithoutDraft(location: RouteLocation): RouteLocation {
   return { ...location, search: search ? `?${search}` : "" };
 }
 
-type SessionReferenceResolution =
-  | { kind: "not-found" }
-  | { kind: "unique"; session: GatewaySessionRow }
-  | { kind: "ambiguous"; sessions: GatewaySessionRow[]; truncated: boolean };
-
 type SessionReferenceSearch = { agentId: string } & (
   | { kind: "short"; value: string }
   | { kind: "exact"; value: string }
@@ -92,11 +95,6 @@ const resolutionCache = new WeakMap<
   GatewayBrowserClient,
   Map<string, Promise<SessionReferenceResolution | null>>
 >();
-
-function sessionKeyUuid(sessionKey: string): string | null {
-  const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
-  return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
-}
 
 function uniqueShortIdPrefix(
   value: string,
@@ -166,7 +164,7 @@ function sessionReferenceSearchText(
   // Short ids are compared hyphen-stripped, but the stored key holds a hyphenated uuid,
   // so only its first block survives as a contiguous substring. Anything longer (from a
   // disambiguation link or a canonicalized slug) would match nothing server-side.
-  return search.value.slice(0, UUID_FIRST_BLOCK_LENGTH);
+  return search.value.slice(0, 8);
 }
 
 function sessionReferenceMatches(
@@ -201,31 +199,6 @@ function sessionReferenceMatches(
 // A truncated set is not a tie, it is an unfinished search. Another page could hold the
 // same prefix under the same slug, so settling here would be the guess the bounded search
 // exists to avoid.
-function narrowBySlugHint(
-  resolution: SessionReferenceResolution,
-  slugHint: string | undefined,
-): SessionReferenceResolution {
-  if (resolution.kind !== "ambiguous" || resolution.truncated || !slugHint) {
-    return resolution;
-  }
-  const matched = resolution.sessions.filter(
-    (row) => controlUiSessionSlug(row.displayName) === slugHint,
-  );
-  return matched.length === 1 && matched[0] ? { kind: "unique", session: matched[0] } : resolution;
-}
-
-function incompleteSessionReferenceResolution(
-  search: SessionReferenceSearch,
-  sessions: GatewaySessionRow[],
-): SessionReferenceResolution {
-  if (search.kind === "slug" && sessions.length === 0) {
-    // Slugs are best-effort: the bounded zero-match contract is a 404, while an
-    // incomplete exact-key search must retain the authoritative literal route.
-    return { kind: "not-found" };
-  }
-  return { kind: "ambiguous", sessions, truncated: true };
-}
-
 async function querySessionReference(
   context: ApplicationContext,
   search: SessionReferenceSearch,
@@ -250,15 +223,6 @@ async function querySessionReference(
       cache.delete(cacheKey);
     }
   }
-}
-
-function requireSessionReferenceResolution(
-  resolution: SessionReferenceResolution | null,
-): SessionReferenceResolution {
-  if (!resolution) {
-    throw new Error("Session list unavailable while resolving URL.");
-  }
-  return resolution;
 }
 
 async function querySessionReferencePages(
@@ -294,11 +258,11 @@ async function querySessionReferencePages(
       return session ? { kind: "unique", session } : { kind: "not-found" };
     }
     if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
-      return incompleteSessionReferenceResolution(search, sessions);
+      return incompleteShortSessionResolution(search.kind, sessions);
     }
     const nextOffset = result.nextOffset ?? offset + result.sessions.length;
     if (nextOffset <= offset) {
-      return incompleteSessionReferenceResolution(search, sessions);
+      return incompleteShortSessionResolution(search.kind, sessions);
     }
     offset = nextOffset;
   }
@@ -319,8 +283,11 @@ function locationWithoutSearchParam(location: RouteLocation, key: string): Route
   return { ...location, search: search ? `?${search}` : "" };
 }
 
-function locationWithoutFacePreference(location: RouteLocation): RouteLocation {
-  return locationWithoutSearchParam(location, SESSION_FACE_PREFERENCE_PARAM);
+function locationWithoutNavigationHints(location: RouteLocation): RouteLocation {
+  return locationWithoutSearchParam(
+    locationWithoutSearchParam(location, SESSION_FACE_PREFERENCE_PARAM),
+    SESSION_NAVIGATION_KEY_PARAM,
+  );
 }
 
 function preferredFace(row: Pick<GatewaySessionRow, "boardFace">): BoardFace {
@@ -358,7 +325,7 @@ function canonicalMainLocation(
   }
   const pathname = pathForSession(face, parsed.agentId, sessionKey, context.basePath, { mainKey });
   return pathname && pathname !== location.pathname
-    ? { ...locationWithoutFacePreference(location), pathname }
+    ? { ...locationWithoutNavigationHints(location), pathname }
     : null;
 }
 
@@ -379,7 +346,7 @@ function canonicalSessionLocation(params: {
   if (!pathname) {
     return undefined;
   }
-  const location = locationWithoutFacePreference(params.location);
+  const location = locationWithoutNavigationHints(params.location);
   const changed =
     pathname !== params.location.pathname || location.search !== params.location.search;
   return changed ? { ...location, pathname } : null;
@@ -482,7 +449,7 @@ function resolvedSessionRouteData(params: {
     draft: draftFromLocation(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
-    ...(canonicalLocation ? { canonicalLocation } : {}),
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
 
@@ -508,7 +475,7 @@ function resolvedMainSessionRouteData(params: {
   if (!pathname) {
     return null;
   }
-  const location = locationWithoutFacePreference(params.location);
+  const location = locationWithoutNavigationHints(params.location);
   const canonicalLocation =
     pathname !== params.location.pathname || location.search !== params.location.search
       ? { ...location, pathname }
@@ -519,7 +486,7 @@ function resolvedMainSessionRouteData(params: {
     agentId: params.target.agentId,
     draft: draftFromLocation(params.location),
     face,
-    ...(canonicalLocation ? { canonicalLocation } : {}),
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
 
@@ -539,7 +506,9 @@ export async function loadChatRoute(
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
     const sessionKey = buildCatalogSessionKey(catalogKey);
-    let canonicalLocation = preferenceDerived ? locationWithoutFacePreference(routeLocation) : null;
+    let canonicalLocation = preferenceDerived
+      ? locationWithoutNavigationHints(routeLocation)
+      : null;
     let resolvedFace = face;
     if (preferenceDerived) {
       const resolution = await querySessionReference(
@@ -557,7 +526,7 @@ export async function loadChatRoute(
           { mainKey: configuredMainKey(context) },
         );
         if (pathname) {
-          canonicalLocation = { ...locationWithoutFacePreference(routeLocation), pathname };
+          canonicalLocation = { ...locationWithoutNavigationHints(routeLocation), pathname };
         }
       }
     }
@@ -569,7 +538,7 @@ export async function loadChatRoute(
       face: resolvedFace,
       // Non-null only on a preference-derived open, where it always at least drops the
       // marker from the URL.
-      ...(canonicalLocation ? { canonicalLocation } : {}),
+      ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: routeLocation } : {}),
     };
   }
   if (target.kind === "main") {
@@ -594,7 +563,7 @@ export async function loadChatRoute(
       }
     }
     const canonicalLocation = preferenceDerived
-      ? locationWithoutFacePreference(routeLocation)
+      ? locationWithoutNavigationHints(routeLocation)
       : null;
     return {
       kind: "session",
@@ -602,7 +571,7 @@ export async function loadChatRoute(
       draft: draftFromLocation(routeLocation),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search
-        ? { canonicalLocation }
+        ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : {}),
     };
   }
@@ -692,7 +661,7 @@ export async function loadChatRoute(
             .catch(() => null)
         : undefined;
     const preferenceLocation = preferenceDerived
-      ? locationWithoutFacePreference(routeLocation)
+      ? locationWithoutNavigationHints(routeLocation)
       : null;
     return {
       kind: "session",
@@ -700,23 +669,42 @@ export async function loadChatRoute(
       draft: draftFromLocation(routeLocation),
       face,
       ...(canonicalLocation
-        ? { canonicalLocation }
+        ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : preferenceLocation && preferenceLocation.search !== routeLocation.search
-          ? { canonicalLocation: preferenceLocation }
+          ? { canonicalLocation: preferenceLocation, canonicalLocationSource: routeLocation }
           : {}),
-      ...(canonicalLocationReady ? { canonicalLocationReady } : {}),
+      ...(canonicalLocationReady
+        ? { canonicalLocationReady, canonicalLocationSource: routeLocation }
+        : {}),
     };
   }
-  const resolution = narrowBySlugHint(
-    requireSessionReferenceResolution(
-      await querySessionReference(
-        context,
-        { kind: "short", value: target.shortId, agentId: target.agentId },
-        signal,
-      ),
-    ),
-    target.slugHint,
-  );
+  const cached = findCachedShortSession(context, routeLocation, target);
+  if (cached && !cached.row) {
+    const canonicalLocation = locationWithoutNavigationHints(routeLocation);
+    const canonicalLocationChanged = canonicalLocation.search !== routeLocation.search;
+    return {
+      kind: "session",
+      sessionKey: cached.sessionKey,
+      draft: draftFromLocation(routeLocation),
+      face,
+      ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
+      ...(canonicalLocationChanged
+        ? { canonicalLocation, canonicalLocationSource: routeLocation }
+        : {}),
+    };
+  }
+  const resolution = cached?.row
+    ? ({ kind: "unique", session: cached.row } as const)
+    : narrowShortResolutionBySlugHint(
+        requireShortSessionResolution(
+          await querySessionReference(
+            context,
+            { kind: "short", value: target.shortId, agentId: target.agentId },
+            signal,
+          ),
+        ),
+        target.slugHint,
+      );
   if (resolution.kind === "not-found") {
     return notFound({ routeId: face });
   }

@@ -240,7 +240,13 @@ describe("executeFollowupTurn", () => {
         typing,
         typingMode: "instant",
         defaultModel: "claude",
-        opts: { onCompactionStart, onCompactionEnd, onReasoningEnd, onNarrationUpdate },
+        opts: {
+          forceToolResultProgress: true,
+          onCompactionStart,
+          onCompactionEnd,
+          onReasoningEnd,
+          onNarrationUpdate,
+        },
       },
       onToolResult,
       onCompactionNoticePayload: vi.fn(async () => {}),
@@ -254,6 +260,41 @@ describe("executeFollowupTurn", () => {
     expect(onCompactionEnd).not.toHaveBeenCalled();
     expect(onReasoningEnd).not.toHaveBeenCalled();
     expect(onNarrationUpdate).not.toHaveBeenCalled();
+  });
+
+  it("honors channel-forced tool progress when verbosity is off", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onToolResult = vi.fn(async () => {});
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolStart?.({ name: "read", phase: "start" });
+      await params.opts?.onToolResult?.({ text: "working" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { forceToolResultProgress: true, onToolStart },
+      },
+      onToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onToolStart).toHaveBeenCalledOnce();
+    expect(onToolResult).toHaveBeenCalledWith({ text: "working" }, { runId: "run-1" });
   });
 
   it("allows explicitly opted-in tool lifecycle while ordinary progress is hidden", async () => {

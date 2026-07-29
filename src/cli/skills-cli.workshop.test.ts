@@ -46,6 +46,13 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(async () => {
+    throw Object.assign(new Error("gateway unavailable"), { kind: "closed", code: 1006 });
+  }),
+  isGatewayTransportError: () => true,
+}));
+
 vi.mock("../terminal/links.js", () => ({
   formatDocsLink: () => "docs.openclaw.ai/cli/skills",
 }));
@@ -180,7 +187,7 @@ describe("skills workshop cli", () => {
     ).resolves.toContain("Use current conditions");
   });
 
-  it("scopes list and inspect to the selected workspace", async () => {
+  it("lists and inspects an agent proposal after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
     const draftPath = path.join(firstWorkspaceDir, "proposal-draft.md");
     await fs.writeFile(draftPath, "# First CLI Skill\n", "utf8");
@@ -201,11 +208,10 @@ describe("skills workshop cli", () => {
 
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-second-");
     await runCommand(["skills", "workshop", "list"]);
-    expect(mocks.runtimeStdout.at(-1)).toBe("No skill proposals.");
-    await expect(runCommand(["skills", "workshop", "inspect", proposalId!])).rejects.toThrow(
-      "__exit__:1",
-    );
-    expect(mocks.runtimeErrors).toContain(`Skill proposal not found: ${proposalId}`);
+    expect(mocks.runtimeStdout.at(-1)).toContain(`${proposalId}  pending  create`);
+    expect(mocks.runtimeStdout.at(-1)).toContain("[previous workspace]");
+    await runCommand(["skills", "workshop", "inspect", proposalId!]);
+    expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
 
     mocks.workspaceDir = firstWorkspaceDir;
     await runCommand(["skills", "workshop", "inspect", proposalId!]);

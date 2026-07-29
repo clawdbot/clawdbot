@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,11 +6,12 @@ import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
-import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -35,7 +35,8 @@ export type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
-  enabled: boolean;
+  /** Master switch tier: true/false, or "auto" (engage per model catalog flag). */
+  enabled: boolean | "auto";
   runtime: "quickjs-wasi";
   mode: "only";
   languages: CodeModeLanguage[];
@@ -49,24 +50,11 @@ export type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "call"
-  | "callValue"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "swarmNote";
-
-export type PendingBridgeRequest = {
-  id: string;
-  method: CodeModeBridgeMethod;
-  args: unknown[];
-};
-
-export type SettledBridgeRequest = { id: string } & Result<unknown, string>;
+export type {
+  CodeModeSettlementMode,
+  PendingBridgeRequest,
+  SettledBridgeRequest,
+} from "./code-mode-worker-types.js";
 
 export type CodeModeFailureCode =
   | "aborted"
@@ -93,28 +81,23 @@ export type CodeModeHeadlessResult =
     };
 
 export type CodeModeWorkerResult =
-  | {
-      status: "completed";
-      value: unknown;
-      output: unknown[];
-    }
-  | {
-      status: "waiting";
-      snapshotBytes: Uint8Array;
-      pendingRequests: PendingBridgeRequest[];
-      output: unknown[];
-    }
+  | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
       error: string;
       code: CodeModeFailureCode;
+      failurePhase: CodeModeFailurePhase;
+      bridgeDispatchStarted: boolean;
       output: unknown[];
     };
 
 const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
   cacheRejections: true,
 });
-let typescriptRuntimeForTest: typeof import("typescript") | null = null;
+let typescriptRuntimeForTest:
+  | typeof import("typescript")
+  | Promise<typeof import("typescript")>
+  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -123,6 +106,9 @@ function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | u
   }
   if (codeMode === false) {
     return { enabled: false };
+  }
+  if (codeMode === "auto") {
+    return { enabled: "auto" };
   }
   return isRecord(codeMode) ? codeMode : undefined;
 }
@@ -137,8 +123,10 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
   return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+function readEnabled(value: unknown): boolean | "auto" {
+  // Shipped default is "auto": code mode engages only for catalog-preferred
+  // models, so unevaluated models keep normal tool exposure by construction.
+  return typeof value === "boolean" || value === "auto" ? value : "auto";
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -164,7 +152,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     DEFAULT_MAX_SEARCH_LIMIT,
   );
   return {
-    enabled: readBoolean(raw.enabled, false),
+    enabled: readEnabled(raw.enabled),
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),
@@ -201,6 +189,27 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     ),
     maxSearchLimit,
   };
+}
+
+/**
+ * Resolves the master switch against one model's catalog capability flag.
+ * `true`/`false` are absolute; `"auto"` engages only for models whose catalog
+ * compat declares `codeMode: "preferred"`. This gates the model-facing tool
+ * surface only; runs that route to a provider-native harness (for example the
+ * default OpenAI Codex surface) never reach this embedded-runtime gate.
+ */
+export function isCodeModeEngagedForModel(
+  config: Pick<CodeModeConfig, "enabled">,
+  model: { compat?: unknown } | undefined,
+): boolean {
+  if (config.enabled !== "auto") {
+    return config.enabled;
+  }
+  const compat =
+    model?.compat && typeof model.compat === "object"
+      ? (model.compat as { codeMode?: unknown })
+      : undefined;
+  return compat?.codeMode === "preferred";
 }
 
 export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
@@ -299,8 +308,15 @@ export function enforceResultLimit(params: {
   value?: unknown;
   config: CodeModeConfig;
 }): void {
-  enforceOutputLimit(params.output, params.config);
-  if (params.value !== undefined && jsonByteLength(params.value) > params.config.maxOutputBytes) {
+  const serializedOutputBytes = jsonByteLength(params.output);
+  if (serializedOutputBytes > params.config.maxOutputBytes) {
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
+  }
+  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
+  if (
+    params.value !== undefined &&
+    outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
+  ) {
     throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }
@@ -436,17 +452,123 @@ function maskCodeLiteralsAndComments(
   }
 }
 
+function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
+  if (callee.type === "ParenthesizedExpression") {
+    return isModuleLoaderCallee(callee.expression);
+  }
+  if (callee.type === "ChainExpression") {
+    return isModuleLoaderCallee(callee.expression);
+  }
+  if (callee.type === "SequenceExpression") {
+    const expression = callee.expressions[callee.expressions.length - 1];
+    return expression !== undefined && isModuleLoaderCallee(expression);
+  }
+  return callee.type === "Identifier" && callee.name === "require";
+}
+
+function containsModuleAccess(node: import("acorn").AnyNode): boolean {
+  if (
+    node.type === "ImportDeclaration" ||
+    node.type === "ImportExpression" ||
+    (node.type === "MetaProperty" && node.meta.name === "import") ||
+    (node.type === "CallExpression" && isModuleLoaderCallee(node.callee))
+  ) {
+    return true;
+  }
+
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (
+          child !== null &&
+          typeof child === "object" &&
+          "type" in child &&
+          typeof child.type === "string" &&
+          containsModuleAccess(child as import("acorn").AnyNode)
+        ) {
+          return true;
+        }
+      }
+      continue;
+    }
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "type" in value &&
+      typeof value.type === "string" &&
+      containsModuleAccess(value as import("acorn").AnyNode)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function typeScriptContainsModuleAccess(code: string, ts: typeof import("typescript")): boolean {
+  const source = ts.createSourceFile(
+    "code-mode.ts",
+    code,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  const isLoaderCallee = (expression: import("typescript").Expression): boolean => {
+    if (ts.isParenthesizedExpression(expression)) {
+      return isLoaderCallee(expression.expression);
+    }
+    if (
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+    ) {
+      return isLoaderCallee(expression.right);
+    }
+    return ts.isIdentifier(expression) && expression.text === "require";
+  };
+
+  const visit = (node: import("typescript").Node): boolean => {
+    if (
+      ts.isImportDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node) ||
+      (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) ||
+      (ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword || isLoaderCallee(node.expression)))
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, (child) => (visit(child) ? true : undefined)) === true;
+  };
+
+  return visit(source);
+}
+
 function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
 ): boolean {
+  try {
+    const source = parse(`(async () => {\n${code}\n})`, {
+      ecmaVersion: "latest",
+    });
+    // The WASI guest has no host module loader. Only executable module syntax
+    // belongs in this early check; ordinary guest methods are not capabilities.
+    return containsModuleAccess(source);
+  } catch {
+    if (typescriptRuntime) {
+      try {
+        return typeScriptContainsModuleAccess(code, typescriptRuntime);
+      } catch {
+        // Keep malformed input on the conservative lexical fallback.
+      }
+    }
+  }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
-    return typescriptRuntimeForTest;
+    return await typescriptRuntimeForTest;
   }
   return await typescriptRuntimeLoader.load();
 }
@@ -509,10 +631,10 @@ export function errorMessage(error: unknown): string {
 }
 
 export function createCodeModeApiFilesForRun(
-  catalog: Parameters<typeof createCodeModeApiVirtualFiles>[0],
+  namespaceRuntime: CodeModeNamespaceRuntime,
   swarmEnabled: boolean,
 ) {
-  const files = createCodeModeApiVirtualFiles(catalog);
+  const { apiFiles: files } = namespaceRuntime;
   return swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts");
 }
 
@@ -530,7 +652,9 @@ export function enforceSnapshotPayloadLimits(params: {
 export const codeModeRuntimeTesting = {
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+  setTypescriptRuntimeForTest: (
+    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
+  ) => {
     typescriptRuntimeForTest = runtime;
   },
 };

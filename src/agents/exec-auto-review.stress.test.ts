@@ -33,6 +33,7 @@ type StressCompletionResult = {
 
 function createStressReviewer(params: {
   complete: (request: StressCompletionRequest) => Promise<StressCompletionResult>;
+  signal?: AbortSignal;
   timeoutMs?: number;
 }) {
   const prepare = vi.fn(async () => ({
@@ -43,6 +44,7 @@ function createStressReviewer(params: {
   const complete = vi.fn(params.complete);
   const reviewer = createModelExecAutoReviewer({
     cfg: {},
+    signal: params.signal,
     ...(params.timeoutMs === undefined ? {} : { reviewer: { timeoutMs: params.timeoutMs } }),
     deps: {
       prepareSimpleCompletionModelForAgent:
@@ -85,7 +87,7 @@ function chooseSeeded<T>(random: () => number, values: readonly T[]): T {
   return selected;
 }
 
-describe.runIf(process.platform !== "win32")("exec auto-review shell stress", () => {
+describe("exec auto-review shell stress", () => {
   it("keeps mutable PowerShell script entry points outside auto-review", () => {
     const positionalScript = ["pwsh", "-NoProfile", "./safe.ps1"];
     const explicitScript = ["pwsh", "-NoProfile", "-File", "./safe.ps1"];
@@ -388,7 +390,7 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     }
   });
 
-  it.each([
+  it.runIf(process.platform !== "win32").each([
     ["bash combined login", "bash -lc 'echo startup'"],
     ["bash reversed login flags", "bash -cl 'echo startup'"],
     ["bash separate login flags", "bash -l -c 'echo startup'"],
@@ -596,19 +598,21 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     }
   });
 
-  it.each([
-    "node --version",
-    "git status",
-    "printf safe",
-    "cmd /d /c echo safe",
-    "cmd.exe /d /s /c echo safe",
-    "CMD.EXE /D /S /C echo safe",
-    "cmd /d /s /q /c echo safe",
-    "cmd /d /e:on /f:off /v:on /t:0f /c echo safe",
-    "pwsh -NoProfile -Command 'Write-Output safe'",
-    "pwsh -nop -c 'Write-Output safe'",
-    "pwsh /NoProfile /c 'Write-Output safe'",
-  ])("preserves ordinary reviewable command: %s", async (command) => {
+  it
+    .runIf(process.platform !== "win32")
+    .each([
+      "node --version",
+      "git status",
+      "printf safe",
+      "cmd /d /c echo safe",
+      "cmd.exe /d /s /c echo safe",
+      "CMD.EXE /D /S /C echo safe",
+      "cmd /d /s /q /c echo safe",
+      "cmd /d /e:on /f:off /v:on /t:0f /c echo safe",
+      "pwsh -NoProfile -Command 'Write-Output safe'",
+      "pwsh -nop -c 'Write-Output safe'",
+      "pwsh /NoProfile /c 'Write-Output safe'",
+    ])("preserves ordinary reviewable command: %s", async (command) => {
     for (const host of ["gateway", "node", "codex-app-server"] as const) {
       await expect(
         buildExecAutoReviewInputForShellCommand({
@@ -722,6 +726,113 @@ describe("exec auto-review adversarial model-response stress", () => {
 });
 
 describe("exec auto-review concurrency stress", () => {
+  it("keeps 128 mixed concurrent provider failures bounded and isolated", async () => {
+    const providerFailure = "provider\n\u001b[31mfailed\u001b[0m\u202e" + "x".repeat(1_024);
+    const cases = Array.from({ length: 128 }, (_unused, index) => {
+      const prepare = vi.fn(async () => {
+        if (index % 4 === 0) {
+          return { error: providerFailure };
+        }
+        return {
+          selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+          model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
+          auth: { apiKey: "redacted", mode: "env" as const },
+        };
+      });
+      const complete = vi.fn(async () => {
+        if (index % 4 === 1) {
+          return {
+            stopReason: "error" as const,
+            errorMessage: providerFailure,
+            content: [],
+          };
+        }
+        if (index % 4 === 2) {
+          throw new Error(providerFailure);
+        }
+        return modelResponse("allow", "low");
+      });
+      const reviewer = createModelExecAutoReviewer({
+        cfg: {},
+        deps: {
+          prepareSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModel:
+            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        },
+      });
+      return { reviewer, prepare, complete };
+    });
+
+    const decisions = await Promise.all(
+      cases.map(({ reviewer }, index) =>
+        Promise.resolve(
+          reviewer({
+            ...baselineInput,
+            command: `git status --failure-case=${index}`,
+            argv: ["git", "status", `--failure-case=${index}`],
+          }),
+        ),
+      ),
+    );
+
+    for (const [index, decision] of decisions.entries()) {
+      expect(decision.decision, `provider failure case ${index}`).toBe(
+        index % 4 === 3 ? "allow-once" : "ask",
+      );
+      expect(decision.rationale.length, `provider failure case ${index}`).toBeLessThanOrEqual(500);
+      expect(decision.rationale, `provider failure case ${index}`).not.toMatch(
+        /[\p{Cc}\p{Cf}\u2028\u2029]/u,
+      );
+      expect(cases[index]?.prepare).toHaveBeenCalledTimes(1);
+      expect(cases[index]?.complete).toHaveBeenCalledTimes(index % 4 === 0 ? 0 : 1);
+    }
+  });
+
+  it("cancels 64 concurrent provider reviews without sharing execution signals", async () => {
+    const controllers = Array.from({ length: 64 }, () => new AbortController());
+    const observedSignals: AbortSignal[] = [];
+    const requests = controllers.map((controller, index) => {
+      const { reviewer } = createStressReviewer({
+        signal: controller.signal,
+        complete: async (request) => {
+          const providerSignal = request.options.signal;
+          if (!providerSignal) {
+            throw new Error("review completion must receive an abort signal");
+          }
+          observedSignals.push(providerSignal);
+          return await new Promise<StressCompletionResult>((_resolve, reject) => {
+            providerSignal.addEventListener("abort", () => reject(new Error("provider aborted")), {
+              once: true,
+            });
+          });
+        },
+      });
+      return Promise.resolve(
+        reviewer({
+          ...baselineInput,
+          command: `git status --cancel-case=${index}`,
+          argv: ["git", "status", `--cancel-case=${index}`],
+        }),
+      );
+    });
+    const settled = Promise.allSettled(requests);
+    await vi.waitFor(() => expect(observedSignals).toHaveLength(controllers.length));
+
+    for (const [index, controller] of controllers.entries()) {
+      controller.abort(new Error(`cancelled review ${index}`));
+    }
+
+    const results = await settled;
+    for (const [index, result] of results.entries()) {
+      expect(result.status, `cancelled review ${index}`).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(result.reason).toMatchObject({ message: `cancelled review ${index}` });
+      }
+    }
+    expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
+  });
+
   it("keeps 256 concurrent approvals independently bound and single-use", async () => {
     const { reviewer, prepare, complete } = createStressReviewer({
       complete: async () => modelResponse("allow", "low"),

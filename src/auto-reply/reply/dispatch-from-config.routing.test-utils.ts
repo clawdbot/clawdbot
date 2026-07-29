@@ -1122,6 +1122,49 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("deduplicates identical commentary when producer item ids change", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      From: "discord:user:123",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onItemEvent?.({
+        itemId: "commentary-stream",
+        kind: "preamble",
+        progressText: "Checking the current state.",
+      });
+      await opts?.onItemEvent?.({
+        itemId: "commentary-snapshot",
+        kind: "preamble",
+        progressText: "Checking the current state.",
+      });
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const sendToolResult = dispatcher.sendToolResult as ReturnType<typeof vi.fn>;
+    expect(sendToolResult).toHaveBeenCalledTimes(1);
+    expect((sendToolResult.mock.calls[0]?.[0] as ReplyPayload | undefined)?.text).toBe(
+      "💬 Checking the current state.",
+    );
+  });
+
   it("flushes the previous commentary block when a new item starts", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

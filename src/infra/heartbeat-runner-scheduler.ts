@@ -19,7 +19,6 @@ import {
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
-import { resolveHeartbeatSession } from "./heartbeat-runner-session.js";
 import {
   computeNextHeartbeatPhaseDueMs,
   resolveHeartbeatPhaseMs,
@@ -382,11 +381,8 @@ export function startHeartbeatRunner(opts: {
       advanceAgentSchedule(agent, now, reason);
       let agentRan = res.status === "ran";
 
-      const defaultSessionKey = resolveHeartbeatSession(
-        wakeConfig,
-        agent.agentId,
-        agent.heartbeat,
-      ).sessionKey;
+      // Re-read pending commitments after the global turn so a task-preempted
+      // default session gets an isolated follow-up without duplicating sends.
       const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
         ? await listDueCommitmentSessionKeys({
             cfg: wakeConfig,
@@ -396,9 +392,6 @@ export function startHeartbeatRunner(opts: {
           })
         : [];
       for (const dueSessionKey of dueSessionKeys) {
-        if (dueSessionKey === defaultSessionKey) {
-          continue;
-        }
         let commitmentRes: HeartbeatRunResult;
         try {
           commitmentRes = await runOnce({

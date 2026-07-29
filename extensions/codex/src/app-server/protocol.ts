@@ -1,3 +1,13 @@
+import type {
+  CodexAppInfo,
+  CodexAppsInstalledParams,
+  CodexAppsInstalledResponse,
+  CodexAppsListParams,
+  CodexAppsListResponse,
+  CodexAppsReadParams,
+  CodexAppsReadResponse,
+} from "./app-inventory-protocol.js";
+import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
@@ -259,6 +269,10 @@ type CodexThreadArchiveParams = JsonObject & {
   threadId: string;
 };
 
+type CodexThreadDeleteParams = JsonObject & {
+  threadId: string;
+};
+
 type CodexThreadUnarchiveResponse = {
   thread: CodexThread;
 };
@@ -368,6 +382,7 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   sessionId?: string;
+  path?: string | null;
   historyMode?: "legacy" | "paginated";
   extra?: JsonObject | null;
   name?: string | null;
@@ -626,33 +641,6 @@ type CodexPluginInstallResponse = {
   appsNeedingAuth: CodexAppSummary[];
 };
 
-type CodexAppInfo = {
-  id: string;
-  name: string;
-  description?: string | null;
-  logoUrl?: string | null;
-  logoUrlDark?: string | null;
-  distributionChannel?: string | null;
-  branding?: JsonValue;
-  appMetadata?: JsonValue;
-  labels?: JsonValue;
-  installUrl?: string | null;
-  isAccessible: boolean;
-  isEnabled: boolean;
-  pluginDisplayNames: string[];
-};
-
-type CodexAppsListParams = {
-  cursor?: string | null;
-  limit?: number;
-  forceRefetch?: boolean;
-};
-
-type CodexAppsListResponse = {
-  data: CodexAppInfo[];
-  nextCursor?: string | null;
-};
-
 type CodexSkillsListParams = {
   cwds: string[];
   forceReload?: boolean;
@@ -709,8 +697,7 @@ export type CodexRequestObject = Record<string, unknown>;
 export declare namespace v2 {
   export type AppInfo = CodexAppInfo;
   export type AppSummary = CodexAppSummary;
-  export type AppsListParams = CodexAppsListParams;
-  export type AppsListResponse = CodexAppsListResponse;
+  export type AppsInstalledResponse = CodexAppsInstalledResponse;
   export type HooksListParams = CodexHooksListParams;
   export type HooksListResponse = CodexHooksListResponse;
   export type PluginDetail = CodexPluginDetail;
@@ -727,9 +714,14 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "app/installed": CodexAppsInstalledParams;
+  "app/list": CodexAppsListParams;
+  "app/read": CodexAppsReadParams;
+  "command/exec": CodexCommandExecParams;
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
+  "thread/delete": CodexThreadDeleteParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
   "thread/turns/list": CodexThreadTurnsListParams;
@@ -750,7 +742,10 @@ type CodexAppServerRequestResultMap = {
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;
+  "app/installed": CodexAppsInstalledResponse;
   "app/list": CodexAppsListResponse;
+  "app/read": CodexAppsReadResponse;
+  "command/exec": CodexCommandExecResponse;
   "config/mcpServer/reload": JsonValue;
   "config/read": CodexConfigReadResponse;
   "configRequirements/read": CodexConfigRequirementsReadResponse;
@@ -772,6 +767,7 @@ type CodexAppServerRequestResultMap = {
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
   "thread/archive": JsonValue;
+  "thread/delete": JsonValue;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;

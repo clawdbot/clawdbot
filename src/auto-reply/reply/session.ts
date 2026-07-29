@@ -678,6 +678,7 @@ async function initSessionStateAttemptLocked(
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
+    sessionKey,
     storePath,
   });
   const entryFreshness = entry
@@ -1029,23 +1030,14 @@ async function initSessionStateAttemptLocked(
   }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
-    sessionEntry.memoryFlushCompactionCount = undefined;
-    sessionEntry.memoryFlushAt = undefined;
+    sessionEntry.memoryFlush = undefined;
     // Runtime model fields are persisted last-run cache, not user selection.
     // Reset must drop them so the next turn resolves current defaults or the
     // explicit providerOverride/modelOverride values preserved above.
     sessionEntry.modelProvider = undefined;
     sessionEntry.model = undefined;
-    sessionEntry.fallbackNoticeSelectedModel = undefined;
-    sessionEntry.fallbackNoticeActiveModel = undefined;
-    sessionEntry.fallbackNoticeReason = undefined;
+    sessionEntry.fallbackNotice = undefined;
     sessionEntry.systemPromptReport = undefined;
-    sessionEntry.memoryFlushFailureCount = undefined;
-    sessionEntry.memoryFlushLastFailedAt = undefined;
-    sessionEntry.memoryFlushLastFailureError = undefined;
-    // Clear stale context hash so the first flush in the new session is not
-    // incorrectly skipped due to a hash match with the old transcript (#30115).
-    sessionEntry.memoryFlushContextHash = undefined;
     sessionEntry.startedAt = undefined;
     sessionEntry.endedAt = undefined;
     sessionEntry.runtimeMs = undefined;
@@ -1175,7 +1167,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
+      sessionFile: sessionKey,
       reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
@@ -1239,7 +1231,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         sessionId: effectiveSessionId,
         storePath,
-        sessionFile: sessionEntry?.sessionFile,
+        sessionFile: sessionKey,
         agentId,
       });
     }

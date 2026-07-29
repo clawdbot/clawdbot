@@ -9,6 +9,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
@@ -19,6 +20,9 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
+import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
+import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -26,7 +30,11 @@ type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").re
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
-    async () => ({ ok: true, sessionFile: "x", messageId: "message-x" }),
+    async () => ({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "message-x",
+    }),
   ),
   beginRestartRecoveryTerminalDelivery: vi.fn<
     () => Promise<"started" | "blocked" | "stale" | "not-applicable">
@@ -215,6 +223,25 @@ const makeContext = (): GatewayRequestContext =>
     getRuntimeConfig: () => ({}),
   }) as unknown as GatewayRequestContext;
 
+async function invokeGatewayMessageMethod(params: {
+  method: "message.action" | "poll" | "send";
+  request: Record<string, unknown>;
+  respond: ReturnType<typeof vi.fn>;
+  context: GatewayRequestContext;
+}) {
+  await expectDefined(
+    sendHandlers[params.method],
+    `sendHandlers.${params.method} test invariant`,
+  )({
+    params: params.request as never,
+    respond: params.respond as never,
+    context: params.context,
+    req: { type: "req", id: "1", method: params.method },
+    client: null as never,
+    isWebchatConnect: () => false,
+  });
+}
+
 async function runSend(params: Record<string, unknown>) {
   return await runSendWithClient(params);
 }
@@ -280,6 +307,7 @@ async function runMessageActionRequest(
         messageActionContext?: {
           expiresAtMs: number;
           sessionId?: string;
+          sourceReplySessionKey?: string;
           sourceReplyFinal?: boolean;
           sourceReplyToolCallId?: string;
           requesterAccountId?: string;
@@ -508,6 +536,7 @@ async function runTelegramTerminalAction(params: {
   message?: string;
   presentation?: Record<string, unknown>;
   sessionKey?: string;
+  sourceReplySessionKey?: string;
   currentMessageId?: string;
   currentThreadTs?: string;
   sourceReplyFinal?: boolean;
@@ -536,6 +565,9 @@ async function runTelegramTerminalAction(params: {
           messageActionContext: {
             expiresAtMs: Date.now() + 60_000,
             sessionId: params.sessionId,
+            ...(params.sourceReplySessionKey === undefined
+              ? {}
+              : { sourceReplySessionKey: params.sourceReplySessionKey }),
             sourceReplyFinal: params.sourceReplyFinal ?? true,
             ...(params.toolCallId === undefined
               ? {}
@@ -629,6 +661,19 @@ function runDiscordChannelInfo(
   );
 }
 
+function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: string) => string) {
+  mocks.getChannelPlugin.mockImplementation((channel: string) => ({
+    id: channel,
+    actions: { handleAction: true },
+    outbound: { sendPoll: mocks.sendPoll },
+    config: {
+      listAccountIds: () => ["primary", "secondary"],
+      defaultAccountId: () => resolveDefaultAccountId(channel),
+      resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
+    },
+  }));
+}
+
 describe("gateway send mirroring", () => {
   let registrySeq = 0;
 
@@ -668,10 +713,119 @@ describe("gateway send mirroring", () => {
       details: { action: "handled" },
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
-    mocks.getChannelPlugin.mockReturnValue({
+    mocks.getChannelPlugin.mockImplementation((channel: string) => ({
+      id: channel,
       actions: { handleAction: true },
       outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: (cfg: { channels?: Record<string, { accounts?: object }> }) => {
+          const accountIds = Object.keys(cfg.channels?.[channel]?.accounts ?? {});
+          return accountIds.length > 0 ? accountIds : ["default"];
+        },
+        resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
+      },
+    }));
+  });
+
+  it.each([
+    {
+      name: "message.action with an unknown account",
+      accountId: "missing",
+      invoke: () =>
+        runMessageActionRequest({
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          accountId: "missing",
+          idempotencyKey: "account-message-action",
+        }),
+      expectedError: "Unknown account",
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "message.action with an unknown nested account",
+      accountId: "missing",
+      invoke: () =>
+        runMessageActionRequest({
+          channel: "slack",
+          action: "send",
+          params: {
+            target: "channel:current",
+            message: "hi",
+            accountId: "missing",
+          },
+          idempotencyKey: "account-message-action-nested",
+        }),
+      expectedError: "Unknown account",
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "message.action with conflicting account fields",
+      accountId: "sut",
+      invoke: () =>
+        runMessageActionRequest({
+          channel: "slack",
+          action: "send",
+          params: {
+            target: "channel:current",
+            message: "hi",
+            accountId: "default",
+          },
+          accountId: "sut",
+          idempotencyKey: "account-message-action-conflict",
+        }),
+      expectedError: "does not match",
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "send with a malformed account",
+      accountId: "!!!",
+      invoke: () =>
+        runSend({
+          channel: "slack",
+          to: "channel:current",
+          message: "hi",
+          accountId: "!!!",
+          idempotencyKey: "account-send",
+        }),
+      expectedError: "Invalid account ID",
+      providerCall: mocks.deliverOutboundPayloads,
+    },
+    {
+      name: "poll with a disabled account",
+      accountId: "disabled",
+      invoke: () =>
+        runPoll({
+          channel: "slack",
+          to: "channel:current",
+          question: "Choose",
+          options: ["A", "B"],
+          accountId: "disabled",
+          idempotencyKey: "account-poll",
+        }),
+      expectedError: "disabled",
+      providerCall: mocks.sendPoll,
+    },
+  ])("rejects $name before provider code", async (testCase) => {
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "slack",
+      actions: { handleAction: true },
+      outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: () => ["default", "sut", "disabled"],
+        resolveAccount: (_cfg: unknown, accountId: string) => ({
+          enabled: accountId !== "disabled",
+        }),
+      },
     });
+
+    const { respond } = await testCase.invoke();
+
+    const response = firstRespondCall(respond);
+    expect(response[0]).toBe(false);
+    expect(response[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(JSON.stringify(response[2])).toContain(testCase.expectedError);
+    expect(testCase.providerCall).not.toHaveBeenCalled();
   });
 
   it("uses the resolved runtime config for message.action when the source snapshot matches", async () => {
@@ -889,8 +1043,9 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    });
     expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
       conversationReadOrigin: "direct-operator",
     });
@@ -904,6 +1059,311 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(directRespond)?.[1]).toEqual({ action: "direct" });
     expect(firstRespondCall(delegatedRespond)?.[1]).toEqual({ action: "delegated" });
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not share message.action idempotency results across account selections", async () => {
+    const context = makeContext();
+    const validRespond = vi.fn();
+    const invalidRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const validRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "default",
+        idempotencyKey: "idem-action-mixed-account",
+      } as never,
+      respond: validRespond,
+      context,
+      req: { type: "req", id: "valid", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+    const invalidRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "missing",
+        idempotencyKey: "idem-action-mixed-account",
+      } as never,
+      respond: invalidRespond,
+      context,
+      req: { type: "req", id: "invalid", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await invalidRequest;
+    expect(firstRespondCall(invalidRespond)?.[0]).toBe(false);
+    expect(JSON.stringify(firstRespondCall(invalidRespond)?.[2])).toContain("Unknown account");
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    });
+
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await validRequest;
+    expect(firstRespondCall(validRespond)?.[0]).toBe(true);
+  });
+
+  it("dedupes equivalent message.action account selections across request fields", async () => {
+    const context = makeContext();
+    const envelopeRespond = vi.fn();
+    const nestedRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const envelopeRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "default",
+        idempotencyKey: "idem-action-equivalent-account",
+      } as never,
+      respond: envelopeRespond,
+      context,
+      req: { type: "req", id: "envelope", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+    const nestedRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi", accountId: "default" },
+        idempotencyKey: "idem-action-equivalent-account",
+      } as never,
+      respond: nestedRespond,
+      context,
+      req: { type: "req", id: "nested", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    });
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await Promise.all([envelopeRequest, nestedRequest]);
+
+    expect(firstRespondCall(envelopeRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(nestedRespond)?.[0]).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes omitted and explicit default message.action accounts", async () => {
+    const context = makeContext();
+    const omittedRespond = vi.fn();
+    const explicitRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const omittedRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        idempotencyKey: "idem-action-effective-default",
+      } as never,
+      respond: omittedRespond,
+      context,
+      req: { type: "req", id: "omitted", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+    const explicitRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "default",
+        idempotencyKey: "idem-action-effective-default",
+      } as never,
+      respond: explicitRespond,
+      context,
+      req: { type: "req", id: "explicit", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    });
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await Promise.all([omittedRequest, explicitRequest]);
+
+    expect(firstRespondCall(omittedRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(explicitRespond)?.[0]).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays an omitted message.action account after the default account changes", async () => {
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const invoke = async (respond: ReturnType<typeof vi.fn>) => {
+      await invokeGatewayMessageMethod({
+        method: "message.action",
+        request: {
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          idempotencyKey: "idem-action-default-account-reload",
+        },
+        respond,
+        context,
+      });
+    };
+
+    const firstRespond = vi.fn();
+    await invoke(firstRespond);
+    defaultAccountId = "secondary";
+    const retryRespond = vi.fn();
+    await invoke(retryRespond);
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
+  it("keeps a pending message.action route bound through maintenance and default changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const maintenance = startGatewayMaintenanceTimers({
+      ...createGatewayMaintenanceStateForTest(),
+      dedupe: context.dedupe,
+      runWorktreeGc: vi.fn(async () => undefined),
+    });
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+    const invoke = (respond: ReturnType<typeof vi.fn>) =>
+      invokeGatewayMessageMethod({
+        method: "message.action",
+        request: {
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          idempotencyKey: "idem-action-pending-maintenance",
+        },
+        respond,
+        context,
+      });
+
+    try {
+      const firstRespond = vi.fn();
+      const firstRequest = invoke(firstRespond);
+      await vi.waitFor(() => {
+        expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+      });
+      expect([...context.dedupe.keys()].some((key) => key.includes(":route-binding:"))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 60_000);
+      defaultAccountId = "secondary";
+      const retryRespond = vi.fn();
+      const retryRequest = invoke(retryRespond);
+      await vi.waitFor(() => {
+        expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+      });
+
+      actionDeferred.resolve({ details: { action: "handled" } });
+      await Promise.all([firstRequest, retryRequest]);
+
+      expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    } finally {
+      clearInterval(maintenance.tickInterval);
+      clearInterval(maintenance.healthInterval);
+      clearInterval(maintenance.dedupeCleanup);
+      clearInterval(maintenance.worktreeCleanup);
+      if (maintenance.mediaCleanup) {
+        clearInterval(maintenance.mediaCleanup);
+      }
+      maintenance.skillCuratorCleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let settled route aliases evict canonical results before ttl", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const maintenance = startGatewayMaintenanceTimers({
+      ...createGatewayMaintenanceStateForTest(),
+      dedupe: context.dedupe,
+      runWorktreeGc: vi.fn(async () => undefined),
+    });
+    const operationCount = Math.floor(DEDUPE_MAX / 2) + 1;
+    const invoke = (idempotencyKey: string, respond: ReturnType<typeof vi.fn>) =>
+      invokeGatewayMessageMethod({
+        method: "message.action",
+        request: {
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          idempotencyKey,
+        },
+        respond,
+        context,
+      });
+
+    try {
+      for (let index = 0; index < operationCount; index += 1) {
+        await invoke(`idem-action-capacity-${index}`, vi.fn());
+      }
+
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(operationCount);
+      expect(context.dedupe.size).toBe(operationCount);
+      expect([...context.dedupe.keys()].some((key) => key.includes(":route-binding:"))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      defaultAccountId = "secondary";
+      const retryRespond = vi.fn();
+      await invoke("idem-action-capacity-0", retryRespond);
+
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(operationCount);
+      expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+    } finally {
+      clearInterval(maintenance.tickInterval);
+      clearInterval(maintenance.healthInterval);
+      clearInterval(maintenance.dedupeCleanup);
+      clearInterval(maintenance.worktreeCleanup);
+      if (maintenance.mediaCleanup) {
+        clearInterval(maintenance.mediaCleanup);
+      }
+      maintenance.skillCuratorCleanup();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps an agent runtime delegated even with a direct-operator marker", async () => {
@@ -936,6 +1396,357 @@ describe("gateway send mirroring", () => {
     );
 
     expect(lastDispatchChannelMessageActionCall()?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("dedupes omitted and explicit default send routes", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const deliveryDeferred = createDeferred<Array<{ messageId: string; channel: string }>>();
+    mocks.deliverOutboundPayloads.mockReturnValueOnce(deliveryDeferred.promise);
+
+    const firstRequest = expectDefined(
+      sendHandlers.send,
+      "sendHandlers.send test invariant",
+    )({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        idempotencyKey: "idem-send-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = expectDefined(
+      sendHandlers.send,
+      "sendHandlers.send test invariant",
+    )({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        accountId: "default",
+        idempotencyKey: "idem-send-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    });
+
+    deliveryDeferred.resolve([{ messageId: "m-concurrent", channel: "slack" }]);
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]?.messageId).toBe("m-concurrent");
+    expect(firstCall?.[1]?.runId).toBe("idem-send-concurrent");
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]?.messageId).toBe("m-concurrent");
+    expect(secondCall?.[1]?.runId).toBe("idem-send-concurrent");
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect([firstCall?.[3]?.cached, secondCall?.[3]?.cached].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("replays an omitted send route after channel and account defaults change", async () => {
+    let defaultChannel = "slack";
+    const defaultAccounts: Record<string, string> = {
+      discord: "secondary",
+      slack: "primary",
+    };
+    mocks.resolveMessageChannelSelection.mockImplementation(async () => ({
+      channel: defaultChannel,
+      configured: [defaultChannel],
+    }));
+    mockMutableMessageRouteAccounts((channel) => defaultAccounts[channel] ?? "primary");
+    const context = makeContext();
+    const invoke = async (respond: ReturnType<typeof vi.fn>) => {
+      await invokeGatewayMessageMethod({
+        method: "send",
+        request: {
+          to: "channel:C1",
+          message: "hi",
+          idempotencyKey: "idem-send-default-route-reload",
+        },
+        respond,
+        context,
+      });
+    };
+
+    const firstRespond = vi.fn();
+    await invoke(firstRespond);
+    defaultChannel = "discord";
+    defaultAccounts.slack = "secondary";
+    const retryRespond = vi.fn();
+    await invoke(retryRespond);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "send",
+      method: "send" as const,
+      request: {
+        to: "channel:C1",
+        message: "hi",
+        idempotencyKey: "idem-send-deferred-route-race",
+      },
+      providerCall: mocks.deliverOutboundPayloads,
+    },
+    {
+      name: "poll",
+      method: "poll" as const,
+      request: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        idempotencyKey: "idem-poll-deferred-route-race",
+      },
+      providerCall: mocks.sendPoll,
+    },
+  ])(
+    "keeps the first deferred $name route when a concurrent retry sees newer defaults",
+    async (testCase) => {
+      const firstSelection = createDeferred<{ channel: string; configured: string[] }>();
+      mocks.resolveMessageChannelSelection
+        .mockImplementationOnce(async () => await firstSelection.promise)
+        .mockResolvedValue({ channel: "discord", configured: ["discord"] });
+      mockMutableMessageRouteAccounts(() => "primary");
+
+      const providerDeferred = createDeferred<unknown>();
+      if (testCase.method === "send") {
+        mocks.deliverOutboundPayloads.mockReturnValueOnce(providerDeferred.promise as never);
+      } else {
+        mocks.sendPoll.mockReturnValueOnce(providerDeferred.promise as never);
+      }
+
+      const context = makeContext();
+      const firstRespond = vi.fn();
+      const retryRespond = vi.fn();
+      const firstRequest = invokeGatewayMessageMethod({
+        method: testCase.method,
+        request: testCase.request,
+        respond: firstRespond,
+        context,
+      });
+      await vi.waitFor(() => {
+        expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+      });
+
+      const retryRequest = invokeGatewayMessageMethod({
+        method: testCase.method,
+        request: testCase.request,
+        respond: retryRespond,
+        context,
+      });
+      await Promise.resolve();
+      expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+
+      firstSelection.resolve({ channel: "slack", configured: ["slack"] });
+      await vi.waitFor(() => {
+        expect(testCase.providerCall).toHaveBeenCalledTimes(1);
+      });
+      if (testCase.method === "send") {
+        providerDeferred.resolve([{ messageId: "m-race", channel: "slack" }]);
+      } else {
+        providerDeferred.resolve({ messageId: "poll-race", pollId: "poll-race" });
+      }
+      await Promise.all([firstRequest, retryRequest]);
+
+      expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+      expect(testCase.providerCall).toHaveBeenCalledTimes(1);
+      expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+    },
+  );
+
+  it("dedupes omitted and explicit default poll routes", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const pollDeferred = createDeferred<{ messageId: string; pollId: string }>();
+    mocks.sendPoll.mockReturnValueOnce(pollDeferred.promise);
+
+    const firstRequest = expectDefined(
+      sendHandlers.poll,
+      "sendHandlers.poll test invariant",
+    )({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = expectDefined(
+      sendHandlers.poll,
+      "sendHandlers.poll test invariant",
+    )({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        accountId: "default",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    });
+
+    pollDeferred.resolve({ messageId: "poll-concurrent", pollId: "poll-1" });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]?.messageId).toBe("poll-concurrent");
+    expect(firstCall?.[1]?.pollId).toBe("poll-1");
+    expect(firstCall?.[1]?.runId).toBe("idem-poll-concurrent");
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]?.messageId).toBe("poll-concurrent");
+    expect(secondCall?.[1]?.pollId).toBe("poll-1");
+    expect(secondCall?.[1]?.runId).toBe("idem-poll-concurrent");
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect([firstCall?.[3]?.cached, secondCall?.[3]?.cached].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("replays an omitted poll account after the default account changes", async () => {
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const invoke = async (respond: ReturnType<typeof vi.fn>) => {
+      await invokeGatewayMessageMethod({
+        method: "poll",
+        request: {
+          to: "channel:C1",
+          question: "Q?",
+          options: ["A", "B"],
+          channel: "slack",
+          idempotencyKey: "idem-poll-default-account-reload",
+        },
+        respond,
+        context,
+      });
+    };
+
+    const firstRespond = vi.fn();
+    await invoke(firstRespond);
+    defaultAccountId = "secondary";
+    const retryRespond = vi.fn();
+    await invoke(retryRespond);
+
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "message.action",
+      method: "message.action" as const,
+      request: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "primary",
+        idempotencyKey: "idem-action-explicit-route-reload",
+      },
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "send",
+      method: "send" as const,
+      request: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        accountId: "primary",
+        idempotencyKey: "idem-send-explicit-route-reload",
+      },
+      providerCall: mocks.deliverOutboundPayloads,
+    },
+    {
+      name: "poll",
+      method: "poll" as const,
+      request: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        accountId: "primary",
+        idempotencyKey: "idem-poll-explicit-route-reload",
+      },
+      providerCall: mocks.sendPoll,
+    },
+  ])("replays a cached $name result after its explicit route is removed", async (testCase) => {
+    mockMutableMessageRouteAccounts(() => "primary");
+    mocks.deliverOutboundPayloads.mockResolvedValue([
+      { messageId: "explicit-route-message", channel: "slack" },
+    ]);
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    await invokeGatewayMessageMethod({
+      method: testCase.method,
+      request: testCase.request,
+      respond: firstRespond,
+      context,
+    });
+
+    mocks.getChannelPlugin.mockReturnValue(undefined);
+    const retryRespond = vi.fn();
+    await invokeGatewayMessageMethod({
+      method: testCase.method,
+      request: testCase.request,
+      respond: retryRespond,
+      context,
+    });
+
+    expect(testCase.providerCall).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
   });
 
   it("accepts media-only sends without message", async () => {
@@ -1688,7 +2499,14 @@ describe("gateway send mirroring", () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([
       { messageId: "m-threaded", channel: "slack" },
     ]);
-    const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
+    const outboundPlugin = {
+      id: "slack",
+      outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+      },
+    };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
       .mockReturnValueOnce(outboundPlugin)
@@ -1715,7 +2533,14 @@ describe("gateway send mirroring", () => {
   it("forwards replyToId on gateway sends", async () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-reply", channel: "slack" }]);
-    const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
+    const outboundPlugin = {
+      id: "slack",
+      outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+      },
+    };
     mocks.getChannelPlugin.mockReturnValue(outboundPlugin);
 
     const { respond } = await runSend({
@@ -1891,8 +2716,13 @@ describe("gateway send mirroring", () => {
 
   it("strips current-turn context from unauthenticated message action callers", async () => {
     mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
       actions: {
         handleAction: vi.fn(),
+      },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
       },
     });
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(jsonResult({ ok: true }));
@@ -1920,8 +2750,13 @@ describe("gateway send mirroring", () => {
 
   it("strips forged current-turn context from agent runs without an ingress capability", async () => {
     mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
       actions: {
         handleAction: vi.fn(),
+      },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
       },
     });
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(jsonResult({ ok: true }));
@@ -1989,6 +2824,44 @@ describe("gateway send mirroring", () => {
                 currentChannelProvider: "whatsapp",
                 currentChannelId: "user:alice",
               },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "agent runtime identity does not match the requested session",
+    );
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "another agent", sourceReplySessionKey: "agent:other:main" },
+    { name: "a malformed key", sourceReplySessionKey: "not-a-session-key" },
+  ])("rejects a signed source-reply session for $name", async ({ sourceReplySessionKey }) => {
+    const sessionKey = "agent:main:whatsapp:direct:alice";
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { messageId: "wamid.1", emoji: "ok" },
+        sessionKey,
+        sessionId: "session-1",
+        agentId: "main",
+        idempotencyKey: `idem-invalid-source-session:${sourceReplySessionKey}`,
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-1",
+              sourceReplySessionKey,
             },
           },
         },
@@ -2113,6 +2986,47 @@ describe("gateway send mirroring", () => {
         mocks.completeRestartRecoveryTerminalDelivery.mock.invocationCallOrder[0],
         "expected terminal completion order",
       ),
+    );
+  });
+
+  it("uses the signed run session for gateway-owned source reply receipts", async () => {
+    registerMessageActionPlugin({
+      messageId: "tg-split-session",
+      registrySuffix: "source-message-action-split-session",
+    });
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-split-session" }),
+    );
+    const policySessionKey = "agent:main:telegram:default:direct:chat-123";
+    const runSessionKey = "agent:main:main";
+
+    const { respond } = await runTelegramTerminalAction({
+      sessionId: "session-split-key",
+      sessionKey: policySessionKey,
+      sourceReplySessionKey: runSessionKey,
+      idempotencyKey: "idem-source-message-action-split-key",
+      sourceTurnId: "channel-user:v1:split-key",
+      toolCallId: "message-call-split-key",
+      message: "visible source reply",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.beginRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-split-key",
+        sessionKey: runSessionKey,
+        sourceTurnId: "channel-user:v1:split-key",
+        toolCallId: "message-call-split-key",
+      }),
+    );
+    expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: runSessionKey }),
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: runSessionKey }),
+    );
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: policySessionKey }),
     );
   });
 
@@ -2576,7 +3490,11 @@ describe("gateway send mirroring", () => {
     });
     expect(respond).not.toHaveBeenCalled();
 
-    mirrorDeferred.resolve({ ok: true, sessionFile: "x", messageId: "message-async" });
+    mirrorDeferred.resolve({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "message-async",
+    });
     await request;
 
     expect(firstRespondCall(respond)[0]).toBe(true);
@@ -2593,7 +3511,11 @@ describe("gateway send mirroring", () => {
     );
     mocks.appendAssistantMessageToSessionTranscript
       .mockReturnValueOnce(firstMirrorDeferred.promise)
-      .mockResolvedValueOnce({ ok: true, sessionFile: "x", messageId: "message-second" });
+      .mockResolvedValueOnce({
+        ok: true,
+        target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+        messageId: "message-second",
+      });
 
     const firstRespond = vi.fn();
     const secondRespond = vi.fn();
@@ -2658,7 +3580,11 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ text: "first visible reply" }),
     );
 
-    firstMirrorDeferred.resolve({ ok: true, sessionFile: "x", messageId: "message-first" });
+    firstMirrorDeferred.resolve({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "message-first",
+    });
     await first;
     await second;
 

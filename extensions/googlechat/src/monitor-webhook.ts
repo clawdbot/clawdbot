@@ -1,5 +1,6 @@
 // Googlechat plugin module implements monitor webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeWebhookPath,
@@ -40,10 +41,6 @@ type ParsedGoogleChatInboundSuccess = {
   raw: Record<string, unknown>;
   addOnBearerToken: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseGoogleChatInboundPayloadOrReject(
   raw: unknown,

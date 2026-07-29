@@ -77,6 +77,7 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
   const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
     position,
+    basePath: host.basePath,
     activeId,
     activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
     agents,

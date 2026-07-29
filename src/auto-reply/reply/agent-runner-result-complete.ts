@@ -105,6 +105,7 @@ export async function completeReplyAgentRun(input: {
   if (autoCompactionCount > 0) {
     const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
     const count = await incrementRunCompactionCount({
+      agentId: followupRun.run.agentId,
       cfg,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -115,7 +116,6 @@ export async function completeReplyAgentRun(input: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       contextTokensUsed,
       newSessionId: runResult.meta?.agentMeta?.sessionId,
-      newSessionFile: runResult.meta?.agentMeta?.sessionFile,
     });
     const refreshedSessionEntry =
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
@@ -125,7 +125,7 @@ export async function completeReplyAgentRun(input: {
         key: queueKey,
         previousSessionId,
         nextSessionId: refreshedSessionEntry.sessionId,
-        nextSessionFile: refreshedSessionEntry.sessionFile,
+        nextSessionFile: queueKey,
       });
     }
 
@@ -241,7 +241,9 @@ export async function completeReplyAgentRun(input: {
   const sessionUsage =
     traceAuthorized && activeSessionEntry?.traceLevel === "raw"
       ? await accumulateSessionUsageFromTranscript({
+          agentId: followupRun.run.agentId,
           sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
+          sessionKey: followupRun.run.sessionKey,
           storePath,
           sessionFile: followupRun.run.sessionFile,
         })
@@ -385,21 +387,36 @@ export async function completeReplyAgentRun(input: {
         runtimePolicySessionKey,
         opts,
       });
-      await updateSessionEntry(
+      const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
+      // A reset can rebind the key while the model runs; its replacement must
+      // never inherit the old run's final or advertise an uncommitted intent.
+      const persistedPendingFinalDelivery = await updateSessionEntry(
         { storePath, sessionKey },
-        () => ({
-          pendingFinalDelivery: true,
-          pendingFinalDeliveryText: resolvedPendingText,
-          pendingFinalDeliveryIntentId,
-          pendingFinalDeliveryContext,
-          pendingFinalDeliveryCreatedAt: Date.now(),
-          updatedAt: Date.now(),
-        }),
+        (entry) =>
+          entry.sessionId === expectedSessionId
+            ? {
+                pendingFinalDelivery: {
+                  kind: "replayable" as const,
+                  text: resolvedPendingText,
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: pendingFinalDeliveryContext,
+                  createdAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              }
+            : null,
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
         },
       );
+      if (
+        persistedPendingFinalDelivery?.sessionId !== expectedSessionId ||
+        persistedPendingFinalDelivery.pendingFinalDelivery?.intentId !==
+          pendingFinalDeliveryIntentId
+      ) {
+        throw new Error("pending final delivery session changed or was deleted");
+      }
     }
   }
   const result = returnWithQueuedFollowupDrain(

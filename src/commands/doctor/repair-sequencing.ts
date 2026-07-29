@@ -16,7 +16,7 @@ import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
-import { collectActiveToolSchemaProjectionWarnings } from "./shared/active-tool-schema-warnings.js";
+import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -220,6 +220,7 @@ export async function runDoctorRepairSequence(params: {
   appendNotes(warningNotes, emptyAllowlistWarnings);
 
   await applyRepairStages([maybeRepairLegacyToolsBySenderKeys, maybeRepairExecSafeBinProfiles]);
+  appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
   appendRepairNotes(
     migrateLegacyOnboardingRecommendationsScope({
@@ -270,12 +271,6 @@ export async function runDoctorRepairSequence(params: {
     openAIAuthProviderRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
-
-  const activeToolSchemaWarnings = await collectActiveToolSchemaProjectionWarnings({
-    cfg: state.candidate,
-    env,
-  });
-  appendNotes(warningNotes, activeToolSchemaWarnings);
 
   return { state, changeNotes, warningNotes, authProfilesRepaired };
 }

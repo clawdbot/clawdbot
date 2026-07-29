@@ -219,6 +219,8 @@ struct ChatMessageBubble: View {
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    let imageArtifactResolverReady: Bool
+    let loadImageArtifact: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
 
     var body: some View {
         if self.isUser {
@@ -261,7 +263,9 @@ struct ChatMessageBubble: View {
             userMessageExpanded: self.userMessageExpanded,
             onToggleUserMessageExpanded: self.onToggleUserMessageExpanded,
             inlineWidgetResolverReady: self.inlineWidgetResolverReady,
-            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
+            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver,
+            imageArtifactResolverReady: self.imageArtifactResolverReady,
+            loadImageArtifact: self.loadImageArtifact)
     }
 }
 
@@ -314,6 +318,8 @@ private struct ChatMessageBody: View {
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    let imageArtifactResolverReady: Bool
+    let loadImageArtifact: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
 
     var body: some View {
         let text = self.primaryText
@@ -370,10 +376,22 @@ private struct ChatMessageBody: View {
                 ChatLinkPreview(url: previewURL)
             }
 
-            if !self.inlineAttachments.isEmpty {
-                ForEach(self.inlineAttachments.indices, id: \.self) { idx in
-                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
+            if !self.visibleInlineAttachments.isEmpty {
+                ForEach(self.visibleInlineAttachments.indices, id: \.self) { idx in
+                    AttachmentRow(
+                        att: self.visibleInlineAttachments[idx],
+                        isUser: self.isUser,
+                        resolverReady: self.imageArtifactResolverReady,
+                        loadImage: self.loadImageArtifact)
                 }
+            }
+
+            if self.omittedImageAttachmentCount > 0 {
+                Text(String(
+                    format: String(localized: "Additional images hidden: %lld"),
+                    Int64(self.omittedImageAttachmentCount)))
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             ForEach(self.inlineWidgets.indices, id: \.self) { idx in
@@ -434,7 +452,6 @@ private struct ChatMessageBody: View {
             text: text,
             context: .user,
             variant: self.markdownVariant,
-            font: OpenClawChatTypography.body,
             textColor: textColor)
     }
 
@@ -502,6 +519,19 @@ private struct ChatMessageBody: View {
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
         self.message.content.filter(\.isInlineAttachment)
+    }
+
+    private var visibleInlineAttachments: [OpenClawChatMessageContent] {
+        var imageCount = 0
+        return self.inlineAttachments.filter { attachment in
+            guard attachment.isImageAttachment else { return true }
+            defer { imageCount += 1 }
+            return imageCount < 4
+        }
+    }
+
+    private var omittedImageAttachmentCount: Int {
+        max(0, self.inlineAttachments.filter(\.isImageAttachment).count - 4)
     }
 
     private var inlineWidgets: [OpenClawChatCanvasPreview] {
@@ -621,11 +651,25 @@ private struct ChatMessageBody: View {
 private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let resolverReady: Bool
+    let loadImage: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
 
     var body: some View {
+        if self.att.isImageAttachment, let artifactId = self.normalizedArtifactId {
+            ChatMediaImageAttachment(
+                artifactId: artifactId,
+                label: self.attachmentLabel,
+                resolverReady: self.resolverReady,
+                load: self.loadImage)
+        } else {
+            self.fallbackRow
+        }
+    }
+
+    private var fallbackRow: some View {
         HStack(spacing: 8) {
             Image(systemName: self.isAudio ? "waveform" : "paperclip")
-            Text(self.isAudio ? "Voice note" : (self.att.fileName ?? "Attachment"))
+            Text(self.isAudio ? "Voice note" : self.attachmentLabel)
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
@@ -647,6 +691,26 @@ private struct AttachmentRow: View {
     private var isAudio: Bool {
         self.att.mimeType?.hasPrefix("audio/") == true
     }
+
+    private var normalizedArtifactId: String? {
+        let value = self.att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private var attachmentLabel: String {
+        let values = [self.att.alt, self.att.fileName]
+        return values.lazy
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? String(localized: "Attachment")
+    }
+}
+
+extension OpenClawChatMessageContent {
+    fileprivate var isImageAttachment: Bool {
+        self.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "image" ||
+            self.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .hasPrefix("image/") == true
+    }
 }
 
 @MainActor
@@ -658,6 +722,7 @@ struct ChatTypingIndicatorBubble: View {
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let runIdentity: String
+    let outputTokens: Int?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -670,7 +735,9 @@ struct ChatTypingIndicatorBubble: View {
             }
 
             HStack(spacing: 9) {
-                ChatWorkingIndicatorContent(runIdentity: self.runIdentity)
+                ChatWorkingIndicatorContent(
+                    runIdentity: self.runIdentity,
+                    outputTokens: self.outputTokens)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -690,16 +757,21 @@ struct ChatTypingIndicatorBubble: View {
 private struct ChatWorkingIndicatorContent: View {
     @State private var startedAt: Date
     let seed: String
+    let outputTokens: Int?
 
-    init(runIdentity: String) {
+    init(runIdentity: String, outputTokens: Int?) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
+        self.outputTokens = outputTokens
     }
 
     var body: some View {
         HStack(spacing: 9) {
             ChatWorkingClawView(seed: self.seed)
-            ChatWorkingStatusText(startedAt: self.startedAt, seed: self.seed)
+            ChatWorkingStatusText(
+                startedAt: self.startedAt,
+                seed: self.seed,
+                outputTokens: self.outputTokens)
         }
     }
 }
@@ -804,7 +876,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
-            lhs.runIdentity == rhs.runIdentity
+            lhs.runIdentity == rhs.runIdentity &&
+            lhs.outputTokens == rhs.outputTokens
     }
 }
 
@@ -920,6 +993,15 @@ extension ChatPendingToolsBubble: @MainActor Equatable {
     }
 }
 
+extension AssistantTextSegment.Kind {
+    var markdownTypography: ChatMarkdownRenderer.Typography {
+        switch self {
+        case .response: .response
+        case .thinking: .thinking
+        }
+    }
+}
+
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
@@ -941,19 +1023,12 @@ private struct ChatAssistantTextBody: View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         return VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking
-                    ? OpenClawChatTypography.callout.italic()
-                    : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,
                     variant: self.markdownVariant,
-                    font: font,
+                    typography: segment.kind.markdownTypography,
                     textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
                     isComplete: self.isComplete)
             }
         }
@@ -1028,12 +1103,6 @@ private struct ChatStreamingAssistantTextBody: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(self.snapshot.segments.enumerated()), id: \.offset) { entry in
                 let segment = entry.element
-                let font = segment.kind == .thinking
-                    ? OpenClawChatTypography.callout.italic()
-                    : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 let reveal = self.reveal(
                     segmentIndex: entry.offset,
                     now: now)
@@ -1041,9 +1110,8 @@ private struct ChatStreamingAssistantTextBody: View {
                     snapshot: segment.markdown,
                     context: .assistant,
                     variant: self.markdownVariant,
-                    font: font,
+                    typography: segment.kind.markdownTypography,
                     textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
                     reveal: reveal)
             }
         }

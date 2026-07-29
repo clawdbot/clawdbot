@@ -15,6 +15,7 @@ import {
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
+import { cardBoardId } from "./store-card-helpers.js";
 import { isWorkboardClaimReclaimable } from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
@@ -74,10 +75,6 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.trunc(value))
     : fallback;
-}
-
-function cardBoardId(card: WorkboardCard): string {
-  return card.metadata?.automation?.boardId ?? "default";
 }
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
@@ -442,14 +439,14 @@ async function runWorkboardDispatch(
         continue;
       }
     }
-    // Invalid workspace preflights must not spend the provider outage budget.
-    attemptedStarts += 1;
     try {
       const claimed = await params.store.claim(
         card.id,
         { ownerId, ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds },
         {
           expectedAuthority: {
+            boardId: cardBoardId(card),
+            status: card.status,
             agentId: card.agentId,
             workspace: card.metadata?.automation?.workspace,
             workspaceAccess: card.metadata?.automation?.workspaceAccess,
@@ -458,6 +455,9 @@ async function runWorkboardDispatch(
         },
       );
       claimValue = claimed.token;
+      // Racing card changes never reached a worker and must not consume the
+      // provider-outage budget or starve a later healthy candidate.
+      attemptedStarts += 1;
       const context = await params.store.buildWorkerContext(card.id);
       const materialized = await materializeWorkspace({
         card: claimed.card,

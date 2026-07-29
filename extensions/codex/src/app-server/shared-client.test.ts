@@ -301,6 +301,55 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).not.toHaveBeenCalled();
   });
 
+  it("skips auth-store resolution only while the same config-owned client stays warm", async () => {
+    const first = createClientHarness();
+    const replacement = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(replacement.client);
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockImplementation(() => {
+      mocks.resolveCodexAppServerAuthProfileStore();
+      return "openai:work";
+    });
+    const startOptions: CodexAppServerStartOptions = {
+      transport: "stdio",
+      homeScope: "agent",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+    const config = { auth: { order: { openai: ["openai:work"] } } };
+    const options = { config, startOptions, timeoutMs: 1_000 };
+
+    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(first, "openclaw/0.143.0 (Linux; test)");
+    await expect(firstAcquire).resolves.toBe(first.client);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledOnce();
+
+    await expect(getLeasedSharedCodexAppServerClient(options)).resolves.toBe(first.client);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledOnce();
+
+    await expect(
+      getLeasedSharedCodexAppServerClient({
+        ...options,
+        config: { auth: { order: { openai: ["openai:work"] } } },
+      }),
+    ).resolves.toBe(first.client);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledTimes(2);
+
+    expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
+    const replacementAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(replacement, "openclaw/0.143.0 (Linux; test)");
+    await expect(replacementAcquire).resolves.toBe(replacement.client);
+    expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledTimes(3);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("does not spawn after startup context exceeds its total deadline", async () => {
     vi.useFakeTimers();
     let resolveManaged: ((value: CodexAppServerStartOptions) => void) | undefined;
@@ -715,6 +764,22 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("includes redacted app-server stderr when shared initialize times out", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const models = listCodexAppServerModels({ timeoutMs: 100 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+    harness.process.stderr.write(
+      'Error: failed to initialize sqlite state runtime token="secret-value"\n',
+    );
+
+    await expect(models).rejects.toThrow(
+      'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=\\"<redacted>\\""',
+    );
+    expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
   it("keeps shared startup alive for a caller with a longer initialize timeout", async () => {
     const harness = createClientHarness();
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
@@ -794,6 +859,20 @@ describe("shared Codex app-server client", () => {
 
     await expect(createIsolatedCodexAppServerClient({ timeoutMs: 5 })).rejects.toThrow(
       "codex app-server initialize timed out",
+    );
+    expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("includes redacted app-server stderr when isolated initialize times out", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const client = createIsolatedCodexAppServerClient({ timeoutMs: 100 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+    harness.process.stderr.write("state database is locked access_token=secret-value\n");
+
+    await expect(client).rejects.toThrow(
+      'codex app-server initialize timed out; stderr="state database is locked access_token=<redacted>"',
     );
     expect(harness.process.stdin.destroyed).toBe(true);
   });
