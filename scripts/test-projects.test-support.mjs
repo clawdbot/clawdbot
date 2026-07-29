@@ -4758,7 +4758,12 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const expandShard = expandToProjectConfigs;
+    // The remote Testbox full gate runs every extension project in this process tree.
+    // Bound project process lifetimes or the non-isolated aggregate exceeds V8's heap limit.
+    const expandShard =
+      expandToProjectConfigs ||
+      (shard.config === FULL_EXTENSIONS_VITEST_CONFIG &&
+        process.env.OPENCLAW_TESTBOX_REMOTE_RUN === "1");
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
