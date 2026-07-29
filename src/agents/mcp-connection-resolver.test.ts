@@ -6,17 +6,31 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-handlers.js";
+import {
+  isGatewaySigusr1RestartExternallyAllowed,
+  setGatewaySigusr1RestartPolicy,
+} from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { createEmptyPluginRegistry, createPluginRegistry } from "../plugins/registry.js";
 import {
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  getOrCreateSessionMcpRuntime,
+  peekSessionMcpRuntime,
+} from "./agent-bundle-mcp-tools.js";
 import { buildCodexMcpServersConfig } from "./codex-mcp-config.js";
 import {
   applyMcpConnectionOverride,
@@ -28,6 +42,8 @@ import {
   testing,
 } from "./mcp-connection-resolver.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
+import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 type AuthenticatedMcpProofEndpoint = {
   owner: string;
@@ -281,6 +297,10 @@ describe("mcp connection resolver helpers", () => {
       pinActivePluginHttpRouteRegistry(pinned.registry);
 
       const active = createMcpProofPluginRegistry();
+      active.apiFor("startup-mail");
+      expect(active.registry.plugins).toContainEqual(
+        expect.objectContaining({ id: "startup-mail", enabled: true, status: "loaded" }),
+      );
       active.apiFor("active-drive").registerMcpServerConnectionResolver({
         serverName: "user-drive",
         resolve: async ({ requesterSenderId }) =>
@@ -387,6 +407,210 @@ describe("mcp connection resolver helpers", () => {
     }
   });
 
+  it("revokes pinned MCP credentials during a full gateway plugin-disable replacement", async () => {
+    const proof = await startAuthenticatedMcpProofServer();
+    const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
+
+    try {
+      // Model catalog provisioning is independent of plugin-owned MCP revocation.
+      // Keep both Gateway refresh calls observable without starting provider discovery.
+      const refreshPreparedModelRuntimeSnapshots = vi
+        .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
+        .mockResolvedValue(undefined);
+      const refreshContextWindowCache = vi
+        .spyOn(await import("./context.js"), "refreshContextWindowCache")
+        .mockResolvedValue(undefined);
+      const previous = createMcpProofPluginRegistry();
+      previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
+        serverName: "user-mail",
+        resolve: async () => ({
+          url: proof.mail.url,
+          headers: { Authorization: proof.mail.authorization },
+        }),
+      });
+      setActivePluginRegistry(previous.registry);
+      pinActivePluginHttpRouteRegistry(previous.registry);
+      pinActivePluginChannelRegistry(previous.registry);
+      pinActivePluginSessionExtensionRegistry(previous.registry);
+
+      const beforeDisable = await resolveRequesterScopedMcpConnections({
+        serverNames: ["user-mail"],
+        requesterSenderId: "existing-before-disable",
+      });
+      const previousConnection = beforeDisable.get("user-mail");
+      expect(previousConnection?.url).toBe(proof.mail.url);
+      if (!previousConnection) {
+        throw new Error("Expected an authorized MCP connection before plugin disable");
+      }
+      const sessionId = "gateway-plugin-disable-mcp-proof";
+      const previousRuntime = await getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey: "agent:test:gateway-plugin-disable-mcp-proof",
+        workspaceDir: process.cwd(),
+        cfg: {
+          mcp: {
+            servers: {
+              "user-mail": {
+                transport: "streamable-http",
+                url: "https://placeholder.invalid/mail",
+              },
+            },
+          },
+        },
+        requesterSenderId: "existing-before-disable",
+        agentAccountId: "proof-bot",
+        messageChannel: "telegram",
+      });
+      expect(peekSessionMcpRuntime({ sessionId })).toBeDefined();
+      await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).resolves.toMatchObject(
+        { content: [{ type: "text", text: "mail" }] },
+      );
+      expect(proof.mail.streamedResponses).toBeGreaterThanOrEqual(3);
+
+      const reloadPlan = buildGatewayReloadPlan(["plugins.entries.startup-mail.enabled"]);
+      expect(reloadPlan).toMatchObject({
+        reloadPlugins: true,
+        disposeMcpRuntimes: true,
+      });
+
+      const replacement = createMcpProofPluginRegistry();
+      replacement.apiFor("active-drive").registerMcpServerConnectionResolver({
+        serverName: "user-drive",
+        resolve: async () => ({
+          url: proof.activeDrive.url,
+          headers: { Authorization: proof.activeDrive.authorization },
+        }),
+      });
+      expect(isPluginRegistryRetired(previous.registry)).toBe(false);
+
+      type GatewayReloadProofState = ReturnType<
+        Parameters<typeof createGatewayReloadHandlers>[0]["getState"]
+      >;
+      let gatewayState: GatewayReloadProofState = {
+        hooksConfig: null,
+        hookClientIpConfig: { trustedProxies: undefined, allowRealIpFallback: false },
+        heartbeatRunner: { stop() {}, updateConfig() {} },
+        cronState: {
+          cron: {
+            async start() {},
+            stop() {},
+          } as GatewayReloadProofState["cronState"]["cron"],
+          storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
+          cronEnabled: false,
+        },
+        channelHealthMonitor: null,
+      };
+      const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
+      const nextConfig: OpenClawConfig = {
+        plugins: {
+          entries: {
+            "startup-mail": { enabled: false },
+            "active-drive": { enabled: true },
+          },
+        },
+        mcp: {
+          servers: {
+            "user-drive": {
+              transport: "streamable-http",
+              url: "https://placeholder.invalid/drive",
+            },
+          },
+        },
+      };
+      const gatewayReload = createGatewayReloadHandlers({
+        deps: {},
+        broadcast() {},
+        getState: () => gatewayState,
+        setState(nextState) {
+          gatewayState = nextState;
+        },
+        async startChannel() {},
+        async stopChannel() {},
+        async reloadPlugins({ beforeReplace, commitRuntime }) {
+          await beforeReplace(new Set());
+          await commitRuntime();
+          // Plugin owners publish all gateway dispatch surfaces in one replacement.
+          setActivePluginRegistry(replacement.registry);
+          pinActivePluginHttpRouteRegistry(replacement.registry);
+          pinActivePluginSessionExtensionRegistry(replacement.registry);
+          pinActivePluginChannelRegistry(replacement.registry);
+          return { restartChannels: new Set(), activeChannels: new Set() };
+        },
+        logHooks: reloadLog,
+        logChannels: reloadLog,
+        logCron: reloadLog,
+        logReload: reloadLog,
+        cronReconciliation: createGatewayCronReconciliation({
+          port: 0,
+          workspaceDir: process.cwd(),
+          isClosing: () => false,
+          async runHook() {},
+        }),
+        createHealthMonitor: () => null,
+        requestRecoveryRestart,
+      });
+
+      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBeUndefined();
+      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+        catalogMode: "static",
+      });
+      expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(isPluginRegistryRetired(previous.registry)).toBe(true);
+      expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+
+      const legacyRequests = proof.mail.requests;
+      await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).rejects.toThrow(
+        "bundle-mcp runtime disposed for session gateway-plugin-disable-mcp-proof",
+      );
+      expect(proof.mail.requests).toBe(legacyRequests);
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-drive", "user-mail"],
+          requesterSenderId: "brand-new-after-disable",
+        }),
+      ).resolves.toEqual(
+        new Map([
+          [
+            "user-drive",
+            {
+              url: proof.activeDrive.url,
+              headers: { Authorization: proof.activeDrive.authorization },
+            },
+          ],
+        ]),
+      );
+
+      const nextSessionId = "gateway-plugin-disable-brand-new-mcp-proof";
+      const nextRuntime = await getOrCreateSessionMcpRuntime({
+        sessionId: nextSessionId,
+        sessionKey: "agent:test:gateway-plugin-disable-brand-new-mcp-proof",
+        workspaceDir: process.cwd(),
+        cfg: nextConfig,
+        requesterSenderId: "brand-new-after-disable",
+        agentAccountId: "proof-bot",
+        messageChannel: "telegram",
+      });
+      expect(peekSessionMcpRuntime({ sessionId: nextSessionId })).toBeDefined();
+      await expect(nextRuntime.callTool("user-drive", "owner_probe", {})).resolves.toMatchObject({
+        content: [{ type: "text", text: "active-drive" }],
+      });
+      await expect(nextRuntime.callTool("user-mail", "owner_probe", {})).rejects.toThrow();
+      expect(proof.activeDrive.toolCalls).toBe(1);
+      expect(proof.activeDrive.streamedResponses).toBeGreaterThanOrEqual(3);
+      expect(proof.mail.requests).toBe(legacyRequests);
+      expect(proof.mail.toolCalls).toBe(1);
+      expect(proof.pinnedDrive.requests).toBe(0);
+    } finally {
+      await disposeAllSessionMcpRuntimes();
+      clearCurrentProviderAuthState();
+      resetPreparedModelRuntimeSnapshotsForTest();
+      setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
+      await proof.close();
+    }
+  });
+
   it("fails closed without requesterSenderId and drops null resolutions", async () => {
     testing.setMcpServerConnectionResolversForTest([
       {
@@ -415,8 +639,6 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("registers resolved header and signed-URL credentials for redaction", async () => {
-    const { isSecretValueRegisteredForRedaction } =
-      await import("../logging/secret-redaction-registry.js");
     const { resetSecretRedactionRegistryForTest } =
       await import("../logging/secret-redaction-registry.test-support.js");
     resetSecretRedactionRegistryForTest();
