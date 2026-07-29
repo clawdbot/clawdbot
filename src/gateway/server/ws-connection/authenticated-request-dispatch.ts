@@ -14,34 +14,15 @@ import {
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
-type GatewayServerMethodsModule = typeof import("../../server-methods.js");
-type GatewayServerMethodsImporter = () => Promise<GatewayServerMethodsModule>;
-
-export function createGatewayServerMethodsLoader(
-  importer: GatewayServerMethodsImporter = () => import("../../server-methods.js"),
-): GatewayServerMethodsImporter {
-  let cached: Promise<GatewayServerMethodsModule> | undefined;
-  return () => {
-    if (cached) {
-      return cached;
-    }
-    const attempt = importer();
-    cached = attempt;
-    void attempt.catch(() => {
-      if (cached === attempt) {
-        cached = undefined;
-      }
-    });
-    return attempt;
-  };
-}
-
-const loadGatewayServerMethods = createGatewayServerMethodsLoader();
+const loadGatewayServerMethods = createLazyPromise(
+  () => import("./authenticated-request-dispatch.server-methods.runtime.js"),
+);
 
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
