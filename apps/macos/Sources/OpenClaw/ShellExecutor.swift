@@ -1,3 +1,5 @@
+import Darwin
+import Dispatch
 import Foundation
 import OpenClawIPC
 import Subprocess
@@ -61,6 +63,60 @@ enum ShellExecutor {
         case timedOut
     }
 
+    private enum DeadlineOutcome: Sendable, Equatable {
+        case exited
+        case timedOut
+    }
+
+    private final class ProcessExitSignal: @unchecked Sendable {
+        private let lock = NSLock()
+        private let source: DispatchSourceProcess
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var finished = false
+
+        init(processIdentifier: pid_t) {
+            self.source = DispatchSource.makeProcessSource(
+                identifier: processIdentifier,
+                eventMask: .exit,
+                queue: .global(qos: .userInitiated))
+            self.source.setEventHandler { [weak self] in
+                self?.finish()
+            }
+            self.source.resume()
+        }
+
+        func wait() async {
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    self.lock.lock()
+                    guard !self.finished else {
+                        self.lock.unlock()
+                        continuation.resume()
+                        return
+                    }
+                    self.continuation = continuation
+                    self.lock.unlock()
+                }
+            } onCancel: {
+                self.finish()
+            }
+        }
+
+        private func finish() {
+            self.lock.lock()
+            guard !self.finished else {
+                self.lock.unlock()
+                return
+            }
+            self.finished = true
+            let continuation = self.continuation
+            self.continuation = nil
+            self.lock.unlock()
+            self.source.cancel()
+            continuation?.resume()
+        }
+    }
+
     private static func environment(from values: [String: String]?) -> Environment {
         guard let values else { return .inherit }
         var converted: [Environment.Key: String] = [:]
@@ -83,29 +139,50 @@ enum ShellExecutor {
         return result.terminationStatus
     }
 
-    private static func execute(
+    private static func runTimedSubprocess(
         configuration: Configuration,
         output: OutputFiles,
-        timeout: Double?) async throws -> RunOutcome
+        timeout: Double) async throws -> RunOutcome
     {
-        guard let timeout, timeout > 0 else {
-            return try await .completed(self.runSubprocess(configuration: configuration, output: output))
-        }
+        let result = try await Subprocess.run(
+            configuration,
+            input: .none,
+            output: output.subprocessStandardOutput,
+            error: output.subprocessStandardError)
+        { execution in
+            let processIdentifier = pid_t(execution.processIdentifier.value)
+            return await withTaskCancellationHandler {
+                let deadline = await withTaskGroup(of: DeadlineOutcome.self) { group in
+                    let exitSignal = ProcessExitSignal(processIdentifier: processIdentifier)
+                    group.addTask {
+                        await exitSignal.wait()
+                        return .exited
+                    }
+                    group.addTask {
+                        do {
+                            try await Task.sleep(for: .seconds(timeout))
+                            return .timedOut
+                        } catch {
+                            return .exited
+                        }
+                    }
+                    defer { group.cancelAll() }
+                    return await group.next() ?? .exited
+                }
 
-        return try await withThrowingTaskGroup(of: RunOutcome.self) { group in
-            group.addTask {
-                try await .completed(self.runSubprocess(configuration: configuration, output: output))
+                guard deadline == .timedOut else { return false }
+                try? execution.send(signal: .terminate, toProcessGroup: true)
+                try? await Task.sleep(for: .milliseconds(100))
+                // The group leader may have exited on TERM. Keep the body alive until
+                // the final group kill so TERM-ignoring descendants cannot escape.
+                try? execution.send(signal: .kill, toProcessGroup: true)
+                return true
+            } onCancel: {
+                // Cancellation can arrive before the timeout race finishes.
+                _ = Darwin.kill(-processIdentifier, SIGKILL)
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                return .timedOut
-            }
-
-            // Group scope waits for swift-subprocess cancellation teardown, including
-            // SIGKILL escalation and reaping, before a timeout result reaches callers.
-            defer { group.cancelAll() }
-            return try await group.next() ?? .timedOut
         }
+        return result.closureOutput ? .timedOut : .completed(result.terminationStatus)
     }
 
     static func runDetailed(
@@ -141,9 +218,10 @@ enum ShellExecutor {
         platformOptions.qualityOfService = .userInitiated
         platformOptions.createSession = true
         platformOptions.teardownSequence = [
-            .gracefulShutDown(
+            .send(
+                signal: .kill,
                 toProcessGroup: true,
-                allowedDurationToNextStep: .milliseconds(100)),
+                allowedDurationToNextStep: .zero),
         ]
         let configuration = Configuration(
             .path(.init("/usr/bin/env")),
@@ -153,10 +231,15 @@ enum ShellExecutor {
             platformOptions: platformOptions)
 
         do {
-            let outcome = try await self.execute(
-                configuration: configuration,
-                output: output,
-                timeout: timeout)
+            let outcome = if let timeout, timeout > 0 {
+                try await self.runTimedSubprocess(
+                    configuration: configuration,
+                    output: output,
+                    timeout: timeout)
+            } else {
+                try await RunOutcome.completed(
+                    self.runSubprocess(configuration: configuration, output: output))
+            }
             let captured = output.readAndRemove()
             switch outcome {
             case .timedOut:

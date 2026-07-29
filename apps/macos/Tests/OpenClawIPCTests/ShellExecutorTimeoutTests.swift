@@ -45,7 +45,6 @@ struct ShellExecutorTimeoutTests {
                 "/bin/sh",
                 "-c",
                 """
-                trap '' TERM
                 /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do sleep 10; done' &
                 echo $$ > "$PARENT_PID_FILE"
                 while [ ! -s "$CHILD_PID_FILE" ]; do sleep 0.01; done
