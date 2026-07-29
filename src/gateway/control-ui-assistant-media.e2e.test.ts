@@ -51,6 +51,27 @@ describe("Control UI assistant media e2e", () => {
         );
         expect(await ticketed.text()).toBe("ticketed control ui media\n");
 
+        const ranged = await fetch(
+          `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          { headers: { Range: "bytes=9-15" } },
+        );
+        expect(ranged.status).toBe(206);
+        expect(ranged.headers.get("accept-ranges")).toBe("bytes");
+        expect(ranged.headers.get("content-range")).toBe("bytes 9-15/26");
+        expect(ranged.headers.get("content-length")).toBe("7");
+        expect(ranged.headers.get("etag")).toMatch(/^"[A-Za-z0-9_-]+"$/);
+        expect(await ranged.text()).toBe("control");
+
+        const head = await fetch(
+          `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          { method: "HEAD" },
+        );
+        expect(head.status).toBe(200);
+        expect(head.headers.get("accept-ranges")).toBe("bytes");
+        expect(head.headers.get("content-length")).toBe("26");
+        expect(head.headers.get("etag")).toBe(ranged.headers.get("etag"));
+        expect(await head.text()).toBe("");
+
         const otherFilePath = path.join(mediaDir, "other-preview.txt");
         await fs.writeFile(otherFilePath, "other media\n", "utf8");
         const wrongSource = await fetch(
