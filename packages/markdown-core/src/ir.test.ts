@@ -7,6 +7,10 @@ const EMOJI = "\u{1F600}";
 const LEAD_HIGH = "\uD83D"; // High surrogate for U+1F600
 const LEAD_LOW = "\uDE00"; // Low surrogate for U+1F600
 
+function expectWellFormedUtf16(text: string): void {
+  expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
+}
+
 describe("sliceMarkdownIR surrogate pair boundaries", () => {
   it("expands start boundary backward when it lands on a low surrogate", () => {
     // "a😀b" — UTF-16: [a] [\uD83D] [\uDE00] [b], indices 0-3
@@ -86,7 +90,7 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     const sliced = sliceMarkdownIR(ir, 2, ir.text.length);
 
     expect(sliced.text).toBe(`${EMOJI}b`);
-    expect(sliced.text.isWellFormed()).toBe(true);
+    expectWellFormedUtf16(sliced.text);
     expect(sliced.links).toEqual([{ start: 0, end: 3, href }]);
     expect(sliced.styles).toEqual([expect.objectContaining({ start: 0, end: 3, style: "bold" })]);
   });
@@ -102,7 +106,7 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
 
     expect(catStart).toBeGreaterThan(0);
     expect(sliced.text).toBe(ir.text.slice(0, catStart + cat.length));
-    expect(sliced.text.isWellFormed()).toBe(true);
+    expectWellFormedUtf16(sliced.text);
     expect(sliced.annotations).toEqual(ir.annotations);
     expect(sliced.styles).toEqual(ir.styles);
     expect(sliced.links).toEqual([
@@ -122,7 +126,7 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
 
     expect(catStart).toBeGreaterThan(0);
     expect(sliced.text).toBe(ir.text.slice(0, catStart + cat.length));
-    expect(sliced.text.isWellFormed()).toBe(true);
+    expectWellFormedUtf16(sliced.text);
     expect(sliced.listItems).toHaveLength(ir.listItems?.length ?? 0);
     expect(sliced.listItems).toEqual(
       expect.arrayContaining([
@@ -155,7 +159,9 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
           sliceMarkdownIR(ir, start, end),
         );
 
-        expect(chunks.every((chunk) => chunk.text.isWellFormed())).toBe(true);
+        for (const chunk of chunks) {
+          expectWellFormedUtf16(chunk.text);
+        }
         expect(chunks.map((chunk) => chunk.text).join("")).toBe(ir.text);
       }
     }
