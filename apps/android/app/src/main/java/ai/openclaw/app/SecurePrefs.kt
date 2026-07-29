@@ -58,6 +58,11 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyPrefix = "notifications.forwarding.sessionKey"
+    private const val popupBackgroundImageUrisKey = "popup.backgroundImageUris"
+    private const val popupOpacityKey = "popup.opacity"
+    private const val defaultPopupOpacity = 0.55f
+    private const val popupAutoDismissSecondsKey = "popup.autoDismissSeconds"
+    private const val defaultPopupAutoDismissSeconds = 12
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val installedAppsDisclosureConsentVersionKey =
       "device.apps.prominentDisclosure.consentVersion"
@@ -239,6 +244,20 @@ class SecurePrefs(
   // persist server-side via the session category field (mirrors web localStorage).
   private val _sessionCustomGroups = MutableStateFlow(loadChatModelRefs(sessionCustomGroupsKey))
   val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
+
+  // Full-screen popup ("delivery: overlay") appearance: user-picked background images cycle
+  // randomly per popup; opacity/duration tune legibility and how long it stays on screen.
+  private val _popupBackgroundImageUris = MutableStateFlow(loadChatModelRefs(popupBackgroundImageUrisKey))
+  val popupBackgroundImageUris: StateFlow<List<String>> = _popupBackgroundImageUris
+
+  private val _popupOpacity = MutableStateFlow(plainPrefs.getFloat(popupOpacityKey, defaultPopupOpacity))
+  val popupOpacity: StateFlow<Float> = _popupOpacity
+
+  private val _popupAutoDismissSeconds =
+    MutableStateFlow(
+      plainPrefs.getInt(popupAutoDismissSecondsKey, defaultPopupAutoDismissSeconds).coerceIn(3, 30),
+    )
+  val popupAutoDismissSeconds: StateFlow<Int> = _popupAutoDismissSeconds
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -727,6 +746,24 @@ class SecurePrefs(
     val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
     persistChatModelRefs(sessionCustomGroupsKey, sanitized)
     _sessionCustomGroups.value = sanitized
+  }
+
+  fun setPopupBackgroundImageUris(uris: List<String>) {
+    val sanitized = uris.map(String::trim).filter { it.isNotEmpty() }.distinct()
+    persistChatModelRefs(popupBackgroundImageUrisKey, sanitized)
+    _popupBackgroundImageUris.value = sanitized
+  }
+
+  fun setPopupOpacity(value: Float) {
+    val clamped = value.coerceIn(0f, 1f)
+    plainPrefs.edit { putFloat(popupOpacityKey, clamped) }
+    _popupOpacity.value = clamped
+  }
+
+  fun setPopupAutoDismissSeconds(value: Int) {
+    val clamped = value.coerceIn(3, 30)
+    plainPrefs.edit { putInt(popupAutoDismissSecondsKey, clamped) }
+    _popupAutoDismissSeconds.value = clamped
   }
 
   private fun persistChatModelRefs(

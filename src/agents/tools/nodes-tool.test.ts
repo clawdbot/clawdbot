@@ -936,6 +936,40 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("forwards notify subtitle/timestamp/delivery to system.notify", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ ok: true });
+    const tool = createNodesTool();
+
+    await tool.execute("call-notify", {
+      action: "notify",
+      node: "pixel",
+      title: "WhatsApp",
+      body: "Dinner at 7?",
+      subtitle: "Anna",
+      timestamp: "2026-07-29T14:32:00.000Z",
+      delivery: "overlay",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.notify",
+        params: {
+          title: "WhatsApp",
+          body: "Dinner at 7?",
+          subtitle: "Anna",
+          timestamp: "2026-07-29T14:32:00.000Z",
+          sound: undefined,
+          priority: undefined,
+          delivery: "overlay",
+        },
+        idempotencyKey: expect.any(String),
+      },
+    );
+  });
+
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
     mockNodePairApproveFlow({
       requiredApproveScopes: ["operator.pairing", "operator.admin"],

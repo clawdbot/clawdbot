@@ -1,6 +1,10 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.MainActivity
+import android.Manifest
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import org.junit.Assert.assertEquals
@@ -76,6 +80,73 @@ class SystemHandlerTest {
   }
 
   @Test
+  fun handleSystemNotify_parsesSubtitleTimestampAndDelivery() {
+    val poster = FakePoster(authorized = true)
+    val handler = SystemHandler.forTesting(poster = poster)
+
+    val result =
+      handler.handleSystemNotify(
+        """{"title":"WhatsApp","body":"Dinner at 7?","subtitle":"Anna","timestamp":"2026-07-29T14:32:00Z","delivery":"overlay"}""",
+      )
+
+    assertTrue(result.ok)
+    assertEquals("Anna", poster.lastRequest?.subtitle)
+    assertEquals("overlay", poster.lastRequest?.delivery)
+    assertEquals(1785335520000L, poster.lastRequest?.timestampMillis)
+  }
+
+  @Test
+  fun handleSystemNotify_ignoresUnparsableTimestamp() {
+    val poster = FakePoster(authorized = true)
+    val handler = SystemHandler.forTesting(poster = poster)
+
+    val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done","timestamp":"not-a-date"}""")
+
+    assertTrue(result.ok)
+    assertEquals(null, poster.lastRequest?.timestampMillis)
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun buildSystemNotificationAttachesFullScreenIntentForOverlayDelivery() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    val notification =
+      buildSystemNotification(
+        appContext = context,
+        channelId = "test",
+        request =
+          SystemNotifyRequest(
+            "WhatsApp",
+            "Dinner at 7?",
+            sound = null,
+            priority = null,
+            delivery = "overlay",
+            subtitle = "Anna",
+            timestampMillis = 1_785_335_520_000L,
+          ),
+      )
+
+    assertNotNull(notification.fullScreenIntent)
+    val savedIntent = Shadows.shadowOf(notification.fullScreenIntent).savedIntent
+    assertEquals("ai.openclaw.app.ui.popup.PopupOverlayActivity", savedIntent.component?.className)
+    assertEquals("Anna", notification.extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString())
+    assertEquals(1_785_335_520_000L, notification.`when`)
+  }
+
+  @Test
+  fun buildSystemNotificationOmitsFullScreenIntentForSystemDelivery() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    val notification =
+      buildSystemNotification(
+        appContext = context,
+        channelId = "test",
+        request = SystemNotifyRequest("OpenClaw", "done", sound = null, priority = null, delivery = "system"),
+      )
+
+    assertEquals(null, notification.fullScreenIntent)
+  }
+
+  @Test
   fun buildSystemNotificationSetsImmutableAppLaunchIntent() {
     val context: Context = RuntimeEnvironment.getApplication()
     val notification =
@@ -114,6 +185,36 @@ class SystemHandlerTest {
     assertFalse(result.ok)
     assertEquals("UNAVAILABLE", result.error?.code)
     assertEquals("NOTIFICATION_FAILED: boom", result.error?.message)
+  }
+
+  @Test
+  fun handleSystemNotify_overlayDeliveryChannelBypassesDnd() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    val handler = SystemHandler(context)
+
+    val result = handler.handleSystemNotify("""{"title":"WhatsApp","body":"hi","delivery":"overlay"}""")
+
+    assertTrue(result.ok)
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val channel = manager.getNotificationChannel("openclaw.system.notify.timesensitive")
+    assertNotNull(channel)
+    assertTrue(channel!!.canBypassDnd())
+  }
+
+  @Test
+  fun handleSystemNotify_defaultDeliveryChannelDoesNotBypassDnd() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    val handler = SystemHandler(context)
+
+    val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"hi"}""")
+
+    assertTrue(result.ok)
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val channel = manager.getNotificationChannel("openclaw.system.notify.active")
+    assertNotNull(channel)
+    assertFalse(channel!!.canBypassDnd())
   }
 }
 

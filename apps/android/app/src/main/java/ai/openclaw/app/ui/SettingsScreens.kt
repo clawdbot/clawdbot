@@ -87,6 +87,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -140,6 +141,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -1165,7 +1167,140 @@ private fun NotificationSettingsScreen(
         viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
       },
     )
+    PopupNotificationSettingsPanel(viewModel = viewModel)
   }
+}
+
+@Composable
+private fun PopupNotificationSettingsPanel(viewModel: MainViewModel) {
+  val context = LocalContext.current
+  val backgroundImageUris by viewModel.popupBackgroundImageUris.collectAsState()
+  val opacity by viewModel.popupOpacity.collectAsState()
+  val autoDismissSeconds by viewModel.popupAutoDismissSeconds.collectAsState()
+  var fullScreenIntentGranted by remember { mutableStateOf(fullScreenIntentPermissionGranted(context)) }
+  var notificationPolicyAccessGranted by remember {
+    mutableStateOf(notificationPolicyAccessPermissionGranted(context))
+  }
+  val lifecycleOwner = LocalLifecycleOwner.current
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          fullScreenIntentGranted = fullScreenIntentPermissionGranted(context)
+          notificationPolicyAccessGranted = notificationPolicyAccessPermissionGranted(context)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  val imagePickerLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris ->
+      if (uris.isNotEmpty()) {
+        viewModel.setPopupBackgroundImageUris(uris.map { it.toString() })
+      }
+    }
+
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = nativeString("Full-Screen Popup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = nativeString("Used when the agent sends a notify with delivery=overlay — e.g. a summarized message you shouldn't miss while driving."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawSecondaryButton(
+          text =
+            if (backgroundImageUris.isEmpty()) {
+              nativeString("Choose Background Images")
+            } else {
+              nativeString("\$count images selected", backgroundImageUris.size.toString())
+            },
+          onClick = {
+            imagePickerLauncher.launch(
+              PickVisualMediaRequest(mediaType = ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+          },
+          modifier = Modifier.weight(1f),
+        )
+      }
+
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          text = nativeString("Popup Opacity: \$percent%", (opacity * 100).toInt().toString()),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        Slider(
+          value = opacity,
+          onValueChange = { viewModel.setPopupOpacity(it) },
+          valueRange = 0f..1f,
+        )
+      }
+
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          text = nativeString("Auto-Dismiss After: \$seconds s", autoDismissSeconds.toString()),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        Slider(
+          value = autoDismissSeconds.toFloat(),
+          onValueChange = { viewModel.setPopupAutoDismissSeconds(it.toInt()) },
+          valueRange = 3f..30f,
+          steps = 26,
+        )
+      }
+
+      if (!fullScreenIntentGranted) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(
+            text = nativeString("Allow Full-Screen Popups"),
+            onClick = { openFullScreenIntentSettings(context) },
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+
+      if (!notificationPolicyAccessGranted) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(
+            text = nativeString("Allow Overriding Do Not Disturb"),
+            onClick = { openNotificationPolicyAccessSettings(context) },
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+    }
+  }
+}
+
+/** Full-screen intent needs an explicit OS grant on Android 14+; earlier versions allow it by default. */
+private fun fullScreenIntentPermissionGranted(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < 34) return true
+  val manager = context.getSystemService(android.app.NotificationManager::class.java)
+  return manager?.canUseFullScreenIntent() ?: false
+}
+
+private fun openFullScreenIntentSettings(context: Context) {
+  val intent =
+    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+      data = Uri.fromParts("package", context.packageName, null)
+    }
+  context.startActivity(intent)
+}
+
+/** The overlay channel's bypass-DND flag (SystemHandler) only takes effect once this is granted. */
+private fun notificationPolicyAccessPermissionGranted(context: Context): Boolean {
+  val manager = context.getSystemService(android.app.NotificationManager::class.java)
+  return manager?.isNotificationPolicyAccessGranted ?: false
+}
+
+private fun openNotificationPolicyAccessSettings(context: Context) {
+  context.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
 }
 
 @Composable

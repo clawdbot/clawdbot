@@ -101,6 +101,18 @@ const NodesToolSchema = Type.Object({
   // notify
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
+  subtitle: Type.Optional(
+    Type.String({
+      description:
+        "notify: short secondary line shown under the title (e.g. a contact/sender name).",
+    }),
+  ),
+  timestamp: Type.Optional(
+    Type.String({
+      description:
+        "notify: ISO-8601 time the underlying event occurred (e.g. when a message was received).",
+    }),
+  ),
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
@@ -224,6 +236,8 @@ export function createNodesTool(options?: {
               params: {
                 title: title.trim(),
                 body: body.trim(),
+                subtitle: typeof params.subtitle === "string" ? params.subtitle : undefined,
+                timestamp: typeof params.timestamp === "string" ? params.timestamp : undefined,
                 sound: typeof params.sound === "string" ? params.sound : undefined,
                 priority: typeof params.priority === "string" ? params.priority : undefined,
                 delivery: typeof params.delivery === "string" ? params.delivery : undefined,

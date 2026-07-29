@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
@@ -149,5 +150,14 @@
                 <data android:mimeType="text/markdown" />
             </intent-filter>
         </activity>
+        <!-- Takeover surface for system.notify delivery=overlay; shows over the lock screen
+             without unlocking, like an incoming-call screen, so it can't be swiped away. -->
+        <activity
+            android:name=".ui.popup.PopupOverlayActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.OpenClawPopup" />
     </application>
 </manifest>

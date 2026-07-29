@@ -592,6 +592,9 @@ class MainViewModel private constructor(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val accessibilityControlEnabled: StateFlow<Boolean> = prefs.accessibilityControlEnabled
+  val popupBackgroundImageUris: StateFlow<List<String>> = prefs.popupBackgroundImageUris
+  val popupOpacity: StateFlow<Float> = prefs.popupOpacity
+  val popupAutoDismissSeconds: StateFlow<Int> = prefs.popupAutoDismissSeconds
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val preferredCameraFacing: StateFlow<String> = prefs.preferredCameraFacing
   val preferredAudioInputDevice: StateFlow<String?> = prefs.preferredAudioInputDevice
@@ -913,6 +916,18 @@ class MainViewModel private constructor(
 
   fun setAccessibilityControlEnabled(value: Boolean) {
     prefs.setAccessibilityControlEnabled(value)
+  }
+
+  fun setPopupBackgroundImageUris(uris: List<String>) {
+    prefs.setPopupBackgroundImageUris(uris)
+  }
+
+  fun setPopupOpacity(value: Float) {
+    prefs.setPopupOpacity(value)
+  }
+
+  fun setPopupAutoDismissSeconds(value: Int) {
+    prefs.setPopupAutoDismissSeconds(value)
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
