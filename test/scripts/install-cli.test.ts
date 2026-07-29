@@ -54,6 +54,10 @@ describe("install-cli.sh", () => {
       git() {
         [[ "$1" == "--git-dir=$repo/.git" ]] &&
           [[ "$2" == "--work-tree=$repo" ]] &&
+          [[ "$3" == "rev-parse" ]] &&
+          [[ "$4" == "--verify" ]] &&
+          [[ "$5" == "--quiet" ]] &&
+          [[ "$6" == "HEAD^{commit}" ]] &&
           return 1
         return 99
       }

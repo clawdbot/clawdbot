@@ -1469,7 +1469,7 @@ function Assert-GitCheckoutHasCommit {
 
     $hasHead = $false
     try {
-        git "--git-dir=$gitDir" "--work-tree=$RepoDir" rev-parse --verify --quiet HEAD 2>$null | Out-Null
+        git "--git-dir=$gitDir" "--work-tree=$RepoDir" rev-parse --verify --quiet "HEAD^{commit}" 2>$null | Out-Null
         $hasHead = ($LASTEXITCODE -eq 0)
     } catch {}
     if (-not $hasHead) {

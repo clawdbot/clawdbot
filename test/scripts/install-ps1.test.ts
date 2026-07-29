@@ -663,7 +663,7 @@ describe("install.ps1 failure handling", () => {
 
     expect(guardBody).toContain('"--git-dir=$gitDir"');
     expect(guardBody).toContain('"--work-tree=$RepoDir"');
-    expect(guardBody).toContain("rev-parse --verify --quiet HEAD");
+    expect(guardBody).toContain('rev-parse --verify --quiet "HEAD^{commit}"');
     expect(guardBody).toContain("Git checkout has no commit");
     expect(guardBody).not.toContain("Remove-Item");
     expect(guardBody).not.toContain("Move-Item");
