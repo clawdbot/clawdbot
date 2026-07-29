@@ -722,6 +722,7 @@ struct ChatTypingIndicatorBubble: View {
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let runIdentity: String
+    let outputTokens: Int?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -734,7 +735,9 @@ struct ChatTypingIndicatorBubble: View {
             }
 
             HStack(spacing: 9) {
-                ChatWorkingIndicatorContent(runIdentity: self.runIdentity)
+                ChatWorkingIndicatorContent(
+                    runIdentity: self.runIdentity,
+                    outputTokens: self.outputTokens)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -754,16 +757,21 @@ struct ChatTypingIndicatorBubble: View {
 private struct ChatWorkingIndicatorContent: View {
     @State private var startedAt: Date
     let seed: String
+    let outputTokens: Int?
 
-    init(runIdentity: String) {
+    init(runIdentity: String, outputTokens: Int?) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
+        self.outputTokens = outputTokens
     }
 
     var body: some View {
         HStack(spacing: 9) {
             ChatWorkingClawView(seed: self.seed)
-            ChatWorkingStatusText(startedAt: self.startedAt, seed: self.seed)
+            ChatWorkingStatusText(
+                startedAt: self.startedAt,
+                seed: self.seed,
+                outputTokens: self.outputTokens)
         }
     }
 }
@@ -868,7 +876,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
-            lhs.runIdentity == rhs.runIdentity
+            lhs.runIdentity == rhs.runIdentity &&
+            lhs.outputTokens == rhs.outputTokens
     }
 }
 

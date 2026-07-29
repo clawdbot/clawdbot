@@ -65,7 +65,7 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   createStores: () => PreparedModelRuntimeStores;
 }>;
 
-export type PreparedConfiguredRuntimeModel = Readonly<{
+type PreparedConfiguredRuntimeModel = Readonly<{
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;

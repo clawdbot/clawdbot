@@ -751,6 +751,8 @@ export async function loadCompactHooksHarness(): Promise<{
           ...emptyPluginMetadataSnapshot,
           workspaceDir: input.workspaceDir as string | undefined,
         },
+        configuredRuntimeModels: [],
+        inlineProviderModels: [],
         createStores: () => ({ authStorage: {}, modelRegistry: {} }),
       },
       release: vi.fn(),

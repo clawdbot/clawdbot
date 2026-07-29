@@ -25,6 +25,17 @@ export function slugifySessionKey(value: string) {
   return `${base}-${hash}`;
 }
 
+/** Builds a bounded Docker name without truncating the scope-identity slug. */
+export function buildSandboxContainerName(prefix: string, slug: string): string {
+  const maxLength = 63;
+  const fullName = `${prefix}${slug}`;
+  if (fullName.length <= maxLength) {
+    return fullName;
+  }
+  const identitySuffix = `-${hashTextSha256(fullName).slice(0, 12)}`;
+  return `${fullName.slice(0, maxLength - identitySuffix.length)}${identitySuffix}`;
+}
+
 /** Resolves the per-session sandbox workspace directory under the configured sandbox root. */
 function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
   const resolvedRoot = resolveUserPath(root);

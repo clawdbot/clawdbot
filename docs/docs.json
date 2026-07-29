@@ -1267,6 +1267,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/agent-bindings",
                   "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
@@ -1386,6 +1387,7 @@
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/media-overview",
+                  "tools/mcp",
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
@@ -1766,6 +1768,7 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/notifications",
                   "web/urls",
                   "web/dashboard",
                   "web/dashboards",

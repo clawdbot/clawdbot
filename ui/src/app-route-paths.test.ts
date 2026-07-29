@@ -5,8 +5,11 @@ import {
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
+  pathForPluginsHubTab,
+  pluginsHubTabFromPath,
   routeIdFromPath,
   type MemoryRouteTab,
+  type PluginsHubRouteTab,
 } from "./app-route-paths.ts";
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
@@ -77,6 +80,77 @@ describe("Memory tab route paths", () => {
     expect(router.getState().location).toEqual(location);
     expect(router.getState().matches[0]?.location).toEqual(location);
     expect(location.pathname).toBe("/settings/memory/settings");
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    router.stop();
+  });
+});
+
+describe("Plugins hub tab route paths", () => {
+  it.each([
+    ["installed", "/settings/plugins"],
+    ["discover", "/settings/plugins/discover"],
+  ] as const)("round-trips %s through its canonical path", (tab, pathname) => {
+    expect(pathForPluginsHubTab(tab)).toBe(pathname);
+    expect(pluginsHubTabFromPath(pathname)).toBe(tab);
+    expect(routeIdFromPath(pathname)).toBe("plugins");
+  });
+
+  it.each(["installed", "discover"] as const)(
+    "round-trips %s under a configured base path",
+    (tab: PluginsHubRouteTab) => {
+      const pathname = pathForPluginsHubTab(tab, "/ui");
+      expect(pluginsHubTabFromPath(pathname, "/ui")).toBe(tab);
+      expect(routeIdFromPath(pathname, "/ui")).toBe("plugins");
+      expect(inferBasePathFromPathname(pathname)).toBe("/ui");
+    },
+  );
+
+  it("rejects unknown and nested Plugins hub tab segments", () => {
+    expect(pluginsHubTabFromPath("/settings/plugins/unknown")).toBeNull();
+    expect(pluginsHubTabFromPath("/settings/plugins/discover/extra")).toBeNull();
+    expect(routeIdFromPath("/settings/plugins/unknown")).toBeNull();
+    expect(routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
+  });
+
+  it("publishes the real dynamic pathname after the exact-match startup bridge", async () => {
+    let location: RouteLocation = {
+      pathname: "/settings/plugins/discover",
+      search: "?query=calendar",
+      hash: "#featured",
+    };
+    const push = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const replace = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const history: RouterHistory = {
+      location: () => location,
+      push,
+      replace,
+      listen: () => () => undefined,
+    };
+    const router = createApplicationRouter();
+    const pluginsRoute = router.getRoute("plugins");
+    if (!pluginsRoute) {
+      throw new Error("Plugins route missing");
+    }
+    pluginsRoute.component = async () => ({ render: () => null });
+    const context = {
+      basePath: "",
+      gateway: {
+        snapshot: { phase: "reconnecting", client: null },
+      },
+    } as unknown as ApplicationContext;
+
+    await startApplicationRouter(router, history, "", context);
+
+    expect(router.getState().location).toEqual(location);
+    expect(router.getState().matches[0]?.location).toEqual(location);
+    expect(location.pathname).toBe("/settings/plugins/discover");
+    expect(location.search).toBe("?query=calendar");
+    expect(location.hash).toBe("#featured");
     expect(push).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
     router.stop();

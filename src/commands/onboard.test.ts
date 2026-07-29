@@ -377,6 +377,26 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it("rejects --reset-scope without --reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        resetScope: "full",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--reset-scope requires --reset. Re-run with openclaw onboard --reset --reset-scope full.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
   it("fails fast for invalid non-interactive --mode before reset", async () => {
     const runtime = makeRuntime();
 
@@ -859,6 +879,20 @@ describe("setupWizardCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting TUI and non-interactive modes", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ tui: true, nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();

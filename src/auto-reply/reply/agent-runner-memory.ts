@@ -796,15 +796,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (params.isHeartbeat || isCli || ownsNativeCompaction) {
     return entry ?? params.sessionEntry;
   }
-  if (normalizeLowercaseStringOrEmpty(runtimeId) === "codex") {
-    // Codex runtime sessions should reach Codex with their real thread state.
-    // Its harness owns automatic compaction; OpenClaw preflight compaction is
-    // only for non-Codex embedded runtimes.
-    logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
-    );
-    return entry ?? params.sessionEntry;
-  }
+  const isCodexRuntime = normalizeLowercaseStringOrEmpty(runtimeId) === "codex";
 
   const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   if (!compactionSessionKey) {
@@ -866,7 +858,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
-    typeof freshPersistedTokens === "number" && !freshNeedsOutputRead
+    isCodexRuntime || (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           agentId: compactionAgentId,
@@ -893,6 +885,17 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
+  if (isCodexRuntime && !shouldCompactByTranscriptBytes) {
+    // Codex owns native-thread token pressure; OpenClaw owns the host transcript byte fuse
+    // that bounds fresh-thread bootstrap seeds.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex ` +
+        `reason=codex_native_auto_compaction ` +
+        `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+        `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
+    );
+    return entry ?? params.sessionEntry;
+  }
   const stalePersistedPromptTokens =
     hasPersistedTotalTokens && entry.totalTokensFresh !== false
       ? Math.floor(persistedTotalTokens)

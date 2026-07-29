@@ -17,8 +17,12 @@ import {
   hasMeaningfulRetiredMediaCarrier,
 } from "../media/media-facts.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  isPersistentOpenClawAgentDatabasePath,
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
 import { migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema } from "../state/openclaw-agent-db-schema.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -580,7 +584,10 @@ export function migrateLegacyMediaPersistence(
   const warnings: string[] = [];
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
   try {
-    registered = listOpenClawRegisteredAgentDatabases({ env });
+    registered = listOpenClawRegisteredAgentDatabases({
+      env,
+      includeIncompatibleSchemaVersions: true,
+    });
   } catch (error) {
     return {
       changes,
@@ -594,6 +601,26 @@ export function migrateLegacyMediaPersistence(
   const archiveDirectories = new Set<string>();
   for (const entry of registered) {
     const pathname = path.resolve(entry.path);
+    if (!isPersistentOpenClawAgentDatabasePath(pathname, env)) {
+      unregisterOpenClawAgentDatabase({ agentId: entry.agentId, env, path: entry.path });
+      changes.push(`Removed archived or transient agent database registry entry ${pathname}.`);
+      continue;
+    }
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.statSync(pathname);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        warnings.push(`Could not inspect registered agent database ${pathname}: ${String(error)}`);
+        continue;
+      }
+    }
+    if (!stat?.isFile()) {
+      unregisterOpenClawAgentDatabase({ agentId: entry.agentId, env, path: entry.path });
+      changes.push(`Removed missing agent database registry entry ${pathname}.`);
+      warnings.push(`Skipped missing registered agent database ${pathname}.`);
+      continue;
+    }
     archiveDirectories.add(
       resolveSqliteTranscriptArchiveDirectory({
         agentId: entry.agentId,

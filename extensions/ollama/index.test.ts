@@ -144,6 +144,17 @@ function registerOllamaCloudProvider() {
   return registerProvidersWithPluginConfig({}).find((provider) => provider.id === "ollama-cloud");
 }
 
+describe("ollama tool-schema compatibility", () => {
+  it("registers llama.cpp GBNF projection for local and cloud providers", () => {
+    for (const provider of registerProvidersWithPluginConfig({})) {
+      expect(provider).toMatchObject({
+        normalizeToolSchemas: expect.any(Function),
+        inspectToolSchemas: expect.any(Function),
+      });
+    }
+  });
+});
+
 function createOllamaResetValidationContext(
   opts: Record<string, unknown> = {},
 ): Parameters<NonNullable<ProviderAuthMethod["validateNonInteractive"]>>[0] {

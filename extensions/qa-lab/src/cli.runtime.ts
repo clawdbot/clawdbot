@@ -146,6 +146,7 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
+  expandScenarioChannels?: boolean;
   channelDriver?: string;
   channel?: string;
   runner?: string;
@@ -709,6 +710,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
+      expandScenarioChannels: true,
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
@@ -1008,6 +1010,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     evidenceMode: opts.evidenceMode,
     transportId,
     channelDriver,
+    ...(opts.expandScenarioChannels ? { expandScenarioChannels: true } : {}),
     ...(liveAdapterFactories
       ? {
           adapterFactories: liveAdapterFactories,

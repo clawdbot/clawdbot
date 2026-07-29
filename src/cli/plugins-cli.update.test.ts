@@ -1144,28 +1144,43 @@ describe("plugins cli update", () => {
     ).toBe(true);
   });
 
-  it("does not sync official catalog specs for manual plugin updates", async () => {
-    const config = createTrackedPluginConfig({
-      pluginId: "codex",
+  it.each([
+    {
+      updateChannel: "beta" as const,
+      registryLine: "beta",
+      spec: "@openclaw/codex@2026.6.8-beta.1",
+    },
+    {
+      updateChannel: "stable" as const,
+      registryLine: "latest",
       spec: "@openclaw/codex@2026.5.28",
-      resolvedName: "@openclaw/codex",
-    });
-    loadConfig.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    },
+  ])(
+    "passes the $updateChannel channel to probe $registryLine for targeted exact pins",
+    async ({ updateChannel, spec }) => {
+      const config = createTrackedPluginConfig({
+        pluginId: "codex",
+        spec,
+        resolvedName: "@openclaw/codex",
+      });
+      config.update = { channel: updateChannel };
+      loadConfig.mockReturnValue(config);
+      setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+      updateNpmInstalledPlugins.mockResolvedValue({
+        config,
+        changed: false,
+        outcomes: [],
+      });
 
-    await runPluginsCommand(["plugins", "update", "codex"]);
+      await runPluginsCommand(["plugins", "update", "codex"]);
 
-    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
-    expect(updateParams.pluginIds).toEqual(["codex"]);
-    expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
-    expect(updateParams.updateChannel).toBeUndefined();
-    expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
-  });
+      const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+      expect(updateParams.pluginIds).toEqual(["codex"]);
+      expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
+      expect(updateParams.updateChannel).toBe(updateChannel);
+      expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
+    },
+  );
 
   it("syncs official catalog specs with beta channel context for update --all", async () => {
     const config = createTrackedPluginConfig({

@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -324,8 +325,14 @@ function splitArgumentsForStreaming(argumentsValue: string): string[] {
   }
   const chunkSize = 256;
   const chunks: string[] = [];
-  for (let i = 0; i < argumentsValue.length; i += chunkSize) {
-    chunks.push(argumentsValue.slice(i, i + chunkSize));
+  for (let start = 0; start < argumentsValue.length;) {
+    const end = avoidTrailingHighSurrogateBreak(
+      argumentsValue,
+      start,
+      Math.min(start + chunkSize, argumentsValue.length),
+    );
+    chunks.push(argumentsValue.slice(start, end));
+    start = end;
   }
   return chunks.length > 0 ? chunks : [""];
 }

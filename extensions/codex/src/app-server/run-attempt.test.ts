@@ -23,6 +23,7 @@ import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcr
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexSystemPromptReport,
@@ -59,6 +60,7 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
+  type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 
@@ -490,8 +492,8 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     if (method === "thread/start") {
       return threadStartResult();
     }
-    if (method === "app/list") {
-      throw new Error("app/list should not run when runtime toolsAllow is empty.");
+    if (method === "app/installed" || method === "app/read") {
+      throw new Error("App inventory should not run when runtime toolsAllow is empty.");
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -633,26 +635,21 @@ type GoogleCalendarCacheKeyInput = {
   agentDir: string;
 };
 
-function googleCalendarAppListResult(isEnabled: boolean) {
+function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
   return {
-    data: [
-      {
-        id: "google-calendar-app",
-        name: "Google Calendar",
-        description: null,
-        logoUrl: null,
-        logoUrlDark: null,
-        distributionChannel: null,
-        branding: null,
-        appMetadata: null,
-        labels: null,
-        installUrl: null,
-        isAccessible: true,
-        isEnabled,
-        pluginDisplayNames: [],
-      },
-    ],
-    nextCursor: null,
+    id: "google-calendar-app",
+    name: "Google Calendar",
+    description: null,
+    logoUrl: null,
+    logoUrlDark: null,
+    distributionChannel: null,
+    branding: null,
+    appMetadata: null,
+    labels: null,
+    installUrl: null,
+    isAccessible: true,
+    isEnabled,
+    pluginDisplayNames: [],
   };
 }
 
@@ -711,10 +708,12 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
   },
 } as const;
 
-function createGoogleCalendarRequest(appList?: () => unknown) {
+function createGoogleCalendarRequest(
+  appInventory?: (method: "app/installed" | "app/read") => unknown,
+) {
   return vi.fn(async (method: string) => {
-    if (method === "app/list" && appList) {
-      return appList();
+    if ((method === "app/installed" || method === "app/read") && appInventory) {
+      return appInventory(method);
     }
     if (method === "plugin/list") {
       return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
@@ -736,7 +735,8 @@ async function primeGoogleCalendarAppInventory(key: string, isEnabled: boolean):
   defaultCodexAppInventoryCache.clear();
   await defaultCodexAppInventoryCache.refreshNow({
     key,
-    request: async () => googleCalendarAppListResult(isEnabled),
+    request: async (method, params) =>
+      codexAppInventoryResponse(method, [googleCalendarAppInfo(isEnabled)], params),
   });
 }
 
@@ -2229,7 +2229,8 @@ describe("runCodexAppServerAttempt", () => {
       open_world_enabled: false,
     });
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -2257,7 +2258,8 @@ describe("runCodexAppServerAttempt", () => {
       destructive_enabled: false,
       open_world_enabled: false,
     });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
   it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
     const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
@@ -4433,8 +4435,8 @@ describe("runCodexAppServerAttempt", () => {
           accountId: "account-work",
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => {
-        throw new Error("app/list should use the account-keyed cache entry");
+      appInventory: () => {
+        throw new Error("App discovery should use the account-keyed cache entry");
       },
       configure: (params: EmbeddedRunAttemptParams) => {
         params.authProfileId = "openai:work";
@@ -4453,10 +4455,11 @@ describe("runCodexAppServerAttempt", () => {
           },
         };
       },
-      expectsAppList: false,
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
     },
     {
-      name: "sends a thread/start app enable override when app/list cached the app as disabled",
+      name: "does not expose a cached disabled app when runtime callability is unknown",
       cachedEnabled: false,
       cacheKey: ({ appServer, agentDir }: GoogleCalendarCacheKeyInput) =>
         buildCodexPluginAppCacheKey({
@@ -4464,10 +4467,10 @@ describe("runCodexAppServerAttempt", () => {
           agentDir,
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => {
-        throw new Error("app/list should use the cached inventory entry");
-      },
-      expectsAppList: false,
+      appInventory: (method: "app/installed" | "app/read") =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(false)]),
+      expectsAppInventory: true,
+      expectedAppEnabled: undefined,
     },
     {
       name: "keys plugin app inventory by inherited API key fallback credentials",
@@ -4482,39 +4485,55 @@ describe("runCodexAppServerAttempt", () => {
           }),
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => googleCalendarAppListResult(true),
+      appInventory: (method: "app/installed" | "app/read") =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
       configure: () => {
         vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
         vi.stubEnv("OPENAI_API_KEY", "");
       },
-      expectsAppList: true,
+      expectsAppInventory: true,
+      expectedAppEnabled: true,
     },
-  ])("$name", async ({ cachedEnabled, cacheKey, appList, configure, expectsAppList }) => {
-    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
-    const pluginConfig = GOOGLE_CALENDAR_PLUGIN_CONFIG;
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: readCodexPluginConfig(pluginConfig),
-    });
-    await primeGoogleCalendarAppInventory(cacheKey({ appServer, agentDir }), cachedEnabled);
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
-      createGoogleCalendarRequest(appList),
-    );
-    const params = createParams(sessionFile, workspaceDir);
-    params.agentDir = agentDir;
-    configure?.(params);
-    const run = runCodexAppServerAttempt(params, { pluginConfig });
-    await completeStartedRun(run, waitForMethod, completeTurn);
-    const threadStart = requests.find((entry) => entry.method === "thread/start");
-    const threadStartParams = threadStart?.params as
-      | { config?: { apps?: Record<string, { enabled?: boolean }> } }
-      | undefined;
-    expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(true);
-    if (expectsAppList) {
-      expect(requests.map((entry) => entry.method)).toContain("app/list");
-    } else {
-      expect(requests.map((entry) => entry.method)).not.toContain("app/list");
-    }
-  });
+  ])(
+    "$name",
+    async ({
+      cachedEnabled,
+      cacheKey,
+      appInventory,
+      configure,
+      expectsAppInventory,
+      expectedAppEnabled,
+    }) => {
+      const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+      const pluginConfig = GOOGLE_CALENDAR_PLUGIN_CONFIG;
+      const appServer = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: readCodexPluginConfig(pluginConfig),
+      });
+      await primeGoogleCalendarAppInventory(cacheKey({ appServer, agentDir }), cachedEnabled);
+      const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+        createGoogleCalendarRequest(appInventory),
+      );
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = agentDir;
+      configure?.(params);
+      const run = runCodexAppServerAttempt(params, { pluginConfig });
+      await completeStartedRun(run, waitForMethod, completeTurn);
+      const threadStart = requests.find((entry) => entry.method === "thread/start");
+      const threadStartParams = threadStart?.params as
+        | { config?: { apps?: Record<string, { enabled?: boolean }> } }
+        | undefined;
+      expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(
+        expectedAppEnabled,
+      );
+      if (expectsAppInventory) {
+        expect(requests.map((entry) => entry.method)).toContain("app/installed");
+        expect(requests.map((entry) => entry.method)).toContain("app/read");
+      } else {
+        expect(requests.map((entry) => entry.method)).not.toContain("app/installed");
+        expect(requests.map((entry) => entry.method)).not.toContain("app/read");
+      }
+    },
+  );
 
   it("times out app-server startup before thread setup can hang forever", async () => {
     setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => {}));

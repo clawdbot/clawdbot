@@ -188,7 +188,6 @@ extensions/oc-path/src/oc-path/find.ts
 extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
-extensions/ollama/src/setup.ts
 extensions/ollama/src/stream-runtime.test.ts
 extensions/ollama/src/stream.ts
 extensions/openai/image-generation-provider.test.ts

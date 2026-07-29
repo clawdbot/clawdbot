@@ -510,6 +510,54 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
   }
 }
 
+function runControlUiI18nSourceFixture(options: {
+  compatibilityTarget: boolean;
+  hasVerifyScript: boolean;
+}): { calls: string[]; output: string; summary: string; status: number | null } {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-control-ui-i18n-"));
+  try {
+    const fakeBin = path.join(root, "bin");
+    const callsPath = path.join(root, "pnpm-calls.txt");
+    const summaryPath = path.join(root, "summary.md");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({
+        scripts: options.hasVerifyScript ? { "ui:i18n:verify": "true" } : {},
+      })}\n`,
+    );
+    writeExecutable(path.join(fakeBin, "pnpm"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ]);
+    const sourceStep = readCiWorkflow().jobs["control-ui-i18n"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
+    );
+    const run = spawnSync("bash", ["-c", sourceStep.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        COMPATIBILITY_TARGET: options.compatibilityTarget ? "true" : "false",
+        GITHUB_STEP_SUMMARY: summaryPath,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PNPM_CALLS: callsPath,
+      },
+    });
+    return {
+      calls: existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+        : [],
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+      summary: existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : "",
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
@@ -4399,8 +4447,36 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
     expect(localeJob["continue-on-error"]).toBeUndefined();
+    expect(localeJob.env.COMPATIBILITY_TARGET).toBe(
+      "${{ needs.preflight.outputs.compatibility_target }}",
+    );
     expect(sourceStep["continue-on-error"]).toBeUndefined();
-    expect(sourceStep.run).toBe("pnpm ui:i18n:verify");
+    const compatibilityWithoutVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: true,
+      hasVerifyScript: false,
+    });
+    expect(compatibilityWithoutVerify.status, compatibilityWithoutVerify.output).toBe(0);
+    expect(compatibilityWithoutVerify.calls).toEqual([]);
+    expect(compatibilityWithoutVerify.summary).toContain(
+      "Skipping ui:i18n:verify: unavailable on the selected compatibility target.",
+    );
+
+    const currentWithoutVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: false,
+      hasVerifyScript: false,
+    });
+    expect(currentWithoutVerify.status).toBe(1);
+    expect(currentWithoutVerify.calls).toEqual([]);
+    expect(currentWithoutVerify.output).toContain(
+      "ui:i18n:verify is required for non-compatibility targets.",
+    );
+
+    const currentWithVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: false,
+      hasVerifyScript: true,
+    });
+    expect(currentWithVerify.status, currentWithVerify.output).toBe(0);
+    expect(currentWithVerify.calls).toEqual(["ui:i18n:verify"]);
     expect(localeStep["continue-on-error"]).toBe(
       "${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
     );

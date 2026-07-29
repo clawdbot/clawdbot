@@ -182,7 +182,7 @@ official external plugins, and one-click MCP connectors for popular services.
 Typing in the search box queries
 [ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
 section with download counts and source-verification badges. Deep links can
-target the store directly with `/settings/plugins?tab=discover`.
+target the store directly with `/settings/plugins/discover`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
@@ -253,7 +253,7 @@ select it to open the owning Approvals page.
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`). Archived sessions keep the composer disabled and show a banner with an **Unarchive** action before the conversation can continue.
     - Chat history refreshes request a bounded recent window with per-message text caps, so large sessions do not force the browser to render a full transcript payload before chat becomes usable.
     - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. The Gateway uses `GH_TOKEN` or `GITHUB_TOKEN` when available, after confirming the repository is public; otherwise it uses GitHub's anonymous API with a longer cache.
-    - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Video-capable browser sessions can choose a device-local camera in Settings or flip cameras from the live preview; the browser captures JPEG frames for the realtime provider without streaming camera video through the Gateway. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`. GPT-Live sessions differ: their delegated work runs on the Gateway-owned sideband, so steering does not apply — a newer spoken task supersedes the running delegation. Configure the realtime provider, model, and speaker voice on **Settings → Talk**, whose pickers come from `talk.catalog` and show whether the selection is ready to use.
+    - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Video-capable browser sessions can choose a device-local camera in Settings or flip cameras from the live preview; the browser captures JPEG frames for the realtime provider without streaming camera video through the Gateway. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`. GPT-Live delegates on the Gateway-owned sideband, but each delegation has the same spoken-confirmation gate and browser-owned `talk.client.steer` lifecycle; a newer spoken task can also supersede the running delegation. Configure the realtime provider, model, and speaker voice on **Settings → Talk**, whose pickers come from `talk.catalog` and show whether the selection is ready to use.
     - Stream tool calls and live tool output cards in Chat (agent events). Tool activity renders as kind-aware rows: shell commands show the syntax-highlighted command with terminal-style output; supported edit and write calls show bounded inline diffs, line numbers when available, and `+added -removed` stats; and consecutive calls collapse into a summary such as "Ran 13 commands, read 6 files, edited 9 files". While a run is live, the newest running call names the group header. Expand a row to inspect its remaining arguments and raw output.
     - Optional AI purpose titles for complex tool calls (long shell commands, argument-heavy plugin tools), enabled with `gateway.controlUi.toolTitles: true` (default off). Titles come from the batched `chat.toolTitles` method through standard utility-model routing — an explicit `utilityModel` (operator-chosen provider, like other utility tasks), else the session provider's declared small-model default — and cache gateway-side per agent. When the opt-in is off or no cheap model is usable, rows keep their deterministic labels and no model call happens.
     - Start or dismiss ephemeral model-suggested follow-up tasks; accepted suggestions open a fresh managed-worktree session with the proposed prompt.
@@ -518,6 +518,8 @@ The Control UI ships a `manifest.webmanifest` and a service worker, so modern br
 
 Inside the macOS app, the Notifications settings page shows the app's native notification permission instead of browser push because the app delivers notifications natively.
 
+See [Notifications](/web/notifications) for the browser and macOS setup steps.
+
 If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
 
 | Surface                                            | What it does                                                                 |
@@ -540,7 +542,7 @@ The Control UI uses these scope-gated Gateway methods to register and test brows
 - `push.web.vapidPublicKey` fetches the active VAPID public key.
 - `push.web.subscribe` registers an `endpoint` plus `keys.p256dh`/`keys.auth`.
 - `push.web.unsubscribe` removes a registered endpoint.
-- `push.web.test` sends a test notification to the caller's subscription.
+- `push.web.test` sends a test notification to registered browser subscriptions.
 
 <Note>
 Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway/configuration) for relay-backed push) and the `push.test` method, which targets native mobile pairing.
