@@ -779,6 +779,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     if (!execTool) {
       throw new Error("missing code-mode exec tool");
     }
+    const abortSignal = new AbortController().signal;
     const wrapped = wrapToolWithAbortSignal(
       wrapToolWithBeforeToolCallHook(execTool, {
         agentId: "main",
@@ -786,7 +787,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         sessionId: "session-main",
         runId: "run-main",
       }),
-      new AbortController().signal,
+      abortSignal,
     );
     const [def] = toToolDefinitions([wrapped]);
     if (!def) {
@@ -824,6 +825,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         sessionKey: "agent:main:main",
         sessionId: "session-main",
         runId: "run-main",
+        abortSignal,
         toolCallId: "call-wrapped-code-mode-exec",
       },
     );
@@ -1318,6 +1320,66 @@ describe("before_tool_call adapter and client tool integration", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetClientVoiceConfirmationStateForTest();
     vi.restoreAllMocks();
+  });
+
+  it.each(["wrapped", "adapter"] as const)(
+    "forwards the owning tool-call signal through the %s path",
+    async (pathKind) => {
+      const controller = new AbortController();
+      const seenSignals: Array<AbortSignal | undefined> = [];
+      installBeforeToolCallHook({
+        runBeforeToolCallImpl: async (_event, ctx) => {
+          seenSignals.push((ctx as { abortSignal?: AbortSignal }).abortSignal);
+        },
+      });
+      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const sourceTool = asAgentTool({ name: "read", execute });
+      const tool = pathKind === "wrapped" ? wrapToolWithBeforeToolCallHook(sourceTool) : sourceTool;
+      const definition = expectDefined(toToolDefinitions([tool])[0], `${pathKind} tool definition`);
+
+      await definition.execute(
+        `call-signal-${pathKind}`,
+        { path: "/tmp/input" },
+        controller.signal,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      expect(seenSignals).toEqual([controller.signal]);
+    },
+  );
+
+  it("forwards the owning tool-call signal to client-tool hooks", async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    installBeforeToolCallHook({
+      runBeforeToolCallImpl: async (_event, ctx) => {
+        seenSignal = (ctx as { abortSignal?: AbortSignal }).abortSignal;
+      },
+    });
+    const tool = expectDefined(
+      toClientToolDefinitions([
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ])[0],
+      "client tool definition",
+    );
+
+    await tool.execute(
+      "client-call-signal",
+      {},
+      controller.signal,
+      undefined,
+      {} as ExtensionContext,
+    );
+
+    expect(seenSignal).toBe(controller.signal);
   });
 
   it("passes modified params to client tool callbacks", async () => {
