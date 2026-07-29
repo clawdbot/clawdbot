@@ -1,13 +1,20 @@
-/** Construction and owner identity for prepared model runtime generations. */
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../node-host/with-timeout.js";
+import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+  getPreparedMessageToolCatalog,
+  getPreparedMessageToolCatalogForRegistry,
+} from "../plugins/prepared-message-tool-catalog.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import {
@@ -17,7 +24,15 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
-import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import {
+  buildInlineProviderModels,
+  type InlineModelEntry,
+} from "./embedded-agent-runner/model.inline-provider.js";
+import {
+  loadBundledProviderStaticCatalogContextModels,
+  resolveBundledStaticCatalogModel,
+} from "./embedded-agent-runner/model.static-catalog.js";
+import { staticModelIdMatches } from "./embedded-agent-runner/model.static-id.js";
 import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -34,10 +49,28 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   agentDir: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
+  /** Run-prepared repository root; null means discovery completed without a match. */
+  repoRoot?: string | null;
+  /** Stable identity derived from repoRoot; null means the run is outside a repository. */
+  projectKey?: string | null;
+  /** Session active project set, ordered most-recent first; empty before run binding. */
+  activeProjectKeys: readonly string[];
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
+  messageToolCatalog?: PreparedMessageToolCatalog;
+  mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
   modelCatalog: ModelCatalogSnapshot;
+  /** Full static models for configured refs, resolved once at the lifecycle boundary. */
+  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
+  /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
+  inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
+}>;
+
+type PreparedConfiguredRuntimeModel = Readonly<{
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
 }>;
 
 export type PreparedModelRuntimeStores = {
@@ -282,6 +315,55 @@ function collectPreparedModelRuntimeProviderIds(
   return [...providerIds].toSorted((left, right) => left.localeCompare(right));
 }
 
+function prepareConfiguredRuntimeModels(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  providerStaticModels: readonly ProviderRuntimeModel[];
+  workspaceDir?: string;
+}): PreparedConfiguredRuntimeModel[] {
+  const prepared: PreparedConfiguredRuntimeModel[] = [];
+  const seen = new Set<string>();
+  for (const { value } of collectConfiguredModelRefs(params.config)) {
+    const separator = value.indexOf("/");
+    if (separator <= 0 || separator >= value.length - 1) {
+      continue;
+    }
+    const provider = normalizeProviderId(value.slice(0, separator));
+    const modelId = value.slice(separator + 1).trim();
+    if (!provider || !modelId) {
+      continue;
+    }
+    const key = `${provider}\0${modelId.toLowerCase()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
+    // and the provider-static catalog fills only models absent from that surface.
+    const model =
+      resolveBundledStaticCatalogModel({
+        provider,
+        modelId,
+        cfg: params.config,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
+        includeRuntimeDiscovery: true,
+      }) ??
+      params.providerStaticModels.find((candidate) =>
+        staticModelIdMatches({
+          candidateId: candidate.id,
+          rowProvider: candidate.provider,
+          provider,
+          modelId,
+        }),
+      );
+    if (model) {
+      prepared.push({ provider, modelId, model });
+    }
+  }
+  return prepared;
+}
+
 export function ownerKey(input: PreparedModelRuntimeInput): string {
   return JSON.stringify({
     agentId: input.agentId,
@@ -386,19 +468,28 @@ async function buildSnapshot(
   catalogMode: PreparedModelRuntimeCatalogMode,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const env = input.env ?? process.env;
-  if (!input.readOnly) {
-    // Writable lifecycle publication owns process-global runtime plugin activation. Read-only
-    // drafts consume manifest metadata only and must not mutate live hooks outside that gate.
-    ensureRuntimePluginsLoaded({
-      config: input.config,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
-  }
+  const runtimePluginRegistry = !input.readOnly
+    ? ensureRuntimePluginsLoaded({
+        config: input.config,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      })
+    : undefined;
   const pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
+  const mediaCapabilityProviders = input.readOnly
+    ? undefined
+    : prepareMediaCapabilityProviders({
+        cfg: input.config,
+        pluginMetadataSnapshot,
+        registry: runtimePluginRegistry,
+      });
+  const messageToolCatalog =
+    (runtimePluginRegistry
+      ? getPreparedMessageToolCatalogForRegistry(runtimePluginRegistry)
+      : getPreparedMessageToolCatalog()) ?? EMPTY_PREPARED_MESSAGE_TOOL_CATALOG;
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
     config: input.config,
     // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
@@ -441,14 +532,32 @@ async function buildSnapshot(
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
-  const staticEntries = (
-    await loadBundledProviderStaticCatalogContextModels({
-      cfg: input.config,
-      env,
-      ...(catalogMode === "static" ? { providerIds } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    })
-  ).map(toStaticCatalogEntry);
+  const providerStaticModels = await loadBundledProviderStaticCatalogContextModels({
+    cfg: input.config,
+    env,
+    ...(catalogMode === "static" ? { providerIds } : {}),
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+  });
+  const configuredRuntimeModels = prepareConfiguredRuntimeModels({
+    config: input.config,
+    env,
+    providerStaticModels,
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+  });
+  const staticModels = new Map<string, ProviderRuntimeModel>();
+  for (const model of [
+    ...configuredRuntimeModels.map((configured) => configured.model),
+    ...providerStaticModels,
+  ]) {
+    const modelKey = `${normalizeProviderId(model.provider)}\0${model.id.trim().toLowerCase()}`;
+    if (!staticModels.has(modelKey)) {
+      staticModels.set(modelKey, model);
+    }
+  }
+  const staticEntries = [...staticModels.values()].map(toStaticCatalogEntry);
+  // Config reload publishes a replacement snapshot. Keep the synchronous inline projection
+  // at that lifecycle boundary instead of rebuilding it on every model resolution in a turn.
+  const inlineProviderModels = buildInlineProviderModels(input.config.models?.providers ?? {});
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the
     // credential map and parsed catalog remain owned by the lifecycle snapshot.
@@ -458,11 +567,16 @@ async function buildSnapshot(
   return Object.freeze({
     ...(input.agentId ? { agentId: input.agentId } : {}),
     agentDir: input.agentDir,
+    activeProjectKeys: [],
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     metadataSnapshot: pluginMetadataSnapshot,
+    messageToolCatalog,
+    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog: { ...modelCatalog, staticEntries },
+    configuredRuntimeModels,
+    inlineProviderModels,
     createStores,
   });
 }

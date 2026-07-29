@@ -1,5 +1,6 @@
 // Voice Call plugin module implements webhook security behavior.
 import crypto from "node:crypto";
+import { isIP } from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -133,8 +134,23 @@ function extractHostname(hostHeader: string): string | null {
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
+    const suffix = hostHeader.slice(endBracket + 1);
+    if (suffix && !/^:\d+$/u.test(suffix)) {
+      return null;
+    }
     const hostname = hostHeader.slice(1, endBracket);
-    return normalizeLowercaseStringOrEmpty(hostname);
+    if (isIP(hostname) !== 6) {
+      return null;
+    }
+    try {
+      const parsedHostname = new URL(`https://[${hostname}]/`).hostname;
+      if (!parsedHostname.startsWith("[") || !parsedHostname.endsWith("]")) {
+        return null;
+      }
+      return normalizeLowercaseStringOrEmpty(parsedHostname.slice(1, -1));
+    } catch {
+      return null;
+    }
   }
 
   // Handle IPv4/domain with optional port
@@ -173,6 +189,10 @@ function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
     }
   }
   return normalized.size > 0 ? normalized : null;
+}
+
+function formatHostnameForUrl(hostname: string): string {
+  return isIP(hostname) === 6 ? `[${hostname}]` : hostname;
 }
 
 /**
@@ -285,7 +305,7 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     // URL parsing failed
   }
 
-  return `${proto}://${host}${path}`;
+  return `${proto}://${formatHostnameForUrl(host)}${path}`;
 }
 
 function buildTwilioVerificationUrl(
@@ -869,7 +889,6 @@ export function verifyPlivoWebhook(
     try {
       const req = new URL(reconstructed);
       const base = new URL(options.publicUrl);
-      base.pathname = req.pathname;
       base.search = req.search;
       verificationUrl = base.toString();
     } catch {

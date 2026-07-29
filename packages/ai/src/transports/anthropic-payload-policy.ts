@@ -1,7 +1,8 @@
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
-} from "../internal/shared.js";
+} from "../utils/system-prompt-cache-boundary.js";
 /**
  * Anthropic-family request payload policy helpers.
  * Applies service-tier and cache-control markers only when provider endpoint
@@ -64,8 +65,7 @@ export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
 ): AnthropicEphemeralCacheControl | undefined {
-  const retention =
-    cacheRetention ?? (process.env.OPENCLAW_CACHE_RETENTION === "long" ? "long" : "short");
+  const retention = resolveCacheRetention(cacheRetention);
   if (retention === "none") {
     return undefined;
   }

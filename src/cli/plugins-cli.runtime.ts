@@ -14,6 +14,7 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
@@ -52,22 +53,12 @@ function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
 }
 
 function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
-  if (state === "fresh") {
-    return theme.success(state);
-  }
-  if (state === "stale") {
-    return theme.warn(state);
-  }
-  return theme.warn(state);
+  return state === "fresh" ? theme.success(state) : theme.warn(state);
 }
 
 function reportMissingPlugin(id: string) {
   defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
   return defaultRuntime.exit(1);
-}
-
-function matchesPluginId(plugin: { id: string }, id: string) {
-  return plugin.id === id;
 }
 
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
@@ -188,31 +179,54 @@ function collectConfiguredRuntimePluginWarnings(params: {
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginsEnableCommandUnlocked(idInput),
+  );
+}
+
+async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
   const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
   const { normalizePluginId } = await loadPluginsConfigState();
   const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
-  const { logSlotWarnings } = await loadPluginsCommandHelpers();
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
   id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+  if (!report.plugins.some((plugin) => plugin.id === id)) {
     return reportMissingPlugin(id);
   }
   const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
     updateChannelConfig: false,
   });
+  // A blocked request must not displace the active slot or rewrite persisted state.
+  if (!enableResult.enabled) {
+    defaultRuntime.log(
+      theme.warn(
+        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
+      ),
+    );
+    return;
+  }
+
+  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
+  const { logSlotWarnings } = await loadPluginsCommandHelpers();
+  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   let next: OpenClawConfig = enableResult.config;
   const slotResult = applySlotSelectionForPlugin(next, id);
   next = slotResult.config;
   await replaceConfigFile({
     nextConfig: next,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    // Source/runtime projection must retain the explicitly merged canonical
+    // entry; otherwise compatibility-only nested settings are silently lost.
+    writeOptions: {
+      explicitSetPaths: [["plugins", "entries", enableResult.pluginId]],
+    },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
@@ -224,17 +238,19 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
     },
   });
   logSlotWarnings(slotResult.warnings);
-  if (enableResult.enabled) {
-    defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
-    return;
-  }
-  defaultRuntime.log(
-    theme.warn(`Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`),
-  );
+  defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
 }
 
 /** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsDisableCommand(idInput: string): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginsDisableCommandUnlocked(idInput),
+  );
+}
+
+async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
@@ -246,7 +262,7 @@ export async function runPluginsDisableCommand(idInput: string): Promise<void> {
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
   id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+  if (!report.plugins.some((plugin) => plugin.id === id)) {
     return reportMissingPlugin(id);
   }
   const next = setPluginEnabledInConfig(cfg, id, false, {
@@ -255,6 +271,11 @@ export async function runPluginsDisableCommand(idInput: string): Promise<void> {
   await replaceConfigFile({
     nextConfig: next,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    // `id` was normalized before discovery; persist that same canonical entry
+    // so alias invocations cannot lose settings during source projection.
+    writeOptions: {
+      explicitSetPaths: [["plugins", "entries", id]],
+    },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
@@ -286,27 +307,27 @@ export async function runPluginsInstallAction(
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry, refreshPluginRegistry } =
     await import("../plugins/plugin-registry.js");
-  const cfg = getRuntimeConfig();
 
   if (opts.refresh) {
-    const index = await refreshPluginRegistry({
-      config: cfg,
-      reason: "manual",
-    });
-    if (opts.json) {
-      defaultRuntime.writeJson({
-        refreshed: true,
-        registry: index,
+    return await withPluginLifecycleLease({}, async () => {
+      const index = await refreshPluginRegistry({
+        config: getRuntimeConfig(),
+        reason: "manual",
       });
-      return;
-    }
-    const total = index.plugins.length;
-    const enabled = countEnabledPlugins(index.plugins);
-    defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
-    return;
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          refreshed: true,
+          registry: index,
+        });
+        return;
+      }
+      const total = index.plugins.length;
+      const enabled = countEnabledPlugins(index.plugins);
+      defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
+    });
   }
 
-  const inspection = await inspectPluginRegistry({ config: cfg });
+  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
   if (opts.json) {
     defaultRuntime.writeJson({
       state: inspection.state,
@@ -509,25 +530,15 @@ function classifyMarketplaceFeedFallback(error: string | undefined): string | un
   if (!text) {
     return undefined;
   }
-  if (text.includes("offline mode")) {
-    return "offline";
-  }
-  if (text.includes("checksum mismatch")) {
-    return "checksum_mismatch";
-  }
-  if (text.includes("schema")) {
-    return "schema";
-  }
-  if (/http\s+304/u.test(text)) {
-    return "not_modified";
-  }
-  if (/http\s+\d{3}/u.test(text)) {
-    return "http_error";
-  }
-  if (text.includes("timed out") || text.includes("timeout")) {
-    return "timeout";
-  }
-  return "error";
+  const categories = [
+    [/offline mode/u, "offline"],
+    [/checksum mismatch/u, "checksum_mismatch"],
+    [/schema/u, "schema"],
+    [/http\s+304/u, "not_modified"],
+    [/http\s+\d{3}/u, "http_error"],
+    [/timed out|timeout/u, "timeout"],
+  ] as const;
+  return categories.find(([pattern]) => pattern.test(text))?.[1] ?? "error";
 }
 
 function emitMarketplaceFeedTelemetry(params: {
@@ -647,10 +658,6 @@ function redactMarketplaceFeedUrl(value: string): string {
   }
 }
 
-function replaceAllLiteral(value: string, search: string, replacement: string): string {
-  return search ? value.split(search).join(replacement) : value;
-}
-
 function redactMarketplaceOutputText(
   value: string,
   rawUrls: readonly (string | undefined)[],
@@ -660,7 +667,7 @@ function redactMarketplaceOutputText(
     if (!rawUrl) {
       continue;
     }
-    redacted = replaceAllLiteral(redacted, rawUrl, redactMarketplaceFeedUrl(rawUrl));
+    redacted = redacted.replaceAll(rawUrl, () => redactMarketplaceFeedUrl(rawUrl));
   }
   return redacted;
 }
@@ -711,6 +718,37 @@ function formatMarketplaceFeedTrust(trust: MarketplaceFeedTrustPayload): string 
   return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
 }
 
+function formatMarketplaceFeedLines(
+  payload: MarketplaceRefreshPayload,
+  options: { includeChecksum?: boolean } = {},
+): string[] {
+  const lines = [
+    `${theme.muted("Source:")} ${formatMarketplaceRefreshSource(payload.source)}`,
+    `${theme.muted("Entries:")} ${payload.entries}`,
+  ];
+  if (payload.feed) {
+    lines.push(
+      `${theme.muted("Feed:")} ${payload.feed.id} ${theme.muted(`sequence ${payload.feed.sequence}`)}`,
+    );
+  }
+  if (payload.metadata?.url) {
+    lines.push(`${theme.muted("URL:")} ${payload.metadata.url}`);
+  }
+  if (options.includeChecksum && payload.metadata?.checksum) {
+    lines.push(`${theme.muted("SHA-256:")} ${payload.metadata.checksum}`);
+  }
+  if (payload.snapshot?.savedAt) {
+    lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
+  }
+  if (payload.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
+  }
+  if (payload.error) {
+    lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
+  }
+  return lines;
+}
+
 function shouldFailPinnedMarketplaceRefresh(params: {
   expectedSha256?: string;
   source: MarketplaceRefreshPayload["source"];
@@ -743,7 +781,7 @@ export async function runPluginMarketplaceEntriesCommand(
 ): Promise<void> {
   const catalog = await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
-  const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries(cfg, {
+  const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries({
     ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
     ...(opts.offline ? { offline: true } : {}),
@@ -753,9 +791,7 @@ export async function runPluginMarketplaceEntriesCommand(
   });
   const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
     const id = catalog.resolveOfficialExternalPluginId(entry);
-    const install =
-      catalog.resolveOfficialExternalPluginInstall(entry, { catalogConfig: cfg.marketplaces }) ??
-      undefined;
+    const install = catalog.resolveOfficialExternalPluginInstall(entry) ?? undefined;
     const payload: MarketplaceEntryPayload = {
       label: catalog.resolveOfficialExternalPluginLabel(entry),
     };
@@ -789,31 +825,7 @@ export async function runPluginMarketplaceEntriesCommand(
     return;
   }
 
-  const lines = [
-    theme.muted("Source:") + " " + formatMarketplaceRefreshSource(summary.source),
-    theme.muted("Entries:") + " " + String(entries.length),
-  ];
-  if (summary.feed) {
-    lines.push(
-      theme.muted("Feed:") +
-        " " +
-        summary.feed.id +
-        " " +
-        theme.muted("sequence " + String(summary.feed.sequence)),
-    );
-  }
-  if (summary.metadata?.url) {
-    lines.push(theme.muted("URL:") + " " + summary.metadata.url);
-  }
-  if (summary.snapshot?.savedAt) {
-    lines.push(theme.muted("Snapshot:") + " " + summary.snapshot.savedAt);
-  }
-  if (summary.trust) {
-    lines.push(theme.muted("Trust:") + " " + formatMarketplaceFeedTrust(summary.trust));
-  }
-  if (summary.error) {
-    lines.push(theme.muted("Fallback reason:") + " " + summary.error);
-  }
+  const lines = formatMarketplaceFeedLines(summary);
   if (entries.length > 0) {
     lines.push("");
     lines.push(...entries.map(formatMarketplaceEntryLine));
@@ -829,7 +841,7 @@ export async function runPluginMarketplaceRefreshCommand(
     await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
   const expectedSha256 = normalizeMarketplaceExpectedSha256(opts.expectedSha256);
-  const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries(cfg, {
+  const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries({
     ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
     ...(expectedSha256 ? { expectedSha256 } : {}),
@@ -863,30 +875,7 @@ export async function runPluginMarketplaceRefreshCommand(
     return;
   }
 
-  const lines = [
-    `${theme.muted("Source:")} ${formatMarketplaceRefreshSource(payload.source)}`,
-    `${theme.muted("Entries:")} ${payload.entries}`,
-  ];
-  if (payload.feed) {
-    lines.push(
-      `${theme.muted("Feed:")} ${payload.feed.id} ${theme.muted(`sequence ${payload.feed.sequence}`)}`,
-    );
-  }
-  if (payload.metadata?.url) {
-    lines.push(`${theme.muted("URL:")} ${payload.metadata.url}`);
-  }
-  if (payload.metadata?.checksum) {
-    lines.push(`${theme.muted("SHA-256:")} ${payload.metadata.checksum}`);
-  }
-  if (payload.snapshot?.savedAt) {
-    lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
-  }
-  if (payload.trust) {
-    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
-  }
-  if (payload.error) {
-    lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
-  }
+  const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
   defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
     defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));

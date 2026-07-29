@@ -100,15 +100,19 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
+function isResponsesToolCallOutput(item: ResponsesInputItem) {
+  return item.type === "function_call_output" || item.type === "custom_tool_call_output";
+}
+
 function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   return stringifyFunctionCallOutput(item.output);
 }
 
 function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   const record = item as {
@@ -124,7 +128,7 @@ function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
 }
 
 function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return false;
   }
   return item.is_error === true || item.isError === true;
@@ -270,27 +274,6 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
     }
   }
   return texts;
-}
-
-export function extractSystemInputText(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "system") {
-      continue;
-    }
-    if (typeof item.content === "string" && item.content.trim()) {
-      texts.push(item.content.trim());
-      continue;
-    }
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n");
 }
 
 export function extractAllInputTexts(input: ResponsesInputItem[]) {

@@ -58,6 +58,141 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     snippets: ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
   },
   {
+    file: "v2/AppSummary.ts",
+    snippets: [
+      "description: string | null",
+      "installUrl: string | null",
+      "category: string | null",
+    ],
+  },
+  {
+    file: "v2/AppsInstalledParams.ts",
+    snippets: ["threadId?: string | null", "forceRefresh?: boolean"],
+  },
+  {
+    file: "v2/AppsInstalledResponse.ts",
+    snippets: ["apps: Array<InstalledApp>"],
+  },
+  {
+    file: "v2/AppsReadParams.ts",
+    snippets: ["appIds: Array<string>", "includeTools?: boolean"],
+  },
+  {
+    file: "v2/AppsReadResponse.ts",
+    snippets: ["apps: Array<ConnectorMetadata>", "missingAppIds: Array<string>"],
+  },
+  {
+    file: "v2/CommandExecParams.ts",
+    snippets: [
+      "command: Array<string>",
+      "outputBytesCap?: number | null",
+      "timeoutMs?: number | null",
+      "env?: { [key in string]?: string | null } | null",
+    ],
+  },
+  {
+    file: "v2/CommandExecResponse.ts",
+    snippets: ["exitCode: number", "stdout: string", "stderr: string"],
+  },
+  {
+    file: "v2/ConfigBatchWriteParams.ts",
+    snippets: [
+      "edits: Array<ConfigEdit>",
+      "filePath?: string | null",
+      "expectedVersion?: string | null",
+      "reloadUserConfig?: boolean",
+    ],
+  },
+  {
+    file: "v2/ConfigEdit.ts",
+    snippets: ["keyPath: string", "value: JsonValue", "mergeStrategy: MergeStrategy"],
+  },
+  {
+    file: "v2/ConfigValueWriteParams.ts",
+    snippets: [
+      "keyPath: string",
+      "value: JsonValue",
+      "mergeStrategy: MergeStrategy",
+      "filePath?: string | null",
+      "expectedVersion?: string | null",
+    ],
+  },
+  {
+    file: "v2/ConfigWriteResponse.ts",
+    snippets: [
+      "status: WriteStatus",
+      "version: string",
+      "filePath: AbsolutePathBuf",
+      "overriddenMetadata: OverriddenMetadata | null",
+    ],
+  },
+  {
+    file: "v2/InstalledApp.ts",
+    snippets: ["runtimeName: string | null", "enabled: boolean", "callable: boolean"],
+  },
+  {
+    file: "v2/MarketplaceLoadErrorInfo.ts",
+    snippets: ["marketplacePath: AbsolutePathBuf", "message: string"],
+  },
+  {
+    file: "v2/MergeStrategy.ts",
+    snippets: ['"replace"', '"upsert"'],
+  },
+  {
+    file: "v2/OverriddenMetadata.ts",
+    snippets: [
+      "message: string",
+      "overridingLayer: ConfigLayerMetadata",
+      "effectiveValue: JsonValue",
+    ],
+  },
+  {
+    file: "v2/PluginSummary.ts",
+    snippets: ["remotePluginId: string | null"],
+  },
+  {
+    file: "v2/PluginListParams.ts",
+    snippets: ["forceRefetch?: boolean"],
+  },
+  {
+    file: "v2/PluginInstalledParams.ts",
+    snippets: [
+      "cwds?: Array<AbsolutePathBuf> | null",
+      "installSuggestionPluginNames?: Array<string> | null",
+    ],
+  },
+  {
+    file: "v2/PluginInstalledResponse.ts",
+    snippets: [
+      "marketplaces: Array<PluginMarketplaceEntry>",
+      "marketplaceLoadErrors: Array<MarketplaceLoadErrorInfo>",
+    ],
+  },
+  {
+    file: "v2/PluginListResponse.ts",
+    snippets: [
+      "marketplaces: Array<PluginMarketplaceEntry>",
+      "marketplaceLoadErrors: Array<MarketplaceLoadErrorInfo>",
+      "featuredPluginIds: Array<string>",
+    ],
+  },
+  {
+    file: "v2/PluginReadParams.ts",
+    snippets: ["pluginName: string"],
+  },
+  {
+    file: "v2/PluginReadResponse.ts",
+    snippets: ["plugin: PluginDetail"],
+  },
+  {
+    file: "v2/PluginInstallParams.ts",
+    snippets: ["pluginName: string"],
+  },
+  {
+    file: "v2/PluginInstallResponse.ts",
+    snippets: ["appsNeedingAuth: Array<AppSummary>"],
+  },
+  {
     file: "v2/ThreadStartParams.ts",
     snippets: [
       "permissions?: string | null",
@@ -70,8 +205,12 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     snippets: ["permissions?: string | null", "serviceTier?: string | null"],
   },
   {
+    file: "v2/WriteStatus.ts",
+    snippets: ['"ok"', '"okOverridden"'],
+  },
+  {
     file: "ReviewDecision.ts",
-    snippets: ['"approved"', '"approved_for_session"', '"denied"', '"abort"'],
+    snippets: ['"approved"', '"approved_for_session"', "denied: { rejection: string }", '"abort"'],
   },
   {
     file: "v2/PlanDeltaNotification.ts",
@@ -142,9 +281,12 @@ async function checkMaintainedProtocolTypes(sourceRoot: string): Promise<void> {
   const probe = `
 import type {
   CodexAppServerRequestParams,
+  CodexAppServerRequestResult,
+  CodexConfigEdit,
   CodexDynamicToolSpec,
   CodexDynamicToolCallParams,
   CodexErrorNotification,
+  CodexGetAccountResponse,
   CodexModelListResponse,
   CodexThreadForkParams,
   CodexThreadForkResponse,
@@ -154,11 +296,37 @@ import type {
   CodexThreadStartResponse,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
+  v2,
 } from ${JSON.stringify(protocolImport)};
+import type { AppSummary } from ${JSON.stringify(generatedImport("v2/AppSummary.ts"))};
+import type { AppsInstalledParams } from ${JSON.stringify(generatedImport("v2/AppsInstalledParams.ts"))};
+import type { AppsInstalledResponse } from ${JSON.stringify(generatedImport("v2/AppsInstalledResponse.ts"))};
+import type { AppsListParams } from ${JSON.stringify(generatedImport("v2/AppsListParams.ts"))};
+import type { AppsListResponse } from ${JSON.stringify(generatedImport("v2/AppsListResponse.ts"))};
+import type { AppsReadParams } from ${JSON.stringify(generatedImport("v2/AppsReadParams.ts"))};
+import type { AppsReadResponse } from ${JSON.stringify(generatedImport("v2/AppsReadResponse.ts"))};
+import type { CommandExecParams } from ${JSON.stringify(generatedImport("v2/CommandExecParams.ts"))};
+import type { CommandExecResponse } from ${JSON.stringify(generatedImport("v2/CommandExecResponse.ts"))};
+import type { ConfigBatchWriteParams } from ${JSON.stringify(generatedImport("v2/ConfigBatchWriteParams.ts"))};
+import type { ConfigEdit } from ${JSON.stringify(generatedImport("v2/ConfigEdit.ts"))};
+import type { ConfigValueWriteParams } from ${JSON.stringify(generatedImport("v2/ConfigValueWriteParams.ts"))};
+import type { ConfigWriteResponse } from ${JSON.stringify(generatedImport("v2/ConfigWriteResponse.ts"))};
 import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
 import type { DynamicToolSpec } from ${JSON.stringify(generatedImport("v2/DynamicToolSpec.ts"))};
 import type { ErrorNotification } from ${JSON.stringify(generatedImport("v2/ErrorNotification.ts"))};
+import type { GetAccountResponse } from ${JSON.stringify(generatedImport("v2/GetAccountResponse.ts"))};
+import type { MarketplaceLoadErrorInfo } from ${JSON.stringify(generatedImport("v2/MarketplaceLoadErrorInfo.ts"))};
 import type { ModelListResponse } from ${JSON.stringify(generatedImport("v2/ModelListResponse.ts"))};
+import type { PluginInstalledParams } from ${JSON.stringify(generatedImport("v2/PluginInstalledParams.ts"))};
+import type { PluginInstalledResponse } from ${JSON.stringify(generatedImport("v2/PluginInstalledResponse.ts"))};
+import type { PluginInstallParams } from ${JSON.stringify(generatedImport("v2/PluginInstallParams.ts"))};
+import type { PluginInstallResponse } from ${JSON.stringify(generatedImport("v2/PluginInstallResponse.ts"))};
+import type { PluginListParams } from ${JSON.stringify(generatedImport("v2/PluginListParams.ts"))};
+import type { PluginListResponse } from ${JSON.stringify(generatedImport("v2/PluginListResponse.ts"))};
+import type { PluginReadParams } from ${JSON.stringify(generatedImport("v2/PluginReadParams.ts"))};
+import type { PluginReadResponse } from ${JSON.stringify(generatedImport("v2/PluginReadResponse.ts"))};
+import type { ThreadDeleteParams } from ${JSON.stringify(generatedImport("v2/ThreadDeleteParams.ts"))};
+import type { ThreadDeleteResponse } from ${JSON.stringify(generatedImport("v2/ThreadDeleteResponse.ts"))};
 import type { ThreadForkParams } from ${JSON.stringify(generatedImport("v2/ThreadForkParams.ts"))};
 import type { ThreadForkResponse } from ${JSON.stringify(generatedImport("v2/ThreadForkResponse.ts"))};
 import type { ThreadResumeParams } from ${JSON.stringify(generatedImport("v2/ThreadResumeParams.ts"))};
@@ -169,6 +337,33 @@ import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/
 import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
 import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
 
+declare const openClawAppsInstalledParams: CodexAppServerRequestParams<"app/installed">;
+const generatedAppsInstalledParams: AppsInstalledParams = openClawAppsInstalledParams;
+declare const openClawAppsListParams: CodexAppServerRequestParams<"app/list">;
+const generatedAppsListParams: AppsListParams = openClawAppsListParams;
+declare const openClawAppsReadParams: CodexAppServerRequestParams<"app/read">;
+const generatedAppsReadParams: AppsReadParams = openClawAppsReadParams;
+declare const openClawAppSummary: v2.AppSummary;
+const generatedAppSummary: AppSummary = openClawAppSummary;
+declare const openClawCommandExecParams: CodexAppServerRequestParams<"command/exec">;
+const generatedCommandExecParams: CommandExecParams = openClawCommandExecParams;
+declare const generatedNullableCommandExecParams: CommandExecParams;
+const openClawNullableCommandExecParams: CodexAppServerRequestParams<"command/exec"> =
+  generatedNullableCommandExecParams;
+declare const openClawConfigBatchWriteParams: CodexAppServerRequestParams<"config/batchWrite">;
+const generatedConfigBatchWriteParams: ConfigBatchWriteParams = openClawConfigBatchWriteParams;
+declare const openClawConfigEdit: CodexConfigEdit;
+const generatedConfigEdit: ConfigEdit = openClawConfigEdit;
+declare const openClawConfigValueWriteParams: CodexAppServerRequestParams<"config/value/write">;
+const generatedConfigValueWriteParams: ConfigValueWriteParams = openClawConfigValueWriteParams;
+declare const openClawPluginInstalledParams: CodexAppServerRequestParams<"plugin/installed">;
+const generatedPluginInstalledParams: PluginInstalledParams = openClawPluginInstalledParams;
+declare const openClawPluginInstallParams: CodexAppServerRequestParams<"plugin/install">;
+const generatedPluginInstallParams: PluginInstallParams = openClawPluginInstallParams;
+declare const openClawPluginListParams: CodexAppServerRequestParams<"plugin/list">;
+const generatedPluginListParams: PluginListParams = openClawPluginListParams;
+declare const openClawPluginReadParams: CodexAppServerRequestParams<"plugin/read">;
+const generatedPluginReadParams: PluginReadParams = openClawPluginReadParams;
 declare const openClawDynamicToolSpec: CodexDynamicToolSpec;
 const generatedDynamicToolSpec: DynamicToolSpec = openClawDynamicToolSpec;
 declare const openClawTurnEnvironmentParams: CodexTurnEnvironmentParams;
@@ -179,18 +374,69 @@ declare const openClawThreadResumeParams: CodexThreadResumeParams;
 const generatedThreadResumeParams: ThreadResumeParams = openClawThreadResumeParams;
 declare const openClawThreadForkParams: CodexThreadForkParams;
 const generatedThreadForkParams: ThreadForkParams = openClawThreadForkParams;
+declare const openClawThreadDeleteParams: CodexAppServerRequestParams<"thread/delete">;
+const generatedThreadDeleteParams: ThreadDeleteParams = openClawThreadDeleteParams;
 declare const openClawTurnInterruptParams: CodexAppServerRequestParams<"turn/interrupt">;
 const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
 declare const openClawTurnStartParams: CodexTurnStartParams;
 const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;
 
+declare const generatedAppsInstalledResponse: AppsInstalledResponse;
+const openClawAppsInstalledResponse: CodexAppServerRequestResult<"app/installed"> =
+  generatedAppsInstalledResponse;
+declare const generatedAppsListResponse: AppsListResponse;
+const openClawAppsListResponse: CodexAppServerRequestResult<"app/list"> =
+  generatedAppsListResponse;
+declare const generatedAppsReadResponse: AppsReadResponse;
+const openClawAppsReadResponse: CodexAppServerRequestResult<"app/read"> =
+  generatedAppsReadResponse;
+declare const generatedAppSummaryResponse: AppSummary;
+const openClawAppSummaryResponse: v2.AppSummary = generatedAppSummaryResponse;
+declare const generatedCommandExecResponse: CommandExecResponse;
+const openClawCommandExecResponse: CodexAppServerRequestResult<"command/exec"> =
+  generatedCommandExecResponse;
+declare const generatedConfigWriteResponse: ConfigWriteResponse;
+const openClawConfigBatchWriteResponse: CodexAppServerRequestResult<"config/batchWrite"> =
+  generatedConfigWriteResponse;
+const openClawConfigValueWriteResponse: CodexAppServerRequestResult<"config/value/write"> =
+  generatedConfigWriteResponse;
+const generatedExactConfigBatchWriteResponse: ConfigWriteResponse =
+  openClawConfigBatchWriteResponse;
+const generatedExactConfigValueWriteResponse: ConfigWriteResponse =
+  openClawConfigValueWriteResponse;
+declare const generatedPluginInstalledResponse: PluginInstalledResponse;
+const openClawPluginInstalledResponse: CodexAppServerRequestResult<"plugin/installed"> =
+  generatedPluginInstalledResponse;
+const generatedPluginInstalledMarketplaceLoadErrors: MarketplaceLoadErrorInfo[] =
+  openClawPluginInstalledResponse.marketplaceLoadErrors;
+type InstalledPluginResponseHasNoFeaturedCatalog =
+  "featuredPluginIds" extends keyof v2.PluginInstalledResponse ? never : true;
+const installedPluginResponseHasNoFeaturedCatalog: InstalledPluginResponseHasNoFeaturedCatalog =
+  true;
+declare const generatedPluginInstallResponse: PluginInstallResponse;
+const openClawPluginInstallResponse: CodexAppServerRequestResult<"plugin/install"> =
+  generatedPluginInstallResponse;
+declare const generatedPluginListResponse: PluginListResponse;
+const openClawPluginListResponse: CodexAppServerRequestResult<"plugin/list"> =
+  generatedPluginListResponse;
+const generatedPluginListMarketplaceLoadErrors: MarketplaceLoadErrorInfo[] =
+  openClawPluginListResponse.marketplaceLoadErrors;
+const generatedPluginListFeaturedPluginIds: string[] = openClawPluginListResponse.featuredPluginIds;
+declare const generatedPluginReadResponse: PluginReadResponse;
+const openClawPluginReadResponse: CodexAppServerRequestResult<"plugin/read"> =
+  generatedPluginReadResponse;
 declare const generatedDynamicToolCallParams: Omit<DynamicToolCallParams, "arguments">;
 const openClawDynamicToolCallParams: Omit<CodexDynamicToolCallParams, "arguments"> =
   generatedDynamicToolCallParams;
 declare const generatedErrorNotification: ErrorNotification;
 const openClawErrorNotification: CodexErrorNotification = generatedErrorNotification;
+declare const generatedGetAccountResponse: GetAccountResponse;
+const openClawGetAccountResponse: CodexGetAccountResponse = generatedGetAccountResponse;
 declare const generatedModelListResponse: ModelListResponse;
 const openClawModelListResponse: CodexModelListResponse = generatedModelListResponse;
+declare const generatedThreadDeleteResponse: ThreadDeleteResponse;
+const openClawThreadDeleteResponse: CodexAppServerRequestResult<"thread/delete"> =
+  generatedThreadDeleteResponse;
 
 // Thread and turn bodies are normalized behind checked-in JSON schemas. Their
 // raw generated shapes must not be confused with the projector-facing types.

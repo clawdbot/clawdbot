@@ -12,6 +12,7 @@ import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
+type LaunchdHandoffMode = LaunchdRestartHandoffMode | "park";
 
 type LaunchdRestartHandoffResult = Result<Promise<boolean>, string>;
 
@@ -95,7 +96,7 @@ function resolveLaunchdRestartTarget(
 }
 
 function buildLaunchdRestartScript(
-  mode: LaunchdRestartHandoffMode,
+  mode: LaunchdHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
 ): string {
   // The detached shell waits for the caller before touching launchd so the
@@ -109,6 +110,26 @@ if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   done
 fi
 `;
+
+  if (mode === "park") {
+    return `service_target="$1"
+domain="$2"
+plist_path="$3"
+${waitForCallerPid}
+status=0
+if launchctl bootout "$service_target"; then
+  status=0
+else
+  status=$?
+fi
+if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw service park done source=handoff interactive=0\\n' "$(date -u +%FT%TZ)" >&2
+else
+  printf '[%s] openclaw service park failed source=handoff status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
+fi
+exit "$status"
+`;
+  }
 
   if (mode === "kickstart") {
     // Restart is explicit operator intent; undo any previous `launchctl disable`.
@@ -231,9 +252,9 @@ exit "$status"
 `;
 }
 
-export function scheduleDetachedLaunchdRestartHandoff(params: {
+function scheduleDetachedLaunchdHandoff(params: {
   env?: Record<string, string | undefined>;
-  mode: LaunchdRestartHandoffMode;
+  mode: LaunchdHandoffMode;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
   const target = resolveLaunchdRestartTarget(params.env);
@@ -275,4 +296,19 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
   } catch (error) {
     return err(formatErrorMessage(error));
   }
+}
+
+export function scheduleDetachedLaunchdRestartHandoff(params: {
+  env?: Record<string, string | undefined>;
+  mode: LaunchdRestartHandoffMode;
+  waitForPid?: number;
+}): LaunchdRestartHandoffResult {
+  return scheduleDetachedLaunchdHandoff(params);
+}
+
+export function scheduleDetachedLaunchdMaintenancePark(params: {
+  env?: Record<string, string | undefined>;
+  waitForPid?: number;
+}): LaunchdRestartHandoffResult {
+  return scheduleDetachedLaunchdHandoff({ ...params, mode: "park" });
 }

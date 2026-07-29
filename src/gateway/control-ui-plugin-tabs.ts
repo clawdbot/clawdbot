@@ -1,8 +1,12 @@
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
+// Read the session-extension registry (gateway-pinned at startup), not the
+// mutable active registry: agent-turn standalone loads swap the active registry
+// for one without control-UI descriptors, which would empty hello for every
+// connection made after the first agent run.
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import {
   authorizeOperatorScopesForRequiredScope,
@@ -105,7 +109,7 @@ export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
 ): ControlUiPluginTab[] {
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   return projectControlUiPluginTabs(registry?.controlUiDescriptors ?? [], scopes).flatMap((tab) => {
     const route = registry ? findControlUiTabGatewayRoute(registry, tab) : undefined;
     if (route === null) {
@@ -123,7 +127,7 @@ export function listControlUiPluginTabs(
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
-  const entries = getActivePluginRegistry()?.controlUiDescriptors ?? [];
+  const entries = getActivePluginSessionExtensionRegistry()?.controlUiDescriptors ?? [];
   return entries
     .flatMap((entry) => {
       const descriptor = entry.descriptor;
@@ -152,7 +156,7 @@ export function listControlUiPluginWidgetKinds(
 export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   if (!registry || !authorizeOperatorScopesForRequiredScope(READ_SCOPE, callerScopes).allowed) {
     return [];
   }

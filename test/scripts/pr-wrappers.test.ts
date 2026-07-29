@@ -3,11 +3,13 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,10 +23,12 @@ function readScript(path: string): string {
 const canonicalMismatchMessage = (repo: string) =>
   [
     "scripts/pr implementation differs between this worktree and the canonical checkout, and does not match origin/main.",
+    "differing wrapper components vs origin/main: scripts/pr-lib",
     `Refusing to silently substitute canonical wrapper code from: ${repo}`,
     "Run scripts/pr from a checkout whose wrapper matches the canonical checkout or a fetched origin/main.",
     "",
   ].join("\n");
+const itPosix = process.platform === "win32" ? it.skip : it;
 
 function makeMismatchedWrapperRepo() {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "openclaw-pr-dev-wrapper-")));
@@ -97,12 +101,23 @@ function makeMismatchedWrapperRepo() {
   const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
 
   return {
+    bin,
     canonical,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
     env: fixtureEnv,
     linked,
     localRevision,
   };
+}
+
+function resolveCommand(command: string): string {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) {
+      return realpathSync(candidate);
+    }
+  }
+  throw new Error(`command not found in test PATH: ${command}`);
 }
 
 function parseSubcommandClassifications(script: string): Map<string, string> {
@@ -155,13 +170,40 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("scripts/pr review-init <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr ci-dispatch <PR>");
-    expect(script).toContain("scripts/pr merge-run <PR>");
+    expect(script).toContain("scripts/pr merge-run <PR> [--auto-merge]");
+    expect(script).toContain("OPENCLAW_PR_AUTO_MERGE=1 is equivalent");
+    expect(script).toContain("Required commands: git, gh, jq, rg (ripgrep), pnpm, node.");
     expect(script).toContain('review_init "$pr"');
     expect(script).toContain('prepare_run "$pr"');
     expect(script).toContain('ci_dispatch "$pr"');
-    expect(script).toContain('merge_run "$pr"');
+    expect(script).toContain('merge_run "$pr" "$auto_merge"');
     expect(script).toContain('require_main_target_pr "${1-}"');
     expect(script).toContain("only support PRs targeting main");
+  });
+
+  itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      rmSync(join(fixture.bin, "rg"));
+      for (const command of ["bash", "basename", "dirname", "git", "jq", "pnpm", "node"]) {
+        symlinkSync(resolveCommand(command), join(fixture.bin, command));
+      }
+
+      const result = spawnSync(join(fixture.canonical, "scripts", "pr"), ["ls"], {
+        cwd: fixture.canonical,
+        encoding: "utf8",
+        env: {
+          ...fixture.env,
+          PATH: fixture.bin,
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Missing required command(s): rg");
+      expect(result.stderr).toContain("Install ripgrep and retry:");
+    } finally {
+      fixture.cleanup();
+    }
   });
 
   it("classifies every dispatched subcommand", () => {
@@ -261,6 +303,8 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("--merge");
     expect(script).toContain("--rebase");
     expect(script).toContain('echo "Merged via $merge_label."');
+    expect(script).toContain("--auto");
+    expect(script).toContain('--match-head-commit "$PREP_HEAD_SHA"');
   });
 
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {
@@ -379,6 +423,7 @@ describe("scripts/pr wrappers", () => {
 
     expect(result.stderr).not.toContain("Refusing to silently substitute");
     expect(result.stderr).not.toContain("scripts/pr implementation differs");
+    expect(result.stderr).not.toContain("differing wrapper components vs origin/main");
     expect(result.stderr).not.toContain("uncommitted changes");
 
     // A local branch literally named "origin/main" must not spoof the trust

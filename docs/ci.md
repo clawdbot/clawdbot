@@ -34,11 +34,11 @@ dispatch.
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                 | Node-relevant changes                          |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                               | Control UI i18n-relevant changes and manual CI |
 | `checks-fast-core`                 | Fast Linux correctness lanes: suppression-baseline max-lines ratchet, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                  | Node-relevant changes                          |
-| `qa-smoke-ci-profile`              | Two self-contained balanced parts of the bounded automatic QA Smoke representative set; full taxonomy coverage remains available through explicit QA profiles                                                         | Node-relevant changes                          |
+| `qa-smoke-ci-profile`              | Self-contained balanced parts of the automatic QA Smoke coverage set; full taxonomy coverage remains available through explicit QA profiles                                                                           | Node-relevant changes                          |
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                   | Node-relevant changes                          |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                  | Node-relevant changes                          |
 | `checks-node-*`                    | Changed-target Node tests on pull requests; full core shards on `main`, manual, release, and broad-fallback runs                                                                                                      | Node-relevant changes                          |
-| `check-*`                          | Sharded main local gate equivalent: guards, shrinkwrap, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                   | Node-relevant changes                          |
+| `check-*`                          | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                | Node-relevant changes                          |
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture | Node-relevant changes                          |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                            | Manual CI dispatch for releases                |
 | `check-docs`                       | Docs formatting, lint, and broken-link checks                                                                                                                                                                         | Docs changed (PRs and manual dispatch)         |
@@ -152,6 +152,8 @@ General activity is observation, not delivery-by-default. The ClawSweeper agent 
 
 Treat GitHub titles, comments, bodies, review text, branch names, and commit messages as untrusted data throughout this path. They are input for summarization and triage, not instructions for the workflow or agent runtime.
 
+Barnacle treats bug-labeled issues as verification candidates rather than inactivity-close candidates. It may add the `stale` label, which dispatches one exact ClawSweeper review, but it cannot close that issue. ClawSweeper may then apply an evidence-backed resolution; a proven fix on current `main` closes as completed, while current or inconclusive bugs stay open. The stale workflow also audits recent close events and fails when a Barnacle identity closes a bug as `not_planned`.
+
 ## Manual dispatches
 
 Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI/native app i18n. Automatic source PRs verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Full native parity remains blocking for generated-artifact PRs, manual CI, Full Release Validation, and release prep. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
@@ -164,14 +166,15 @@ gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_andro
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
-The monthly npm-only extended-stable path is the exception: dispatch both `OpenClaw NPM
-Release` preflight and `Full Release Validation` from the exact
-`extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
-direct npm publish run. See [Monthly npm-only extended-stable
-publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
-the commands, exact identity requirements, registry readback, and selector
-repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
-Release, private dist-tag, or other platform publication.
+Gateway extended-stable runs npm preflight, Full Release Validation, and plugin
+npm release from `extended-stable/YYYY.M.33`; core publish consumes those three
+run IDs plus the validation attempt. `release-ci/*` evidence is invalid because
+publish binds every run to the canonical branch and release SHA. The tag
+publishes Gateway images and only the `extended-stable*` aliases; the path skips
+the regular orchestrator and its ClawHub, native-app, GitHub Release, website,
+and private dist-tag surfaces. See [Monthly Gateway extended-stable
+publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
+for commands and recovery.
 
 ## Runners
 
@@ -179,7 +182,7 @@ Release, private dist-tag, or other platform publication.
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ubuntu-24.04`                  | `security-fast`, manual CI dispatch and non-canonical repository fallbacks, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow                                |
 | `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `pnpm-store-warmup`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, `check-docs`, and `skills-python` |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                             |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, the serial Chromium/Vite `checks-ui-e2e` lane, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                              |
 | `blacksmith-16vcpu-ubuntu-2404` | Automatic QA Smoke CI shards, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                                                                                                  |
 | `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                  |
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                |
@@ -206,6 +209,22 @@ concurrent repositories, retries, and burst overlap.
 The changed-target PR plan reduces the common Node test burst from 14 Blacksmith registrations to one. Broad-risk PRs keep the 14-registration compact fallback, so the worst case does not increase.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
+
+## Surface ratchets
+
+Two shrink-only budgets guard the configuration surface. Both fail CI on growth
+until the budget file is consciously updated in the same PR, and both demand a
+ratchet-down when cleanup lowers the real count.
+
+- `config/env-var-count-budget.txt` caps the number of distinct `OPENCLAW_*`
+  names in production source under `src/`, `packages/`, and `extensions/`
+  (tests and QA Lab excluded). Checked by `node scripts/check-env-var-count.mjs`.
+  Removing env vars: lower the number in the same PR. Adding one is a
+  config-surface decision — justify it in the PR body.
+- `docs/.generated/config-baseline.counts.json` caps the per-kind
+  (core/channel/plugin) `openclaw.json` schema entry counts. Checked by
+  `pnpm config:docs:check`; regenerate with `pnpm config:docs:gen` after any
+  schema change.
 
 ## Local equivalents
 
@@ -331,7 +350,7 @@ the beta profile can opt in with `run_release_soak=true`.
 
 The umbrella records the dispatched child run ids, and the final `Verify full validation` job re-checks current child run conclusions and appends slowest-job tables for each child run. If a child workflow is rerun and turns green, rerun only the parent verifier job to refresh the umbrella result and timing summary.
 
-For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `performance` for only the OpenClaw Performance child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix. For one failed cross-OS lane, combine `rerun_group=cross-os` with `cross_os_suite_filter`, for example `windows/packaged-upgrade`; long cross-OS commands emit heartbeat lines and packaged-upgrade summaries include per-phase timings. Selected Matrix and Telegram QA lanes block normal release validation, as does the standard runtime tool coverage gate. QA parity, runtime parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory.
+For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `performance` for only the OpenClaw Performance child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix. For one failed cross-OS lane, combine `rerun_group=cross-os` with `cross_os_suite_filter`, for example `windows/packaged-upgrade`; long cross-OS commands emit heartbeat lines and packaged-upgrade summaries include per-phase timings. Selected Matrix and Telegram QA lanes block normal release validation, as does the core runtime-pair tool coverage gate. QA parity, runtime parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 
@@ -415,7 +434,7 @@ Package Acceptance has bounded legacy-compatibility windows for already-publishe
 - plugin smokes may read legacy install-record locations or accept missing marketplace install-record persistence;
 - `plugin-update` may allow config metadata migration while still requiring the install record and no-reinstall behavior to stay unchanged.
 
-The published `2026.4.26` package may also warn for local build metadata stamp files that were already shipped, and packages through `2026.5.20` may warn instead of fail when `npm-shrinkwrap.json` is missing. Later packages must satisfy the modern contracts; the same conditions fail instead of warn or skip.
+The published `2026.4.26` package may also warn for local build metadata stamp files that were already shipped. Current package validators require both npm lockfile formats to be absent from new tarballs.
 
 ### Examples
 
@@ -547,9 +566,7 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 
 - The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out mock parity plus live Matrix, Telegram, Discord, WhatsApp, and Slack jobs. Live jobs use the `qa-live-shared` environment; Telegram, Discord, WhatsApp, and Slack use Convex leases, while Matrix provisions disposable local credentials.
 
-Release checks run Matrix and Telegram live transport lanes with the deterministic mock provider and mock-qualified models (`mock-openai/gpt-5.6-luna` and `mock-openai/gpt-5.6-luna-alt`) so the channel contract is isolated from live model latency and normal provider-plugin startup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
-
-Scheduled and release Matrix gates use the shared QA Lab suite host and live adapter with the release scenarios. The CLI default and manual workflow input remain `all`; manual `all` dispatches fan out the `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` profiles so the 93-scenario proof stays within per-job timeouts. Focused manual dispatches select `fast`, `release`, or `transport` in one job.
+Scheduled, manual, and release Matrix checks use the deterministic mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same deterministic model boundary. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
@@ -632,12 +649,24 @@ gh workflow run duplicate-after-merge.yml \
 
 ## Local check gates and changed routing
 
+### Config baseline count ratchet
+
+`pnpm config:docs:check` rejects undocumented config-surface growth and corrupt or stale count snapshots. When a reviewed product change intentionally adds schema paths, run `pnpm config:docs:gen`, inspect the core/channel/plugin count deltas and generated SHA-256 files, and commit the conscious baseline bump with the schema, help, labels, migration, and tests. Do not hand-edit the counts file to bypass the ratchet.
+
+Config authors must also tier new leaves for Settings. Add `advanced: false` or
+`advanced: true` at the leaf, or place the key beneath an ancestor whose tier
+all descendants should inherit. Unclassified roots fail the schema quality
+test with copy-paste stubs; paths without an ancestor are advanced by default.
+The curated common-leaf snapshot makes intentional tier changes visible in
+review.
+
 Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local check gate is stricter about architecture boundaries than the broad CI platform scope:
 
 - core production changes run core prod and core test typecheck plus core lint/guards;
 - core test-only changes run only core test typecheck plus core lint;
 - extension production changes run extension prod and extension test typecheck plus extension lint;
 - extension test-only changes run extension test typecheck plus extension lint;
+- bundled channel manifests, package metadata, config schemas, UI hints, and generator owners also run the bundled channel config metadata drift check;
 - public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts (Vitest extension sweeps stay explicit test work);
 - release metadata-only version bumps run targeted version/config/root-dependency checks;
 - unknown root/config changes fail safe to all check lanes.

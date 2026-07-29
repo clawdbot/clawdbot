@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatSessionEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -27,12 +26,64 @@ class ChatWorkingIndicatorTest {
       counts[stance] = counts.getOrDefault(stance, 0) + 1
     }
 
-    assertEquals(660, counts[WorkingClawStance.Default])
-    assertEquals(200, counts[WorkingClawStance.Southpaw])
+    assertEquals(1_000, counts.values.sum())
+    assertEquals(WorkingClawStance.entries.toSet(), counts.keys)
+    assertEquals(630, counts[WorkingClawStance.Default])
+    assertEquals(190, counts[WorkingClawStance.Southpaw])
     assertEquals(50, counts[WorkingClawStance.Flurry])
     assertEquals(40, counts[WorkingClawStance.Spin])
     assertEquals(30, counts[WorkingClawStance.Shadowbox])
     assertEquals(20, counts[WorkingClawStance.Backflip])
+    assertEquals(20, counts[WorkingClawStance.Zen])
+    assertEquals(10, counts[WorkingClawStance.Drummer])
+    assertEquals(10, counts[WorkingClawStance.Peekaboo])
+  }
+
+  @Test
+  fun newStancesUseSpecifiedCyclesAndKeyframePoses() {
+    assertEquals(6_000L, workingClawCycleMs(WorkingClawStance.Zen))
+    assertPose(
+      workingClawPose(WorkingClawStance.Zen, 0.30f),
+      scale = 1.08f,
+      jawRotation = -10f,
+    )
+    assertPose(
+      workingClawPose(WorkingClawStance.Zen, 0.70f),
+      jawRotation = -24f,
+    )
+    assertPose(
+      workingClawPose(WorkingClawStance.Zen, 0.76f),
+      scale = 1f,
+      jawRotation = 2f,
+    )
+
+    assertEquals(1_200L, workingClawCycleMs(WorkingClawStance.Drummer))
+    assertEquals(-20f, workingClawPose(WorkingClawStance.Drummer, 0.10f).jawRotation, 0.001f)
+    assertPose(
+      workingClawPose(WorkingClawStance.Drummer, 0.15f),
+      rotationZ = -8f,
+      jawRotation = 2f,
+    )
+    assertEquals(-20f, workingClawPose(WorkingClawStance.Drummer, 0.50f).jawRotation, 0.001f)
+    assertPose(
+      workingClawPose(WorkingClawStance.Drummer, 0.55f),
+      rotationZ = 8f,
+      jawRotation = 2f,
+    )
+
+    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.Peekaboo))
+    assertPose(
+      workingClawPose(WorkingClawStance.Peekaboo, 0.62f),
+      translationYDp = 5f,
+      scale = 0.72f,
+      jawRotation = -2f,
+    )
+    assertPose(
+      workingClawPose(WorkingClawStance.Peekaboo, 0.78f),
+      translationYDp = -1.5f,
+      scale = 1.06f,
+      jawRotation = -28f,
+    )
   }
 
   @Test
@@ -60,69 +111,65 @@ class ChatWorkingIndicatorTest {
   }
 
   @Test
-  fun provisionalRunAdoptsAuthoritativeIdentityWithoutChangingLocalStart() {
+  fun ackRekeyKeepsOptimisticClockAndLocalStart() {
     val tracker = ChatWorkingRunTracker("agent:main:main")
-    val provisional = requireNotNull(tracker.resolve(indicatorVisible = true, session = null, nowElapsedMs = 5_000L))
-
+    val provisional =
+      requireNotNull(
+        tracker.resolve(
+          indicatorVisible = true,
+          clockKey = "message-1",
+          authoritativeRunId = "client-run",
+          nowElapsedMs = 5_000L,
+          outputTokens = null,
+        ),
+      )
     val authoritative =
       requireNotNull(
         tracker.resolve(
           indicatorVisible = true,
-          session =
-            ChatSessionEntry(
-              key = "agent:main:main",
-              updatedAtMs = 6_000L,
-              status = "running",
-              startedAt = 4_000L,
-              activeRunIds = listOf("run-1"),
-            ),
-          nowElapsedMs = 6_000L,
+          clockKey = "message-1",
+          authoritativeRunId = "server-run",
+          nowElapsedMs = 8_000L,
+          outputTokens = 40L,
         ),
       )
 
-    assertEquals(provisional.key, authoritative.key)
+    assertEquals(provisional.clockKey, authoritative.clockKey)
     assertEquals(5_000L, authoritative.observedAtElapsedMs)
-    assertEquals("run-1", authoritative.authoritativeRunId)
-    assertEquals(4_000L, authoritative.authoritativeStartedAtMs)
+    assertEquals("server-run", authoritative.authoritativeRunId)
+    assertEquals(40L, authoritative.outputTokens)
   }
 
   @Test
-  fun authoritativeReplacementGetsANewRunIdentity() {
+  fun serverRunReplacementGetsANewClock() {
     val tracker = ChatWorkingRunTracker("agent:main:main")
     val first =
       requireNotNull(
-        tracker.resolve(
-          indicatorVisible = true,
-          session =
-            ChatSessionEntry(
-              key = "agent:main:main",
-              updatedAtMs = 1L,
-              status = "running",
-              startedAt = 1_000L,
-              activeRunIds = listOf("run-1"),
-            ),
-          nowElapsedMs = 7_000L,
-        ),
+        tracker.resolve(true, "run-1", "run-1", 7_000L, null),
       )
     val replacement =
       requireNotNull(
-        tracker.resolve(
-          indicatorVisible = true,
-          session =
-            ChatSessionEntry(
-              key = "agent:main:main",
-              updatedAtMs = 2L,
-              status = "running",
-              startedAt = 2_000L,
-              activeRunIds = listOf("run-2"),
-            ),
-          nowElapsedMs = 9_000L,
-        ),
+        tracker.resolve(true, "run-2", "run-2", 9_000L, null),
       )
 
-    assertEquals("run-1", first.key)
-    assertEquals("run-2", replacement.key)
+    assertEquals("run-1", first.clockKey)
+    assertEquals("run-2", replacement.clockKey)
     assertEquals(9_000L, replacement.observedAtElapsedMs)
-    assertEquals(2_000L, replacement.authoritativeStartedAtMs)
+  }
+
+  private fun assertPose(
+    pose: WorkingClawPose,
+    rotationZ: Float = 0f,
+    translationXDp: Float = 0f,
+    translationYDp: Float = 0f,
+    scale: Float = 1f,
+    jawRotation: Float = -10f,
+  ) {
+    assertEquals(rotationZ, pose.rotationZ, 0.001f)
+    assertEquals(0f, pose.rotationY, 0.001f)
+    assertEquals(translationXDp, pose.translationXDp, 0.001f)
+    assertEquals(translationYDp, pose.translationYDp, 0.001f)
+    assertEquals(scale, pose.scale, 0.001f)
+    assertEquals(jawRotation, pose.jawRotation, 0.001f)
   }
 }

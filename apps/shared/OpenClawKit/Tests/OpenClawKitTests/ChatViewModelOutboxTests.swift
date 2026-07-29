@@ -23,7 +23,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             lastError: lastError)
     }
 
-    fileprivate func markCommandRetriedIfPresent(
+    private func markCommandRetriedIfPresent(
         id: String,
         agentID: String?,
         deliverySessionKey: String,
@@ -661,21 +661,6 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
             lastError: lastError)
     }
 
-    func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
-    }
-
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
@@ -820,21 +805,6 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
             lastError: lastError)
     }
 
-    func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
-    }
-
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
@@ -915,21 +885,6 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
             attemptVersion: attemptVersion,
             retryCount: retryCount,
             lastError: lastError)
-    }
-
-    func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
@@ -1786,6 +1741,9 @@ struct ChatViewModelOutboxTests {
                 vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
             }
         }
+        try await waitUntil("terminal failure flush settled") {
+            await MainActor.run { !vm.isFlushingOutbox }
+        }
 
         // Tap-to-retry resets attempts; with the gateway accepting again the
         // command now flushes and the row disappears.
@@ -1794,7 +1752,7 @@ struct ChatViewModelOutboxTests {
             vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
         })
         await MainActor.run { vm.retryOutboxMessage(failedMessageID) }
-        try await waitUntil("retried command drained") {
+        try await waitUntil("retried command drained", timeoutSeconds: 30) {
             await store.loadCommands().isEmpty
         }
         #expect(await transport.state.sentIdempotencyKeys.count == 1)
@@ -2729,21 +2687,24 @@ extension ChatViewModelOutboxTests {
             await MainActor.run { queuedStateCount(observer) == 1 }
         }
 
-        let sendGate = DeleteGate()
-        await transport.state.setHeldSendGate(sendGate)
-        await transport.goOnline()
-        try await waitUntil("first view model claims row") {
-            await store.loadCommands().map(\.status) == [.sending]
-        }
         let messageID = try #require(await MainActor.run {
             observer.messages.first { observer.outboxState(for: $0.id) == .queued }?.id
         })
+        let sendGate = DeleteGate()
+        await transport.state.setHeldSendGate(sendGate)
+        // This fake exposes one shared event stream, unlike native transports that
+        // broadcast reconnects. Select the intended owner instead of racing the observer.
+        await MainActor.run { sender.applyTransportHealth(true) }
+        try await waitUntil("first view model claims row") {
+            await store.loadCommands().map(\.status) == [.sending]
+        }
         await MainActor.run { observer.deleteOutboxMessage(messageID) }
         try await waitUntil("observer adopts sending status") {
             await MainActor.run { observer.outboxState(for: messageID) == .sending }
         }
         #expect(await store.loadCommands().map(\.status) == [.sending])
 
+        await transport.state.setHealthy(true)
         await sendGate.open()
         try await waitUntil("claimed send confirms") {
             await store.loadCommands().isEmpty

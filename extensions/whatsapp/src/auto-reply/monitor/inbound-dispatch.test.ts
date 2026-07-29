@@ -278,6 +278,7 @@ function expectRememberSentContextFields(
 type BufferedReplyParams = Parameters<typeof createWhatsAppReplyPlan>[0];
 type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context">> & {
   context?: Partial<BufferedReplyParams["context"]>;
+  cancelAfterPrepare?: (payload: CapturedReplyPayload) => boolean;
 };
 
 function finalizedContext(
@@ -319,6 +320,7 @@ function unacceptedDeliveryResult() {
 }
 
 async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
+  const { cancelAfterPrepare, ...paramOverrides } = overrides;
   const params: BufferedReplyParams = {
     cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
     connectionId: "conn",
@@ -336,22 +338,86 @@ async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
     shouldClearGroupHistory: false,
   };
 
-  return runWhatsAppReplyPlan({
-    ...params,
-    ...overrides,
-    context: finalizedContext({ ...params.context, ...overrides.context }),
-  });
+  return runWhatsAppReplyPlan(
+    {
+      ...params,
+      ...paramOverrides,
+      context: finalizedContext({ ...params.context, ...paramOverrides.context }),
+    },
+    { cancelAfterPrepare },
+  );
 }
 
-async function runWhatsAppReplyPlan(params: BufferedReplyParams): Promise<boolean> {
+async function runWhatsAppReplyPlan(
+  params: BufferedReplyParams,
+  options: Pick<BufferedReplyOverrides, "cancelAfterPrepare"> = {},
+): Promise<boolean> {
   const plan = createWhatsAppReplyPlan(params);
   const dispatchResult = await dispatchReplyWithBufferedBlockDispatcherMock({
     ctx: params.context,
     dispatcherOptions: {
       ...plan.dispatcherOptions,
-      deliver: plan.delivery.deliver as NonNullable<
-        NonNullable<CapturedDispatchParams["dispatcherOptions"]>["deliver"]
-      >,
+      deliver: async (payload, info) => {
+        // The dispatcher fixture retains null as the explicit no-native-reply sentinel.
+        const deliveryInput = payload as unknown as Parameters<typeof plan.delivery.deliver>[0];
+        const prepared = plan.delivery.preparePayload
+          ? await plan.delivery.preparePayload(deliveryInput, info)
+          : deliveryInput;
+        if (prepared === null) {
+          const result = {
+            visibleReplySent: false,
+            suppression: { reason: "no_visible_payload" as const },
+          };
+          await plan.delivery.onDelivered?.(deliveryInput, info, result);
+          return result;
+        }
+        const durable =
+          typeof plan.delivery.durable === "function"
+            ? await plan.delivery.durable(prepared, info)
+            : plan.delivery.durable;
+        if (durable) {
+          const outcome = requireRecord(
+            await deliverInboundReplyWithMessageSendContextMock({
+              cfg: params.cfg,
+              channel: "whatsapp",
+              accountId: params.route.accountId,
+              agentId: params.route.agentId,
+              ctxPayload: params.context,
+              payload: prepared,
+              info,
+              ...durable,
+            }),
+            "durable outcome",
+          );
+          if (outcome.status === "failed") {
+            const error = outcome.error;
+            if (outcome.sentBeforeError === true && error && typeof error === "object") {
+              Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+            }
+            plan.delivery.onError?.(error, info);
+            throw error;
+          }
+          if (outcome.status === "handled_visible" || outcome.status === "handled_no_send") {
+            const result = outcome.delivery as Awaited<ReturnType<typeof plan.delivery.deliver>>;
+            await plan.delivery.onDelivered?.(prepared, info, result);
+            return result;
+          }
+        }
+        if (options.cancelAfterPrepare?.(prepared)) {
+          const result = {
+            visibleReplySent: false,
+            suppression: { reason: "cancelled_by_message_sending_hook" as const },
+          };
+          await plan.delivery.onDelivered?.(prepared, info, result);
+          return result;
+        }
+        const result = await plan.delivery.deliver(prepared, info);
+        if (result?.finalization) {
+          void result.finalization.catch(() => undefined);
+        }
+        await plan.delivery.onDelivered?.(prepared, info, result);
+        return result;
+      },
       onError: plan.delivery.onError,
     },
     replyOptions: plan.replyOptions,
@@ -468,10 +534,13 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expectRecordFields(requireRecord(ctx, "remote media inbound context"), {
-      MediaUrl: "https://media.example/image.jpg",
-      MediaUrls: ["https://media.example/image.jpg"],
-      MediaType: "image/jpeg",
+    expect(requireRecord(ctx, "remote media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          url: "https://media.example/image.jpg",
+          contentType: "image/jpeg",
+        }),
+      ],
     });
   });
 
@@ -623,7 +692,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         payload: {
           body: "<contact>",
-          untrustedStructuredContext: [
+          channelStructuredContext: [
             {
               label: "WhatsApp contact",
               source: "whatsapp",
@@ -639,7 +708,7 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expect(ctx.UntrustedStructuredContext).toEqual([
+    expect(ctx.ChannelStructuredContext).toEqual([
       {
         label: "WhatsApp contact",
         source: "whatsapp",
@@ -678,6 +747,16 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     expect(responsePrefix).toBeUndefined();
+  });
+
+  it("retains the global response prefix when the shared pipeline has no value", async () => {
+    const responsePrefix = resolveWhatsAppResponsePrefix({
+      cfg: { messages: { responsePrefix: "[legacy]" } } as never,
+      agentId: "main",
+      isSelfChat: false,
+    });
+
+    expect(responsePrefix).toBe("[legacy]");
   });
 
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {
@@ -744,6 +823,133 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(3);
     expect(rememberSentText).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains approved deferred media when its captioned replacement is cancelled", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    let deferredFinalization: Promise<unknown> | undefined;
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        const deliver = params.dispatcherOptions?.deliver;
+        if (!deliver) {
+          throw new Error("expected captured deliver callback");
+        }
+        const deferred = requireRecord(
+          await deliver(
+            { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+            { kind: "tool" },
+          ),
+          "deferred media result",
+        );
+        deferredFinalization = deferred.finalization as Promise<unknown>;
+        await expect(
+          deliver(
+            { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
+            { kind: "block" },
+          ),
+        ).resolves.toMatchObject({
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_message_sending_hook" },
+        });
+        await params.dispatcherOptions?.onSettled?.();
+        return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
+      },
+    );
+
+    await dispatchBufferedReply({
+      deliverReply,
+      cancelAfterPrepare: (payload) => payload.text === "captioned replacement",
+    });
+
+    await expect(deferredFinalization).resolves.toMatchObject({ visibleReplySent: true });
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expectReplyResultFields(deliverReply, {
+      mediaUrls: ["/tmp/generated.jpg"],
+      text: undefined,
+    });
+  });
+
+  it("drops deferred media when its captioned replacement fails after becoming visible", async () => {
+    const error = Object.assign(new Error("post-send bookkeeping failed"), {
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    const deliverReply = vi.fn().mockRejectedValueOnce(error);
+    let deferredFinalization: Promise<unknown> | undefined;
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        const deliver = params.dispatcherOptions?.deliver;
+        if (!deliver) {
+          throw new Error("expected captured deliver callback");
+        }
+        const deferred = requireRecord(
+          await deliver(
+            { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+            { kind: "tool" },
+          ),
+          "deferred media result",
+        );
+        deferredFinalization = deferred.finalization as Promise<unknown>;
+        await expect(
+          deliver(
+            { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
+            { kind: "block" },
+          ),
+        ).rejects.toBe(error);
+        await params.dispatcherOptions?.onSettled?.();
+        return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
+      },
+    );
+
+    await dispatchBufferedReply({ deliverReply });
+
+    await expect(deferredFinalization).resolves.toEqual({ visibleReplySent: false });
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops deferred media when replacement bookkeeping fails after provider acceptance", async () => {
+    const error = new Error("remember sent text failed");
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn(() => {
+      throw error;
+    });
+    let deferredFinalization: Promise<unknown> | undefined;
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        const deliver = params.dispatcherOptions?.deliver;
+        if (!deliver) {
+          throw new Error("expected captured deliver callback");
+        }
+        const deferred = requireRecord(
+          await deliver(
+            { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+            { kind: "tool" },
+          ),
+          "deferred media result",
+        );
+        deferredFinalization = deferred.finalization as Promise<unknown>;
+        await expect(
+          deliver(
+            { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
+            { kind: "block" },
+          ),
+        ).rejects.toMatchObject({
+          sentBeforeError: true,
+          visibleReplySent: true,
+        });
+        await params.dispatcherOptions?.onSettled?.();
+        return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
+      },
+    );
+
+    await dispatchBufferedReply({ deliverReply, rememberSentText });
+
+    await expect(deferredFinalization).resolves.toEqual({ visibleReplySent: false });
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });
 
   it.each([
@@ -946,12 +1152,15 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     const deliver = getCapturedDeliver();
-    await expect(
-      deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] }, { kind: "tool" }),
-    ).resolves.toMatchObject({ visibleReplySent: false });
+    const deferred = requireRecord(
+      await deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] }, { kind: "tool" }),
+      "deferred media result",
+    );
+    expect(deferred).toMatchObject({ visibleReplySent: false });
     await expect(deliver?.({ text: "cancelled final" }, { kind: "final" })).resolves.toMatchObject({
-      visibleReplySent: true,
+      visibleReplySent: false,
     });
+    await expect(deferred.finalization).resolves.toMatchObject({ visibleReplySent: true });
     expect(deliverReply).toHaveBeenCalledTimes(1);
   });
 
@@ -1002,6 +1211,9 @@ describe("whatsapp inbound dispatch", () => {
       .fn()
       .mockResolvedValueOnce(acceptedDeliveryResult())
       .mockRejectedValueOnce(error);
+    let firstSettlement: Promise<{ status: "resolved"; value: unknown } | { status: "rejected" }>;
+    let secondSettlement: Promise<{ status: "resolved" } | { status: "rejected"; error: unknown }>;
+    let thirdSettlement: Promise<{ status: "resolved" } | { status: "rejected"; error: unknown }>;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
@@ -1010,12 +1222,40 @@ describe("whatsapp inbound dispatch", () => {
           throw new Error("expected captured deliver callback");
         }
         const onSettled = params.dispatcherOptions?.onSettled;
-        await deliver({ text: "first image", mediaUrls: ["/tmp/first.jpg"] }, { kind: "tool" });
-        await deliver({ text: "second image", mediaUrls: ["/tmp/second.jpg"] }, { kind: "tool" });
+        const first = requireRecord(
+          await deliver({ text: "first image", mediaUrls: ["/tmp/first.jpg"] }, { kind: "tool" }),
+          "first deferred media result",
+        );
+        const second = requireRecord(
+          await deliver({ text: "second image", mediaUrls: ["/tmp/second.jpg"] }, { kind: "tool" }),
+          "second deferred media result",
+        );
+        const third = requireRecord(
+          await deliver({ text: "third image", mediaUrls: ["/tmp/third.jpg"] }, { kind: "tool" }),
+          "third deferred media result",
+        );
+        firstSettlement = (first.finalization as Promise<unknown>).then(
+          (value) => ({ status: "resolved" as const, value }),
+          () => ({ status: "rejected" as const }),
+        );
+        secondSettlement = (second.finalization as Promise<unknown>).then(
+          () => ({ status: "resolved" as const }),
+          (settlementError: unknown) => ({
+            status: "rejected" as const,
+            error: settlementError,
+          }),
+        );
+        thirdSettlement = (third.finalization as Promise<unknown>).then(
+          () => ({ status: "resolved" as const }),
+          (settlementError: unknown) => ({
+            status: "rejected" as const,
+            error: settlementError,
+          }),
+        );
         await onSettled?.();
         return {
           queuedFinal: false,
-          counts: { tool: 2, block: 0, final: 0 },
+          counts: { tool: 3, block: 0, final: 0 },
         };
       },
     );
@@ -1023,11 +1263,24 @@ describe("whatsapp inbound dispatch", () => {
     await expect(dispatchBufferedReply({ deliverReply })).rejects.toMatchObject({
       sentBeforeError: true,
       visibleReplySent: true,
+      cause: error,
     });
-    expect(error).toMatchObject({
-      sentBeforeError: true,
-      visibleReplySent: true,
+    expect(error).not.toHaveProperty("sentBeforeError");
+    expect(error).not.toHaveProperty("visibleReplySent");
+    await expect(firstSettlement!).resolves.toMatchObject({
+      status: "resolved",
+      value: { visibleReplySent: true },
     });
+    await expect(secondSettlement!).resolves.toEqual({ status: "rejected", error });
+    const third = await thirdSettlement!;
+    expect(third).toMatchObject({
+      status: "rejected",
+      error: { cause: error },
+    });
+    if (third.status === "rejected") {
+      expect(third.error).not.toHaveProperty("sentBeforeError");
+      expect(third.error).not.toHaveProperty("visibleReplySent");
+    }
     expect(deliverReply).toHaveBeenCalledTimes(2);
   });
 

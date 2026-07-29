@@ -395,11 +395,18 @@ export function createReplyRestartRecoveryClaimController(params: {
                 restartRecoveryBeforeAgentReplyState: state,
                 ...(pendingFinalDelivery
                   ? {
-                      pendingFinalDelivery: true,
-                      pendingFinalDeliveryText: pendingFinalDelivery.text,
-                      pendingFinalDeliveryIntentId: pendingFinalDelivery.intentId,
-                      pendingFinalDeliveryContext: pendingFinalDelivery.context,
-                      pendingFinalDeliveryCreatedAt: updatedAt,
+                      pendingFinalDelivery: {
+                        ...(pendingFinalDelivery.text
+                          ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                          : { kind: "transport-only" as const }),
+                        createdAt: updatedAt,
+                        ...(pendingFinalDelivery.intentId
+                          ? { intentId: pendingFinalDelivery.intentId }
+                          : {}),
+                        ...(pendingFinalDelivery.context
+                          ? { context: pendingFinalDelivery.context }
+                          : {}),
+                      },
                       // Hook-owned replies are already terminal. A restart may only deliver this
                       // checkpoint; it must never resume the model or broader tool surface.
                       restartRecoveryForceSafeTools: true,
@@ -483,13 +490,6 @@ export function createReplyRestartRecoveryClaimController(params: {
             abortedLastRun: true,
             endedAt,
             pendingFinalDelivery: undefined,
-            pendingFinalDeliveryText: undefined,
-            pendingFinalDeliveryCreatedAt: undefined,
-            pendingFinalDeliveryLastAttemptAt: undefined,
-            pendingFinalDeliveryAttemptCount: undefined,
-            pendingFinalDeliveryLastError: undefined,
-            pendingFinalDeliveryContext: undefined,
-            pendingFinalDeliveryIntentId: undefined,
             runtimeMs:
               typeof current.startedAt === "number"
                 ? Math.max(0, endedAt - current.startedAt)
@@ -498,9 +498,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             updatedAt: endedAt,
           };
         }
-        const preservesPendingFinal =
-          current.pendingFinalDelivery === true ||
-          normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
+        const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;

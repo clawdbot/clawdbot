@@ -1,7 +1,12 @@
 // Covers in-memory system presence merging and expiry behavior.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
+import {
+  listSystemPresence,
+  touchPresence,
+  updateSystemPresence,
+  upsertPresence,
+} from "./system-presence.js";
 
 describe("system-presence", () => {
   afterEach(() => {
@@ -142,6 +147,25 @@ describe("system-presence", () => {
     const update = updateSystemPresence({ text: `${keyPrefix}🚀tail` });
 
     expect(update.key).toBe(keyPrefix);
+  });
+
+  it("keeps connection-owned presence alive when its heartbeat is acknowledged", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now());
+
+    const connectionId = randomUUID();
+    upsertPresence(connectionId, {
+      host: "control-ui",
+      instanceId: connectionId,
+      mode: "webchat",
+      reason: "connect",
+    });
+
+    vi.advanceTimersByTime(4 * 60 * 1000);
+    expect(touchPresence(connectionId)).toBe(true);
+    vi.advanceTimersByTime(4 * 60 * 1000);
+
+    expect(listSystemPresence().map((entry) => entry.instanceId)).toContain(connectionId);
   });
 
   it("prunes stale non-self entries after TTL", () => {

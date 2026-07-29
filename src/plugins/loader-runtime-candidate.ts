@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   resolveEffectiveEnableState,
@@ -372,7 +372,14 @@ export function loadRuntimePluginCandidate(params: {
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
-    pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+    pushPluginLoadError(
+      describeRootFileOpenFailure({
+        failure: opened,
+        subject: "plugin entry path",
+        boundaryLabel: "plugin root",
+        filePath: moduleLoadSource,
+      }),
+    );
     return;
   }
   const safeSource = opened.path;
@@ -522,6 +529,7 @@ export function loadRuntimePluginCandidate(params: {
   });
   const transaction = createPluginRegistrationTransaction({
     registry,
+    activeRecord: record,
     rollbackGlobalSideEffects: () =>
       params.registryBuilder.rollbackPluginGlobalSideEffects(record.id),
   });

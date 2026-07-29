@@ -19,7 +19,11 @@ import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
-const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([["computer.act", "computer"]]);
+const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
+  ["computer.act", "computer"],
+  ["mobile.ui.observe", "mobile_ui"],
+  ["mobile.ui.act", "mobile_ui"],
+]);
 
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",

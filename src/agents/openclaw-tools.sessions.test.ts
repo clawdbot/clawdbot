@@ -6,7 +6,6 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntry,
@@ -1188,14 +1187,10 @@ describe("sessions tools", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "scoped-main-incarnation";
-    fs.writeFileSync(
-      storePath,
-      `${JSON.stringify({
-        [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
-      })}\n`,
-      "utf8",
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: targetSessionKey, storePath },
+      { sessionId: expectedSessionId, updatedAt: 1 },
     );
-    clearSessionStoreCacheForTest();
     const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
       request.requesterSessionKey === requesterSessionKey &&
       request.targetSessionKey === targetSessionKey

@@ -705,6 +705,40 @@ describe("resolveMatrixAuth", () => {
     expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
   });
 
+  it("stops waiting on whoami retry backoff when startup backfill is aborted", async () => {
+    matrixDoRequestMock.mockRejectedValueOnce(
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("read ECONNRESET"), {
+          code: "ECONNRESET",
+        }),
+      }),
+    );
+    const abortController = new AbortController();
+    const startedAt = Date.now();
+    const backfillPromise = backfillMatrixAuthDeviceIdAfterStartup({
+      auth: {
+        accountId: "default",
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      },
+      env: {} as NodeJS.ProcessEnv,
+      abortSignal: abortController.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+
+    // The first retry backoff starts at 250ms; an honored abort returns long before it elapses.
+    await expect(backfillPromise).resolves.toBeUndefined();
+    expect(Date.now() - startedAt).toBeLessThan(200);
+    expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+  });
+
   it("resolves configured accessToken SecretRefs during Matrix auth", async () => {
     matrixDoRequestMock.mockResolvedValue({
       user_id: "@bot:example.org",

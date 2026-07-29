@@ -41,6 +41,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         let config = WKWebViewConfiguration()
         config.userContentController = WKUserContentController()
         config.preferences.isElementFullscreenEnabled = true
+        config.preferences.tabFocusesLinks = true
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         canvasWindowLogger.debug("CanvasWindowController init config ready")
         for scheme in CanvasScheme.allSchemes {

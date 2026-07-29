@@ -2,6 +2,7 @@ import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./router-outlet.ts";
 
 type RouteId = "page" | "next";
@@ -46,13 +47,54 @@ afterEach(() => {
 });
 
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    await Promise.resolve();
-    await outlet.updateComplete;
-  }
+  // The outlet resolves route work in promise chains that each schedule another render,
+  // so drain to Lit's settled state rather than pumping a fixed number of cycles.
+  await settleLitElement(outlet);
 }
 
 describe("openclaw-router-outlet", () => {
+  it("replaces the centered loading mascot with the resolved route", async () => {
+    vi.useFakeTimers();
+    const routeModule = deferred<TestModule>();
+    const context = { label: "loaded" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => routeModule.promise,
+          loader: (loadContext) => ({ label: loadContext.label }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    const navigation = router.navigate("page", context);
+
+    await settleOutlet(outlet);
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settleOutlet(outlet);
+
+    const loadingState = outlet.querySelector('[role="status"]');
+    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingState?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("thinking");
+    expect(loadingState?.textContent?.trim()).toBe("");
+    expect(outlet.textContent).not.toContain("Loading panel");
+
+    routeModule.resolve({
+      render: (data) => html`<div data-testid="route-page">${data?.label}</div>`,
+    });
+    await navigation;
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
+    expect(outlet.querySelector("openclaw-mascot")).toBeNull();
+    outlet.remove();
+    router.stop();
+  });
+
   it("keeps the current route mounted until nested MCP Apps finish teardown", async () => {
     const teardown = deferred<void>();
     const teardownView = vi.fn(() => teardown.promise);

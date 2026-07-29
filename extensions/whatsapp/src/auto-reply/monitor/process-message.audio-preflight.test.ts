@@ -80,7 +80,6 @@ vi.mock("./runtime-api.js", () => ({
     previousTimestamp: undefined,
   }),
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  resolveDmGroupAccessWithCommandGate: () => ({ commandAuthorized: true }),
   shouldComputeCommandAuthorized: (body: string) => {
     shouldComputeCommandBodies.push(body);
     return shouldComputeCommandResult || body.startsWith("/");
@@ -221,7 +220,6 @@ function makeRemoveAckAfterReplyParams() {
       tools: { media: { audio: { enabled: true } } },
       channels: { whatsapp: {} },
       commands: { useAccessGroups: false },
-      messages: { removeAckAfterReply: true },
     } as never,
     preflightAudioTranscript: "pre-computed transcript from caller",
   };
@@ -292,13 +290,14 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: "okay let's test this voice message",
-      MediaTranscribedIndexes: [0],
-    });
-    // mediaPath and mediaType must be preserved so inboundAudio detection (used by
-    // features like messages.tts.auto: "inbound") still recognises this as audio.
-    expectContextFields(context, {
-      MediaPath: "/tmp/voice.ogg",
-      MediaType: "audio/ogg; codecs=opus",
+      media: [
+        expect.objectContaining({
+          path: "/tmp/voice.ogg",
+          contentType: "audio/ogg; codecs=opus",
+          kind: "audio",
+          transcribed: true,
+        }),
+      ],
     });
   });
 
@@ -372,7 +371,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: "/new start a new session",
-      MediaTranscribedIndexes: [0],
+      media: [expect.objectContaining({ kind: "audio", transcribed: true })],
     });
   });
 
@@ -392,7 +391,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: "pre-computed transcript from fan-out caller",
-      MediaTranscribedIndexes: [0],
+      media: [expect.objectContaining({ kind: "audio", transcribed: true })],
     });
   });
 
@@ -407,7 +406,7 @@ describe("processMessage audio preflight transcription", () => {
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
   });
 
-  it("removes caller-provided ack after a successful visible reply", async () => {
+  it("keeps caller-provided ack after a successful visible reply", async () => {
     const ackReaction = makeAckReactionHandle();
 
     await processMessage({
@@ -416,10 +415,10 @@ describe("processMessage audio preflight transcription", () => {
     });
     await flushMicrotasks();
 
-    expect(ackReaction.remove).toHaveBeenCalledTimes(1);
+    expect(ackReaction.remove).not.toHaveBeenCalled();
   });
 
-  it("removes internally sent ack after a successful visible reply", async () => {
+  it("keeps internally sent ack after a successful visible reply", async () => {
     const ackReaction = makeAckReactionHandle();
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
 
@@ -427,7 +426,7 @@ describe("processMessage audio preflight transcription", () => {
     await flushMicrotasks();
 
     expect(maybeSendAckReactionMock).toHaveBeenCalledTimes(1);
-    expect(ackReaction.remove).toHaveBeenCalledTimes(1);
+    expect(ackReaction.remove).not.toHaveBeenCalled();
   });
 
   it("keeps ack when no visible reply was delivered", async () => {

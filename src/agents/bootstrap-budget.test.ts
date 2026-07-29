@@ -46,6 +46,39 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.injectedChars).toBe(20);
     expect(stats[1]?.truncated).toBe(true);
   });
+
+  it("derives names for path-only files supplied by bootstrap hooks", () => {
+    const pathOnlyFile = {
+      path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+      content: "remember",
+      missing: false,
+    } as unknown as WorkspaceBootstrapFile;
+    const injectedFiles = [
+      {
+        path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+        content: "remember",
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles: [pathOnlyFile],
+      injectedFiles,
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+
+    expect(analysis.files).toEqual([
+      expect.objectContaining({
+        name: "SELF_IMPROVEMENT_REMINDER.md",
+        path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+        injectedChars: 8,
+        truncated: false,
+      }),
+    ]);
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {
@@ -78,7 +111,7 @@ describe("analyzeBootstrapBudget", () => {
     const agents = analysis.truncatedFiles.find((file) => file.name === "AGENTS.md");
     const soul = analysis.truncatedFiles.find((file) => file.name === "SOUL.md");
     expect(agents?.causes).toContain("per-file-limit");
-    expect(agents?.causes).toContain("total-limit");
+    expect(agents?.causes).not.toContain("total-limit");
     expect(soul?.causes).toContain("total-limit");
   });
 
@@ -98,6 +131,108 @@ describe("analyzeBootstrapBudget", () => {
       bootstrapTotalMaxChars: 200,
     });
     expect(analysis.truncatedFiles[0]?.causes).toStrictEqual([]);
+  });
+
+  it("accounts for the fixed USER.md budget", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "USER.md",
+          path: "/tmp/USER.md",
+          missing: false,
+          rawChars: 5_000,
+          injectedChars: 4_000,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+
+    expect(analysis.truncatedFiles[0]?.causes).toContain("per-file-limit");
+    const lines = buildBootstrapPromptWarning({ analysis, mode: "always" }).lines;
+    expect(lines).toContain("USER.md has a fixed 4000-character bootstrap cap; keep it compact.");
+    expect(lines.join("\n")).not.toContain("raise agents.defaults.bootstrapMaxChars");
+  });
+
+  it("keeps USER.md advice accurate for lower per-file and exhausted total limits", () => {
+    const lowerPerFile = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "USER.md",
+          path: "/tmp/USER.md",
+          missing: false,
+          rawChars: 3_000,
+          injectedChars: 2_000,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 2_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+    const lowerLines = buildBootstrapPromptWarning({
+      analysis: lowerPerFile,
+      mode: "always",
+    }).lines;
+    expect(lowerLines.join("\n")).not.toContain("fixed 4000-character");
+    expect(lowerLines.join("\n")).toContain("raise agents.defaults.bootstrapMaxChars");
+
+    const exhaustedTotal = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/AGENTS.md",
+          missing: false,
+          rawChars: 2_000,
+          injectedChars: 2_000,
+          truncated: false,
+        },
+        {
+          name: "USER.md",
+          path: "/tmp/USER.md",
+          missing: false,
+          rawChars: 5_000,
+          injectedChars: 0,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 2_040,
+    });
+    const exhaustedLines = buildBootstrapPromptWarning({
+      analysis: exhaustedTotal,
+      mode: "always",
+    }).lines;
+    expect(exhaustedTotal.truncatedFiles[0]?.causes).toContain("total-limit");
+    expect(exhaustedLines.join("\n")).toContain("fixed 4000-character");
+    expect(exhaustedLines.join("\n")).toContain("bootstrapTotalMaxChars");
+
+    const laterExhaustion = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "USER.md",
+          path: "/tmp/USER.md",
+          missing: false,
+          rawChars: 5_000,
+          injectedChars: 4_000,
+          truncated: true,
+        },
+        {
+          name: "SOUL.md",
+          path: "/tmp/SOUL.md",
+          missing: false,
+          rawChars: 100,
+          injectedChars: 0,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 4_040,
+    });
+    const user = laterExhaustion.truncatedFiles.find((file) => file.name === "USER.md");
+    const soul = laterExhaustion.truncatedFiles.find((file) => file.name === "SOUL.md");
+    expect(user?.causes).toStrictEqual(["per-file-limit"]);
+    expect(soul?.causes).toContain("total-limit");
   });
 });
 

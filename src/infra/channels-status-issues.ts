@@ -28,6 +28,20 @@ function collectGenericRuntimeStatusIssues(
       continue;
     }
     const accountId = resolveIssueAccountId(account);
+    // Dead ingress outranks the restart-pending short-circuit: a pending restart
+    // cannot fix a channel whose inbound admission is unavailable, and hiding it
+    // behind "status may be stale" is how silent inbound loss stays invisible.
+    if (account.ingressUnavailable === true) {
+      issues.push({
+        channel,
+        accountId,
+        kind: "runtime",
+        message:
+          "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
+        fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
+      });
+      continue;
+    }
     if (account.restartPending === true) {
       issues.push({
         channel,

@@ -31,6 +31,10 @@ const AgentGeneratedAttachmentSchema = closedObject({
   filePath: Type.Optional(Type.String()),
   mimeType: Type.Optional(Type.String()),
   name: Type.Optional(Type.String()),
+  sizeBytes: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number()),
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
 });
 
 /** Internal completion event surfaced when child automation reports back to a parent run. */

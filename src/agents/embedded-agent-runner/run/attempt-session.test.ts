@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => ({
   createEmbeddedAgentResourceLoader: vi.fn(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
+  installCodeModeRepairHook: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
@@ -58,6 +59,9 @@ vi.mock("../system-prompt.js", () => ({
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
 }));
+vi.mock("./code-mode-repair.js", () => ({
+  installCodeModeRepairHook: hoisted.installCodeModeRepairHook,
+}));
 vi.mock("./message-tool-terminal.js", () => ({
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
 }));
@@ -83,7 +87,10 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { activationError?: Error }) {
+function createInput(options?: {
+  activationError?: Error;
+  codeModeControlsEnabledForRun?: boolean;
+}) {
   const events: string[] = [];
   const settingsManager = { id: "settings" };
   const resourceLoader = {
@@ -142,6 +149,9 @@ function createInput(options?: { activationError?: Error }) {
       onDeliveredSourceReply = input.onDeliveredSourceReply;
     },
   );
+  hoisted.installCodeModeRepairHook.mockImplementation(() => {
+    events.push("install-code-mode-repair");
+  });
 
   return {
     activeSession,
@@ -153,7 +163,10 @@ function createInput(options?: { activationError?: Error }) {
       attempt,
       agentCoreThinkingLevel: "high" as const,
       agentDir: "/agent",
-      clientToolPreparation: { deferredDirectoryToolsCallable: false } as never,
+      clientToolPreparation: {
+        codeModeControlsEnabledForRun: options?.codeModeControlsEnabledForRun ?? true,
+        deferredDirectoryToolsCallable: false,
+      } as never,
       effectiveCwd: "/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       initialSystemPrompt: "system prompt",
@@ -198,10 +211,14 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "publish-system-prompt",
       "apply-system-prompt",
       "install-terminal-hook",
+      "install-code-mode-repair",
       "stage:agent-session",
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
+    expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
+      hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
+    );
     expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(
       expect.objectContaining({
         resourceLoader: fixture.resourceLoader,
@@ -224,6 +241,15 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
+  });
+
+  it("does not install Code Mode repair when the run kept direct tools", async () => {
+    const fixture = createInput({ codeModeControlsEnabledForRun: false });
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.installCodeModeRepairHook).not.toHaveBeenCalled();
+    expect(fixture.events).not.toContain("install-code-mode-repair");
   });
 
   it("leaves overflow recovery with the session when no model budget was resolved", async () => {

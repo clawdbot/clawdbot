@@ -4,6 +4,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   coerceSecretRef,
   normalizeResolvedSecretInputString,
@@ -92,7 +93,11 @@ function credentialsMatchBackfillAuthLineage(params: {
   );
 }
 
-async function retryMatrixAuthRequest<T>(label: string, run: () => Promise<T>): Promise<T> {
+async function retryMatrixAuthRequest<T>(
+  label: string,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   return await retryAsync(run, {
     attempts: 3,
     minDelayMs: 250,
@@ -100,6 +105,7 @@ async function retryMatrixAuthRequest<T>(label: string, run: () => Promise<T>): 
     jitter: 0.1,
     label,
     shouldRetry: (err) => shouldRetryMatrixAuthRequest(err),
+    sleep: (ms) => sleepWithAbort(ms, signal),
   });
 }
 
@@ -109,6 +115,7 @@ async function fetchMatrixWhoamiIdentity(params: {
   userId?: string;
   ssrfPolicy?: MatrixResolvedConfig["ssrfPolicy"];
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  signal?: AbortSignal;
 }): Promise<{
   user_id?: string;
   device_id?: string;
@@ -120,12 +127,16 @@ async function fetchMatrixWhoamiIdentity(params: {
     ssrfPolicy: params.ssrfPolicy,
     dispatcherPolicy: params.dispatcherPolicy,
   });
-  return (await retryMatrixAuthRequest("matrix auth whoami", async () => {
-    return (await tempClient.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
-      user_id?: string;
-      device_id?: string;
-    };
-  })) as {
+  return (await retryMatrixAuthRequest(
+    "matrix auth whoami",
+    async () => {
+      return (await tempClient.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
+        user_id?: string;
+        device_id?: string;
+      };
+    },
+    params.signal,
+  )) as {
     user_id?: string;
     device_id?: string;
   };
@@ -774,13 +785,24 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     return undefined;
   }
 
-  const whoami = await fetchMatrixWhoamiIdentity({
-    homeserver: params.auth.homeserver,
-    accessToken: params.auth.accessToken,
-    userId: params.auth.userId,
-    ssrfPolicy: params.auth.ssrfPolicy,
-    dispatcherPolicy: params.auth.dispatcherPolicy,
-  });
+  let whoami: Awaited<ReturnType<typeof fetchMatrixWhoamiIdentity>>;
+  try {
+    whoami = await fetchMatrixWhoamiIdentity({
+      homeserver: params.auth.homeserver,
+      accessToken: params.auth.accessToken,
+      userId: params.auth.userId,
+      ssrfPolicy: params.auth.ssrfPolicy,
+      dispatcherPolicy: params.auth.dispatcherPolicy,
+      signal: params.abortSignal,
+    });
+  } catch (err) {
+    // An abort during whoami retry backoff rejects the backoff sleep; normalize
+    // it to "no deviceId" like the post-whoami aborted checks below.
+    if (isAbortSignalTriggered(params.abortSignal)) {
+      return undefined;
+    }
+    throw err;
+  }
   const deviceId = whoami.device_id?.trim();
   if (!deviceId) {
     return undefined;

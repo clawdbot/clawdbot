@@ -63,7 +63,7 @@ function compactSystemEvent(line: string): string | null {
 }
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {
-  const raw = normalizeOptionalString(cfg.agents?.defaults?.envelopeTimezone);
+  const raw = normalizeOptionalString(cfg.agents?.defaults?.userTimezone);
   if (!raw) {
     return { mode: "local" as const };
   }
@@ -134,6 +134,9 @@ export async function drainFormattedSystemEvents(params: {
     }
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
     let index = 0;
+    // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
+    // Role separation plus external-content wrapping is the boundary.
+    // This is an explicit product decision.
     for (const subline of compacted.split("\n")) {
       systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
       index += 1;

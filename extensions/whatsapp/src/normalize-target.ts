@@ -1,8 +1,8 @@
 // Whatsapp helper module supports normalize target behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -116,9 +116,10 @@ export function normalizeWhatsAppMessagingTarget(raw: string): string | undefine
 
 export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
   return uniqueStrings(
-    normalizeStringEntries(allowFrom)
-      .map(normalizeWhatsAppAllowFromEntry)
-      .filter((entry): entry is string => Boolean(entry)),
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: normalizeWhatsAppAllowFromEntry,
+    }),
   );
 }
 

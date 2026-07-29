@@ -1,12 +1,11 @@
 // Openrouter plugin entrypoint registers its OpenClaw integration.
-import {
-  definePluginEntry,
-  type ProviderReplayPolicy,
-  type ProviderReplayPolicyContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import type {
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
@@ -15,6 +14,7 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -22,7 +22,9 @@ import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./mod
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
+  buildOpenrouterLiveProvider,
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -85,12 +87,6 @@ function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model:
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
     reasoning,
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function sanitizePromptModelId(value: unknown): string | undefined {
@@ -227,11 +223,12 @@ function resolveOpenRouterFusionPromptContribution(
   return lines.length > 2 ? { dynamicSuffix: lines.join("\n") } : undefined;
 }
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
   description: "Bundled OpenRouter provider plugin",
-  register(api) {
+  manifest,
+  provider() {
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
@@ -280,53 +277,31 @@ export default definePluginEntry({
       return base;
     }
 
-    api.registerProvider({
-      id: PROVIDER_ID,
+    return {
       label: "OpenRouter",
       docsPath: "/providers/models",
-      envVars: ["OPENROUTER_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: "OpenRouter API key",
-          hint: "API key",
-          optionKey: "openrouterApiKey",
-          flagName: "--openrouter-api-key",
-          envVar: "OPENROUTER_API_KEY",
-          promptMessage: "Enter OpenRouter API key",
-          defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
-          expectedProviders: ["openrouter"],
-          applyConfig: (cfg) => applyOpenrouterConfig(cfg),
-          wizard: {
-            choiceId: "openrouter-api-key",
-            choiceLabel: "OpenRouter API key",
-            groupId: "openrouter",
-            groupLabel: "OpenRouter",
-            groupHint: "OAuth or API key",
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        }),
-        createOpenRouterOAuthAuthMethod(),
-      ],
+      manifestAuth: {
+        hint: "API key",
+        defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
+        applyConfig: applyOpenrouterConfig,
+      },
+      extraAuth: [createOpenRouterOAuthAuthMethod()],
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey;
           if (!apiKey) {
             return null;
           }
           return {
-            provider: {
-              ...buildOpenrouterProvider(),
+            provider: await buildOpenrouterLiveProvider({
               apiKey,
-            },
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           };
         },
-      },
-      staticCatalog: {
-        order: "simple",
-        run: async () => ({
+        staticRun: async () => ({
           provider: buildOpenrouterProvider(),
         }),
       },
@@ -373,7 +348,9 @@ export default definePluginEntry({
           timeoutMs: ctx.timeoutMs,
           fetchFn: ctx.fetchFn,
         }),
-    });
+    };
+  },
+  register(api) {
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
