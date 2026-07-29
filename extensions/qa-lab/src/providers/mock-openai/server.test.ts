@@ -4131,6 +4131,7 @@ describe("qa mock openai server", () => {
 
     const toolPlan = await postResponses(server, {
       stream: false,
+      tools: [IMAGE_GENERATE_TOOL],
       input: [makeUserInput(prompt)],
     });
     expect(toolPlan.status).toBe(200);

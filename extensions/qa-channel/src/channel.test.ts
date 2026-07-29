@@ -6,13 +6,14 @@ import {
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import * as outboundMedia from "openclaw/plugin-sdk/outbound-media";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
@@ -24,6 +25,7 @@ const QA_GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
 });
 
@@ -175,23 +177,26 @@ async function startQaChannelTestHarness(params?: {
 }
 
 describe("qa-channel plugin", () => {
-  it("records generated media attachments in the deterministic QA bus", async () => {
+  it("records generated media attachments in one deterministic QA bus message", async () => {
     const harness = await startQaChannelTestHarness();
-    const sendMedia = qaChannelPlugin.outbound?.sendMedia;
-    if (!sendMedia) {
-      throw new Error("expected qa-channel media sender");
-    }
+    const adapter = requireQaMessageAdapter();
+    const mediaUrls = [
+      path.join(process.cwd(), "qa-lighthouse.png"),
+      path.join(process.cwd(), "qa-lighthouse-detail.png"),
+    ];
     try {
-      await sendMedia({
+      await adapter.send!.payload!({
         cfg: harness.cfg,
         to: "dm:qa-operator",
-        text: "QA image ready",
-        mediaUrl: "/tmp/qa-lighthouse.png",
-      } as never);
+        text: "QA images ready",
+        payload: { text: "QA images ready", mediaUrls },
+        mediaLocalRoots: [process.cwd()],
+        mediaReadFile: async () => Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+      });
 
       const outbound = await harness.state.waitFor({
         kind: "message-text",
-        textIncludes: "QA image ready",
+        textIncludes: "QA images ready",
         direction: "outbound",
         timeoutMs: 2_000,
       });
@@ -199,9 +204,51 @@ describe("qa-channel plugin", () => {
         expect.objectContaining({
           kind: "image",
           fileName: "qa-lighthouse.png",
-          url: "/tmp/qa-lighthouse.png",
+          contentBase64: QA_GENERATED_IMAGE_BASE64,
+        }),
+        expect.objectContaining({
+          kind: "image",
+          fileName: "qa-lighthouse-detail.png",
+          contentBase64: QA_GENERATED_IMAGE_BASE64,
         }),
       ]);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("does not publish a partial multi-media reply when one attachment fails", async () => {
+    const harness = await startQaChannelTestHarness();
+    const adapter = requireQaMessageAdapter();
+    const loader = vi
+      .spyOn(outboundMedia, "loadOutboundMediaFromUrl")
+      .mockResolvedValueOnce({
+        buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+        kind: "image",
+        contentType: "image/png",
+        fileName: "first.png",
+      })
+      .mockRejectedValueOnce(new Error("second attachment failed"));
+    try {
+      await expect(
+        adapter.send!.payload!({
+          cfg: harness.cfg,
+          to: "dm:qa-operator",
+          text: "QA images ready",
+          payload: {
+            text: "QA images ready",
+            mediaUrls: [
+              "https://cdn.example.test/first.png",
+              "https://cdn.example.test/second.png",
+            ],
+          },
+        }),
+      ).rejects.toThrow("second attachment failed");
+
+      expect(loader).toHaveBeenCalledTimes(2);
+      expect(
+        harness.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
+      ).toEqual([]);
     } finally {
       await harness.stop();
     }
@@ -214,6 +261,12 @@ describe("qa-channel plugin", () => {
       throw new Error("expected qa-channel media sender");
     }
     const mediaUrl = "https://cdn.example.test/generated/image.png?token=qa-secret";
+    vi.spyOn(outboundMedia, "loadOutboundMediaFromUrl").mockResolvedValueOnce({
+      buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+      kind: "image",
+      contentType: "image/png",
+      fileName: "image.png",
+    });
     try {
       await sendMedia({
         cfg: harness.cfg,
@@ -232,9 +285,10 @@ describe("qa-channel plugin", () => {
         expect.objectContaining({
           kind: "image",
           fileName: "image.png",
-          url: mediaUrl,
+          contentBase64: QA_GENERATED_IMAGE_BASE64,
         }),
       ]);
+      expect(JSON.stringify(outbound)).not.toContain("qa-secret");
     } finally {
       await harness.stop();
     }

@@ -1206,6 +1206,7 @@ async function buildResponsesPayload(
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !toolOutput &&
+    (hasDeclaredTool(body, "image_generate") || hasDeclaredTool(body, "exec")) &&
     !extractCompletedImageGenerationMediaPath(input) &&
     (!input.some(
       (item) =>
@@ -1224,15 +1225,13 @@ async function buildResponsesPayload(
     };
     const events = hasDeclaredTool(body, "image_generate")
       ? buildToolCallEventsWithArgs("image_generate", imageArgs)
-      : hasDeclaredTool(body, "exec")
-        ? buildToolCallEventsWithArgs("exec", {
-            language: "javascript",
-            code: [
-              'const matches = await tools.search("image_generate");',
-              `return await tools.call(matches[0].id, ${JSON.stringify(imageArgs)});`,
-            ].join("\n"),
-          })
-        : buildToolCallEventsWithArgs("image_generate", imageArgs);
+      : buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          code: [
+            'const matches = await tools.search("image_generate");',
+            `return await tools.call(matches[0].id, ${JSON.stringify(imageArgs)});`,
+          ].join("\n"),
+        });
     const callId = extractPlannedToolCallId(events);
     if (callId) {
       scenarioState.pendingImageGenerationCalls.set(callId, imageArgs.prompt);
