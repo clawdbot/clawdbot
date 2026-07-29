@@ -5,6 +5,7 @@ import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
+import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { getChatMediaSourceController } from "./chat-media-source.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
@@ -28,12 +29,14 @@ type AssistantAttachmentAvailability =
       mediaTicket?: string;
       mediaTicketExpiresAt?: number;
       refreshAfter?: number;
+      refreshAttempts?: number;
     }
   | { status: "unavailable"; reason: string; checkedAt: number; retryAttempted?: true };
 
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
+const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
 function createUnavailableAssistantAttachment(
@@ -153,6 +156,18 @@ export function resolveAssistantAttachmentAvailability(
     } else if (
       cached.status === "available" &&
       cached.mediaTicket &&
+      cached.mediaTicketExpiresAt !== undefined &&
+      cached.mediaTicketExpiresAt <= now
+    ) {
+      const unavailable = createUnavailableAssistantAttachment(
+        "Attachment unavailable",
+        resource.retryAttempted,
+      );
+      setAssistantAttachmentAvailability(resource, unavailable);
+      return unavailable;
+    } else if (
+      cached.status === "available" &&
+      cached.mediaTicket &&
       (cached.refreshAfter !== undefined
         ? cached.refreshAfter <= now
         : !cached.mediaTicketExpiresAt ||
@@ -174,9 +189,20 @@ export function resolveAssistantAttachmentAvailability(
     if (!refreshingAvailability) {
       return null;
     }
+    const now = Date.now();
+    const expiresAt = refreshingAvailability.mediaTicketExpiresAt;
+    const refreshAttempts = refreshingAvailability.refreshAttempts ?? 0;
+    if (
+      expiresAt === undefined ||
+      expiresAt <= now ||
+      refreshAttempts >= ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES
+    ) {
+      return null;
+    }
     const retryAvailability: AssistantAttachmentAvailability = {
       ...refreshingAvailability,
-      refreshAfter: Date.now() + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS,
+      refreshAfter: Math.min(now + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS, expiresAt),
+      refreshAttempts: refreshAttempts + 1,
     };
     setAssistantAttachmentAvailability(resource, retryAvailability);
     return retryAvailability;
@@ -230,10 +256,6 @@ export function resolveAssistantAttachmentAvailability(
           resource.retryAttempted = false;
           setAssistantAttachmentAvailability(resource, availability);
           return availability;
-        }
-        const retryAvailability = keepPlayableTicketForRetry();
-        if (retryAvailability) {
-          return retryAvailability;
         }
         const unavailable = createUnavailableAssistantAttachment(
           payload?.reason?.trim() || t("chat.attachments.unavailable"),
@@ -432,19 +454,24 @@ export function renderAssistantAttachments(
             attachment.width && attachment.height
               ? { "aspect-ratio": `${attachment.width} / ${attachment.height}` }
               : {};
+          const downloadHref = safeAttachmentHref(attachmentUrl);
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
               <div class="chat-assistant-attachment-card__header">
                 <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
-                <a
-                  class="chat-assistant-attachment-card__download"
-                  href=${attachmentUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label=${t("chat.mediaPlayer.download", { filename: attachment.label })}
-                  title=${t("chat.mediaPlayer.download", { filename: attachment.label })}
-                  >${icons.download}</a
-                >
+                ${downloadHref
+                  ? html`<a
+                      class="chat-assistant-attachment-card__download"
+                      href=${downloadHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label=${t("chat.mediaPlayer.download", {
+                        filename: attachment.label,
+                      })}
+                      title=${t("chat.mediaPlayer.download", { filename: attachment.label })}
+                      >${icons.download}</a
+                    >`
+                  : nothing}
               </div>
               <div class="chat-assistant-video-frame" style=${styleMap(dimensions)}>
                 <span class="chat-assistant-video-frame__placeholder" aria-hidden="true"
@@ -489,13 +516,15 @@ export function renderAssistantAttachments(
                 <div class="chat-assistant-attachment-card__reason">
                   ${t("chat.mediaPlayer.videoUnavailable")}
                 </div>
-                <a
-                  class="chat-assistant-attachment-card__link"
-                  href=${attachmentUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  >${t("chat.mediaPlayer.download", { filename: attachment.label })}</a
-                >
+                ${downloadHref
+                  ? html`<a
+                      class="chat-assistant-attachment-card__link"
+                      href=${downloadHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      >${t("chat.mediaPlayer.download", { filename: attachment.label })}</a
+                    >`
+                  : nothing}
               </div>
             </div>
           `;
@@ -511,16 +540,21 @@ export function renderAssistantAttachments(
             reason: availability.status === "unavailable" ? availability.reason : undefined,
           });
         }
+        const downloadHref = safeAttachmentHref(attachmentUrl);
         return html`
           <div class="chat-assistant-attachment-card">
             <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
-            <a
-              class="chat-assistant-attachment-card__link"
-              href=${attachmentUrl}
-              target="_blank"
-              rel="noreferrer"
-              >${attachment.label}</a
-            >
+            ${downloadHref
+              ? html`<a
+                  class="chat-assistant-attachment-card__link"
+                  href=${downloadHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  >${attachment.label}</a
+                >`
+              : html`<span class="chat-assistant-attachment-card__title"
+                  >${attachment.label}</span
+                >`}
           </div>
         `;
       })}

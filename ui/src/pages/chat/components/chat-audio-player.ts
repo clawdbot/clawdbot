@@ -5,6 +5,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
+import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { claimChatAudioPlayback, releaseChatAudioPlayback } from "./chat-audio-coordinator.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
@@ -108,6 +109,7 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   override render() {
     const progress = this.duration > 0 ? Math.min(1, this.currentTime / this.duration) : 0;
+    const downloadHref = safeAttachmentHref(this.src);
     return html`
       <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
         <div class="chat-assistant-attachment-card__header">
@@ -118,15 +120,17 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   >${t("chat.messages.voiceNote")}</span
                 >`
               : null}
-            <a
-              class="chat-assistant-attachment-card__download"
-              href=${this.src}
-              target="_blank"
-              rel="noreferrer"
-              aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
-              title=${t("chat.mediaPlayer.download", { filename: this.label })}
-              >${icons.download}</a
-            >
+            ${downloadHref
+              ? html`<a
+                  class="chat-assistant-attachment-card__download"
+                  href=${downloadHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
+                  title=${t("chat.mediaPlayer.download", { filename: this.label })}
+                  >${icons.download}</a
+                >`
+              : null}
           </span>
         </div>
         <div

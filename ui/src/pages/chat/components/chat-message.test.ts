@@ -3276,6 +3276,54 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("omits attachment anchors for unsafe transcript URLs", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-unsafe-attachment-links",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "javascript:audio()",
+              kind: "audio",
+              label: "unsafe.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+          {
+            type: "attachment",
+            attachment: {
+              url: "data:text/html,video",
+              kind: "video",
+              label: "unsafe.mp4",
+              mimeType: "video/mp4",
+            },
+          },
+          {
+            type: "attachment",
+            attachment: {
+              url: "vbscript:document",
+              kind: "document",
+              label: "unsafe.pdf",
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    await requireAudioPlayer(container);
+    expect(container.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
+    expect(container.textContent).toContain("unsafe.pdf");
+  });
+
   it("renders verified local assistant attachments through the authenticated media route", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()} test image.png`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
