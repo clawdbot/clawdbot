@@ -423,7 +423,7 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   };
 }
 
-export function applyEditsToNormalizedContent(
+function applyEditsToNormalizedContent(
   normalizedContent: string,
   edits: Edit[],
   path: string,
