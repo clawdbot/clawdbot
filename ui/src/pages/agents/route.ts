@@ -28,6 +28,8 @@ async function loadAgentsRouteData(
   const requestedAgent = route.requestedAgentId
     ? (agentsList?.agents.find((entry) => entry.id === route.requestedAgentId)?.id ?? null)
     : null;
+  // Unknown explicit ids keep their URL while the roster selection falls back,
+  // matching the shipped ?agent= behavior without an automatic mount redirect.
   return {
     ...route,
     gateway,

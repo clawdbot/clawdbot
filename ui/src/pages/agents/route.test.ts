@@ -66,7 +66,7 @@ describe("agents route", () => {
     expect(result.canonicalLocation).toBeUndefined();
   });
 
-  it("falls back to the default agent when an explicit id is unknown", async () => {
+  it("falls back to the default agent without rewriting an unknown explicit id", async () => {
     const result = await loadRoute("/settings/agents/missing/memory");
 
     expect(result.selectedAgentId).toBe("main");
