@@ -203,8 +203,7 @@ export class ChatPane extends ChatPaneHeader {
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // The workspace rail claims the side slot first; the tasks rail needs
-    // room for both columns before it may side-dock next to it.
+    // The workspace rail claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:
         chatLayoutWidth <
@@ -214,8 +213,7 @@ export class ChatPane extends ChatPaneHeader {
       },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    // Side-docked workspace surfaces narrow the conversation region; bottom
-    // strips do not affect whether the session rail can dock beside it.
+    // Only side-docked rails narrow the conversation region.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const selectedSessionRailMode =
@@ -371,6 +369,10 @@ export class ChatPane extends ChatPaneHeader {
             }
           : undefined,
       sessions: state.sessionsResult,
+      toolOverrides: selectedSession?.toolOverrides,
+      capabilityMenu: catalogKey
+        ? undefined
+        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
