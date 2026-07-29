@@ -61,8 +61,27 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
+function resolveLinuxFilesystemBusUid(busAddress: string | undefined): string | undefined {
+  // Classify a single filesystem transport before decoding so custom abstract
+  // buses and semicolon-separated fallback addresses are never rewritten.
+  const singleUnixAddress = busAddress?.match(/^unix:([^;]+)$/u)?.[1];
+  const encodedBusPath = singleUnixAddress
+    ?.split(",")
+    .find((parameter) => parameter.startsWith("path="))
+    ?.slice("path=".length);
+  if (encodedBusPath === undefined) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(encodedBusPath).match(/^\/run\/user\/(\d+)\/bus$/u)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string> {
-  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : 0;
   if (uid <= 0) {
     return "";
   }
@@ -72,7 +91,7 @@ async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string>
   const runtimeDir = normalizeOptionalString(env.XDG_RUNTIME_DIR);
   const busAddress = normalizeOptionalString(env.DBUS_SESSION_BUS_ADDRESS);
   const runtimeUid = runtimeDir?.match(/^\/run\/user\/(\d+)$/)?.[1];
-  const busUid = busAddress?.match(/\/run\/user\/(\d+)\/bus(?:$|[,;])/u)?.[1];
+  const busUid = resolveLinuxFilesystemBusUid(busAddress);
   const repairRuntimeDir = !runtimeDir || (runtimeUid !== undefined && runtimeUid !== String(uid));
   const repairBusAddress = !busAddress || (busUid !== undefined && busUid !== String(uid));
   if (!repairRuntimeDir && !repairBusAddress) {

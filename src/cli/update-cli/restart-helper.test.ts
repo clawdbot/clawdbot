@@ -43,6 +43,7 @@ vi.mock("node:child_process", async () => {
 describe("restart-helper", () => {
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
+  const originalGetEuid = process.geteuid;
 
   async function prepareAndReadScript(
     env: Record<string, string>,
@@ -211,6 +212,7 @@ exit 0
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     process.getuid = originalGetUid;
+    process.geteuid = originalGetEuid;
   });
 
   describe("prepareRestartScript", () => {
@@ -230,7 +232,8 @@ exit 0
 
     it("repairs a mismatched inherited user bus before running systemctl --user", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      process.getuid = () => 1000;
+      process.getuid = () => 2000;
+      process.geteuid = () => 1000;
       const statSpy = vi.spyOn(fs, "stat").mockResolvedValue({
         isSocket: () => true,
       } as Awaited<ReturnType<typeof fs.stat>>);
@@ -280,7 +283,7 @@ exit 1
 
     it("does not rewrite a custom user bus environment", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      process.getuid = () => 1000;
+      process.geteuid = () => 1000;
       const statSpy = vi.spyOn(fs, "stat");
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
@@ -293,16 +296,22 @@ exit 1
       await cleanupScript(scriptPath);
     });
 
-    it("preserves a custom user bus when the runtime directory is missing", async () => {
+    it.each([
+      ["abstract transport", "unix:abstract=/openclaw-user-bus"],
+      ["path-looking abstract transport", "unix:abstract=/run/user/0/bus"],
+      ["multi-address transport", "unix:path=/run/user/0/bus;unix:abstract=/custom-openclaw-bus"],
+      ["malformed escaped path", "unix:path=%2Frun%2Fuser%2F0%2Fbus%ZZ"],
+    ])("preserves a custom %s when the runtime directory is missing", async (_name, busAddress) => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      process.getuid = () => 1000;
+      process.geteuid = () => 1000;
       vi.spyOn(fs, "stat").mockResolvedValue({
         isSocket: () => true,
       } as Awaited<ReturnType<typeof fs.stat>>);
+
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
         XDG_RUNTIME_DIR: "",
-        DBUS_SESSION_BUS_ADDRESS: "unix:abstract=/openclaw-user-bus",
+        DBUS_SESSION_BUS_ADDRESS: busAddress,
       });
 
       expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
@@ -310,9 +319,31 @@ exit 1
       await cleanupScript(scriptPath);
     });
 
+    it.each([
+      ["path first", "unix:path=/run/user/0/bus,guid=0123456789abcdef"],
+      ["guid first", "unix:guid=0123456789abcdef,path=/run/user/0/bus"],
+      ["escaped path", "unix:guid=0123456789abcdef,path=%2Frun%2Fuser%2F0%2Fbus"],
+    ])("repairs a canonical filesystem bus with D-Bus parameters (%s)", async (_order, address) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      vi.spyOn(fs, "stat").mockResolvedValue({
+        isSocket: () => true,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: address,
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).toContain("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'");
+      await cleanupScript(scriptPath);
+    });
+
     it("repairs both missing standard user bus values", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      process.getuid = () => 1000;
+      process.geteuid = () => 1000;
       vi.spyOn(fs, "stat").mockResolvedValue({
         isSocket: () => true,
       } as Awaited<ReturnType<typeof fs.stat>>);
@@ -329,7 +360,7 @@ exit 1
 
     it("keeps a valid standard user bus environment", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      process.getuid = () => 1000;
+      process.geteuid = () => 1000;
       const statSpy = vi.spyOn(fs, "stat");
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
@@ -345,7 +376,7 @@ exit 1
 
     it("keeps the inherited environment when the effective user bus is unavailable", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      process.getuid = () => 1000;
+      process.geteuid = () => 1000;
       vi.spyOn(fs, "stat").mockRejectedValue(
         Object.assign(new Error("missing bus"), { code: "ENOENT" }),
       );
