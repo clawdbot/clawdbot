@@ -957,6 +957,84 @@ describe("config mutate helpers", () => {
     });
   });
 
+  it("writes through a nested include when a read-time migration added keys", async () => {
+    const home = await suiteRootTracker.make("nested-include-migrated");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const agentPath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    const authoredRoot = {
+      agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      agentPath,
+      `${JSON.stringify({ bootstrapMaxChars: 25000 }, null, 2)}\n`,
+      "utf-8",
+    );
+    const migrated = {
+      agents: { entries: { alpha: { bootstrapMaxChars: 25000, default: true } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      agents: { entries: { alpha: { bootstrapMaxChars: 40000, default: true } } },
+    } as OpenClawConfig;
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include-migrated",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig: migrated,
+      }),
+      sourceConfigBeforeMigrations: {
+        agents: { entries: { alpha: { bootstrapMaxChars: 25000 } } },
+      } as ConfigFileSnapshot["sourceConfigBeforeMigrations"],
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          targetPath: agentPath,
+        },
+      ],
+    };
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [agentPath]: await resolveIncludeTarget(agentPath) },
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: createSnapshot({
+          hash: "hash-nested-include-migrated-refreshed",
+          path: configPath,
+          parsed: authoredRoot,
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig,
+      writeOptions: { expectedConfigPath: configPath },
+      io: {
+        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+        writeConfigFile: ioMocks.writeConfigFile,
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(agentPath, "utf-8"))).toEqual({
+      bootstrapMaxChars: 40000,
+      default: true,
+    });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+      '"$include": "./config/agent-alpha.json5"',
+    );
+  });
+
   it("does not write through when a change falls outside the nested include", async () => {
     const authoredRoot = {
       agents: {

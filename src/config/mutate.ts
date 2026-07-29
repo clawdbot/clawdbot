@@ -748,7 +748,11 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       const currentIncludedValue = resolveConfigEnvVars(authoredIncludeValue, envForRestore, {
         onMissing: () => {},
       });
-      const snapshotIncludedValue = readConfigPathValue(params.snapshot.sourceConfig, boundaryPath);
+      // Read-time compatibility migrations can add keys the authored include file
+      // does not carry, so compare against the pre-migration source when present.
+      const authoredSnapshotSource =
+        params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
+      const snapshotIncludedValue = readConfigPathValue(authoredSnapshotSource, boundaryPath);
       if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
         throw new ConfigMutationConflictError("included config changed since last load", {
           currentHash: previousIncludeHash,
