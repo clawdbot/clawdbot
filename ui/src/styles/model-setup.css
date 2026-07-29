@@ -70,6 +70,14 @@
   min-width: 0;
 }
 
+.model-setup__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .model-setup__manual-provider select {
   flex: 1;
   min-width: 0;
@@ -234,5 +242,9 @@
   .model-setup__row > .btn,
   .model-setup__success > .btn {
     align-self: flex-start;
+  }
+
+  .model-setup__row-actions {
+    justify-content: flex-start;
   }
 }
