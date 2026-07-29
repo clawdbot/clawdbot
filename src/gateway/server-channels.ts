@@ -1271,18 +1271,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ...store.stops.keys(),
       ...store.tasks.keys(),
     ]);
-    // A completed hot-reload stop can leave only restartPending, or the
-    // private known-account handoff marker, until the paired start runs; manual
-    // stops must still be able to cancel that queued restart.
+    // A completed hot-reload stop can leave only restartPending, a caller-owned
+    // restart handoff, or the private known-account handoff marker until the
+    // paired start runs; manual stops must still be able to cancel that queued
+    // restart.
     const hasRestartPendingRuntime = Array.from(store.runtimes.values()).some(
       (snapshot) => snapshot.restartPending === true,
     );
+    const hasRestartDeferredHandoff = accountId
+      ? restartDeferredToCaller.has(restartKey(channelId, accountId))
+      : Array.from(restartDeferredToCaller.keys()).some((key) => key.startsWith(`${channelId}:`));
     const hasKnownAccountHandoff = accountId
       ? knownAccountDeferredToCaller.has(restartKey(channelId, accountId))
       : Array.from(store.runtimes.keys()).some((id) =>
           knownAccountDeferredToCaller.has(restartKey(channelId, id)),
         );
-    const hasCallerOwnedHandoff = hasRestartPendingRuntime || hasKnownAccountHandoff;
+    const hasCallerOwnedHandoff =
+      hasRestartPendingRuntime || hasRestartDeferredHandoff || hasKnownAccountHandoff;
     if (!accountId && lifecycleIds.size === 0 && !hasCallerOwnedHandoff) {
       return;
     }
@@ -1308,7 +1313,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const initialTask = store.tasks.get(id);
         const runtimeSnapshot = store.runtimes.get(id);
         const rKey = restartKey(channelId, id);
-        const hadCallerHandoff = knownAccountDeferredToCaller.has(rKey);
+        const hadCallerHandoff =
+          restartDeferredToCaller.has(rKey) || knownAccountDeferredToCaller.has(rKey);
         const hadLiveState = Boolean(
           initialAbort ||
           initialTask ||

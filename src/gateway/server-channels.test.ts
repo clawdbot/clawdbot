@@ -3760,6 +3760,45 @@ describe("server-channels auto restart", () => {
     expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
   });
 
+  it("lets manual stops cancel ordinary reload handoffs without plugin stop hooks", async () => {
+    const accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    await manager.stopChannel("discord", "account-a");
+    await manager.startChannel("discord", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a"]);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(
+      false,
+    );
+  });
+
   it("records manual stops for inactive listed accounts without plugin stop hooks", async () => {
     const accountIds = ["account-a", "account-b"];
     const startAccount = vi.fn(
