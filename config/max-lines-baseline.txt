@@ -945,7 +945,6 @@ src/skills/loading/workspace-load.test.ts
 src/skills/loading/workspace.ts
 src/skills/security/scanner.ts
 src/skills/workshop/service.test.ts
-src/skills/workshop/service.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
