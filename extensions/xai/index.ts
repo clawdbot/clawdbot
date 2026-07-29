@@ -175,7 +175,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: {
+  provider: (api) => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -254,7 +254,10 @@ export default defineSingleProviderPluginEntry({
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: wrapXaiProviderStream,
+    wrapStreamFn: (ctx) =>
+      wrapXaiProviderStream(ctx, {
+        clientVersion: api.runtime.version,
+      }),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
@@ -279,7 +282,7 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
-  },
+  }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
     api.registerMediaUnderstandingProvider(buildXaiMediaUnderstandingProvider());
