@@ -83,7 +83,24 @@ openclaw directory groups members --channel zalouser --group-id <id>
 
 Tool name: `zalouser`
 
-Actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
+Actions: `send`, `image`, `link`, `friends`, `groups`, `groupLink`, `me`, `status`
+
+### `groupLink`
+
+Fetches the invite link of a group the account is a member of (admin rights are
+not required). `threadId` is the group id. Returns the current link state, e.g.
+`{ "enabled": true, "link": "https://zalo.me/g/..." }`, or `{ "enabled": false }`
+when link sharing is turned off for the group.
+
+<Warning>
+Group invite links are shareable join URLs for private groups. Granting the
+`zalouser` tool to an agent includes this read capability - anyone the agent
+relays the link to can join the group while the link stays enabled. Group tool
+policy (`tools.allow` / `tools.deny`) is tool-name scoped, so it cannot
+allow the rest of the tool while blocking `groupLink` alone. If that exposure
+is not acceptable for a deployment, deny the whole `zalouser` tool in the
+affected groups.
+</Warning>
 
 Channel message actions (not the agent tool) also support `react` for message
 reactions.

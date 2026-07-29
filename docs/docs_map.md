@@ -7964,6 +7964,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config
   - H2: CLI
   - H2: Agent tool
+  - H3: groupLink
   - H2: Related
 
 ## plugins/zoom-meetings.md
