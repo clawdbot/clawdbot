@@ -577,6 +577,12 @@ const result = await api.runtime.subagent.run({
 });
 ```
 
+Plugins with a durable, plugin-owned lease controller can instead call
+`api.runtime.subagent.spawnReserved(...)` with a preallocated child session key
+and run id. Core validates and consumes those identities but does not own the
+lease schema, persistence, service RPCs, transition fields, or replay policy.
+The requester session must already be owned by the calling plugin.
+
 Notes:
 
 - `provider` and `model` are optional per-run overrides, not persistent session changes.
@@ -585,7 +591,7 @@ Notes:
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
-- Plugin-created subagent sessions are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.
+- Plugin-created subagent sessions, including reserved spawns, are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.
 
 For web search, plugins can consume the shared runtime helper instead of
 reaching into the agent tool wiring:

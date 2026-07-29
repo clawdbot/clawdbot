@@ -109,15 +109,10 @@ test("unknown-agent session reads return missing results without provisioning an
   });
   expect(described).toMatchObject({ ok: true, payload: { session: null } });
 
-  const messages = await directSessionReq<{
-    messages: unknown[];
-    sessionExists: boolean;
-    totalMessages: number;
-  }>("sessions.get", { key: UNKNOWN_SESSION_KEY });
-  expect(messages).toMatchObject({
-    ok: true,
-    payload: { messages: [], sessionExists: false, totalMessages: 0 },
+  const messages = await directSessionReq<{ messages: unknown[] }>("sessions.get", {
+    key: UNKNOWN_SESSION_KEY,
   });
+  expect(messages).toMatchObject({ ok: true, payload: { messages: [] } });
 
   const preview = await directSessionReq<{
     previews: Array<{ key: string; status: string; items: unknown[] }>;
@@ -134,32 +129,6 @@ test("unknown-agent session reads return missing results without provisioning an
 
   expectAgentStoreAbsent(UNKNOWN_AGENT_ID);
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
-});
-
-test("sessions.get returns canonical existence and total beyond its page limit", async () => {
-  const storePath = await configureFixedSessionStore("canonical-total");
-  const sessionKey = "agent:main:canonical-total";
-  const sessionId = "session-main-canonical-total";
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey, storePath },
-    { sessionId, updatedAt: 42 },
-  );
-  await seedLinearSessionTranscript({
-    agentId: "main",
-    contents: ["one", "two", "three"],
-    sessionId,
-    sessionKey,
-    storePath,
-  });
-
-  const result = await directSessionReq<{
-    messages: unknown[];
-    sessionExists: boolean;
-    totalMessages: number;
-  }>("sessions.get", { key: sessionKey, limit: 1 });
-
-  expect(result.payload).toMatchObject({ sessionExists: true, totalMessages: 3 });
-  expect(result.payload?.messages).toHaveLength(1);
 });
 
 test("sessions.describe reads a pre-existing store after its agent is removed from config", async () => {

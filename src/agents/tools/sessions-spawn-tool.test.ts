@@ -146,20 +146,6 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.streamTo).toBeUndefined();
   });
 
-  it("does not advertise external Agentic OS RPC contract fields to models", () => {
-    const tool = createSessionsSpawnTool();
-    const schema = tool.parameters as { properties?: Record<string, unknown> };
-
-    for (const externalField of [
-      "client_request_id",
-      "idempotency_key",
-      "gateway_lease_id",
-      "metadata",
-    ]) {
-      expect(schema.properties).not.toHaveProperty(externalField);
-    }
-  });
-
   it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
     registerAcpBackendForTest();
 

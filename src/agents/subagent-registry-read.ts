@@ -9,7 +9,6 @@ import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
-  getCurrentSubagentRunByChildSessionKeyAndTaskRunIdFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
@@ -119,23 +118,6 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
   return getSubagentRunByChildSessionKeyFromRuns(
     getSubagentRunsSnapshotForChildSession(subagentRuns, key),
     key,
-  );
-}
-
-/** Returns the current generation for a child session and logical task run. */
-export function getCurrentSubagentRunByChildSessionKeyAndTaskRunId(
-  childSessionKey: string,
-  taskRunId: string,
-): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  const id = taskRunId.trim();
-  if (!key || !id) {
-    return null;
-  }
-  return getCurrentSubagentRunByChildSessionKeyAndTaskRunIdFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-    key,
-    id,
   );
 }
 

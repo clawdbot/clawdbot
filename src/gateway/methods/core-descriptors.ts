@@ -13,15 +13,11 @@ type CoreGatewayMethodSpec = {
   scope: GatewayMethodScope;
   since?: string;
   advertise?: false;
-  nativeProtocol?: false;
   startup?: true;
   controlPlaneWrite?: true;
 };
 
-type CoreGatewayMethodMetadata = Pick<
-  CoreGatewayMethodSpec,
-  "name" | "scope" | "since" | "nativeProtocol"
->;
+type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
@@ -467,28 +463,6 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "session.suggestions.list", scope: "operator.read", since: "2026.7" },
   { name: "session.suggestions.resolve", scope: "operator.write", since: "2026.7" },
   { name: "session.typing", scope: "operator.write", since: "2026.7" },
-  {
-    name: "subagents.allowLease.acquire",
-    scope: "operator.admin",
-    since: "2026.7",
-    nativeProtocol: false,
-  },
-  {
-    name: "subagents.allowLease.status",
-    scope: "operator.read",
-    since: "2026.7",
-    nativeProtocol: false,
-  },
-  {
-    name: "subagents.allowLease.release",
-    scope: "operator.write",
-    since: "2026.7",
-    nativeProtocol: false,
-  },
-  { name: "sessions_spawn", scope: "operator.write", since: "2026.7", nativeProtocol: false },
-  { name: "sessions_list", scope: "operator.read", since: "2026.7", nativeProtocol: false },
-  { name: "sessions_status", scope: "operator.read", since: "2026.7", nativeProtocol: false },
-  { name: "sessions_history", scope: "operator.read", since: "2026.7", nativeProtocol: false },
   // Companion state is process-local and its runner is hard-restricted to
   // read-only workspace and exact-session tools.
   { name: "sessions.companion.ask", scope: "operator.read", since: "2026.7" },
@@ -533,12 +507,7 @@ export function listCoreGatewayMethodNames(): string[] {
 
 /** Returns the public metadata emitted for every core gateway method. */
 export function listCoreGatewayMethodMetadata(): readonly CoreGatewayMethodMetadata[] {
-  return CORE_GATEWAY_METHOD_SPECS.map(({ name, scope, since, nativeProtocol }) => ({
-    name,
-    scope,
-    since,
-    nativeProtocol,
-  }));
+  return CORE_GATEWAY_METHOD_SPECS.map(({ name, scope, since }) => ({ name, scope, since }));
 }
 
 /** Looks up the raw core method scope, including node and dynamic sentinel scopes. */

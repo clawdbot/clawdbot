@@ -857,6 +857,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent = getRuntimeProperty();
         return {
+          spawnReserved: async (params) =>
+            await withPluginRuntimePluginIdScope(pluginId, async () => {
+              assertSessionIdentitiesOwned({
+                action: "spawn a reserved child from",
+                sessionKeys: [params.requesterSessionKey],
+              });
+              return await subagent.spawnReserved(params);
+            }),
           run: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {
               assertSessionIdentitiesOwned({

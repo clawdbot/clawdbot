@@ -15,19 +15,6 @@ review_artifacts_helper_path() {
   printf '%s/pr-lib/review-artifacts.mjs\n' "$scripts_dir"
 }
 
-is_full_lower_hex_sha() {
-  local value="$1"
-  case "$value" in
-    ????????????????????????????????????????)
-      case "$value" in
-        *[!0123456789abcdef]*) return 1 ;;
-        *) return 0 ;;
-      esac
-      ;;
-    *) return 1 ;;
-  esac
-}
-
 review_claim() {
   local pr="$1"
   mark_pr_operation_side_effects_started
@@ -173,10 +160,10 @@ review_artifacts_init() {
   local meta_number head_sha
   meta_number=$(jq -r '.number' .local/pr-meta.json)
   head_sha=$(jq -r '.headRefOid' .local/pr-meta.json)
-  # Avoid external grep/ripgrep dependencies here: fork-PR CI harnesses may not
-  # have those tools installed, and a missing binary would misreport valid metadata
-  # as an identity mismatch.
-  if [ "$meta_number" != "$pr" ] || ! is_full_lower_hex_sha "$head_sha"; then
+  # Bash regex, not rg: this guard runs inside fork-PR CI test harnesses on
+  # GitHub-hosted runners without ripgrep, where a missing rg (exit 127) would
+  # misreport a valid head SHA as an identity mismatch.
+  if [ "$meta_number" != "$pr" ] || ! [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Review artifacts init failed: .local/pr-meta.json describes PR #$meta_number at '$head_sha', not PR #$pr. Re-run: scripts/pr review-init $pr"
     exit 1
   fi

@@ -75,7 +75,6 @@ const SessionsHistoryOutputSchema = Type.Union([
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
-const SESSIONS_HISTORY_MAX_LIMIT = 1000;
 type GatewayCaller = typeof callGateway;
 type ChatHistoryPaginationMetadata = {
   offset?: number;
@@ -448,9 +447,6 @@ export function createSessionsHistoryTool(opts?: {
       }
 
       const limit = readPositiveIntegerParam(params, "limit");
-      if (limit !== undefined && limit > SESSIONS_HISTORY_MAX_LIMIT) {
-        throw new ToolInputError(`limit must be no greater than ${SESSIONS_HISTORY_MAX_LIMIT}`);
-      }
       const offset = readOffsetParam(params);
       const messageId = readStringParam(params, "messageId");
       const sessionId = readStringParam(params, "sessionId");

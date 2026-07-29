@@ -164,18 +164,6 @@
     "target": "Gateway RPC 参考"
   },
   {
-    "source": "Gateway protocol",
-    "target": "Gateway 协议"
-  },
-  {
-    "source": "Gateway integrations for external apps",
-    "target": "外部应用的 Gateway 集成"
-  },
-  {
-    "source": "Lease-backed session spawning",
-    "target": "租约支持的会话生成"
-  },
-  {
     "source": "Building a Gateway client",
     "target": "构建 Gateway 客户端"
   },
@@ -190,10 +178,6 @@
   {
     "source": "Sessions",
     "target": "会话"
-  },
-  {
-    "source": "Session tools",
-    "target": "会话工具"
   },
   {
     "source": "Pi",

@@ -84,12 +84,6 @@ export interface AgentModelCatalogs {
   updated_at: number;
 }
 
-export interface AgenticOsRuntimeSnapshots {
-  key: string;
-  payload_json: string;
-  updated_at_ms: number;
-}
-
 export interface AndroidNotificationRecentPackages {
   package_name: string;
   sort_order: number;
@@ -1557,7 +1551,6 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
-  agentic_os_runtime_snapshots: AgenticOsRuntimeSnapshots;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;

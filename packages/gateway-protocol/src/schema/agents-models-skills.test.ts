@@ -20,7 +20,6 @@ import {
   SkillsProposalEventsListResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
-  ToolsCatalogResultSchema,
   ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
@@ -123,34 +122,6 @@ describe("AgentsUpdateParamsSchema", () => {
       }),
     ).toBe(true);
     expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work", model: "" })).toBe(false);
-  });
-});
-
-describe("ToolsCatalogResultSchema", () => {
-  it("accepts runtimeMethods in the closed catalog result", () => {
-    expect(
-      Value.Check(ToolsCatalogResultSchema, {
-        agentId: "main",
-        profiles: [{ id: "minimal", label: "Minimal" }],
-        groups: [],
-        tools: [],
-        runtimeMethods: [
-          {
-            name: "sessions_spawn",
-            parameters: ["client_request_id", "idempotency_key", "gateway_lease_id"],
-          },
-        ],
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(ToolsCatalogResultSchema, {
-        agentId: "main",
-        profiles: [{ id: "minimal", label: "Minimal" }],
-        groups: [],
-        tools: [],
-        runtimeMethods: [{ name: "sessions_spawn", parameters: [1] }],
-      }),
-    ).toBe(false);
   });
 });
 

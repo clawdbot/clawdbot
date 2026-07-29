@@ -497,6 +497,11 @@ describe("plugin registry runtime config scope", () => {
     const typedEntries = entries as unknown as Record<string, SessionEntry>;
     const subagent = {
       run: vi.fn(async () => ({ runId: "subagent-run" })),
+      spawnReserved: vi.fn(async (params) => ({
+        childSessionKey: params.childSessionKey,
+        runId: params.runId,
+        mode: "run" as const,
+      })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
       deleteSession: vi.fn(async () => {}),
@@ -610,6 +615,18 @@ describe("plugin registry runtime config scope", () => {
         message: "continue",
       }),
     ).resolves.toEqual({ ok: true });
+    const reservedSpawn = {
+      requesterSessionKey: reservedKey,
+      targetAgentId: "main",
+      childSessionKey: "agent:main:subagent:reserved-child",
+      runId: "reserved-child-run",
+      task: "continue through the reserved child",
+    };
+    await expect(ownerApi.runtime.subagent.spawnReserved(reservedSpawn)).resolves.toEqual({
+      childSessionKey: reservedSpawn.childSessionKey,
+      runId: reservedSpawn.runId,
+      mode: "run",
+    });
 
     let delegatedCallbackScope = getPluginRuntimeGatewayRequestScope();
     await expect(
@@ -709,6 +726,9 @@ describe("plugin registry runtime config scope", () => {
     await expect(
       otherApi.runtime.subagent.run({ sessionKey: reservedKey, message: "continue" }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(otherApi.runtime.subagent.spawnReserved(reservedSpawn)).rejects.toThrow(
+      'owned by plugin "codex-owner"',
+    );
     await expect(
       otherApi.runtime.subagent.deleteSession({ sessionKey: reservedKey }),
     ).rejects.toThrow('owned by plugin "codex-owner"');

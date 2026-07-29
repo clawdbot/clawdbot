@@ -351,13 +351,38 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
+    Plugins that persist their own lease and idempotency records can consume
+    preallocated child and run identities atomically:
+
+    ```typescript
+    const accepted = await api.runtime.subagent.spawnReserved({
+      requesterSessionKey: "agent:main:main",
+      targetAgentId: "researcher",
+      childSessionKey: "agent:researcher:subagent:lease-01j...",
+      runId: "run-01j...",
+      task: "Collect the evidence attached to this lease.",
+      cleanup: "keep",
+      context: "isolated",
+    });
+    ```
+
+    `spawnReserved(...)` is a narrow execution seam, not a lease store. The
+    calling plugin owns lease authentication, expiry, replay handling,
+    persistence, and all service-specific metadata or Gateway methods. Core
+    validates that the configured target, child-session agent, returned child
+    identity, and returned run identity match the reservation. Reserved runs
+    are one-shot `mode: "run"` children and do not emit an automatic completion
+    message. `requesterSessionKey` must name a session owned by the calling
+    plugin; a plugin cannot use this seam to borrow another plugin's or an
+    operator's session authority.
+
     <Warning>
     Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.
     </Warning>
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
-    `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
+    `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)` or `api.runtime.subagent.spawnReserved(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
   </Accordion>
   <Accordion title="api.runtime.sandbox">

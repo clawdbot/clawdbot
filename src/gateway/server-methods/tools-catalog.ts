@@ -25,8 +25,6 @@ import {
   getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import { AGENTIC_OS_RUNTIME_METHOD_DESCRIPTORS } from "../agentic-os-runtime-contract-descriptors.js";
-import { listCoreGatewayMethodNames } from "../methods/core-descriptors.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -40,7 +38,6 @@ type ToolCatalogEntry = {
   optional?: boolean;
   risk?: "low" | "medium" | "high";
   tags?: string[];
-  parameters?: string[];
   defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
 };
 
@@ -65,7 +62,6 @@ function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): Tool
       label: tool.label,
       description: tool.description,
       source: "core",
-      parameters: tool.parameters,
       defaultProfiles: resolveCoreToolProfiles(tool.id),
     })),
   }));
@@ -202,9 +198,7 @@ function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   includePlugins?: boolean;
-}): ToolsCatalogResult & {
-  runtimeMethods: Array<{ name: string; parameters: string[] }>;
-} {
+}): ToolsCatalogResult {
   const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
   const includePlugins = params.includePlugins !== false;
   const groups = buildCoreGroups({ cfg: params.cfg, agentId });
@@ -224,13 +218,6 @@ function buildToolsCatalogResult(params: {
     agentId,
     profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
     groups,
-    tools: groups.flatMap((group) => group.tools),
-    runtimeMethods: AGENTIC_OS_RUNTIME_METHOD_DESCRIPTORS.filter((descriptor) =>
-      new Set(listCoreGatewayMethodNames()).has(descriptor.name),
-    ).map((descriptor) => ({
-      name: descriptor.name,
-      parameters: [...descriptor.parameters],
-    })),
   };
 }
 

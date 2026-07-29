@@ -289,8 +289,8 @@ describe("session cost usage", () => {
         timestamp: now.toISOString(),
         message: {
           role: "assistant",
-          provider: "test-pricing",
-          model: "cost-fixture-model",
+          provider: "openai",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 20,
@@ -306,8 +306,8 @@ describe("session cost usage", () => {
         timestamp: now.toISOString(),
         message: {
           role: "assistant",
-          provider: "test-pricing",
-          model: "cost-fixture-model",
+          provider: "openai",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 10,
@@ -322,8 +322,8 @@ describe("session cost usage", () => {
         timestamp: older.toISOString(),
         message: {
           role: "assistant",
-          provider: "test-pricing",
-          model: "cost-fixture-model",
+          provider: "openai",
+          model: "gpt-5.4",
           usage: {
             input: 5,
             output: 5,
@@ -343,10 +343,10 @@ describe("session cost usage", () => {
     const config = {
       models: {
         providers: {
-          "test-pricing": {
+          openai: {
             models: [
               {
-                id: "cost-fixture-model",
+                id: "gpt-5.4",
                 cost: {
                   input: 1,
                   output: 2,
@@ -369,40 +369,6 @@ describe("session cost usage", () => {
       expect(populated).toHaveLength(1);
       expect(summary.totals.totalTokens).toBe(50);
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
-    });
-  });
-
-  it("does not rebuild per-session summaries when refresh is disabled", async () => {
-    const root = await makeSessionCostRoot("cost-session-sync");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionId = "sess-sync-cache";
-    const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
-    await fs.writeFile(
-      sessionFile,
-      transcriptText(sessionId, {
-        type: "message",
-        timestamp: "2026-06-25T12:00:00.000Z",
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: { input: 8, output: 13, totalTokens: 21, cost: { total: 0.021 } },
-        },
-      }),
-      "utf-8",
-    );
-
-    await withStateDir(root, async () => {
-      const disabled = await loadSessionCostSummariesFromCache({
-        sessions: [{ sessionId, sessionFile }],
-        requestRefresh: false,
-      });
-
-      expect(disabled.cacheStatus.status).toBe("stale");
-      expect(disabled.cacheStatus.cachedFiles).toBe(0);
-      expect(disabled.cacheStatus.pendingFiles).toBe(1);
-      expect(disabled.summaries[0]).toBeNull();
     });
   });
 
@@ -649,8 +615,8 @@ describe("session cost usage", () => {
       timestamp: now,
       message: {
         role: "assistant",
-        provider: "test-pricing",
-        model: "cost-fixture-model",
+        provider: "openai",
+        model: "gpt-5.4",
         usage: { input: 10, output: 20, totalTokens: 30 },
       },
     }));
@@ -659,10 +625,10 @@ describe("session cost usage", () => {
     const config = {
       models: {
         providers: {
-          "test-pricing": {
+          openai: {
             models: [
               {
-                id: "cost-fixture-model",
+                id: "gpt-5.4",
                 cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
               },
             ],

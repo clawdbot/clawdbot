@@ -295,12 +295,6 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
   ON state_leases(owner, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS agentic_os_runtime_snapshots (
-  key TEXT PRIMARY KEY,
-  payload_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
   raw_json TEXT NOT NULL,

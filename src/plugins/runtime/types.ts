@@ -42,6 +42,29 @@ type SubagentRunResult = {
   };
 };
 
+type SubagentSpawnReservedParams = {
+  /** Existing requester session whose policy and lineage the child inherits. */
+  requesterSessionKey: string;
+  /** Configured target agent authorized by the plugin-owned lease. */
+  targetAgentId: string;
+  /** Child identity reserved by the plugin before calling core. */
+  childSessionKey: string;
+  /** Run identity reserved by the plugin before calling core. */
+  runId: string;
+  task: string;
+  taskName?: string;
+  label?: string;
+  cleanup?: "delete" | "keep";
+  context?: "isolated" | "fork";
+  lightContext?: boolean;
+};
+
+type SubagentSpawnReservedResult = {
+  childSessionKey: string;
+  runId: string;
+  mode: "run";
+};
+
 type SubagentWaitParams = {
   runId: string;
   timeoutMs?: number;
@@ -116,6 +139,11 @@ export type PluginRuntime = PluginRuntimeCore & {
   };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
+    /**
+     * Consume identities reserved by a plugin-owned lease and start one child.
+     * The plugin owns lease persistence, expiry, replay, and service metadata.
+     */
+    spawnReserved: (params: SubagentSpawnReservedParams) => Promise<SubagentSpawnReservedResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,

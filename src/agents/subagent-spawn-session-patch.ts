@@ -43,6 +43,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
     entry.parentSessionKey = patch.parentSessionKey.trim();
   }
+  if (typeof patch.pluginOwnerId === "string" && patch.pluginOwnerId.trim()) {
+    entry.pluginOwnerId = patch.pluginOwnerId.trim();
+  }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
   }
@@ -107,6 +110,7 @@ export async function createInitialSubagentSession(params: {
   incognito: boolean;
   requesterInternalKey: string;
   completionOwnerSessionKey: string;
+  pluginOwnerId?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   admissionPatch?: Record<string, unknown>;
@@ -120,6 +124,7 @@ export async function createInitialSubagentSession(params: {
   const initialChildSessionPatch: Record<string, unknown> = {
     spawnedBy: params.requesterInternalKey,
     completionOwnerSessionKey: params.completionOwnerSessionKey,
+    ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
     // Navigation and control lineage commit with the creation stamp so a
     // launch failure cannot leave a durable but parentless child row.
     parentSessionKey: params.requesterInternalKey,

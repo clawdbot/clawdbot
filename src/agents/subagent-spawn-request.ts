@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  isSubagentSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { listAgentIds } from "./agent-scope-config.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
 import { listSwarmRunsForGroup } from "./subagent-registry.js";
@@ -221,6 +227,68 @@ export function resolveSubagentSpawnRequest(
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
     : requesterAgentId;
+  const authorizedTargetAgentId = normalizeOptionalString(ctx.authorizedTargetAgentId);
+  const preallocatedChildSessionKey = normalizeOptionalString(ctx.preallocatedChildSessionKey);
+  const preallocatedRunId = normalizeOptionalString(ctx.preallocatedRunId);
+  const hasReservedSpawnField = Boolean(
+    authorizedTargetAgentId || preallocatedChildSessionKey || preallocatedRunId,
+  );
+  if (
+    hasReservedSpawnField &&
+    (!authorizedTargetAgentId || !preallocatedChildSessionKey || !preallocatedRunId)
+  ) {
+    return {
+      ok: false,
+      result: {
+        status: "error",
+        error:
+          "reserved subagent spawn requires authorizedTargetAgentId, preallocatedChildSessionKey, and preallocatedRunId",
+      },
+    };
+  }
+  if (authorizedTargetAgentId) {
+    if (
+      !isValidAgentId(authorizedTargetAgentId) ||
+      normalizeAgentId(authorizedTargetAgentId) !== targetAgentId
+    ) {
+      return {
+        ok: false,
+        result: {
+          status: "forbidden",
+          error: "reserved spawn target does not match requested agentId",
+        },
+      };
+    }
+    const parsedChildSessionKey = parseAgentSessionKey(preallocatedChildSessionKey);
+    const childSuffix = parsedChildSessionKey?.rest.slice("subagent:".length).trim();
+    if (
+      !parsedChildSessionKey ||
+      !isSubagentSessionKey(preallocatedChildSessionKey) ||
+      !childSuffix ||
+      normalizeAgentId(parsedChildSessionKey.agentId) !== targetAgentId
+    ) {
+      return {
+        ok: false,
+        result: {
+          status: "error",
+          error:
+            "reserved childSessionKey must be a non-empty agent:<targetAgentId>:subagent:<id> key",
+        },
+      };
+    }
+    if (
+      isIncognitoSessionKey(requesterInternalKey) &&
+      !isIncognitoSessionKey(preallocatedChildSessionKey)
+    ) {
+      return {
+        ok: false,
+        result: {
+          status: "forbidden",
+          error: "incognito requesters require an incognito reserved childSessionKey",
+        },
+      };
+    }
+  }
   const configuredAgentIds = resolveConfiguredAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
@@ -252,7 +320,7 @@ export function resolveSubagentSpawnRequest(
       targetAgentId,
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
-      authorizedTargetAgentId: ctx.authorizedTargetAgentId,
+      authorizedTargetAgentId,
     });
   };
   const admission = resolveAdmission();
@@ -281,7 +349,6 @@ export function resolveSubagentSpawnRequest(
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
-  const preallocatedRunId = normalizeOptionalString(ctx.preallocatedRunId);
   const childIdem =
     preallocatedRunId ??
     (swarmLaunchReplayKey

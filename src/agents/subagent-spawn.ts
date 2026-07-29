@@ -177,6 +177,7 @@ export async function spawnSubagentDirect(
       incognito,
       requesterInternalKey,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+      ...(ctx.pluginOwnerId ? { pluginOwnerId: ctx.pluginOwnerId } : {}),
       spawnedWorkspaceDir,
       spawnedCwd,
       admissionPatch: admission.childSessionPatch,

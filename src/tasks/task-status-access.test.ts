@@ -6,7 +6,6 @@ import {
 import { resetGeneratedMediaTaskActivityForTests } from "./task-runtime.test-helpers.js";
 import {
   buildPendingGeneratedMediaSessionKeySet,
-  findSubagentTaskByRunIdForStatus,
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
   hasPendingGeneratedMediaTaskForSessionKey,
@@ -76,80 +75,6 @@ describe("generated media task snapshots", () => {
     clearGeneratedMediaTaskActivity("tool:image_generate:run-1");
     expect(hasNewGeneratedMediaTaskForSessionKey(sessionKey, before)).toBe(true);
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
-  });
-});
-
-describe("findSubagentTaskByRunIdForStatus", () => {
-  beforeEach(() => {
-    mocks.listTaskRecordsUnsorted.mockReset();
-  });
-
-  it("requires subagent runtime, child session, and exact or logical run identity", () => {
-    const childSessionKey = "agent:main:subagent:child";
-    mocks.listTaskRecordsUnsorted.mockReturnValue([
-      {
-        taskId: "adversarial-child",
-        runtime: "subagent",
-        childSessionKey: "agent:attacker:subagent:child",
-        runId: "run-current",
-        status: "succeeded",
-        createdAt: 10,
-      },
-      {
-        taskId: "wrong-runtime",
-        runtime: "cli",
-        childSessionKey,
-        runId: "run-logical",
-        status: "running",
-        createdAt: 20,
-      },
-      {
-        taskId: "logical-owner",
-        runtime: "subagent",
-        childSessionKey,
-        runId: "run-logical",
-        status: "running",
-        createdAt: 30,
-      },
-    ]);
-
-    expect(
-      findSubagentTaskByRunIdForStatus({
-        childSessionKey,
-        runId: "run-current",
-        taskRunId: "run-logical",
-      })?.taskId,
-    ).toBe("logical-owner");
-  });
-
-  it("prefers scoped current-run evidence over logical owner evidence", () => {
-    const childSessionKey = "agent:main:subagent:child";
-    mocks.listTaskRecordsUnsorted.mockReturnValue([
-      {
-        taskId: "logical-owner",
-        runtime: "subagent",
-        childSessionKey,
-        runId: "run-logical",
-        status: "running",
-        createdAt: 40,
-      },
-      {
-        taskId: "current-generation",
-        runtime: "subagent",
-        childSessionKey,
-        runId: "run-current",
-        status: "succeeded",
-        createdAt: 30,
-      },
-    ]);
-
-    expect(
-      findSubagentTaskByRunIdForStatus({
-        childSessionKey,
-        runId: "run-current",
-        taskRunId: "run-logical",
-      })?.taskId,
-    ).toBe("current-generation");
   });
 });
 

@@ -640,10 +640,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       agentId: requestedAgent.agentId,
     });
     if (!entry?.sessionId) {
-      respond(true, { messages: [], sessionExists: false, totalMessages: 0 }, undefined);
+      respond(true, { messages: [] }, undefined);
       return;
     }
-    const { messages, totalMessages } = await readRecentSessionMessagesWithStatsAsync(
+    const { messages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
         sessionEntry: entry,
@@ -657,6 +657,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         allowResetArchiveFallback: true,
       },
     );
-    respond(true, { messages, sessionExists: true, totalMessages }, undefined);
+    respond(true, { messages }, undefined);
   },
 };

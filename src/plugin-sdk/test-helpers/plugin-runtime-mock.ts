@@ -992,6 +992,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     subagent: {
       run: vi.fn(),
+      spawnReserved: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
       deleteSession: vi.fn(),

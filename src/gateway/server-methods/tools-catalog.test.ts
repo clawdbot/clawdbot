@@ -61,7 +61,6 @@ type CatalogTool = {
   optional?: boolean;
   risk?: unknown;
   tags?: unknown;
-  parameters?: string[];
   defaultProfiles?: unknown[];
 };
 type CatalogGroup = {
@@ -73,8 +72,6 @@ type CatalogGroup = {
 type CatalogPayload = {
   agentId?: string;
   groups: CatalogGroup[];
-  tools?: CatalogTool[];
-  runtimeMethods?: Array<{ name: string; parameters: string[] }>;
 };
 
 function createInvokeParams(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
@@ -155,53 +152,6 @@ describe("tools.catalog handler", () => {
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
-  });
-
-  it("discovers external orchestrator methods without adding them to model profiles", async () => {
-    const { respond, invoke } = createInvokeParams({ includePlugins: false });
-    await invoke();
-    const payload = expectCatalogPayload(respond);
-    const runtimeMethods = payload.runtimeMethods ?? [];
-    expect(
-      runtimeMethods.find((method) => method.name === "subagents.allowLease.acquire"),
-    ).toMatchObject({
-      parameters: expect.arrayContaining(["client_lease_id", "idempotency_key", "ttl_ms"]),
-    });
-    expect(
-      runtimeMethods.find((method) => method.name === "subagents.allowLease.release"),
-    ).toMatchObject({
-      parameters: expect.arrayContaining([
-        "client_lease_id",
-        "release_idempotency_key",
-        "gateway_lease_id",
-      ]),
-    });
-    expect(runtimeMethods.find((method) => method.name === "sessions_status")).toMatchObject({
-      parameters: ["session_key"],
-    });
-    expect(runtimeMethods.filter((method) => method.name === "sessions_spawn")).toHaveLength(1);
-    expect(runtimeMethods.find((method) => method.name === "sessions_spawn")).toMatchObject({
-      parameters: expect.arrayContaining([
-        "client_request_id",
-        "idempotency_key",
-        "gateway_lease_id",
-        "metadata",
-      ]),
-    });
-    expect(
-      runtimeMethods.find((method) => method.name === "sessions_spawn")?.parameters,
-    ).not.toContain("mode");
-    const catalog = payload.tools ?? payload.groups.flatMap((group) => group.tools);
-    expect(catalog.map((tool) => tool.id)).not.toContain("subagents.allowLease.acquire");
-    expect(catalog.map((tool) => tool.id)).not.toContain("sessions_status");
-    expect(catalog.find((tool) => tool.id === "sessions_spawn")?.parameters ?? []).not.toEqual(
-      expect.arrayContaining([
-        "client_request_id",
-        "idempotency_key",
-        "gateway_lease_id",
-        "metadata",
-      ]),
-    );
   });
 
   it("omits agents_wait until Swarm is enabled for the catalog agent", async () => {

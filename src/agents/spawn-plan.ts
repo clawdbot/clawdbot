@@ -293,7 +293,7 @@ export function resolveSpawnAdmission(params: {
   targetAgentId: string;
   requestedAgentId?: string;
   configuredAgentIds: string[];
-  /** Host-verified one-shot target authorization, for example an active allow lease. */
+  /** Plugin-verified one-shot target authorization from an active spawn lease. */
   authorizedTargetAgentId?: string;
   additionalActiveChildren?: number;
 }):
@@ -353,7 +353,7 @@ export function resolveSpawnAdmission(params: {
     authorizedTargetAgentId &&
     normalizeAgentId(authorizedTargetAgentId) !== normalizeAgentId(params.targetAgentId)
   ) {
-    return { ok: false, error: "host target authorization does not match requested agentId" };
+    return { ok: false, error: "reserved spawn target does not match requested agentId" };
   }
   const requireAgentId =
     requesterSubagentConfig?.requireAgentId ??

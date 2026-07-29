@@ -377,12 +377,9 @@ export function createSessionsListTool(opts?: {
           ...(abortedLastRun !== undefined ? { abortedLastRun } : {}),
           ...(childSessions ? { childSessions } : {}),
         };
-        const needsTranscriptFields =
-          (includeDerivedTitles && !derivedTitle) || (includeLastMessage && !lastMessagePreview);
         if (
           sessionId &&
           hydrateTranscriptFieldsAfterFiltering &&
-          needsTranscriptFields &&
           titleTargets.length < SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS
         ) {
           titleTargets.push({
@@ -422,18 +419,13 @@ export function createSessionsListTool(opts?: {
         await pMap(
           titleTargets,
           async (target) => {
-            let fields: Awaited<ReturnType<typeof readSessionTitleFieldsFromTranscriptAsync>>;
-            try {
-              fields = await readSessionTitleFieldsFromTranscriptAsync({
-                agentId: target.agentId,
-                sessionEntry: target.sessionEntry,
-                sessionId: target.sessionId,
-                sessionKey: target.sessionKey,
-                storePath,
-              });
-            } catch {
-              return;
-            }
+            const fields = await readSessionTitleFieldsFromTranscriptAsync({
+              agentId: target.agentId,
+              sessionEntry: target.sessionEntry,
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              storePath,
+            });
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,

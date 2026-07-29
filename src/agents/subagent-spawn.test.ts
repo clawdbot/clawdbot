@@ -340,9 +340,34 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
-  it("uses host-preallocated child and run identities", async () => {
-    const preallocatedChildSessionKey = "agent:main:subagent:host-reserved-child";
-    const preallocatedRunId = "host-reserved-run";
+  it("consumes plugin-reserved identities with exact one-shot target authorization", async () => {
+    const preallocatedChildSessionKey = "agent:worker:subagent:plugin-reserved-child";
+    const preallocatedRunId = "plugin-reserved-run";
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["planner"],
+            },
+          },
+          {
+            id: "planner",
+            workspace: "/tmp/workspace-planner",
+          },
+          {
+            id: "worker",
+            workspace: "/tmp/workspace-worker",
+          },
+        ],
+      },
+    });
     hoisted.callGatewayMock.mockImplementation(async ({ method, params }) =>
       method === "agent"
         ? { runId: requireRecord(params).idempotencyKey }
@@ -350,13 +375,24 @@ describe("spawnSubagentDirect seam flow", () => {
           ? { ok: true }
           : {},
     );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
 
     const result = await spawnSubagentDirect(
-      { task: "launch with durable host identities" },
+      {
+        task: "launch through the plugin reservation",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
       {
         agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
         preallocatedChildSessionKey,
         preallocatedRunId,
+        pluginOwnerId: "agentic-os",
       },
     );
 
@@ -368,6 +404,8 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(firstRegisteredSubagentRun()).toMatchObject({
       childSessionKey: preallocatedChildSessionKey,
       runId: preallocatedRunId,
+      agentId: "worker",
+      expectsCompletionMessage: false,
     });
     expect(gatewayRequest("agent")).toMatchObject({
       params: {
@@ -375,6 +413,62 @@ describe("spawnSubagentDirect seam flow", () => {
         idempotencyKey: preallocatedRunId,
       },
     });
+    expect(persistedStore?.[preallocatedChildSessionKey]).toMatchObject({
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+    });
+  });
+
+  it.each([
+    {
+      name: "mismatched target",
+      context: {
+        authorizedTargetAgentId: "planner",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved",
+        preallocatedRunId: "reserved-run",
+      },
+      expected: "reserved spawn target does not match requested agentId",
+    },
+    {
+      name: "mismatched child agent",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:planner:subagent:reserved",
+        preallocatedRunId: "reserved-run",
+      },
+      expected: "reserved childSessionKey must be",
+    },
+    {
+      name: "partial reservation",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved",
+      },
+      expected: "reserved subagent spawn requires",
+    },
+  ])("rejects an invalid plugin reservation: $name", async ({ context, expected }) => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "planner", workspace: "/tmp/workspace-planner" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "reject invalid reservation", agentId: "worker" },
+      {
+        agentSessionKey: "agent:main:main",
+        ...context,
+      },
+    );
+
+    expect(result.status).not.toBe("accepted");
+    expect(result.error).toContain(expected);
+    expect(gatewayRequestRecords()).toEqual([]);
   });
 
   it("inherits incognito storage ownership for direct children", async () => {
