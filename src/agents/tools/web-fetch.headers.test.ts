@@ -125,6 +125,7 @@ describe("web_fetch configured request headers", () => {
       Authorization: "Bearer operator-token",
       Cookie: "session=abc",
       Cookie2: "legacy=abc",
+      "Set-Cookie": "session=forged",
       "Proxy-Authorization": "Basic abc",
       "X-Api-Key": "live-key",
       apikey: "live-key",
@@ -143,6 +144,7 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("Authorization");
     expect(names).not.toContain("Cookie");
     expect(names).not.toContain("Cookie2");
+    expect(names).not.toContain("Set-Cookie");
     expect(names).not.toContain("Proxy-Authorization");
     expect(names).not.toContain("X-Api-Key");
     expect(names).not.toContain("apikey");
@@ -288,7 +290,11 @@ describe("web_fetch configured request headers", () => {
     global.fetch = withFetchPreconnect(fetchSpy);
     const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
 
-    const tool = createToolWithHeaders({ "X-Survives-Unicode": "東京" });
+    const invalidName = "X-Bad\n[forged]\u001b[31m";
+    const tool = createToolWithHeaders({
+      "X-Survives-Unicode": "東京",
+      [invalidName]: "ignored",
+    });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/survives" });
 
@@ -300,6 +306,12 @@ describe("web_fetch configured request headers", () => {
     expect(warned).toHaveLength(1);
     // Names are safe to log; values are not.
     expect(warned[0]).not.toContain("東京");
+    const invalidNameWarning = warnSpy.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.includes("X-Bad"));
+    expect(invalidNameWarning).toContain(JSON.stringify(invalidName));
+    expect(invalidNameWarning).not.toContain("\n");
+    expect(invalidNameWarning).not.toContain("\u001b");
   });
 
   it("partitions the fetch cache by configured headers", async () => {

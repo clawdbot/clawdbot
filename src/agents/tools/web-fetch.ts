@@ -83,6 +83,7 @@ const FETCH_RESERVED_HEADER_NAMES = [
   "sec-fetch-mode",
   "cookie",
   "cookie2",
+  "set-cookie",
 ] as const;
 
 const WebFetchSchema = Type.Object({
@@ -208,7 +209,9 @@ function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | u
     reservedNames: FETCH_RESERVED_HEADER_NAMES,
   });
   for (const name of resolution.ignored) {
-    logWarn(`[web-fetch] dropped tools.web.fetch.headers entry a request cannot carry: ${name}`);
+    logWarn(
+      `[web-fetch] dropped tools.web.fetch.headers entry a request cannot carry: ${JSON.stringify(name)}`,
+    );
   }
   for (const name of resolution.refused) {
     logWarn(
