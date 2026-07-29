@@ -36,6 +36,8 @@ function extractBearerToken(header: unknown): string {
 
 const ADD_ON_PREAUTH_MAX_BYTES = 16 * 1024;
 const ADD_ON_PREAUTH_TIMEOUT_MS = 3_000;
+const GOOGLECHAT_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const GOOGLECHAT_WEBHOOK_ACCEPTED_VALUE = "durable";
 
 type ParsedGoogleChatInboundSuccess = {
   raw: Record<string, unknown>;
@@ -269,6 +271,11 @@ export function createGoogleChatWebhookRequestHandler(params: {
                 );
               },
             );
+          }
+          if (admission.kind === "durable") {
+            // Only durably persisted turns claim the marker; ignored non-turn
+            // actions ack without it (same contract as #104407).
+            res.setHeader(GOOGLECHAT_WEBHOOK_ACCEPTED_HEADER, GOOGLECHAT_WEBHOOK_ACCEPTED_VALUE);
           }
         } catch (error) {
           dispatchTarget.runtime.error?.(

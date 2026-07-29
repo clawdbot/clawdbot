@@ -16,6 +16,8 @@ import type { ResolvedSmsAccount } from "./types.js";
 
 const INVALID_REQUEST_MAX_REQUESTS = 300;
 const CALLBACK_DISPATCH_MAX_REQUESTS = 30;
+const SMS_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const SMS_WEBHOOK_ACCEPTED_VALUE = "durable";
 
 // Count failed-auth traffic separately from the stricter dispatchable callback quota.
 // The over-budget decision is applied only after validation fails, so a same-key
@@ -143,6 +145,8 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     }
     // Durable admission also reserves the monitor pump under this HTTP request's
     // detached work root, so the response can acknowledge immediately after commit.
+    // Duplicates map to the committed row, so replays still ack durable (#104407).
+    res.setHeader(SMS_WEBHOOK_ACCEPTED_HEADER, SMS_WEBHOOK_ACCEPTED_VALUE);
     respondTwiml(res, 200);
     return true;
   };
