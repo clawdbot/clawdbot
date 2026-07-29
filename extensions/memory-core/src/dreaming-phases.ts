@@ -2004,7 +2004,7 @@ async function runRemDreaming(params: {
   return { status: "skipped" };
 }
 
-export type DreamingSweepPhaseResult = {
+type DreamingSweepPhaseResult = {
   degradedPhases: number;
   pendingNarratives: number;
 };
