@@ -16,6 +16,7 @@ class FakeSocket extends EventEmitter {
   open(): void {
     this.readyState = 1;
     this.emit("open");
+    this.afterOpen?.(this);
   }
 
   send(payload: string): void {
@@ -54,7 +55,10 @@ class FakeSocket extends EventEmitter {
     this.emit("message", Buffer.from(JSON.stringify(event)), false);
   }
 
-  constructor(private readonly autoStart = true) {
+  constructor(
+    private readonly autoStart = true,
+    private readonly afterOpen?: (socket: FakeSocket) => void,
+  ) {
     super();
   }
 }
@@ -63,9 +67,10 @@ function createHarness(params?: {
   audioFormat?: "pcm16" | "g711_ulaw";
   autoStart?: boolean;
   deferClose?: boolean;
+  afterOpen?: (socket: FakeSocket) => void;
   resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
 }) {
-  const socket = new FakeSocket(params?.autoStart);
+  const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
   socket.deferClose = params?.deferClose ?? false;
   const connections: Array<{ url: string; options: ClientOptions }> = [];
   const webSocketFactory: OpenAIQuicksilverSocketFactory = (url, options) => {
@@ -164,6 +169,22 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     expect(harness.onClose).toHaveBeenCalledOnce();
   });
 
+  it("shares an in-flight connection until session readiness", async () => {
+    const harness = createHarness({ autoStart: false });
+    const firstConnect = harness.bridge.connect();
+    const secondConnect = harness.bridge.connect();
+    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+
+    expect(harness.connections).toHaveLength(1);
+    harness.socket.serverEvent({
+      type: "session.started",
+      session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
+    });
+
+    await Promise.all([firstConnect, secondConnect]);
+    expect(harness.onReady).toHaveBeenCalledOnce();
+  });
+
   it("rejects startup failures without emitting terminal callbacks", async () => {
     const harness = createHarness({ autoStart: false });
     const connecting = harness.bridge.connect();
@@ -178,6 +199,21 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     expect(harness.onError).not.toHaveBeenCalled();
     expect(harness.onClose).not.toHaveBeenCalled();
     expect(harness.bridge.isConnected()).toBe(false);
+  });
+
+  it("does not reject after explicit close while awaiting session readiness", async () => {
+    const harness = createHarness({ autoStart: false, deferClose: true });
+    const connecting = harness.bridge.connect();
+    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+
+    harness.bridge.close();
+    harness.socket.emit("error", new Error("late startup error"));
+
+    await expect(connecting).resolves.toBeUndefined();
+    expect(harness.onClose).toHaveBeenCalledOnce();
+    expect(harness.onClose).toHaveBeenCalledWith("completed");
+    expect(harness.onError).not.toHaveBeenCalled();
+    harness.socket.finishClose();
   });
 
   it("completes once when closed while authentication is pending", async () => {
@@ -199,6 +235,29 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     await expect(connecting).resolves.toBeUndefined();
     expect(harness.connections).toHaveLength(0);
     expect(harness.onError).not.toHaveBeenCalled();
+  });
+
+  it("reports a buffered terminal event that follows session readiness", async () => {
+    const harness = createHarness({
+      autoStart: false,
+      afterOpen: (socket) => {
+        socket.serverEvent({
+          type: "session.started",
+          session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
+        });
+        socket.finishClose();
+      },
+    });
+
+    await harness.bridge.connect();
+
+    expect(harness.onReady).toHaveBeenCalledOnce();
+    expect(harness.onError).toHaveBeenCalledWith(
+      new Error("GPT-Live WebSocket closed during startup"),
+    );
+    expect(harness.onClose).toHaveBeenCalledOnce();
+    expect(harness.onClose).toHaveBeenCalledWith("error");
+    expect(harness.bridge.isConnected()).toBe(false);
   });
 
   it("maps audio, transcripts, and delegations onto the shared bridge contract", async () => {

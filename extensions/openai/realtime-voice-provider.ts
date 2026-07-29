@@ -547,6 +547,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private ws: WebSocket | null = null;
   private connection: OpenAIRealtimeVoiceConnection | undefined;
+  private connectPromise: Promise<void> | undefined;
   private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
   private pendingAudio: Buffer[] = [];
   private markQueue: string[] = [];
@@ -579,9 +580,23 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.terminalError) {
       throw this.terminalError;
     }
+    if (this.lifecycle.isReady()) {
+      return;
+    }
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
     const connection = this.lifecycle.connect();
     this.connection = connection;
-    await this.doConnect(connection);
+    const connectPromise = this.doConnect(connection);
+    this.connectPromise = connectPromise;
+    try {
+      await connectPromise;
+    } finally {
+      if (this.connectPromise === connectPromise) {
+        this.connectPromise = undefined;
+      }
+    }
   }
 
   sendAudio(audio: Buffer): void {
@@ -671,12 +686,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       let settled = false;
       let reachedReady = false;
       let startupFailureClosing = false;
+      let activeWs: WebSocket | undefined;
+      let connectTimeout: ReturnType<typeof setTimeout> | undefined;
+      let removeAbortListener = () => {};
       const settleResolve = () => {
         if (settled) {
           return;
         }
         settled = true;
-        clearTimeout(connectTimeout);
+        if (connectTimeout) {
+          clearTimeout(connectTimeout);
+        }
+        removeAbortListener();
         resolve();
       };
       const settleReject = (error: Error) => {
@@ -684,10 +705,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           return;
         }
         settled = true;
-        clearTimeout(connectTimeout);
+        if (connectTimeout) {
+          clearTimeout(connectTimeout);
+        }
+        removeAbortListener();
         reject(error);
       };
-      const connectTimeout: ReturnType<typeof setTimeout> = setTimeout(() => {
+      connectTimeout = setTimeout(() => {
         if (
           this.lifecycle.isCurrent(lifecycleConnection) &&
           !reachedReady &&
@@ -695,10 +719,26 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         ) {
           const error = new Error("OpenAI realtime connection timeout");
           startupFailureClosing = true;
-          this.ws?.terminate();
+          activeWs?.terminate();
           settleReject(error);
         }
       }, OpenAIRealtimeVoiceBridge.CONNECT_TIMEOUT_MS);
+      const onAbort = () => {
+        if (activeWs && activeWs.readyState !== WebSocket.CLOSED) {
+          activeWs.close(1000, "connection canceled");
+        }
+        if (this.lifecycle.terminalOutcome(lifecycleConnection) === "completed") {
+          settleResolve();
+          return;
+        }
+        const reason = lifecycleConnection.signal.reason;
+        settleReject(reason instanceof Error ? reason : new Error(String(reason)));
+      };
+      lifecycleConnection.signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => lifecycleConnection.signal.removeEventListener("abort", onAbort);
+      if (lifecycleConnection.signal.aborted) {
+        onAbort();
+      }
 
       const openWebSocket = (resolvedConnection: {
         url: string;
@@ -720,10 +760,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           maxPayload: OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
           ...(proxyAgent ? { agent: proxyAgent } : {}),
         });
+        activeWs = ws;
         this.ws = ws;
 
         const rejectStartup = (error: Error) => {
-          if (!this.lifecycle.isCurrent(lifecycleConnection) || reachedReady) {
+          if (!this.lifecycle.acceptsEvents(lifecycleConnection) || reachedReady) {
             return;
           }
           startupFailureClosing = true;
@@ -734,7 +775,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         };
 
         ws.on("open", () => {
-          if (!this.lifecycle.isCurrent(lifecycleConnection)) {
+          if (!this.lifecycle.acceptsEvents(lifecycleConnection)) {
             ws.close(1000, "stale connection");
             return;
           }
@@ -753,7 +794,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         });
 
         ws.on("message", (data: Buffer) => {
-          if (!this.lifecycle.isCurrent(lifecycleConnection)) {
+          if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
             return;
           }
           if (settled && !reachedReady) {
@@ -792,7 +833,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         });
 
         ws.on("error", (error) => {
-          if (!this.lifecycle.isCurrent(lifecycleConnection)) {
+          if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
             return;
           }
           captureWsEvent({

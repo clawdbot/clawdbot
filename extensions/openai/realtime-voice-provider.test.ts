@@ -1369,6 +1369,32 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(true);
   });
 
+  it("shares an in-flight connection until session readiness", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onReady = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady,
+    });
+    const firstConnect = bridge.connect();
+    const secondConnect = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    await Promise.all([firstConnect, secondConnect]);
+    expect(onReady).toHaveBeenCalledOnce();
+    bridge.close();
+  });
+
   it("suppresses auto responses before draining queued initial greeting audio", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridgeRef: { current?: RealtimeVoiceBridge } = {};
@@ -1600,11 +1626,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("ignores late events from a socket replaced by reconnect", async () => {
     vi.useFakeTimers();
     const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
     const onClose = vi.fn();
     const onError = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
+      onAudio,
       onClearAudio: vi.fn(),
       onClose,
       onError,
@@ -1622,6 +1649,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     firstSocket.readyState = FakeWebSocket.CLOSED;
     firstSocket.emit("close", 1006, Buffer.from("transient drop"));
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          delta: Buffer.from("late audio").toString("base64"),
+        }),
+      ),
+    );
+    firstSocket.emit("error", new Error("late retry-wait failure"));
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+
     await vi.advanceTimersByTimeAsync(1000);
     const secondSocket = FakeWebSocket.instances[1];
     if (!secondSocket) {

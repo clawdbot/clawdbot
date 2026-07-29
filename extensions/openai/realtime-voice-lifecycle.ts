@@ -116,6 +116,11 @@ export class OpenAIRealtimeVoiceLifecycle {
     return this.currentState(connection) !== undefined;
   }
 
+  acceptsEvents(connection: OpenAIRealtimeVoiceConnection): boolean {
+    const phase = this.currentState(connection)?.phase;
+    return phase === "connecting" || phase === "ready";
+  }
+
   isReady(): boolean {
     return this.state?.phase === "ready";
   }
