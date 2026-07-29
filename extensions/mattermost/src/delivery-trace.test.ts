@@ -12,7 +12,7 @@ import {
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
-  type DeliveryTraceScenarioName,
+  type DeliveryTraceScenario,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -251,21 +251,32 @@ function setupMattermostTrace(recorder: WireRecorder) {
   };
 }
 
-const MATTERMOST_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
-  "streaming-happy",
-  "final-only",
-  "cancel-mid-stream",
+const MATTERMOST_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
+  deliveryTraceScenarios["streaming-happy"],
+  deliveryTraceScenarios["final-only"],
+  deliveryTraceScenarios["cancel-mid-stream"],
+  {
+    name: "final-then-error",
+    steps: [
+      { kind: "reply-start" },
+      { kind: "partial", text: "Successful assistant" },
+      { kind: "advance", ms: DRAFT_THROTTLE_MS },
+      { kind: "final", text: "Successful assistant final" },
+      { kind: "final", text: "Tool error warning", isError: true },
+      { kind: "idle" },
+    ],
+  },
 ];
 
 describe("mattermost delivery trace goldens", () => {
-  for (const scenarioName of MATTERMOST_TRACE_SCENARIOS) {
-    it(`records ${scenarioName}`, async () => {
+  for (const scenario of MATTERMOST_TRACE_SCENARIOS) {
+    it(`records ${scenario.name}`, async () => {
       const events = await runDeliveryTraceScenario({
-        scenario: deliveryTraceScenarios[scenarioName],
+        scenario,
         setup: setupMattermostTrace,
       });
       expectDeliveryTraceMatchesGolden({
-        goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
+        goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
         events,
       });
     });

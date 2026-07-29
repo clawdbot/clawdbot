@@ -79,7 +79,16 @@ const createPiStore = (
   );
 const installFakePi = () => installFakePiFixture(temporaryDirectories, originalPath);
 
+function usePiCandidateCacheClock(): () => void {
+  let now = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  return () => {
+    now += 32_001;
+  };
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
   process.env.PATH = originalPath;
@@ -247,6 +256,38 @@ describe("Pi session catalog", () => {
     expect(firstSummary?.canContinue).toBe(true);
   });
 
+  it("memoizes file candidates across cadence and re-walks after expiry", async () => {
+    const sessionDirectory = await createPiStore();
+    const baseEnv = {
+      ...process.env,
+      PI_CODING_AGENT_SESSION_DIR: sessionDirectory,
+      PI_CODING_AGENT_DIR: path.dirname(path.dirname(sessionDirectory)),
+    };
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    const statSpy = vi.spyOn(fs, "stat");
+    try {
+      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+      const readdirCount = readdirSpy.mock.calls.length;
+      const statCount = statSpy.mock.calls.length;
+
+      now += 31_999;
+      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+      expect(readdirSpy).toHaveBeenCalledTimes(readdirCount);
+      expect(statSpy).toHaveBeenCalledTimes(statCount);
+
+      now += 2;
+      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+      expect(readdirSpy.mock.calls.length).toBeGreaterThan(readdirCount);
+      expect(statSpy.mock.calls.length).toBeGreaterThan(statCount);
+    } finally {
+      nowSpy.mockRestore();
+      readdirSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+  });
+
   it("summarizes and pages a large session within transport limits", async () => {
     await createPiStore("x".repeat(600 * 1024));
     const listed = await listLocalPiSessionPage({ limit: 20 });
@@ -364,12 +405,14 @@ describe("Pi session catalog", () => {
       },
     ];
     await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const expireCandidates = usePiCandidateCacheClock();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("Assigned title");
 
     await fs.appendFile(
       file,
       `${JSON.stringify({ type: "session_info", id: "clear", parentId: "a", timestamp: "2026-07-13T10:00:04Z", name: "" })}\n`,
     );
+    expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("fallback title");
   });
 
@@ -386,6 +429,7 @@ describe("Pi session catalog", () => {
         cwd: "/workspace",
       }),
     );
+    const expireCandidates = usePiCandidateCacheClock();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.threadId).toBe("pi-session");
 
     await fs.appendFile(
@@ -398,6 +442,7 @@ describe("Pi session catalog", () => {
         name: "No final newline",
       })}`,
     );
+    expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe(
       "No final newline",
     );
@@ -406,6 +451,7 @@ describe("Pi session catalog", () => {
   it("rebuilds metadata after a same-file replacement grows", async () => {
     const directory = await createPiStore("old session");
     const file = path.join(directory, "session.jsonl");
+    const expireCandidates = usePiCandidateCacheClock();
     await listLocalPiSessionPage({ limit: 20 });
 
     const entries = [
@@ -432,6 +478,7 @@ describe("Pi session catalog", () => {
       },
     ];
     await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    expireCandidates();
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
       sessions: [
@@ -547,6 +594,7 @@ describe("Pi session catalog", () => {
     process.env.PI_CODING_AGENT_DIR = agentDirectory;
     process.env.HOME = homeDirectory;
     process.env.USERPROFILE = homeDirectory;
+    const expireCandidates = usePiCandidateCacheClock();
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
       sessions: [
@@ -567,6 +615,7 @@ describe("Pi session catalog", () => {
         name: "",
       })}\n`,
     );
+    expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBeUndefined();
   });
 

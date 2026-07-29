@@ -112,6 +112,21 @@ export const LAB_FEATURES = [
     restartHint: null,
   },
   {
+    id: "loopDetection",
+    title: () => t("labsPage.loopDetection.title"),
+    description: () => t("labsPage.loopDetection.description"),
+    docsUrl: "https://docs.openclaw.ai/tools/loop-detection",
+    configPath: ["tools", "loopDetection", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    // ToolLoopDetectionSchema accepts object form only, and
+    // resolveToolLoopDetectionConfig reads this enabled leaf directly.
+    readEnabled: null,
+    enableAlso: null,
+    restartHint: null,
+  },
+  {
     id: "localModelLean",
     title: () => t("labsPage.localModelLean.title"),
     description: () => t("labsPage.localModelLean.description"),

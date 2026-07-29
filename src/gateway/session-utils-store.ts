@@ -17,6 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
@@ -37,7 +38,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import type { GatewayAgentRow, GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewayAgentRow } from "./session-utils.types.js";
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -250,22 +251,6 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
-export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
-}
-
 export function parseGroupKey(
   key: string,
 ): { channel?: string; kind?: "group" | "channel"; id?: string } | null {
@@ -328,10 +313,16 @@ function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
 ): GatewayAgentRow["model"] | undefined {
-  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  // Agent rows expose model identity to clients; credential-profile binding stays in
+  // canonical config and is consumed only by execution-time model selection.
+  const primary = splitTrailingAuthProfile(
+    resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
+  ).model;
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = normalizeFallbackList(fallbackOverride ?? defaultFallbacks);
+  const fallbacks = normalizeFallbackList(
+    (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
+  );
   if (!primary && fallbacks.length === 0) {
     return undefined;
   }

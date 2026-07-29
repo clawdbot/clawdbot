@@ -149,8 +149,7 @@ extension SettingsProTab {
         self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
     }
 
-    func forgetPendingGateway() async {
-        guard let entry = self.pendingForgetGateway else { return }
+    func forgetGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) async {
         self.pendingForgetGateway = nil
         guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
             self.setupStatusText = String(

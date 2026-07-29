@@ -12,9 +12,9 @@ const tempPaths: string[] = [];
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
-let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
+let collectGatewayHealthSnapshot: typeof import("../gateway/health/collector.js").collectGatewayHealthSnapshot;
 
-describe("getHealthSnapshot plugin state", () => {
+describe("collectGatewayHealthSnapshot plugin state", () => {
   beforeAll(async () => {
     vi.doMock("../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
@@ -35,12 +35,12 @@ describe("getHealthSnapshot plugin state", () => {
       import("../plugins/runtime.js"),
       import("../plugins/runtime-degraded-state.js"),
       import("../test-utils/channel-plugins.js"),
-      import("./health.js"),
+      import("../gateway/health/collector.js"),
     ]);
     setActivePluginRegistry = pluginsRuntime.setActivePluginRegistry;
     setActiveDegradedPlugins = degradedState.setActiveDegradedPlugins;
     createTestRegistry = channelTestUtils.createTestRegistry;
-    getHealthSnapshot = health.getHealthSnapshot;
+    collectGatewayHealthSnapshot = health.collectGatewayHealthSnapshot;
   });
 
   afterEach(() => {
@@ -93,7 +93,11 @@ describe("getHealthSnapshot plugin state", () => {
       },
     ]);
 
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      timeoutMs: 10,
+      probe: false,
+    });
 
     expect(Value.Check(SnapshotSchema.properties.health, snap)).toBe(true);
     expect(snap.plugins?.unavailable).toEqual([

@@ -886,6 +886,174 @@
     },
     {
       "locale": "ar",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "مرفق"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Attachment",
+      "translations": [
+        "Anhang",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Attachment",
+      "translations": [
+        "Archivo adjunto",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "پیوست"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Pièce jointe"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "अटैचमेंट"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Lampiran"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Attachment",
+      "translations": [
+        "Allegato",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "添付ファイル"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "첨부 파일"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Bijlage"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Załącznik"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Attachment",
+      "translations": [
+        "Anexo",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Вложение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Bilaga"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "ไฟล์แนบ"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Ek"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Вкладення"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Tệp đính kèm"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "附件"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "附件"
+      ]
+    },
+    {
+      "locale": "ar",
       "source": "Attention",
       "translations": [
         "تنبيه",
@@ -3050,7 +3218,8 @@
       "source": "Failed",
       "translations": [
         "Fallida",
-        "Fallido"
+        "Fallido",
+        "Falló"
       ]
     },
     {
@@ -3059,6 +3228,14 @@
       "translations": [
         "Échec",
         "Échoué"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Failed",
+      "translations": [
+        "失敗",
+        "失敗しました"
       ]
     },
     {
@@ -3083,6 +3260,14 @@
       "translations": [
         "Не выполнено",
         "Ошибка"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Failed",
+      "translations": [
+        "Başarısız",
+        "Başarısız oldu"
       ]
     },
     {
@@ -7907,7 +8092,8 @@
       "source": "Retry",
       "translations": [
         "Reintentar",
-        "Retry"
+        "Retry",
+        "Volver a intentarlo"
       ]
     },
     {
@@ -7932,7 +8118,8 @@
       "translations": [
         "Retry",
         "पुनः प्रयास करें",
-        "फिर से कोशिश करें"
+        "फिर से कोशिश करें",
+        "फिर से प्रयास करें"
       ]
     },
     {

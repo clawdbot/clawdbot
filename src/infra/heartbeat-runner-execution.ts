@@ -4,6 +4,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
+import { transitionMainSessionRecovery } from "../agents/main-session-recovery-state.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
@@ -13,6 +14,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -50,6 +52,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
@@ -82,6 +85,7 @@ import {
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
+  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
@@ -244,14 +248,48 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
   // Plain `updatedAt` changes are normal for heartbeat sessions and should not
   // suppress heartbeat runs; only defer when final delivery recovery is active.
-  const { entry: recentSessionEntry } = resolveHeartbeatSession(
+  const { sessionKey: recentSessionKey, entry: recentSessionEntry } = resolveHeartbeatSession(
     cfg,
     agentId,
     heartbeat,
     opts.sessionKey,
   );
+  // Recovery can already have admitted its owner and cleared the abort flag;
+  // automatic and sentinel wakes must honor that canonical lifecycle fence.
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const mainSessionRecovery =
+    opts.intent !== "manual" && recentSessionEntry
+      ? transitionMainSessionRecovery(recentSessionEntry, {
+          kind: "inspect",
+          lifecycleGeneration,
+          sessionKey: recentSessionKey,
+        })
+      : undefined;
+  const activeRestartRecoveryRunId = normalizeOptionalString(
+    recentSessionEntry?.restartRecoveryDeliveryRunId,
+  );
+  // Delivery ownership can outlive the recovery aggregate. Only the matching
+  // run from this gateway generation may defer an automatic heartbeat.
+  const hasCurrentRestartRecoveryDelivery =
+    opts.intent !== "manual" &&
+    activeRestartRecoveryRunId !== undefined &&
+    recentSessionEntry?.restartRecoveryRuns?.some(
+      (run) =>
+        run.runId === activeRestartRecoveryRunId && run.lifecycleGeneration === lifecycleGeneration,
+    ) === true;
+  if (
+    (mainSessionRecovery?.kind === "observed" &&
+      (mainSessionRecovery.view.status === "blocked" ||
+        mainSessionRecovery.view.status === "recoverable")) ||
+    hasCurrentRestartRecoveryDelivery
+  ) {
+    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+  }
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
-  const pendingFinalDeliveryText = recentSessionEntry?.pendingFinalDeliveryText;
+  const pendingFinalDeliveryText =
+    recentSessionEntry?.pendingFinalDelivery?.kind === "replayable"
+      ? recentSessionEntry.pendingFinalDelivery.text
+      : undefined;
   const pendingFinalDeliveryIsHeartbeatAck =
     typeof pendingFinalDeliveryText === "string" &&
     stripHeartbeatToken(pendingFinalDeliveryText, {
@@ -259,7 +297,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
     }).shouldSkip;
   if (
-    recentSessionEntry?.pendingFinalDelivery === true &&
+    recentSessionEntry?.pendingFinalDelivery !== undefined &&
     !pendingFinalDeliveryIsHeartbeatAck &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
@@ -593,6 +631,7 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
   const getReplyFromConfig =
     opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
+  const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
   const replyOpts = {
     isHeartbeat: true,
     [HEARTBEAT_RUN_SCOPE]: runScope,
@@ -602,6 +641,7 @@ export async function invokeHeartbeatAgentRun(
     ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
     ...(usesHeartbeatResponseTool ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
     ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
+    ...(heartbeatWakeAbortSignal ? { abortSignal: heartbeatWakeAbortSignal } : {}),
     // Heartbeat timeout is a per-run override so user turns keep the global default.
     timeoutOverrideSeconds: resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
     bootstrapContextMode: heartbeat?.lightContext === true ? ("lightweight" as const) : undefined,
@@ -627,7 +667,13 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
-  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+  const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
+  // Commitment turns are explicit user notifications, not assistant source
+  // replies; keep their owner-marked delivery visible under tool-only policy.
+  const replyPayload =
+    hasDueCommitments && selectedReplyPayload
+      ? markReplyPayloadForSourceSuppressionDelivery(selectedReplyPayload)
+      : selectedReplyPayload;
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&

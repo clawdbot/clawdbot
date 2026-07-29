@@ -627,7 +627,7 @@ async function mirror(params: {
         });
         const appended = await transcript.appendMessage({
           message: messageToAppend,
-          idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
+          idempotencyLookup: idempotencyKey && message.role !== "user" ? "caller-checked" : "scan",
           cwd: params.cwd,
         });
         if (!appended) {
@@ -647,11 +647,13 @@ async function mirror(params: {
           nextUserMessagesPresent.push(appendedMessage);
         }
         nextMessageSeq += 1;
-        nextAppendedUpdates.push({
-          messageId,
-          message: appendedMessage,
-          messageSeq: nextMessageSeq,
-        });
+        if (appended.appended) {
+          nextAppendedUpdates.push({
+            messageId,
+            message: appendedMessage,
+            messageSeq: nextMessageSeq,
+          });
+        }
         if (idempotencyKey) {
           mirrorState.idempotencyKeys.add(idempotencyKey);
         }

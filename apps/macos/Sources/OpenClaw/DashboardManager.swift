@@ -31,6 +31,7 @@ final class DashboardManager {
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
     @ObservationIgnored private var pendingOpenCommands: [DashboardNativeCommand] = []
     @ObservationIgnored private var openForCommandTask: Task<Void, Never>?
+    @ObservationIgnored private var navigationGeneration: UInt64 = 0
     @ObservationIgnored private var updater: UpdaterProviding?
     @ObservationIgnored private var displayedRouteRevision: UInt64?
     @ObservationIgnored private var switchGenerations: [ObjectIdentifier: UInt64] = [:]
@@ -346,6 +347,24 @@ final class DashboardManager {
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
     }
 
+    func show(atPath path: String) async {
+        self.navigationGeneration &+= 1
+        let generation = self.navigationGeneration
+        do {
+            try await self.show()
+            guard generation == self.navigationGeneration else { return }
+            guard let controller,
+                  let fallbackURL = DashboardRouteMap.dashboardURL(
+                      byAppendingSameAppPath: path,
+                      to: controller.dashboardBaseURL)
+            else { return }
+            controller.dispatchNativeNavigation(DashboardNativeNavigation(path: path, fallbackURL: fallbackURL))
+        } catch {
+            guard generation == self.navigationGeneration else { return }
+            self.showFailure(error)
+        }
+    }
+
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
@@ -405,6 +424,10 @@ final class DashboardManager {
     }
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
+        if command.supersedesPendingNavigation {
+            // This also invalidates a handoff still suspended in show(atPath:).
+            self.navigationGeneration &+= 1
+        }
         NSApp.activate(ignoringOtherApps: true)
         if let controller, controller.isWindowOpen, controller.canDeliverNativeCommands {
             controller.show()

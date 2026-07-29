@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
   actionPointerEvents,
@@ -221,6 +222,27 @@ suite.define(() => {
       await expect
         .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
         .toBe(0);
+
+      // Leaving an open drawer must close its fixed menu and clear the drawer
+      // before the same sidebar moves back into the desktop navigation slot.
+      await openSessionMenu();
+      const beforeWideTransition = await hiddenActionCounts();
+      await page.setViewportSize({ height: 900, width: 1280 });
+      await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--mobile-nav");
+      await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expectHiddenShortcutsInert(beforeWideTransition);
+
+      // Returning to drawer layout must not resurrect the prior open drawer.
+      await page.setViewportSize({ height: 900, width: 900 });
+      await expectDrawerClosed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await drawerToggle.click();
+      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await expect
+        .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
+        .toBe(0);
       await openSessionMenu();
       const beforeDrawerCollapse = await hiddenActionCounts();
       await page.keyboard.press("Meta+B");
@@ -286,17 +308,10 @@ suite.define(() => {
         sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
         sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
       ]);
-      // Reconnect can queue a second refresh behind session hydration. Hold both
-      // so each response carries the changed black-box fixture.
-      await gateway.deferNext("sessions.list");
       await gateway.resolveDeferred("sessions.list", refreshedResponse);
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
-        .toBeGreaterThan(firstReconnectListCount);
-      await gateway.resolveDeferred("sessions.list", refreshedResponse);
-      await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
+      await expectRequestCountStable(gateway, "sessions.list", firstReconnectListCount);
     } finally {
       await context.close();
     }

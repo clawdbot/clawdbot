@@ -138,7 +138,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("resolves onClose when the socket closes", async () => {
+  it("socket session resolves onClose when the socket closes", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();
     const reasonPromise = listener.onClose;
@@ -154,7 +154,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("detaches inbound listeners and ends the socket on close()", async () => {
+  it("socket session detaches inbound listeners and ends the socket on close()", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();
 

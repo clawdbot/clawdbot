@@ -17,7 +17,10 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import {
+  createTelegramNativeCommandTestDeps,
+  telegramBotInfoForTest,
+} from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   runTelegramTestMiddlewareChain,
@@ -438,7 +441,10 @@ describe("createTelegramBot", () => {
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
+        telegramDeps: {
+          ...telegramBotDepsForTest,
+          ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
+        },
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   });
@@ -4346,7 +4352,7 @@ describe("createTelegramBot", () => {
     sendMessageSpy.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     replySpy.mockResolvedValue({
-      text: "⚙️ Compaction skipped: already_compacted_recently • ctx 0%",
+      text: "⚙️ Compaction skipped: already_compacted • ctx 0%",
     });
 
     loadConfig.mockReturnValue({

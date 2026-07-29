@@ -20,6 +20,7 @@ import {
   registerOnboardAuthOptions,
   resolveInstallDaemonFlag,
   resolveTailscaleResetOnExitFlag,
+  validateOnboardAuthOptionValues,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
@@ -116,6 +117,9 @@ async function runOnboardingEntry(
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
+    return;
+  }
+  if (!validateOnboardAuthOptionValues(options, runtime)) {
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);

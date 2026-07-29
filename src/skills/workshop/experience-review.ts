@@ -4,11 +4,13 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
+import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   buildSkillExperienceReviewPrompt,
   formatSkillExperienceReviewTranscript,
 } from "./experience-review-prompt.js";
+import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
 const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
@@ -29,6 +31,7 @@ const log = createSubsystemLogger("skills/workshop");
 type ExperienceReviewAgentEndEvent = {
   messages: unknown[];
   success: boolean;
+  error?: string;
 };
 
 type ExperienceReviewAgentContext = {
@@ -40,6 +43,7 @@ type ExperienceReviewAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   authProfileId?: string;
+  modelIterations?: number;
   skillWorkshopAvailable?: boolean;
   compacted?: boolean;
   trigger?: string;
@@ -70,6 +74,11 @@ export type ExperienceReviewCandidate = {
   config?: OpenClawConfig;
   transcript: string;
   modelIterations: number;
+  turnAborted?: boolean;
+};
+
+type ExperienceReviewRunDeps = {
+  getCurrentConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
 type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
@@ -89,6 +98,16 @@ type PendingExperienceReview = {
   generation: number;
   timer?: ExperienceReviewTimer;
 };
+
+function isAuthProfileMigrationRequiredError(
+  error: unknown,
+): error is { code: "AUTH_PROFILE_MIGRATION_REQUIRED" } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "AUTH_PROFILE_MIGRATION_REQUIRED"
+  );
+}
 
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   // Only harnesses that report both the resolved model and actual host-side
@@ -142,7 +161,7 @@ export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
 ): Promise<ExperienceReviewCandidate | undefined> {
-  if (!resolveSkillWorkshopConfig(config).autonomous.enabled) {
+  if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
     return undefined;
   }
   const { resolveConversationCapabilityProfile } =
@@ -245,14 +264,22 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
               return;
             }
-            pendingBySession.delete(sessionKey);
             await deps.runReview(candidate);
+            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
+              pendingBySession.delete(sessionKey);
+            }
           } finally {
             reviewInFlight = false;
           }
         })
         .catch((error: unknown) => {
           log.warn(`skill experience review failed: ${String(error)}`);
+          if (isAuthProfileMigrationRequiredError(error)) {
+            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
+              pendingBySession.delete(sessionKey);
+            }
+            return;
+          }
           if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
             arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
           }
@@ -269,9 +296,14 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       const existing = pendingBySession.get(sessionKey);
+      // Errored completions (provider/prompt failures) are transient environment
+      // noise, not learnable evidence, and a same-model review would likely hit
+      // the same failure. User aborts carry no error and stay eligible: deep
+      // interrupted turns are exactly where corrective evidence lives.
+      const errored = typeof params.event.error === "string" && params.event.error.trim() !== "";
       if (
         existing &&
-        !params.event.success &&
+        errored &&
         params.ctx.runId?.trim() &&
         params.ctx.runId === existing.candidate.ctx.runId
       ) {
@@ -286,7 +318,10 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (existing) {
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
-      if (!resolveSkillWorkshopConfig(params.config).autonomous.enabled) {
+      if (errored) {
+        return;
+      }
+      if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
         return;
       }
       if (!isEligibleContext(params.ctx)) {
@@ -298,8 +333,16 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
 
       const turnMessages = currentTurnMessages(params.event.messages);
-      const modelIterations = countModelIterations(turnMessages);
-      if (params.event.success && modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+      // Native harnesses can report exact provider iterations even when their
+      // transcript projection has a different assistant-message cardinality.
+      const reportedModelIterations = params.ctx.modelIterations;
+      const modelIterations =
+        reportedModelIterations === undefined
+          ? countModelIterations(turnMessages)
+          : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
+            ? reportedModelIterations
+            : 0;
+      if (modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as
             | [string, PendingExperienceReview]
@@ -342,6 +385,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           ...(params.config ? { config: params.config } : {}),
           transcript: formatSkillExperienceReviewTranscript(turnMessages),
           modelIterations,
+          turnAborted: !params.event.success,
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;
@@ -362,6 +406,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
 
 export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
+  deps: ExperienceReviewRunDeps = {},
 ): Promise<void> {
   const workspaceDir = candidate.ctx.workspaceDir;
   const sessionKey = candidate.ctx.sessionKey;
@@ -372,6 +417,7 @@ export async function runSkillExperienceReview(
   }
 
   const sessionId = randomUUID();
+  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
@@ -415,6 +461,8 @@ export async function runSkillExperienceReview(
     disableMessageTool: true,
     disableTrajectory: true,
     skillWorkshopProposalOnly: true,
+    skillWorkshopAutonomousCapture: true,
+    skillWorkshopProposalMutationBudget: proposalMutationBudget,
     skillWorkshopOrigin: {
       ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
       sessionKey,
@@ -427,4 +475,36 @@ export async function runSkillExperienceReview(
     reasoningLevel: "off",
     suppressToolErrorWarnings: true,
   });
+
+  const currentConfig = deps.getCurrentConfig
+    ? await deps.getCurrentConfig()
+    : (await import("../../config/config.js")).getRuntimeConfig();
+  if (resolveSkillWorkshopConfig(currentConfig).autonomous.mode !== "auto") {
+    return;
+  }
+  const proposalIds = [...(proposalMutationBudget.mutatedProposalIds ?? [])];
+  if (proposalIds.length === 0) {
+    return;
+  }
+  const { inspectSkillProposal } = await import("./service.js");
+  for (const proposalId of proposalIds) {
+    const proposal = await inspectSkillProposal(proposalId, {
+      workspaceDir,
+      ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
+    });
+    if (
+      !proposal ||
+      proposal.record.status !== "pending" ||
+      proposal.record.autonomousCapture !== true
+    ) {
+      continue;
+    }
+    await autoApplySkillProposal({
+      workspaceDir,
+      ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
+      config: currentConfig,
+      proposalId,
+      skillName: proposal.record.target.skillName,
+    });
+  }
 }

@@ -1,13 +1,13 @@
 // Memory Core QMD runtime cache helpers.
 import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { memoryCoreWorkspaceEntryKey, openMemoryCoreStateStore } from "../dreaming-state.js";
 
 const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE = "qmd-runtime-cache.collection-validation";
 const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE =
   "qmd-runtime-cache.multi-collection-probe";
-const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_MAX_ENTRIES = 1_000;
-const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_MAX_ENTRIES = 1_000;
+const QMD_RUNTIME_CACHE_MAX_ENTRIES = 1_000;
 const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS = 5 * 60_000;
 const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS = 10 * 60_000;
 
@@ -39,11 +39,14 @@ export type QmdRuntimeMultiCollectionProbeCacheContext = QmdRuntimeCacheContextB
   sources: readonly string[];
 };
 
-type QmdRuntimeCacheCollectionValidationEntry = {
+type QmdRuntimeCacheEntryBase = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
   keyHash: string;
+};
+
+type QmdRuntimeCacheCollectionValidationEntry = QmdRuntimeCacheEntryBase & {
   validation: {
     ok: true;
     collectionConfigHash: string;
@@ -51,11 +54,7 @@ type QmdRuntimeCacheCollectionValidationEntry = {
   };
 };
 
-type QmdRuntimeCacheMultiCollectionProbeEntry = {
-  version: 1;
-  createdAtMs: number;
-  expiresAtMs: number;
-  keyHash: string;
+type QmdRuntimeCacheMultiCollectionProbeEntry = QmdRuntimeCacheEntryBase & {
   multiCollectionProbe: {
     supported: boolean;
   };
@@ -70,15 +69,6 @@ type QmdRuntimeCacheResult<T> =
 
 function normalizeText(value: string): string {
   return value.trim();
-}
-
-function normalizeCollection(collection: QmdRuntimeManagedCollection) {
-  return {
-    name: normalizeText(collection.name),
-    kind: collection.kind,
-    pathHash: normalizePathIdentity(collection.path),
-    pattern: normalizeText(collection.pattern),
-  };
 }
 
 function hashText(value: string): string {
@@ -98,7 +88,10 @@ function sortedUnique(values: readonly string[]): string[] {
 function buildCollectionConfigHash(collections: readonly QmdRuntimeManagedCollection[]): string {
   const normalized = collections
     .map((collection) => ({
-      ...normalizeCollection(collection),
+      name: normalizeText(collection.name),
+      kind: collection.kind,
+      pathHash: normalizePathIdentity(collection.path),
+      pattern: normalizeText(collection.pattern),
     }))
     .toSorted(
       (left, right) =>
@@ -126,59 +119,32 @@ function buildRuntimeCacheContextRecord(
   };
 }
 
-function buildCollectionValidationCacheContextInput(
-  params: QmdRuntimeCollectionValidationCacheContext,
-): string {
-  return JSON.stringify({
-    ...buildRuntimeCacheContextRecord(params),
-    collectionConfigHash: buildCollectionConfigHash(params.collections),
-  });
-}
-
-function buildMultiCollectionProbeCacheContextInput(
-  params: QmdRuntimeMultiCollectionProbeCacheContext,
-): string {
-  return JSON.stringify(buildRuntimeCacheContextRecord(params));
-}
-
 function buildQmdCollectionValidationCacheContextHash(
   params: QmdRuntimeCollectionValidationCacheContext,
 ): string {
-  return hashText(buildCollectionValidationCacheContextInput(params));
+  return hashText(
+    JSON.stringify({
+      ...buildRuntimeCacheContextRecord(params),
+      collectionConfigHash: buildCollectionConfigHash(params.collections),
+    }),
+  );
 }
 
 function buildQmdMultiCollectionProbeCacheContextHash(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
 ): string {
-  return hashText(buildMultiCollectionProbeCacheContextInput(params));
+  return hashText(JSON.stringify(buildRuntimeCacheContextRecord(params)));
 }
 
-function collectionValidationStore(): PluginStateKeyedStore<QmdRuntimeCacheCollectionValidationEntry> {
-  return openMemoryCoreStateStore<QmdRuntimeCacheCollectionValidationEntry>({
-    namespace: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE,
-    maxEntries: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_MAX_ENTRIES,
-  });
-}
-
-function multiCollectionProbeStore(): PluginStateKeyedStore<QmdRuntimeCacheMultiCollectionProbeEntry> {
-  return openMemoryCoreStateStore<QmdRuntimeCacheMultiCollectionProbeEntry>({
-    namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
-    maxEntries: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_MAX_ENTRIES,
-  });
-}
-
-function collectionValidationEntryKey(params: QmdRuntimeCollectionValidationCacheContext): string {
-  return memoryCoreWorkspaceEntryKey(
-    params.workspaceDir,
-    `qmd-runtime-cache.collection-validation:${buildQmdCollectionValidationCacheContextHash(params)}`,
-  );
-}
-
-function multiCollectionProbeEntryKey(params: QmdRuntimeMultiCollectionProbeCacheContext): string {
-  return memoryCoreWorkspaceEntryKey(
-    params.workspaceDir,
-    `qmd-runtime-cache.multi-collection-probe:${buildQmdMultiCollectionProbeCacheContextHash(params)}`,
-  );
+function resolveQmdRuntimeCache<T extends QmdRuntimeCacheEntryBase>(
+  workspaceDir: string,
+  namespace: string,
+  keyHash: string,
+): { key: string; store: PluginStateKeyedStore<T> } {
+  return {
+    key: memoryCoreWorkspaceEntryKey(workspaceDir, `${namespace}:${keyHash}`),
+    store: openMemoryCoreStateStore<T>({ namespace, maxEntries: QMD_RUNTIME_CACHE_MAX_ENTRIES }),
+  };
 }
 
 type QmdRuntimeCacheEnvelope = {
@@ -194,11 +160,8 @@ function normalizeCacheEntryEnvelope(
   nowMs: number,
   expectedKeyHash: string,
 ): QmdRuntimeCacheEnvelope | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (record.version !== QMD_RUNTIME_CACHE_ENTRY_VERSION) {
+  const record = asOptionalRecord(value);
+  if (!record || record.version !== QMD_RUNTIME_CACHE_ENTRY_VERSION) {
     return undefined;
   }
 
@@ -238,18 +201,13 @@ function normalizeCollectionValidationEntry(
   }
   const { record, createdAtMs, expiresAtMs, keyHash } = envelope;
 
-  const validation = record.validation;
-  if (typeof validation !== "object" || validation === null) {
-    return undefined;
-  }
-  const validationRecord = validation as Record<string, unknown>;
-  if (validationRecord.ok !== true) {
-    return undefined;
-  }
-  if (typeof validationRecord.collectionConfigHash !== "string") {
-    return undefined;
-  }
-  if (typeof validationRecord.collectionCount !== "number") {
+  const validation = asOptionalRecord(record.validation);
+  if (
+    !validation ||
+    validation.ok !== true ||
+    typeof validation.collectionConfigHash !== "string" ||
+    typeof validation.collectionCount !== "number"
+  ) {
     return undefined;
   }
 
@@ -260,8 +218,8 @@ function normalizeCollectionValidationEntry(
     keyHash,
     validation: {
       ok: true,
-      collectionConfigHash: normalizeText(validationRecord.collectionConfigHash),
-      collectionCount: Math.max(0, Math.floor(validationRecord.collectionCount)),
+      collectionConfigHash: normalizeText(validation.collectionConfigHash),
+      collectionCount: Math.max(0, Math.floor(validation.collectionCount)),
     },
   };
 }
@@ -277,12 +235,8 @@ function normalizeMultiCollectionProbeEntry(
   }
   const { record, createdAtMs, expiresAtMs, keyHash } = envelope;
 
-  const probe = record.multiCollectionProbe;
-  if (typeof probe !== "object" || probe === null) {
-    return undefined;
-  }
-  const probeRecord = probe as Record<string, unknown>;
-  if (typeof probeRecord.supported !== "boolean") {
+  const probe = asOptionalRecord(record.multiCollectionProbe);
+  if (!probe || typeof probe.supported !== "boolean") {
     return undefined;
   }
 
@@ -292,55 +246,57 @@ function normalizeMultiCollectionProbeEntry(
     expiresAtMs,
     keyHash,
     multiCollectionProbe: {
-      supported: probeRecord.supported,
+      supported: probe.supported,
     },
   };
 }
 
-export async function readQmdCollectionValidationCache(
-  params: QmdRuntimeCollectionValidationCacheContext,
-  nowMs = Date.now(),
-): Promise<QmdRuntimeCacheResult<QmdRuntimeCacheCollectionValidationEntry>> {
+async function readQmdRuntimeCache<T extends QmdRuntimeCacheEntryBase>(params: {
+  workspaceDir: string;
+  namespace: string;
+  keyHash: string;
+  nowMs: number;
+  normalize: (value: unknown, nowMs: number, keyHash: string) => T | undefined;
+}): Promise<QmdRuntimeCacheResult<T>> {
   try {
-    const store = collectionValidationStore();
-    const key = collectionValidationEntryKey(params);
-    const expectedKeyHash = buildQmdCollectionValidationCacheContextHash(params);
+    const { store, key } = resolveQmdRuntimeCache<T>(
+      params.workspaceDir,
+      params.namespace,
+      params.keyHash,
+    );
     const raw = await store.lookup(key);
-    if (!raw) {
-      return { state: "miss" };
-    }
-    const validated = normalizeCollectionValidationEntry(raw, nowMs, expectedKeyHash);
+    const validated = raw && params.normalize(raw, params.nowMs, params.keyHash);
     return validated ? { state: "hit", value: validated } : { state: "miss" };
   } catch {
     return { state: "miss" };
   }
 }
 
-export async function writeQmdCollectionValidationCache(
-  params: QmdRuntimeCollectionValidationCacheContext,
-  nowMs = Date.now(),
-): Promise<boolean> {
+async function writeQmdRuntimeCache<T extends QmdRuntimeCacheEntryBase>(params: {
+  workspaceDir: string;
+  namespace: string;
+  keyHash: string;
+  nowMs: number;
+  ttlMs: number;
+  payload: Omit<T, keyof QmdRuntimeCacheEntryBase>;
+}): Promise<boolean> {
   try {
-    const key = collectionValidationEntryKey(params);
-    const keyHash = buildQmdCollectionValidationCacheContextHash(params);
-    const collectionConfigHash = buildCollectionConfigHash(params.collections);
-    const createdAtMs = Math.max(0, Math.floor(nowMs));
-    const ttlMs = QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS;
-    const store = collectionValidationStore();
+    const { store, key } = resolveQmdRuntimeCache<T>(
+      params.workspaceDir,
+      params.namespace,
+      params.keyHash,
+    );
+    const createdAtMs = Math.max(0, Math.floor(params.nowMs));
     await store.register(
       key,
       {
         version: QMD_RUNTIME_CACHE_ENTRY_VERSION,
         createdAtMs,
-        expiresAtMs: createdAtMs + ttlMs,
-        keyHash,
-        validation: {
-          ok: true,
-          collectionConfigHash,
-          collectionCount: params.collections.length,
-        },
-      },
-      { ttlMs },
+        expiresAtMs: createdAtMs + params.ttlMs,
+        keyHash: params.keyHash,
+        ...params.payload,
+      } as T,
+      { ttlMs: params.ttlMs },
     );
     return true;
   } catch {
@@ -348,23 +304,50 @@ export async function writeQmdCollectionValidationCache(
   }
 }
 
+export async function readQmdCollectionValidationCache(
+  params: QmdRuntimeCollectionValidationCacheContext,
+  nowMs = Date.now(),
+): Promise<QmdRuntimeCacheResult<QmdRuntimeCacheCollectionValidationEntry>> {
+  return await readQmdRuntimeCache({
+    workspaceDir: params.workspaceDir,
+    namespace: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE,
+    keyHash: buildQmdCollectionValidationCacheContextHash(params),
+    nowMs,
+    normalize: normalizeCollectionValidationEntry,
+  });
+}
+
+export async function writeQmdCollectionValidationCache(
+  params: QmdRuntimeCollectionValidationCacheContext,
+  nowMs = Date.now(),
+): Promise<boolean> {
+  return await writeQmdRuntimeCache<QmdRuntimeCacheCollectionValidationEntry>({
+    workspaceDir: params.workspaceDir,
+    namespace: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE,
+    keyHash: buildQmdCollectionValidationCacheContextHash(params),
+    nowMs,
+    ttlMs: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS,
+    payload: {
+      validation: {
+        ok: true,
+        collectionConfigHash: buildCollectionConfigHash(params.collections),
+        collectionCount: params.collections.length,
+      },
+    },
+  });
+}
+
 export async function readQmdMultiCollectionProbeCache(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
   nowMs = Date.now(),
 ): Promise<QmdRuntimeCacheResult<QmdRuntimeCacheMultiCollectionProbeEntry>> {
-  try {
-    const store = multiCollectionProbeStore();
-    const key = multiCollectionProbeEntryKey(params);
-    const expectedKeyHash = buildQmdMultiCollectionProbeCacheContextHash(params);
-    const raw = await store.lookup(key);
-    if (!raw) {
-      return { state: "miss" };
-    }
-    const validated = normalizeMultiCollectionProbeEntry(raw, nowMs, expectedKeyHash);
-    return validated ? { state: "hit", value: validated } : { state: "miss" };
-  } catch {
-    return { state: "miss" };
-  }
+  return await readQmdRuntimeCache({
+    workspaceDir: params.workspaceDir,
+    namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
+    keyHash: buildQmdMultiCollectionProbeCacheContextHash(params),
+    nowMs,
+    normalize: normalizeMultiCollectionProbeEntry,
+  });
 }
 
 export async function writeQmdMultiCollectionProbeCache(
@@ -372,37 +355,26 @@ export async function writeQmdMultiCollectionProbeCache(
   supported: boolean,
   nowMs = Date.now(),
 ): Promise<boolean> {
-  try {
-    const key = multiCollectionProbeEntryKey(params);
-    const keyHash = buildQmdMultiCollectionProbeCacheContextHash(params);
-    const createdAtMs = Math.max(0, Math.floor(nowMs));
-    const ttlMs = QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS;
-    const store = multiCollectionProbeStore();
-    await store.register(
-      key,
-      {
-        version: QMD_RUNTIME_CACHE_ENTRY_VERSION,
-        createdAtMs,
-        expiresAtMs: createdAtMs + ttlMs,
-        keyHash,
-        multiCollectionProbe: {
-          supported,
-        },
-      },
-      { ttlMs },
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return await writeQmdRuntimeCache<QmdRuntimeCacheMultiCollectionProbeEntry>({
+    workspaceDir: params.workspaceDir,
+    namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
+    keyHash: buildQmdMultiCollectionProbeCacheContextHash(params),
+    nowMs,
+    ttlMs: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS,
+    payload: { multiCollectionProbe: { supported } },
+  });
 }
 
 export async function clearQmdMultiCollectionProbeCache(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
 ): Promise<void> {
   try {
-    const store = multiCollectionProbeStore();
-    await store.delete(multiCollectionProbeEntryKey(params));
+    const { store, key } = resolveQmdRuntimeCache<QmdRuntimeCacheMultiCollectionProbeEntry>(
+      params.workspaceDir,
+      QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
+      buildQmdMultiCollectionProbeCacheContextHash(params),
+    );
+    await store.delete(key);
   } catch {
     // fail open
   }

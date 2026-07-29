@@ -72,6 +72,8 @@ export function createMatrixReplyDispatcher(config: {
     logVerboseMessage,
   } = config;
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
+  // Tool, block, and final payloads are delivered separately but share one first-reply slot.
+  const hasRepliedRef = { value: false };
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
 
@@ -99,6 +101,7 @@ export function createMatrixReplyDispatcher(config: {
             runtime,
             textLimit,
             replyToMode,
+            hasRepliedRef,
             threadId: threadTarget,
             replyToId: threadTarget ?? replyToEventId ?? undefined,
             accountId,
@@ -211,6 +214,7 @@ export function createMatrixReplyDispatcher(config: {
                 runtime,
                 textLimit,
                 replyToMode,
+                hasRepliedRef,
                 threadId: threadTarget,
                 replyToId: threadTarget ?? replyToEventId ?? undefined,
                 accountId,
@@ -276,6 +280,7 @@ export function createMatrixReplyDispatcher(config: {
             runtime,
             textLimit,
             replyToMode,
+            hasRepliedRef,
             threadId: threadTarget,
             replyToId: threadTarget ?? replyToEventId ?? undefined,
             accountId,
@@ -301,6 +306,7 @@ export function createMatrixReplyDispatcher(config: {
             runtime,
             textLimit,
             replyToMode,
+            hasRepliedRef,
             threadId: threadTarget,
             replyToId: threadTarget ?? replyToEventId ?? undefined,
             accountId,
@@ -333,6 +339,7 @@ export function createMatrixReplyDispatcher(config: {
           runtime,
           textLimit,
           replyToMode,
+          hasRepliedRef,
           threadId: threadTarget,
           replyToId: threadTarget ?? replyToEventId ?? undefined,
           accountId,

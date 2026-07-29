@@ -248,6 +248,11 @@ targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
 seam is for async tool-result transforms that must run before OpenClaw or
 Codex feeds tool output back into the model.
 
+Middleware options may combine `runtimes` with a `matcher` tool-name list.
+Each registration keeps that pair intact, so registering the same handler for
+different runtimes does not broaden either matcher. Matchers use non-empty
+canonical OpenClaw tool ids; omit `matcher` to match all tools.
+
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API. The
@@ -293,6 +298,11 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+Harnesses that forward embedded attempt params should pass
+`skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
+deliberately narrow single-tool runs, and the runtime keeps them on the raw
+tool surface instead of engaging code mode or a tool-search catalog.
 
 ### Native Codex harness mode
 

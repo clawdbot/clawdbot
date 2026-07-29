@@ -187,7 +187,7 @@ suite.define(() => {
     }
   });
 
-  it("sends the first chat turn while agents startup loading is still pending", async () => {
+  it("waits for configured inference before sending the first chat turn", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -210,43 +210,21 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const sendButton = page.getByRole("button", { name: "Send message" });
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => sendButton.count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      const prompt = "send before agents list completes";
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .waitFor({ state: "visible", timeout: 10_000 });
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      await expect
-        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
-          timeout: 10_000,
-        })
-        .toBe("");
-      const params = requireRecord(sendRequest.params);
-      expect(params.message).toBe(prompt);
-      expect(params.sessionKey).toBe("global");
-      expect(params.agentId).toBe("ops");
-
-      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: "First token visible.",
-        message: {
-          content: [{ text: "First token visible.", type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        agentId: "ops",
-        sessionKey: "global",
-        state: "delta",
-      });
-      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
       await gateway.resolveDeferred("chat.startup", {
         agentsList: {
-          agents: [{ id: "ops", name: "OpenClaw" }],
+          agents: [
+            {
+              id: "ops",
+              model: { primary: "openai/startup-model" },
+              name: "OpenClaw",
+            },
+          ],
           defaultId: "ops",
           mainKey: "main",
           scope: "agent",
@@ -274,6 +252,39 @@ suite.define(() => {
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
+
+      const prompt = "send after configured inference loads";
+      await composer.fill(prompt);
+      await sendButton.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => sendButton.isEnabled()).toBe(true);
+      await sendButton.click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => composer.inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
+      const params = requireRecord(sendRequest.params);
+      expect(params.message).toBe(prompt);
+      expect(params.sessionKey).toBe("global");
+      expect(params.agentId).toBe("ops");
+
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "First token visible.",
+        message: {
+          content: [{ text: "First token visible.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        agentId: "ops",
+        sessionKey: "global",
+        state: "delta",
+      });
+      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
       await expect

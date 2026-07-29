@@ -78,6 +78,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockReset();
   });
 
+  it("registers llama.cpp GBNF tool-schema projection", () => {
+    expect(registerProvider()).toMatchObject({
+      normalizeToolSchemas: expect.any(Function),
+      inspectToolSchemas: expect.any(Function),
+    });
+  });
+
   it("preflights the requested LM Studio model before destructive non-interactive reset", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,

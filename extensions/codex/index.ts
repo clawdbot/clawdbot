@@ -14,10 +14,6 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  CODEX_REALTIME_OFFER_PATH,
-  configureCodexRealtimeBrowserSession,
-} from "./realtime-voice-api.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -94,42 +90,6 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    if (api.registrationMode === "full") {
-      const realtimeBrowserSession = configureCodexRealtimeBrowserSession({
-        getConfig: resolveCurrentConfig,
-        getPluginConfig: resolveCurrentPluginConfig,
-      });
-      api.registerHttpRoute({
-        path: CODEX_REALTIME_OFFER_PATH,
-        auth: "plugin",
-        match: "exact",
-        handler: realtimeBrowserSession.handler,
-      });
-      api.registerService({
-        id: "codex-oauth-realtime-browser-session-warmup",
-        start: () => {
-          void realtimeBrowserSession.warmup().catch((error: unknown) => {
-            api.logger.debug?.(
-              `Codex OAuth realtime warmup unavailable: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
-        },
-      });
-      api.lifecycle.registerRuntimeLifecycle({
-        id: "codex-oauth-realtime-browser-session",
-        description: "Release Codex OAuth realtime browser sessions when the plugin stops",
-        cleanup: async ({ reason }) => {
-          // Session cleanup must not release the process runtime. Registry
-          // restart and plugin disable release this registration's lease.
-          if (reason === "reset" || reason === "delete") {
-            return;
-          }
-          await realtimeBrowserSession.cleanup();
-        },
-      });
-    }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
     const openBindingStateStore = () =>
       (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({

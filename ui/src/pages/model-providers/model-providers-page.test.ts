@@ -15,8 +15,6 @@ type ModelProvidersPageTestElement = HTMLElement & {
   data: ModelProvidersData | null;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
-  refreshQueue: Promise<void>;
-  refreshing: boolean;
   routeData: ModelProvidersRouteData | undefined;
   selectedAgentId: string;
 };
@@ -84,6 +82,28 @@ function createHarness(initialScopeId: string) {
     },
   };
   const subscribe = () => () => undefined;
+  const runtimeConfig = {
+    state: {
+      connected: true,
+      configSnapshot: { config: {} },
+      configForm: {
+        agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } },
+      },
+      configLoading: false,
+      configSaving: false,
+      configApplying: false,
+      configNeedsApply: false,
+      configFormMode: "form",
+      configFormDirty: false,
+      configAutoSaveStatus: "idle",
+    },
+    ensureLoaded: vi.fn(async () => undefined),
+    patchForm: vi.fn(),
+    save: vi.fn(async () => true),
+    apply: vi.fn(async () => true),
+    discardDraft: vi.fn(async () => undefined),
+    subscribe,
+  };
   const context = {
     gateway: { snapshot, subscribe },
     agents: {
@@ -103,7 +123,11 @@ function createHarness(initialScopeId: string) {
       subscribe,
     },
     agentSelection,
-    runtimeConfig: { state: {}, subscribe },
+    runtimeConfig,
+    overlays: {
+      snapshot: { updateRunning: false, updateReconciliationPending: false },
+      subscribe,
+    },
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
   return {
@@ -112,6 +136,7 @@ function createHarness(initialScopeId: string) {
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
     request,
+    runtimeConfig,
     snapshot,
   };
 }
@@ -131,12 +156,50 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("links the page subtitle to the model providers guide", async () => {
+    const { context } = createHarness("main");
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(link?.textContent?.trim()).toBe("Learn more");
+    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
+  });
+
+  it("patches thinking and fast mode through the shared config draft", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
+
+    const groups = page.querySelectorAll<HTMLElement & { value: string }>("wa-radio-group");
+    expect(groups).toHaveLength(2);
+    groups[0]!.value = "high";
+    groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    groups[1]!.value = "off";
+    groups[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(runtimeConfig.patchForm).toHaveBeenNthCalledWith(
+      1,
+      ["agents", "defaults", "thinkingDefault"],
+      "high",
+    );
+    expect(runtimeConfig.patchForm).toHaveBeenNthCalledWith(
+      2,
+      ["agents", "defaults", "fastModeDefault"],
+      false,
+    );
+  });
+
   it("reloads credential status when the agent selector changes", async () => {
     const { agentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "main" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "main" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
 
     request.mockClear();
@@ -145,9 +208,12 @@ describe("ModelProvidersPage agent scope", () => {
     notifySelection();
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
-    await page.refreshQueue;
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
   });
@@ -159,7 +225,11 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "main" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "main" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     // Invalidate the in-flight refresh mid-await; the stale completion must
     // clear `refreshing` so the new agent's load can proceed.
@@ -168,10 +238,13 @@ describe("ModelProvidersPage agent scope", () => {
     release();
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
-    await page.refreshQueue;
-    expect(page.refreshing).toBe(false);
+    await vi.waitFor(() => expect(page.data?.updatedAt).toEqual(expect.any(Number)));
   });
 
   it("discards stale route data when selection changes during preload", async () => {
@@ -185,7 +258,11 @@ describe("ModelProvidersPage agent scope", () => {
     document.body.append(page);
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     expect(page.selectedAgentId).toBe("writer");
     expect(page.data).not.toBe(staleData);

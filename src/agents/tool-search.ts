@@ -8,10 +8,9 @@ import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
+  getReusableCatalogSnapshotCountForTest,
   isDirectVisibleCatalogTool,
-  reusableCatalogSnapshots,
   resolveCatalog,
-  sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
   appendToolSearchCodeStderrTail,
@@ -226,8 +225,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  sessionCatalogs,
-  reusableCatalogSnapshots,
+  getReusableCatalogSnapshotCountForTest,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,

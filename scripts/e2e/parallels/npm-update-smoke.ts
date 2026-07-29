@@ -11,7 +11,8 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
-import { formatDurationCompact } from "../../../src/infra/format-time/format-duration.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import prettyMilliseconds from "pretty-ms";
 import {
   die,
   ensureValue,
@@ -97,6 +98,11 @@ interface SpawnLoggedOptions {
   timeoutKillGraceMs?: number;
   timeoutLabel?: string;
   timeoutMs?: number;
+}
+
+interface MacosUpdateExec {
+  execArgs: string[];
+  ownerUser: string;
 }
 
 interface NpmUpdateSummary {
@@ -527,7 +533,17 @@ function platformRecord<T>(value: T): Record<Platform, T> {
 }
 
 function formatDuration(durationMs: number): string {
-  return formatDurationCompact(durationMs, { spaced: true }) ?? "0ms";
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "0ms";
+  }
+  const roundedMs = Math.round(durationMs);
+  if (roundedMs < 1000) {
+    return prettyMilliseconds(roundedMs);
+  }
+  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
+    hideYear: true,
+    unitCount: 2,
+  });
 }
 
 function readHarnessCheckoutVersion(): string {
@@ -551,10 +567,6 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function parseRegistryPackageMetadata(raw: string): {
@@ -1156,26 +1168,24 @@ export class NpmUpdateSmoke {
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
+    const macosUpdateExec = this.resolveMacosUpdateExec(ctx);
     const scriptPath = this.writeGuestScript(
       this.macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
+      { execArgs: macosUpdateExec.execArgs, mode: "700" },
     );
-    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
-    const sudoUserArgIndex = macosExecArgs.indexOf("-u");
-    const sudoUser =
-      sudoUserArgIndex >= 0 && sudoUserArgIndex + 1 < macosExecArgs.length
-        ? macosExecArgs[sudoUserArgIndex + 1]
-        : "";
-    if (sudoUser) {
-      run("prlctl", ["exec", this.macosVm, "/usr/sbin/chown", sudoUser, scriptPath], {
+    run(
+      "prlctl",
+      ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
+      {
         timeoutMs: 30_000,
-      });
-    }
+      },
+    );
     try {
       const status = await this.runStreamingToJobLog(
         "prlctl",
-        ["exec", this.macosVm, ...macosExecArgs, "/bin/bash", scriptPath],
+        ["exec", this.macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
         timeoutMs,
         ctx,
       );
@@ -1187,7 +1197,7 @@ export class NpmUpdateSmoke {
     }
   }
 
-  private resolveMacosUpdateExecArgs(ctx: UpdateJobContext): string[] {
+  private resolveMacosUpdateExec(ctx: UpdateJobContext): MacosUpdateExec {
     const guestPath =
       "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
     const currentUser = run("prlctl", ["exec", this.macosVm, "--current-user", "whoami"], {
@@ -1197,7 +1207,10 @@ export class NpmUpdateSmoke {
     });
     const user = currentUser.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
     if (currentUser.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-      return ["--current-user", "/usr/bin/env", `PATH=${guestPath}`];
+      return {
+        execArgs: ["--current-user", "/usr/bin/env", `PATH=${guestPath}`],
+        ownerUser: user,
+      };
     }
 
     const fallbackUser = this.resolveMacosDesktopUser();
@@ -1210,17 +1223,20 @@ export class NpmUpdateSmoke {
       `desktop user unavailable via Parallels --current-user; using root sudo fallback for ${fallbackUser}\n`,
     );
     const home = this.resolveMacosDesktopHome(fallbackUser);
-    return [
-      "/usr/bin/sudo",
-      "-H",
-      "-u",
-      fallbackUser,
-      "/usr/bin/env",
-      `HOME=${home}`,
-      `USER=${fallbackUser}`,
-      `LOGNAME=${fallbackUser}`,
-      `PATH=${guestPath}`,
-    ];
+    return {
+      execArgs: [
+        "/usr/bin/sudo",
+        "-H",
+        "-u",
+        fallbackUser,
+        "/usr/bin/env",
+        `HOME=${home}`,
+        `USER=${fallbackUser}`,
+        `LOGNAME=${fallbackUser}`,
+        `PATH=${guestPath}`,
+      ],
+      ownerUser: fallbackUser,
+    };
   }
 
   private resolveMacosDesktopUser(): string {
@@ -1321,9 +1337,16 @@ export class NpmUpdateSmoke {
     }
   }
 
-  private writeGuestScript(vm: string, script: string, prefix: string): string {
+  private writeGuestScript(
+    vm: string,
+    script: string,
+    prefix: string,
+    options: { execArgs?: string[]; mode?: "700" | "755" } = {},
+  ): string {
+    const execArgs = options.execArgs ?? [];
+    const mode = options.mode ?? "755";
     const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
-    const write = run("prlctl", ["exec", vm, "/usr/bin/tee", scriptPath], {
+    const write = run("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,
       quiet: true,
@@ -1333,7 +1356,7 @@ export class NpmUpdateSmoke {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
     try {
-      const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "755", scriptPath], {
+      const chmod = run("prlctl", ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath], {
         check: false,
         quiet: true,
         timeoutMs: 30_000,

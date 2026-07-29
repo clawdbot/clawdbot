@@ -10,6 +10,18 @@ export type ChatSplitLayout = {
   activePaneId: string;
 };
 
+export function singlePaneLayout(
+  columnId: string,
+  paneId: string,
+  sessionKey: string,
+): ChatSplitLayout {
+  return {
+    columns: [{ id: columnId, panes: [{ id: paneId, sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: paneId,
+  };
+}
+
 const MIN_PAIR_SHARE = 0.15;
 
 export function splitWeight(weights: number[], index: number, context: string): number {
@@ -92,6 +104,15 @@ export function findPane(
 
 export function panesOf(layout: ChatSplitLayout): ChatSplitPane[] {
   return layout.columns.flatMap((column) => column.panes.map((pane) => ({ ...pane })));
+}
+
+/** Panes actually rendered at the current viewport width. */
+export function visiblePanesOf(layout: ChatSplitLayout, narrow: boolean): ChatSplitPane[] {
+  if (!narrow) {
+    return panesOf(layout);
+  }
+  const activePane = findPane(layout, layout.activePaneId)?.pane;
+  return activePane ? [activePane] : [];
 }
 
 export function insertPane(

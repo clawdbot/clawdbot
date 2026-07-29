@@ -7,6 +7,7 @@ import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
 type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
+type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
 
 function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
   return {
@@ -36,6 +37,9 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
     defaultModelsDirty: false,
+    thinkingLevel: "off",
+    fastMode: false,
+    configBusy: false,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
@@ -69,6 +73,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onUtilityChange: () => undefined,
     onDefaultModelsSave: () => undefined,
     onDefaultModelsReset: () => undefined,
+    onThinkingChange: () => undefined,
+    onFastModeChange: () => undefined,
     ...overrides,
   };
 }
@@ -90,6 +96,21 @@ function button(container: Element, label: string): HTMLButtonElement | undefine
   );
 }
 
+function settingsRow(container: Element, label: string): HTMLElement {
+  const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) => text(candidate.querySelector(".settings-row__title")) === label,
+  );
+  if (!match) {
+    throw new Error(`Missing settings row: ${label}`);
+  }
+  return match;
+}
+
+function selectSegment(group: SegmentedGroup, value: string) {
+  group.value = value;
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 describe("renderModelProviders", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -100,6 +121,64 @@ describe("renderModelProviders", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+  });
+
+  it("renders model behavior next to default models and emits canonical values", () => {
+    const onThinkingChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    const container = mount(
+      props({
+        thinkingLevel: "low",
+        fastMode: "auto",
+        onThinkingChange,
+        onFastModeChange,
+      }),
+    );
+
+    const behavior = container.querySelector("#settings-model-behavior");
+    expect(behavior).not.toBeNull();
+    const thinking = settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    );
+    const fastMode = settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    );
+    expect(thinking?.value).toBe("low");
+    expect(fastMode?.value).toBe("auto");
+    expect([...fastMode!.querySelectorAll("wa-radio")].map((entry) => text(entry))).toEqual([
+      "Auto",
+      "Fast",
+      "Standard",
+    ]);
+
+    selectSegment(thinking!, "high");
+    selectSegment(fastMode!, "off");
+    expect(onThinkingChange).toHaveBeenCalledWith("high", expect.any(HTMLElement));
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it("locks model behavior while shared config work is pending", () => {
+    const container = mount(props({ configBusy: true }));
+    const behavior = container.querySelector("#settings-model-behavior");
+    const groups = behavior?.querySelectorAll<SegmentedGroup>("wa-radio-group") ?? [];
+
+    expect(groups).toHaveLength(2);
+    expect([...groups].every((group) => group.disabled)).toBe(true);
+  });
+
+  it("keeps model behavior available while provider data loads", () => {
+    const container = mount(props({ loading: true, thinkingLevel: "high", fastMode: true }));
+    const behavior = container.querySelector("#settings-model-behavior");
+
+    expect(behavior).not.toBeNull();
+    expect(
+      settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+    ).toBe("high");
+    expect(
+      settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+    ).toBe("on");
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
   });
 
   it("renders credential provenance and probe results", () => {

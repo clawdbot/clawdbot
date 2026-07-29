@@ -40,6 +40,7 @@ async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   const mod = await importHookRunnerGlobalModule();
   mod.resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -129,6 +130,103 @@ describe("hook-runner-global", () => {
       ).toEqual([["rovoclaw", "atl-sec-core"]]);
     } finally {
       releasePinnedPluginChannelRegistry(gatewayRegistry);
+    }
+  });
+
+  it.each([
+    {
+      hookName: "before_tool_call" as const,
+      run: (runner: HookRunner) =>
+        runner.runBeforeToolCall({ toolName: "read", params: {} }, { toolName: "read" }),
+    },
+    {
+      hookName: "before_install" as const,
+      run: (runner: HookRunner) =>
+        runner.runBeforeInstall(
+          {
+            targetName: "demo",
+            targetType: "plugin",
+            sourcePath: "/tmp/demo",
+            sourcePathKind: "directory",
+            origin: "local",
+            request: { kind: "plugin-dir", mode: "install" },
+            builtinScan: {
+              status: "ok",
+              scannedFiles: 0,
+              critical: 0,
+              warn: 0,
+              info: 0,
+              findings: [],
+            },
+          },
+          { origin: "local", targetType: "plugin", requestKind: "plugin-dir" },
+        ),
+    },
+  ])("fails closed when a default-bounded $hookName handler hangs", async ({ hookName, run }) => {
+    vi.useFakeTimers();
+    let releaseHandler: (() => void) | undefined;
+    const registry = createMockPluginRegistry([
+      {
+        hookName,
+        pluginId: "hanging-policy",
+        handler: () =>
+          new Promise<void>((resolve) => {
+            releaseHandler = resolve;
+          }),
+      },
+    ]);
+    const mod = await importHookRunnerGlobalModule();
+    setActivePluginRegistry(registry);
+    mod.initializeGlobalHookRunner(registry);
+    const pending = run(expectGlobalHookRunner(mod.getGlobalHookRunner()));
+
+    try {
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      const rejection = expect(pending).rejects.toThrow(
+        `${hookName} handler from hanging-policy failed: timed out after 15000ms`,
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      await rejection;
+    } finally {
+      releaseHandler?.();
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it("bounds gateway_stop handlers and lets shutdown continue", async () => {
+    vi.useFakeTimers();
+    let releaseHandler: (() => void) | undefined;
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "gateway_stop",
+        pluginId: "hanging-shutdown",
+        handler: () =>
+          new Promise<void>((resolve) => {
+            releaseHandler = resolve;
+          }),
+      },
+    ]);
+    const mod = await importHookRunnerGlobalModule();
+    setActivePluginRegistry(registry);
+    mod.initializeGlobalHookRunner(registry);
+    const pending = mod.runGlobalGatewayStopSafely({
+      event: { reason: "test shutdown" },
+      ctx: {},
+    });
+
+    try {
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      releaseHandler?.();
+      await pending;
     }
   });
 });

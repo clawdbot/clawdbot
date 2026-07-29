@@ -243,13 +243,42 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await expectHoverTooltip(replyButton, "Reply");
       await screenshot(page, "01-inline-actions.png");
 
+      const hideButton = group.getByRole("button", { name: "Hide message" });
+      expect(
+        await hideButton.evaluate((element) => {
+          const row = element.closest<HTMLElement>(".chat-virtual-row");
+          return Boolean(row && getComputedStyle(row).transform !== "none");
+        }),
+      ).toBe(true);
+      await hideButton.click();
+      const hideConfirmation = page.locator(".chat-delete-confirm");
+      await hideConfirmation.waitFor({ state: "visible" });
+      expect(
+        await hideConfirmation.evaluate((element) => element.parentElement === document.body),
+      ).toBe(true);
+      const hideConfirmationBounds = await hideConfirmation.boundingBox();
+      const viewport = page.viewportSize();
+      expect(hideConfirmationBounds).not.toBeNull();
+      expect(viewport).not.toBeNull();
+      expect(hideConfirmationBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(hideConfirmationBounds!.y).toBeGreaterThanOrEqual(0);
+      expect(hideConfirmationBounds!.x + hideConfirmationBounds!.width).toBeLessThanOrEqual(
+        viewport!.width,
+      );
+      expect(hideConfirmationBounds!.y + hideConfirmationBounds!.height).toBeLessThanOrEqual(
+        viewport!.height,
+      );
+      await screenshot(page, "02-hide-confirmation.png");
+      await hideConfirmation.getByRole("button", { name: "Cancel" }).click();
+
+      await group.hover();
       await replyButton.click();
       const replyPreview = page.locator(".chat-reply-preview");
       await replyPreview.waitFor({ state: "visible" });
       expect(await replyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
         messageText,
       );
-      await screenshot(page, "02-reply-preview.png");
+      await screenshot(page, "03-reply-preview.png");
       await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       const menu = page.locator(".chat-reply-context-menu");
@@ -287,7 +316,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Open in canvas",
         "Copy as markdown",
       ]);
-      await screenshot(page, "03-selected-text-context-menu.png");
+      await screenshot(page, "04-selected-text-context-menu.png");
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -305,7 +334,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(
         await menu.getByRole("menuitem", { name: "Reply to message" }).locator("svg").count(),
       ).toBe(0);
-      await screenshot(page, "04-context-menu.png");
+      await screenshot(page, "05-context-menu.png");
 
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expect

@@ -3,6 +3,7 @@
  * store preserves typed columns for hot delivery state while retaining the
  * normalized payload JSON for forward-compatible record hydration.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -26,8 +27,37 @@ type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs
 type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type SubagentRunSqliteInsert = Insertable<SubagentRunsTable>;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
+type CanonicalSubagentRunRecord = SubagentRunRecord &
+  Required<Pick<SubagentRunRecord, "execution" | "completion" | "delivery">>;
+const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
+const DELIVERY_STATUSES = new Set(
+  "not_required pending in_progress delivered failed suspended discarded".split(" "),
+);
 
-/** Converts undefined to null so optional record fields round-trip through sqlite columns. */
+function hasStateStatus(
+  value: unknown,
+  statuses: ReadonlySet<string>,
+): value is Record<string, unknown> {
+  return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
+}
+
+function hasCanonicalDeliveryState(value: unknown): value is Record<string, unknown> {
+  return (
+    hasStateStatus(value, DELIVERY_STATUSES) &&
+    !("handoffLeaseId" in value || "handoffLeasedAt" in value || "handoffInjectedAt" in value)
+  );
+}
+
+function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
+  return (
+    isRecord(value) &&
+    hasStateStatus(value.execution, EXECUTION_STATUSES) &&
+    isRecord(value.completion) &&
+    typeof value.completion.required === "boolean" &&
+    hasCanonicalDeliveryState(value.delivery)
+  );
+}
+
 function jsonStringify(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -59,8 +89,8 @@ function createDeliveryFromTypedColumns(
   row: SubagentRunSqliteRow,
   fallback: SubagentCompletionDeliveryState | undefined,
 ): SubagentCompletionDeliveryState | undefined {
-  // Typed delivery columns are authoritative for retry/delivered state while
-  // payload_json keeps compatibility with older fields during migration.
+  // Typed delivery columns own retry/delivered state; payload_json supplies
+  // canonical delivery fields without dedicated columns.
   const delivery = fallback ? { ...fallback } : undefined;
   const payload = parseJson(row.pending_final_delivery_payload_json) as
     | PendingFinalDeliveryPayload
@@ -152,7 +182,12 @@ function createRequesterSettleWakeFromTypedColumns(
 
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const payload = (parseJson(row.payload_json) as Partial<SubagentRunRecord> | undefined) ?? {};
+  const parsedPayload = parseJson(row.payload_json);
+  // SQLite shipped after nested state became canonical; unowned rows are transient.
+  if (!isCanonicalSubagentRunRecord(parsedPayload)) {
+    return null;
+  }
+  const payload = parsedPayload;
   const requesterOrigin =
     (parseJson(row.requester_origin_json) as SubagentRunRecord["requesterOrigin"] | undefined) ??
     payload.requesterOrigin;
@@ -268,9 +303,11 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
 
-/** Flattens a normalized subagent run into typed sqlite columns plus payload_json. */
 function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunSqliteInsert {
   const normalized = normalizeSubagentRunState(structuredClone(entry));
+  if (!isCanonicalSubagentRunRecord(normalized)) {
+    throw new Error("subagent run is missing canonical nested state");
+  }
   const delivery = normalized.delivery;
   const completion = normalized.completion;
   const requesterSettleWake = normalized.requesterSettleWake;

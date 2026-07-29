@@ -5,6 +5,7 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { stripChannelTargetPrefix, stripTargetKindPrefix } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveZaloAccount } from "./accounts.js";
@@ -119,11 +120,15 @@ function resolveValidatedSendContext(
   if (!token) {
     return { ok: false, error: "No Zalo bot token configured" };
   }
-  const trimmedChatId = chatId?.trim();
+  const trimmedChatId = normalizeZaloSendChatId(chatId);
   if (!trimmedChatId) {
     return { ok: false, error: "No chat_id provided" };
   }
   return { ok: true, chatId: trimmedChatId, token, fetcher };
+}
+
+function normalizeZaloSendChatId(chatId: string): string {
+  return stripTargetKindPrefix(stripChannelTargetPrefix(chatId, "zalo", "zl"));
 }
 
 function resolveSendContextOrFailure(

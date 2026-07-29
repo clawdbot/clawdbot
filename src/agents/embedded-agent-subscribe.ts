@@ -60,6 +60,8 @@ import {
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
+import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -139,27 +141,53 @@ function splitTrailingFenceFragment(
 
 function collectPendingMediaFromInternalEvents(
   events: SubscribeEmbeddedAgentSessionParams["internalEvents"],
-): string[] {
+): {
+  mediaUrls: string[];
+  attachments: NonNullable<AgentInternalEvent["attachments"]>;
+  trustByUrl: Map<string, boolean>;
+} {
   if (!events?.length) {
-    return [];
+    return { mediaUrls: [], attachments: [], trustByUrl: new Map() };
   }
   const pending: string[] = [];
-  const seen = new Set<string>();
+  const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
+  const indexByUrl = new Map<string, number>();
+  const trustedByUrl = new Map<string, boolean>();
   for (const event of events) {
+    const generatedMediaEvent = hasGeneratedMediaCompletionEvent([event]);
+    const attachmentByUrl = new Map(
+      (event.attachments ?? []).flatMap((attachment) => {
+        const reference = normalizeOptionalString(
+          attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
+        );
+        return reference ? [[reference, attachment] as const] : [];
+      }),
+    );
     const mediaUrls = [
       ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
       ...mediaUrlsFromGeneratedAttachments(event.attachments),
     ];
     for (const mediaUrl of mediaUrls) {
       const normalized = normalizeOptionalString(mediaUrl) ?? "";
-      if (!normalized || seen.has(normalized)) {
+      if (!normalized) {
         continue;
       }
-      seen.add(normalized);
+      const metadata = attachmentByUrl.get(normalized);
+      const existingIndex = indexByUrl.get(normalized);
+      if (existingIndex !== undefined) {
+        trustedByUrl.set(normalized, trustedByUrl.get(normalized) === true || generatedMediaEvent);
+        if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
+          attachments[existingIndex] = metadata;
+        }
+        continue;
+      }
+      indexByUrl.set(normalized, pending.length);
+      trustedByUrl.set(normalized, generatedMediaEvent);
       pending.push(normalized);
+      attachments.push(metadata ?? {});
     }
   }
-  return pending;
+  return { mediaUrls: pending, attachments, trustByUrl: trustedByUrl };
 }
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
@@ -168,7 +196,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
-  const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
+  const initialPendingToolMedia = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedAgentSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
@@ -239,9 +267,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
-    pendingToolMediaUrls: initialPendingToolMediaUrls,
+    pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
+    pendingToolMediaAttachments: initialPendingToolMedia.attachments,
+    pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
     pendingToolAudioAsVoice: false,
-    pendingToolTrustedLocalMedia: false,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
@@ -376,21 +405,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
+    const taggedPayload =
+      options?.assistantMessageIndex !== undefined
+        ? setReplyPayloadMetadata(withToolMedia, {
+            assistantMessageIndex: options.assistantMessageIndex,
+            ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
+          })
+        : withToolMedia;
     if (state.deferBlockReplyDelivery) {
-      const deferredPayload =
-        options?.assistantMessageIndex !== undefined
-          ? setReplyPayloadMetadata(withToolMedia, {
-              assistantMessageIndex: options.assistantMessageIndex,
-            })
-          : withToolMedia;
       if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(deferredPayload);
+        deferredToolMediaReplies.add(taggedPayload);
       }
-      state.deferredBlockReplies.push(deferredPayload);
+      state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(withToolMedia, options);
-    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+    const emitted = emitBlockReplySafely(taggedPayload, options);
+    if (emitted && !taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
       state.visibleBlockReplyCount += 1;
       if (consumesPendingToolMedia) {
         state.hasToolMediaBlockReply = true;
@@ -1305,8 +1336,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
+    state.pendingToolMediaAttachments = [];
+    state.pendingToolMediaTrustByUrl.clear();
     state.pendingToolAudioAsVoice = false;
-    state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();

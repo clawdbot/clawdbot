@@ -453,5 +453,10 @@ export function resolveMainSessionResumePolicy(
       reason: "transcript tail is a stale approval-pending tool result",
     };
   }
-  return { action: "resume", forceRestartSafeTools: false };
+  // A later tool result can hide the checkpoint at the transcript tail; keep
+  // the interrupted turn restricted without borrowing an earlier turn's state.
+  return {
+    action: "resume",
+    forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+  };
 }

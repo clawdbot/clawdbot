@@ -134,6 +134,9 @@ export async function startGatewayEarlyRuntime(params: {
           ]);
         return registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {
+            // The snapshot invalidation runs after remote descriptors/bins change;
+            // clients can now refetch authoritative skills.status without racing the probe.
+            params.broadcast("skills.changed", { reason: event.reason });
             return;
           }
           // Coalesce local skill changes before refreshing connected remote
@@ -144,7 +147,17 @@ export async function startGatewayEarlyRuntime(params: {
           }
           const nextTimer = setTimeout(() => {
             params.setSkillsRefreshTimer(null);
-            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
+            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig()).then(
+              () => {
+                params.broadcast("skills.changed", { reason: event.reason });
+              },
+              (error: unknown) => {
+                params.log.warn(
+                  `failed to refresh remote bins after skills change: ${String(error)}`,
+                );
+                params.broadcast("skills.changed", { reason: event.reason });
+              },
+            );
           }, params.skillsRefreshDelayMs);
           params.setSkillsRefreshTimer(nextTimer);
         });

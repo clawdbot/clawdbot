@@ -269,11 +269,66 @@ struct SwiftUIRenderSmokeTests {
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
         }
+    }
+
+    @Test @MainActor func `managed assistant image starts its artifact load`() async throws {
+        let artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "image",
+                text: nil,
+                mimeType: "image/png",
+                fileName: nil,
+                artifactId: artifactId,
+                url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
+                alt: "Managed preview",
+                content: nil)],
+            timestamp: 1)
+        var requestedArtifactId: String?
+        let root = ChatMessageBubble(
+            message: message,
+            style: .standard,
+            markdownVariant: .standard,
+            userAccent: nil,
+            displayOptions: [],
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false,
+            contextWindowTokens: nil,
+            userMessageExpanded: false,
+            onToggleUserMessageExpanded: {},
+            inlineWidgetResolverReady: true,
+            inlineWidgetResourceResolver: { _, _ in nil },
+            mediaArtifactResolverReady: true,
+            mediaPlaybackAllowed: { true },
+            loadMediaArtifact: { requested, kind in
+                requestedArtifactId = requested
+                #expect(kind == .image)
+                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
+                    data: Data(base64Encoded:
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                    mimeType: "image/png"))
+            })
+        let window = Self.host(root, size: CGSize(width: 393, height: 420))
+        defer { window.isHidden = true }
+
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while requestedArtifactId == nil, ContinuousClock().now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(requestedArtifactId == artifactId)
     }
 
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
@@ -336,7 +391,10 @@ struct SwiftUIRenderSmokeTests {
                     userMessageExpanded: false,
                     onToggleUserMessageExpanded: {},
                     inlineWidgetResolverReady: true,
-                    inlineWidgetResourceResolver: { _, _ in nil })
+                    inlineWidgetResourceResolver: { _, _ in nil },
+                    mediaArtifactResolverReady: false,
+                    mediaPlaybackAllowed: { true },
+                    loadMediaArtifact: { _, _ in nil })
                 ChatStreamingAssistantBubble(
                     text: text,
                     markdownVariant: .standard,
@@ -390,7 +448,10 @@ struct SwiftUIRenderSmokeTests {
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))

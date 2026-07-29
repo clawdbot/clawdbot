@@ -205,6 +205,19 @@ On macOS, `gateway stop` uses `launchctl bootout` by default. This removes the L
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
+### Existing system LaunchDaemons
+
+OpenClaw installs and manages a per-user LaunchAgent. It does not install or manage system LaunchDaemons. If a custom LaunchDaemon already uses the same gateway label, OpenClaw refuses to write, start, restart, or repair a user LaunchAgent because two `KeepAlive` managers can repeatedly restart the same gateway.
+
+The ownership check reads `launchctl print system/<label>` and also checks installed plists under `/Library/LaunchDaemons`. It fails closed when system ownership cannot be verified, and `--force` does not bypass it. `openclaw gateway status` reports a loaded same-label system job; add `--deep` to scan installed system service files.
+
+Choose one lifecycle owner before retrying:
+
+- To keep the custom system LaunchDaemon, remove any competing user LaunchAgent and set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when running Doctor so it remains diagnostic-only for service lifecycle.
+- To return to the supported user LaunchAgent, unload the system job with `sudo launchctl bootout system/<label>`, remove or relocate its actual plist, sign in to the macOS desktop as the target user, then run `openclaw gateway install`.
+
+For the default profile, `<label>` is `ai.openclaw.gateway`. Named profiles use `ai.openclaw.<profile>`.
+
   </Tab>
 
   <Tab title="Linux (systemd user)">

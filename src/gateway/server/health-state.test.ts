@@ -1,21 +1,21 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HealthSummary } from "../../commands/health.js";
+import type { HealthSummary } from "../health/types.js";
 
 /**
  * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
  */
-const getHealthSnapshotMock = vi.hoisted(() => vi.fn());
+const collectGatewayHealthSnapshotMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../commands/health.js", () => ({
-  getHealthSnapshot: getHealthSnapshotMock,
+vi.mock("../health/collector.js", () => ({
+  collectGatewayHealthSnapshot: collectGatewayHealthSnapshotMock,
 }));
 
 function healthSnapshotCallArg(index = 0) {
-  return getHealthSnapshotMock.mock.calls.at(index)?.at(0) as
+  return collectGatewayHealthSnapshotMock.mock.calls.at(index)?.at(0) as
     | {
+        audience?: "public" | "admin";
         eventLoop?: unknown;
-        includeSensitive?: boolean;
         probe?: boolean;
         runtimeSnapshot?: unknown;
         configReloadHotReloadStatus?: unknown;
@@ -44,8 +44,8 @@ function createHealthSummary(): HealthSummary {
 
 async function loadHealthState() {
   vi.resetModules();
-  getHealthSnapshotMock.mockReset();
-  getHealthSnapshotMock.mockResolvedValue(createHealthSummary());
+  collectGatewayHealthSnapshotMock.mockReset();
+  collectGatewayHealthSnapshotMock.mockResolvedValue(createHealthSummary());
   return await import("./health-state.js");
 }
 
@@ -57,7 +57,7 @@ describe("refreshGatewayHealthSnapshot", () => {
   it("keeps refreshes coalesced while preserving the first probe intent", async () => {
     const healthState = await loadHealthState();
     let resolveSnapshot: ((summary: HealthSummary) => void) | undefined;
-    getHealthSnapshotMock.mockImplementation(
+    collectGatewayHealthSnapshotMock.mockImplementation(
       () =>
         new Promise<HealthSummary>((resolve) => {
           resolveSnapshot = resolve;
@@ -67,10 +67,10 @@ describe("refreshGatewayHealthSnapshot", () => {
     const first = healthState.refreshGatewayHealthSnapshot({ probe: false });
     const second = healthState.refreshGatewayHealthSnapshot({ probe: true });
 
-    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(getHealthSnapshotMock).toHaveBeenCalledWith({
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledWith({
+      audience: "public",
       probe: false,
-      includeSensitive: false,
       runtimeSnapshot: undefined,
     });
     expect(Object.hasOwn(healthSnapshotCallArg() ?? {}, "eventLoop")).toBe(false);
@@ -99,7 +99,7 @@ describe("refreshGatewayHealthSnapshot", () => {
       getEventLoopHealth: () => undefined,
     });
 
-    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
     expect(healthSnapshotCallArg()?.eventLoop).toBe(eventLoop);
     expect(Object.hasOwn(healthSnapshotCallArg(1) ?? {}, "eventLoop")).toBe(false);
   });
@@ -116,7 +116,7 @@ describe("refreshGatewayHealthSnapshot", () => {
       getConfigReloaderHotReloadStatus: () => undefined,
     });
 
-    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
     expect(healthSnapshotCallArg()?.configReloadHotReloadStatus).toBe("disabled");
     expect(Object.hasOwn(healthSnapshotCallArg(1) ?? {}, "configReloadHotReloadStatus")).toBe(
       false,
@@ -141,17 +141,17 @@ describe("refreshGatewayHealthSnapshot", () => {
       },
     });
 
-    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
     expect(
-      getHealthSnapshotMock.mock.calls
+      collectGatewayHealthSnapshotMock.mock.calls
         .map((_call, index) => healthSnapshotCallArg(index)?.probe)
         .toSorted((a, b) => Number(a) - Number(b)),
     ).toEqual([false, true]);
     expect(
-      getHealthSnapshotMock.mock.calls.map(
-        (_call, index) => healthSnapshotCallArg(index)?.includeSensitive,
+      collectGatewayHealthSnapshotMock.mock.calls.map(
+        (_call, index) => healthSnapshotCallArg(index)?.audience,
       ),
-    ).toEqual([false, false]);
+    ).toEqual(["public", "public"]);
     expect(healthSnapshotCallArg()?.runtimeSnapshot).toBe(runtimeSnapshot);
     expect(healthSnapshotCallArg(1)?.runtimeSnapshot).toBeUndefined();
   });
@@ -161,7 +161,7 @@ describe("refreshGatewayHealthSnapshot", () => {
     const sensitiveSummary = createHealthSummary();
     const safeSummary = createHealthSummary();
     const broadcast = vi.fn();
-    getHealthSnapshotMock
+    collectGatewayHealthSnapshotMock
       .mockResolvedValueOnce(sensitiveSummary)
       .mockResolvedValueOnce(safeSummary);
     healthState.setBroadcastHealthUpdate(broadcast);
@@ -186,7 +186,7 @@ describe("refreshGatewayHealthSnapshot", () => {
     const safeSummary = createHealthSummary();
     let resolveSensitive: (() => void) | undefined;
     let resolveSafe: (() => void) | undefined;
-    getHealthSnapshotMock
+    collectGatewayHealthSnapshotMock
       .mockImplementationOnce(
         () =>
           new Promise<HealthSummary>((resolve) => {
@@ -206,9 +206,9 @@ describe("refreshGatewayHealthSnapshot", () => {
     });
     const safe = healthState.refreshGatewayHealthSnapshot({ probe: false });
 
-    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(healthSnapshotCallArg()?.includeSensitive).toBe(true);
-    expect(healthSnapshotCallArg(1)?.includeSensitive).toBe(false);
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(healthSnapshotCallArg()?.audience).toBe("admin");
+    expect(healthSnapshotCallArg(1)?.audience).toBe("public");
 
     resolveSensitive?.();
     resolveSafe?.();
@@ -216,5 +216,25 @@ describe("refreshGatewayHealthSnapshot", () => {
     await expect(sensitive).resolves.toBe(sensitiveSummary);
     await expect(safe).resolves.toBe(safeSummary);
     expect(healthState.getHealthCache()).toBe(safeSummary);
+  });
+
+  it.each([
+    { includeSensitive: false, label: "public" },
+    { includeSensitive: true, label: "sensitive" },
+  ])("releases the $label refresh lane after rejection", async ({ includeSensitive }) => {
+    const healthState = await loadHealthState();
+    const recovered = createHealthSummary();
+    collectGatewayHealthSnapshotMock
+      .mockRejectedValueOnce(new Error("snapshot failed"))
+      .mockResolvedValueOnce(recovered);
+
+    await expect(
+      healthState.refreshGatewayHealthSnapshot({ probe: false, includeSensitive }),
+    ).rejects.toThrow("snapshot failed");
+    await expect(
+      healthState.refreshGatewayHealthSnapshot({ probe: false, includeSensitive }),
+    ).resolves.toBe(recovered);
+
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
   });
 });

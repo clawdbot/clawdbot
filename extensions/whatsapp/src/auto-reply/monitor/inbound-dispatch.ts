@@ -5,7 +5,7 @@ import {
   isChannelPartialDeliveryError,
   type CommandFacts,
   type ChannelInboundTurnPlan,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -25,6 +25,7 @@ import {
 } from "../../outbound-media-contract.js";
 import type { WhatsAppReplyDeliveryResult } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
+import type { EchoTracker } from "./echo.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
@@ -388,7 +389,7 @@ export async function buildWhatsAppInboundContext(params: {
         })
       : undefined;
 
-  const media = toInboundMediaFacts(
+  const media = await toInboundMediaFactsWithMetadata(
     params.msg.payload.media
       ? [
           {
@@ -580,14 +581,7 @@ export function createWhatsAppReplyPlan(params: {
   maxMediaTextChunkLimit?: number;
   msg: AdmittedWebInboundMessage;
   onModelSelected?: ChannelReplyOnModelSelected;
-  rememberSentText: (
-    text: string | undefined,
-    opts: {
-      combinedBody?: string;
-      combinedBodySessionKey?: string;
-      logVerboseMessage?: boolean;
-    },
-  ) => void;
+  rememberSentText: EchoTracker["rememberText"];
   replyLogger: ReturnType<typeof getChildLogger>;
   replyPipeline: WhatsAppDispatchPipeline;
   replyResolver: typeof getReplyFromConfig;
@@ -630,6 +624,7 @@ export function createWhatsAppReplyPlan(params: {
     params.rememberSentText(payload.text, {
       combinedBody: params.context.Body as string | undefined,
       combinedBodySessionKey: params.route.sessionKey,
+      conversationId,
       logVerboseMessage: shouldLog,
     });
     if (shouldLogVerbose()) {

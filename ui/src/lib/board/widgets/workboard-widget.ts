@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
@@ -19,6 +20,7 @@ type SharedWorkboardWidgetRuntime = {
   host: WorkboardHost;
   listeners: Set<(snapshot: ReturnType<typeof normalizeCardsPayload>) => void>;
   loadPromise?: Promise<ReturnType<typeof normalizeCardsPayload>>;
+  snapshot?: ReturnType<typeof normalizeCardsPayload>;
 };
 
 type SharedWorkboardWidgetSubscription = {
@@ -77,6 +79,7 @@ function loadSharedWorkboardCards(
   };
   void load.then((snapshot) => {
     releaseLoad();
+    runtime.snapshot = snapshot;
     // A change can arrive after another widget started its snapshot request.
     // Broadcast the eventual post-change reload so idle widgets cannot stay stale.
     for (const listener of runtime.listeners) {
@@ -128,18 +131,41 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected cards: WorkboardCard[] = [];
   protected statuses: readonly WorkboardStatus[] = [];
-  protected loading = false;
   protected loaded = false;
   protected error = "";
-  private loadAttempted = false;
 
   private allCards: WorkboardCard[] = [];
   private workboardHost: WorkboardHost = {};
   private client: GatewayBrowserClient | null = null;
   private sharedRuntime: SharedWorkboardWidgetRuntime | null = null;
-  private refreshGeneration = 0;
-  private refreshPromise: Promise<void> | null = null;
-  private refreshPending = false;
+  private readonly refreshTask = new Task(this, {
+    autoRun: false,
+    args: () => [this.client, this.sharedRuntime, false as boolean, false as boolean] as const,
+    task: async ([client, runtime, force, refreshAfterInflight]) => {
+      if (!client || !runtime) {
+        return initialState;
+      }
+      if (!force && runtime.snapshot) {
+        return runtime.snapshot;
+      }
+      const pending = runtime.loadPromise;
+      try {
+        const snapshot = await loadSharedWorkboardCards(client, runtime);
+        return refreshAfterInflight && pending
+          ? loadSharedWorkboardCards(client, runtime)
+          : snapshot;
+      } catch (error) {
+        if (!refreshAfterInflight || !pending) {
+          throw error;
+        }
+        return loadSharedWorkboardCards(client, runtime);
+      }
+    },
+    onError: (error) => {
+      this.error = error instanceof Error ? error.message : String(error);
+      this.requestRender();
+    },
+  });
   private readonly applySharedSnapshot = (
     snapshot: ReturnType<typeof normalizeCardsPayload>,
   ): void => {
@@ -172,7 +198,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   }
 
   override updated(): void {
-    if (!this.loadAttempted && !this.loading) {
+    if (!this.loaded && this.refreshTask.status === TaskStatus.INITIAL) {
       void this.refresh();
     }
   }
@@ -181,17 +207,13 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     if (this.client && this.sharedRuntime) {
       releaseWorkboardWidgetRuntime(this.client, this.sharedRuntime, this.applySharedSnapshot);
     }
-    this.refreshGeneration += 1;
-    this.refreshPromise = null;
-    this.refreshPending = false;
+    void this.refreshTask.run([null, null, false, false]);
     this.client = null;
     this.sharedRuntime = null;
     this.allCards = [];
     this.cards = [];
     this.workboardHost = {};
     this.loaded = false;
-    this.loadAttempted = false;
-    this.loading = false;
     this.error = "";
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -209,6 +231,10 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected retryLoad(): void {
     void this.refresh(true);
+  }
+
+  protected get loading(): boolean {
+    return this.refreshTask.status === TaskStatus.PENDING;
   }
 
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
@@ -257,16 +283,17 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.workboardHost = this.sharedRuntime?.host ?? {};
     this.allCards = [];
     this.cards = [];
-    this.refreshGeneration += 1;
-    this.refreshPromise = null;
-    this.refreshPending = false;
+    void this.refreshTask.run([null, null, false, false]);
     this.loaded = false;
-    this.loadAttempted = false;
-    this.loading = false;
     this.error = "";
+    // A cached runtime still has another live same-client listener; the last
+    // disconnect deletes it, while shared change events keep its snapshot current.
+    if (this.sharedRuntime?.snapshot) {
+      this.applySharedSnapshot(this.sharedRuntime.snapshot);
+    }
     this.requestRender();
-    if (nextClient) {
-      void this.refresh(true);
+    if (nextClient && !this.sharedRuntime?.snapshot) {
+      void this.refresh();
     }
   }
 
@@ -276,45 +303,13 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     if (!client || !sharedRuntime || (!force && this.loaded)) {
       return;
     }
-    if (this.refreshPromise) {
-      if (force) {
-        this.refreshPending = true;
-      }
-      return await this.refreshPromise;
+    const refreshAfterInflight = force && this.refreshTask.status === TaskStatus.PENDING;
+    if (!force && this.refreshTask.status === TaskStatus.PENDING) {
+      return;
     }
-    const generation = ++this.refreshGeneration;
-    this.loadAttempted = true;
-    this.loading = true;
     this.error = "";
     this.requestRender();
-    const refresh = (async () => {
-      try {
-        await loadSharedWorkboardCards(client, sharedRuntime);
-      } catch (error) {
-        if (generation === this.refreshGeneration && client === this.client) {
-          this.error = error instanceof Error ? error.message : String(error);
-        }
-      } finally {
-        if (generation === this.refreshGeneration) {
-          this.loading = false;
-          this.requestRender();
-        }
-      }
-    })();
-    this.refreshPromise = refresh;
-    try {
-      await refresh;
-    } finally {
-      if (this.refreshPromise === refresh) {
-        this.refreshPromise = null;
-        const shouldRefreshAgain =
-          this.refreshPending && generation === this.refreshGeneration && client === this.client;
-        this.refreshPending = false;
-        if (shouldRefreshAgain) {
-          await this.refresh(true);
-        }
-      }
-    }
+    await this.refreshTask.run([client, sharedRuntime, force, refreshAfterInflight]);
   }
 
   private syncFromHost(): void {

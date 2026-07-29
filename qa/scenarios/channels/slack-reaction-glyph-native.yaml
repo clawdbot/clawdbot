@@ -6,7 +6,6 @@ scenario:
     primary:
       - slack.actions
   execution:
-    profiles: { "slack:default": 6 }
     kind: flow
     channel: slack
     timeoutMs: 90000

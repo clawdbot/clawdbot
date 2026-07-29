@@ -2,6 +2,7 @@
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
+import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -25,6 +26,7 @@ export class LegacyContextEngine implements ContextEngine {
     id: "legacy",
     name: "Legacy Context Engine",
     version: "1.0.0",
+    acceptedHostParams: [...CONTEXT_ENGINE_HOST_PARAMS],
   };
 
   async ingest(_params: {
