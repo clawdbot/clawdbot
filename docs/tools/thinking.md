@@ -76,6 +76,7 @@ title: "Thinking levels"
 - For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
 - For Codex-backed `openai/*` / `openai-codex/*` models, fast mode sends the same `service_tier=priority` flag on Codex Responses. Native Codex app-server turns receive the tier only on `turn/start` or thread start/resume, so `auto` cannot retier one already-running app-server turn; it applies to the next model turn OpenClaw starts.
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- For the `claude-cli` backend, fast mode maps to Claude Code's per-invocation `fastMode` setting. Restricted and `/btw` side-question runs keep fast mode disabled.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
 - `/status` shows `Fast` when fast mode is enabled and `Fast:auto` when the configured mode is auto.
