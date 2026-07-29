@@ -51,9 +51,15 @@ afterAll(async () => {
 beforeEach(() => {
   runFfprobe.mockReset();
   resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
+  // Write a real seekable file so probeVideoDimensions can fs.open it (same
+  // path production uses after withTempWorkspace.write).
   withTempWorkspace.mockImplementation(async (_opts, run) => {
     const workspace = {
-      write: vi.fn(async (name: string) => `/tmp/openclaw/ws/${name}`),
+      write: vi.fn(async (name: string, buffer: Buffer) => {
+        const filePath = path.join(testDir, name);
+        await fs.writeFile(filePath, buffer);
+        return filePath;
+      }),
     };
     return await run(workspace);
   });
@@ -211,8 +217,15 @@ describe("probeMediaFilesWithinBudget", () => {
 describe("probeVideoDimensions", () => {
   it("writes buffer to seekable temp file then probes path", async () => {
     const buffer = Buffer.from("video");
-    const write = vi.fn(async (name: string) => `/tmp/openclaw/ws/${name}`);
-    withTempWorkspace.mockImplementationOnce(async (_opts, run) => await run({ write }));
+    let write: ReturnType<typeof vi.fn> | undefined;
+    withTempWorkspace.mockImplementationOnce(async (_opts, run) => {
+      write = vi.fn(async (name: string, data: Buffer) => {
+        const filePath = path.join(testDir, name);
+        await fs.writeFile(filePath, data);
+        return filePath;
+      });
+      return await run({ write });
+    });
     runFfprobe.mockResolvedValueOnce(JSON.stringify({ streams: [{ width: 720, height: 1280 }] }));
 
     await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
