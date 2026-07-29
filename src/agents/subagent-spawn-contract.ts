@@ -60,6 +60,9 @@ export type SpawnSubagentContext = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   requesterRunId?: string;
+  /** Prepared active requester model for same-agent native spawn inheritance. */
+  requesterModelProvider?: string;
+  requesterModelId?: string;
 };
 
 export type SpawnSubagentResult = {
@@ -75,6 +78,7 @@ export type SpawnSubagentResult = {
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
   modelApplied?: boolean;
+  modelSelectionSource?: "explicit" | "configured" | "requester" | "default";
   error?: string;
   attachments?: {
     count: number;

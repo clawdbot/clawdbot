@@ -23,7 +23,11 @@ function createSetupDeps(home: string) {
       readConfigFileSnapshotForWrite: configIO.readConfigFileSnapshotForWrite,
     }),
     ensureAgentWorkspace: vi.fn(
-      async (params?: { dir?: string; skipOptionalBootstrapFiles?: string[] }) => ({
+      async (params?: {
+        dir?: string;
+        ensureBootstrapFiles?: boolean;
+        skipOptionalBootstrapFiles?: string[];
+      }) => ({
         dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
       }),
     ),
@@ -403,6 +407,24 @@ describe("setupCommand", () => {
       const workspaceParams = requireFirstWorkspaceParams(deps.ensureAgentWorkspace);
       expect(workspaceParams.dir).toBe(workspace);
       expect(workspaceParams.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
+    });
+  });
+
+  it("persists explicit skipBootstrap and omits workspace instruction files", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, "custom-workspace");
+
+      await setupCommand({ workspace, skipBootstrap: true }, runtime, deps);
+
+      const config = JSON.parse(
+        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      ) as OpenClawConfig;
+      expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).ensureBootstrapFiles).toBe(
+        false,
+      );
     });
   });
 

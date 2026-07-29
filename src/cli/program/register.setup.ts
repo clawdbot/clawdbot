@@ -24,7 +24,7 @@ import {
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
-const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
 const optionalString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
@@ -116,7 +116,13 @@ async function runOnboardingEntry(
       return;
     }
     const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
+    await setupCommand(
+      {
+        workspace: optionalString(options.workspace),
+        skipBootstrap: Boolean(options.skipBootstrap),
+      },
+      runtime,
+    );
     return;
   }
   if (!validateOnboardAuthOptionValues(options, runtime)) {

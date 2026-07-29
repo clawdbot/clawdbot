@@ -3198,5 +3198,23 @@ describe("resolveSubagentSpawnModelSelection", () => {
       "anthropic/claude-sonnet-4-6",
     );
   });
+
+  it("uses the requester model after explicit and configured subagent selections", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        requesterModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toBe("anthropic/claude-sonnet-4-6");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

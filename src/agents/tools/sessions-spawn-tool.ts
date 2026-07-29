@@ -281,6 +281,8 @@ export function createSessionsSpawnTool(
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
     requesterRunId?: string;
+    requesterModelProvider?: string;
+    requesterModelId?: string;
     swarmCollector?: boolean;
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
@@ -574,6 +576,8 @@ export function createSessionsSpawnTool(
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
           requesterRunId: opts?.requesterRunId,
+          requesterModelProvider: opts?.requesterModelProvider,
+          requesterModelId: opts?.requesterModelId,
         },
       );
 

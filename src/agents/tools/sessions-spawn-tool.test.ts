@@ -146,6 +146,20 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.streamTo).toBeUndefined();
   });
 
+  it("passes the active requester model into native spawn context", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterModelProvider: "anthropic",
+      requesterModelId: "claude-sonnet-4-6",
+    });
+
+    await tool.execute("call-native-model", { task: "investigate" });
+
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.requesterModelProvider).toBe("anthropic");
+    expect(spawnContext.requesterModelId).toBe("claude-sonnet-4-6");
+  });
+
   it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
     registerAcpBackendForTest();
 
@@ -527,6 +541,43 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("inherits the active requester model for visible sessions", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:inherited-model",
+      runStarted: true,
+      runId: "run-visible-inherited-model",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterModelProvider: "anthropic",
+      requesterModelId: "claude-sonnet-4-6",
+      config: {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.5" } },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-inherited-model", {
+      task: "inspect issue",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      resolvedModel: "anthropic/claude-sonnet-4-6",
+      modelSelectionSource: "requester",
+    });
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6" }),
+    );
+  });
+
   it("uses the target agent model for cross-agent visible sessions", async () => {
     const callGateway = vi.fn(async () => ({
       key: "agent:reviewer:dashboard:child",
@@ -565,6 +616,44 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
+  });
+
+  it("keeps the target primary model for cross-agent visible sessions", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:reviewer:dashboard:primary-child",
+      runStarted: true,
+      runId: "run-reviewer-primary",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterModelProvider: "anthropic",
+      requesterModelId: "claude-sonnet-4-6",
+      config: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["reviewer"] } },
+          list: [{ id: "main" }, { id: "reviewer", model: { primary: "openai/gpt-5.5" } }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-reviewer-primary", {
+      task: "review patch",
+      agentId: "reviewer",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      resolvedModel: "openai/gpt-5.5",
+      modelSelectionSource: "default",
+    });
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ model: "openai/gpt-5.5" }),
+    );
   });
 
   it("rejects cross-agent visible transcript forks", async () => {

@@ -670,6 +670,8 @@ export function createOpenClawTools(
             config: resolvedConfig,
             requesterAgentIdOverride: sessionAgentId,
             requesterRunId: options?.runId,
+            requesterModelProvider: options?.modelProvider,
+            requesterModelId: options?.modelId,
             swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,

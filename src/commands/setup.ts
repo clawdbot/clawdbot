@@ -134,7 +134,7 @@ async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<str
 
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
-  opts?: { workspace?: string },
+  opts?: { workspace?: string; skipBootstrap?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
   deps: SetupCommandDeps = {},
 ) {
@@ -176,6 +176,8 @@ export async function setupCommand(
   const shouldWriteWorkspace =
     !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
+  const shouldWriteSkipBootstrap =
+    opts?.skipBootstrap === true && resolvedDefaults.skipBootstrap !== true;
   const writeInheritedWorkspaceOverride =
     snapshot.exists &&
     shouldWriteWorkspace &&
@@ -219,34 +221,61 @@ export async function setupCommand(
   if (shouldWriteGatewayMode) {
     next = { ...next, gateway: { ...next.gateway, mode: "local" } };
   }
+  if (shouldWriteSkipBootstrap) {
+    next = {
+      ...next,
+      agents: {
+        ...next.agents,
+        defaults: { ...next.agents?.defaults, skipBootstrap: true },
+      },
+    };
+  }
 
   if (!snapshot.exists) {
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
     next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
   }
 
-  if (!snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode) {
-    // Preserve all existing config fields and touch only workspace/gateway mode
-    // defaults that this command owns.
+  if (
+    !snapshot.exists ||
+    shouldPersistRoster ||
+    shouldWriteWorkspace ||
+    shouldWriteGatewayMode ||
+    shouldWriteSkipBootstrap
+  ) {
+    // Preserve all existing config fields and touch only the setup defaults
+    // explicitly owned by this command.
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
+    const explicitSetPaths = [
+      ...(snapshot.exists && shouldPersistRoster ? [["agents", "entries"]] : []),
+      ...(writeInheritedWorkspaceOverride ? [["agents", "defaults", "workspace"]] : []),
+      ...(snapshot.exists && shouldWriteSkipBootstrap
+        ? [["agents", "defaults", "skipBootstrap"]]
+        : []),
+    ];
+    const explicitSetValueSource = writeInheritedWorkspaceOverride
+      ? {
+          ...next,
+          agents: {
+            ...next.agents,
+            defaults: { ...next.agents?.defaults, workspace },
+          },
+        }
+      : next;
     await replaceConfig({
       nextConfig: next,
       snapshot,
       afterWrite: { mode: "auto" },
       writeOptions: {
         ...prepared.writeOptions,
-        ...(snapshot.exists && shouldPersistRoster
+        ...(explicitSetPaths.length > 0
           ? {
-              explicitSetPaths: [["agents", "entries"]],
-              explicitSetValueSource: cfg,
+              explicitSetPaths,
+              explicitSetValueSource,
             }
           : {}),
-        ...(writeInheritedWorkspaceOverride
-          ? {
-              allowIncludeAncestorExplicitSetPaths: true,
-              explicitSetPaths: [["agents", "defaults", "workspace"]],
-              explicitSetValueSource: { agents: { defaults: { workspace } } },
-            }
+        ...(writeInheritedWorkspaceOverride || shouldWriteSkipBootstrap
+          ? { allowIncludeAncestorExplicitSetPaths: true }
           : {}),
       },
     });
@@ -261,6 +290,9 @@ export async function setupCommand(
       if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");
       }
+      if (shouldWriteSkipBootstrap) {
+        updates.push("set agents.defaults.skipBootstrap");
+      }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
       await (deps.logConfigUpdated ?? logDefaultConfigUpdated)(runtime, {
         path: configPath,
@@ -274,7 +306,9 @@ export async function setupCommand(
 
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
-    ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
+    ensureBootstrapFiles: !(
+      opts?.skipBootstrap === true || resolvedDefaults.skipBootstrap === true
+    ),
     skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);

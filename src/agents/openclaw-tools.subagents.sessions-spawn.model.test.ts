@@ -116,6 +116,38 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBeUndefined();
   });
 
+  it("inherits the active requester model when no subagent model is configured", () => {
+    const plan = expectOkPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+        }),
+        targetAgentId: "main",
+        requesterModel: "anthropic/claude-sonnet-4-6",
+      }),
+    );
+
+    expect(plan.resolvedModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(plan.modelSelectionSource).toBe("requester");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("anthropic");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("claude-sonnet-4-6");
+  });
+
+  it("prefers configured subagent models over the requester model", () => {
+    const plan = expectOkPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "openai/gpt-5.4" } } },
+        }),
+        targetAgentId: "main",
+        requesterModel: "anthropic/claude-sonnet-4-6",
+      }),
+    );
+
+    expect(plan.resolvedModel).toBe("openai/gpt-5.4");
+    expect(plan.modelSelectionSource).toBe("configured");
+  });
+
   it("uses the target default provider for bare configured subagent models", () => {
     const plan = expectOkPlan(
       resolveSubagentModelAndThinkingPlan({

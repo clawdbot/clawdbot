@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { modelKey } from "../shared/model-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
@@ -185,6 +186,10 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
+  const requesterModel =
+    params.targetAgentId === params.requesterAgentId && params.ctx.requesterModelId
+      ? modelKey(params.ctx.requesterModelProvider ?? "", params.ctx.requesterModelId)
+      : undefined;
   const callerThinkingRaw = readRequesterThinkingLevel({
     cfg: params.cfg,
     requesterInternalKey: params.requesterInternalKey,
@@ -204,6 +209,7 @@ export async function resolveSubagentChildPlan(params: {
     requesterAgentConfig,
     targetAgentConfig,
     modelOverride: params.request.model,
+    requesterModel,
     thinkingOverrideRaw: params.request.thinking,
     callerThinkingRaw,
     fastMode: inheritedFastMode,

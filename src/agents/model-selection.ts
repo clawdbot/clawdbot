@@ -5,10 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -314,7 +311,19 @@ export function resolveSubagentSpawnModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
   modelOverride?: unknown;
+  requesterModel?: unknown;
 }): string {
+  return resolveSubagentSpawnModelSelectionWithSource(params).model;
+}
+
+export type SubagentModelSelectionSource = "explicit" | "configured" | "requester" | "default";
+
+export function resolveSubagentSpawnModelSelectionWithSource(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  modelOverride?: unknown;
+  requesterModel?: unknown;
+}): { model: string; source: SubagentModelSelectionSource } {
   const runtimeDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -324,18 +333,30 @@ export function resolveSubagentSpawnModelSelection(params: {
     agentId: params.agentId,
     modelOverride: params.modelOverride,
     defaultProvider: runtimeDefault.provider,
+    includeAgentPrimary: false,
   });
   if (configured) {
-    return configured;
+    return {
+      model: configured,
+      source: normalizeModelSelection(params.modelOverride) ? "explicit" : "configured",
+    };
   }
-  const raw =
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
-    `${runtimeDefault.provider}/${runtimeDefault.model}`;
+  const requester = resolveConfiguredSubagentSpawnModelSelection({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelOverride: params.requesterModel,
+    defaultProvider: runtimeDefault.provider,
+    includeAgentPrimary: false,
+  });
+  if (requester) {
+    return { model: requester, source: "requester" };
+  }
+  const raw = `${runtimeDefault.provider}/${runtimeDefault.model}`;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: runtimeDefault.provider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  return { model: resolveModelThroughAliases(raw, aliasIndex), source: "default" };
 }
 
 export function resolveConfiguredSubagentSpawnModelSelection(params: {

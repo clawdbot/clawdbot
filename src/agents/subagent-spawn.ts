@@ -636,6 +636,7 @@ export async function spawnSubagentDirect(
           : acceptedNote,
         ...resolvedModelMetadata,
         modelApplied: resolvedModel ? modelApplied : undefined,
+        modelSelectionSource: plan.modelSelectionSource,
         attachments: attachmentsReceipt,
       };
     }
@@ -665,6 +666,7 @@ export async function spawnSubagentDirect(
         : acceptedNote,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
+      modelSelectionSource: plan.modelSelectionSource,
       attachments: attachmentsReceipt,
     };
   } finally {

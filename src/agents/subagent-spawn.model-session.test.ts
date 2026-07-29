@@ -142,4 +142,45 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(persistedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
     expect(persistedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
   });
+
+  it("keeps the target primary model for cross-agent native spawns", async () => {
+    const dedicatedUpdateSessionStoreMock = vi.fn();
+    const {
+      resetSubagentRegistryForTests: resetForCrossAgentTest,
+      spawnSubagentDirect: spawnCrossAgent,
+    } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () =>
+        createSubagentSpawnTestConfig(os.tmpdir(), {
+          agents: {
+            defaults: {
+              workspace: os.tmpdir(),
+              subagents: { allowAgents: ["reviewer"] },
+            },
+            list: [{ id: "main" }, { id: "reviewer", model: { primary: "openai/gpt-5.5" } }],
+          },
+        }),
+      updateSessionStoreMock: dedicatedUpdateSessionStoreMock,
+      workspaceDir: os.tmpdir(),
+    });
+    resetForCrossAgentTest();
+
+    const result = await spawnCrossAgent(
+      {
+        task: "test",
+        agentId: "reviewer",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        requesterModelProvider: "anthropic",
+        requesterModelId: "claude-sonnet-4-6",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      resolvedModel: "openai/gpt-5.5",
+      modelSelectionSource: "default",
+    });
+  });
 });

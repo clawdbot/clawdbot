@@ -172,10 +172,11 @@ describe("registerSetupCommand", () => {
   });
 
   it("runs baseline setup command when --baseline is set", async () => {
-    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws", "--json"]);
+    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws", "--skip-bootstrap", "--json"]);
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastSetupOptions()?.skipBootstrap).toBe(true);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

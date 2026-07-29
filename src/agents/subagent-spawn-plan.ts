@@ -9,7 +9,7 @@ import type { FastMode } from "../shared/fast-mode.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
-  resolveSubagentSpawnModelSelection,
+  resolveSubagentSpawnModelSelectionWithSource,
 } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
@@ -58,15 +58,18 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   requesterAgentConfig?: unknown;
   targetAgentConfig?: unknown;
   modelOverride?: string;
+  requesterModel?: string;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
   fastMode?: FastMode;
 }) {
-  const resolvedModel = resolveSubagentSpawnModelSelection({
+  const modelSelection = resolveSubagentSpawnModelSelectionWithSource({
     cfg: params.cfg,
     agentId: params.targetAgentId,
     modelOverride: params.modelOverride,
+    requesterModel: params.requesterModel,
   });
+  const resolvedModel = modelSelection.model;
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,
@@ -82,20 +85,23 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     return {
       status: "error" as const,
       resolvedModel,
+      modelSelectionSource: modelSelection.source,
       error: `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${hint}.`,
     };
   }
 
   const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
-  const hasConfiguredAutoModel =
+  const hasPersistentAutoModel =
     modelOverrideSource === "auto" &&
-    Boolean(
-      resolveSubagentConfiguredModelSelection({
-        cfg: params.cfg,
-        agentId: params.targetAgentId,
-      }),
-    );
-  const configuredModelRef = hasConfiguredAutoModel ? splitModelRef(resolvedModel) : undefined;
+    (modelSelection.source === "configured" ||
+      modelSelection.source === "requester" ||
+      Boolean(
+        resolveSubagentConfiguredModelSelection({
+          cfg: params.cfg,
+          agentId: params.targetAgentId,
+        }),
+      ));
+  const configuredModelRef = hasPersistentAutoModel ? splitModelRef(resolvedModel) : undefined;
   const modelOrigin = configuredModelRef?.model
     ? {
         provider:
@@ -111,6 +117,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   return {
     status: "ok" as const,
     resolvedModel,
+    modelSelectionSource: modelSelection.source,
     modelApplied: Boolean(resolvedModel),
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {

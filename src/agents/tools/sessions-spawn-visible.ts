@@ -11,11 +11,12 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { modelKey } from "../../shared/model-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
-import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
+import { resolveSubagentSpawnModelSelectionWithSource } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
@@ -62,6 +63,8 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   requesterAgentIdOverride?: string;
+  requesterModelProvider?: string;
+  requesterModelId?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
 };
@@ -226,8 +229,17 @@ export async function maybeSpawnVisibleSession(params: {
   if (!targetPolicy.ok) {
     return { status: "forbidden", error: targetPolicy.error };
   }
-  const resolvedModel =
-    modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
+  const requesterModel =
+    targetAgentId === requesterAgentId && params.options?.requesterModelId
+      ? modelKey(params.options.requesterModelProvider ?? "", params.options.requesterModelId)
+      : undefined;
+  const modelSelection = resolveSubagentSpawnModelSelectionWithSource({
+    cfg,
+    agentId: targetAgentId,
+    modelOverride,
+    requesterModel,
+  });
+  const resolvedModel = modelSelection.model;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -400,6 +412,8 @@ export async function maybeSpawnVisibleSession(params: {
       runId,
       mode: "run",
       cleanup: "keep",
+      resolvedModel,
+      modelSelectionSource: modelSelection.source,
     };
   } finally {
     reservation.release();
