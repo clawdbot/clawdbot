@@ -326,12 +326,19 @@ function resolvePublishedInventorySnapshot(
   }
   const refreshedTargetIds = new Set(snapshot.targetAppIds);
   const { targetAppIds: snapshotTargetAppIds, ...snapshotBase } = snapshot;
+  // Freshness belongs to the newest refresh that re-read every retained row: a
+  // merge keeps the existing timestamps while unrefreshed rows remain (they
+  // must not be renewed), but a targeted refresh covering the whole cached
+  // targeted scope adopts the new ones, or an expired targeted-only entry
+  // could never regain freshness from targeted refreshes.
+  const coversWholeCachedScope =
+    (existing.targetAppIds?.length ?? 0) > 0 &&
+    (existing.targetAppIds ?? []).every((appId) => refreshedTargetIds.has(appId));
   return {
     ...snapshotBase,
-    // Freshness belongs to the last complete fetch: a targeted merge must not
-    // renew rows it never re-read, or non-target rows would stay fresh forever.
-    fetchedAtMs: existing.fetchedAtMs,
-    expiresAtMs: existing.expiresAtMs,
+    ...(coversWholeCachedScope
+      ? {}
+      : { fetchedAtMs: existing.fetchedAtMs, expiresAtMs: existing.expiresAtMs }),
     apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
     installedApps: mergeRefreshedRows(
       existing.installedApps,

@@ -603,6 +603,27 @@ describe("Codex app inventory cache", () => {
     expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
   });
 
+  it("renews freshness when a targeted refresh re-covers the whole cached scope", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
+    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1_500,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 1_600, suppressRefresh: true }).state).toBe("fresh");
+  });
+
   it("retires stacked scoped invalidations across separate covering refreshes", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
