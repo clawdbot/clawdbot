@@ -205,7 +205,7 @@ On macOS, `gateway stop` uses `launchctl bootout` by default. This removes the L
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
-#### Existing system LaunchDaemons
+### Existing system LaunchDaemons
 
 OpenClaw installs and manages a per-user LaunchAgent. It does not install or manage system LaunchDaemons. If a custom LaunchDaemon already uses the same gateway label, OpenClaw refuses to write, start, restart, or repair a user LaunchAgent because two `KeepAlive` managers can repeatedly restart the same gateway.
 

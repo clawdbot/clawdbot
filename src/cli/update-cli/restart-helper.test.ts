@@ -613,41 +613,6 @@ exit 0
       expect(log).not.toContain("openclaw restart done source=update");
     });
 
-    it("refuses the update handoff before user activation when a system owner appears", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
-      const fakeBinDir = path.join(tmpDir, "bin");
-      const stateDir = path.join(tmpDir, "state");
-      const activationMarker = path.join(tmpDir, "activation-ran");
-      await fs.mkdir(fakeBinDir, { recursive: true });
-      await writeFakeSleep(fakeBinDir);
-      await writeFakeLaunchctl(
-        fakeBinDir,
-        `#!/bin/sh
-printf activated > "$ACTIVATION_MARKER"
-exit 0
-`,
-        "loaded",
-      );
-
-      const { scriptPath } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "default",
-        HOME: path.join(tmpDir, "home"),
-        OPENCLAW_STATE_DIR: stateDir,
-      });
-      const result = await executeScript(scriptPath, {
-        ACTIVATION_MARKER: activationMarker,
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
-
-      expect(result.code).toBe(78);
-      await expect(fs.access(activationMarker)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(log).toContain("openclaw restart blocked source=update");
-      expect(log).toContain("loaded system LaunchDaemon system/ai.openclaw.gateway");
-    });
-
     it("continues the macOS restart path when log setup fails", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;

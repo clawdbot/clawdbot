@@ -244,6 +244,10 @@ export function formatSystemLaunchDaemonOwnershipSummary(
       return `System LaunchDaemon plist ${ownership.plistPath} already owns this gateway label.`;
     case "unverifiable":
       return `System LaunchDaemon ownership for ${ownership.serviceTarget} could not be verified: ${ownership.detail}`;
+    default: {
+      const exhaustive: never = ownership;
+      throw new Error(`Unexpected system LaunchDaemon ownership: ${String(exhaustive)}`);
+    }
   }
 }
 
