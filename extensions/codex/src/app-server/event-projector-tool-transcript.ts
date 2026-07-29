@@ -443,6 +443,7 @@ export class CodexToolTranscriptProjection {
   synthesizeMissingToolResults(params: {
     synthesize: boolean;
     recordPromptError: boolean;
+    suppressLastToolError?: boolean;
   }): string | undefined {
     if (!params.synthesize) {
       return undefined;
@@ -485,7 +486,15 @@ export class CodexToolTranscriptProjection {
       });
     }
     if (!params.recordPromptError) {
-      this.recordMissingToolError(missingTranscriptIds, missingTrajectoryIds);
+      // When the completed turn already produced a deliverable assistant answer,
+      // do not promote the bookkeeping mismatch to lastToolError: the channel
+      // would surface it as a user-visible failure even though a complete answer
+      // exists in the transcript (#115489). Explicit aborts still leave
+      // lastToolError set for diagnostics — suppressLastToolError is only true
+      // when hasDeliverableAssistantOnCompletedTurn is set.
+      if (!params.suppressLastToolError) {
+        this.recordMissingToolError(missingTranscriptIds, missingTrajectoryIds);
+      }
       return undefined;
     }
     const missingCount = new Set([...missingTranscriptIds, ...missingTrajectoryIds]).size;

@@ -347,6 +347,7 @@ export class CodexAppServerEventProjector {
         synthesize: legacyFailClosed,
         recordPromptError:
           legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
+        suppressLastToolError: hasDeliverableAssistantOnCompletedTurn,
       });
     if (synthesizedMissingToolResultError) {
       this.synthesizedMissingToolResultError = synthesizedMissingToolResultError;
