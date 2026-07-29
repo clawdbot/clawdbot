@@ -2,6 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import {
+  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+  OpenClawAgentDatabaseMediaMigrationRequiredError,
+} from "../../state/openclaw-agent-db-migration-required.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
@@ -470,6 +474,34 @@ describe("runGatewayLoop", () => {
         (completeBoot.mock.calls[0]?.[0] as { reason?: string } | undefined)?.reason ?? "";
       expect(reason).toHaveLength(499);
       expect(Buffer.from(reason).toString()).toBe(reason);
+    });
+  });
+
+  it("records a typed reason for media-migration startup failures", async () => {
+    await withIsolatedSignals(async () => {
+      const failure = new OpenClawAgentDatabaseMediaMigrationRequiredError(
+        "/tmp/openclaw-agent.sqlite",
+        14,
+      );
+      const { runtime } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      const { runGatewayLoop } = await import("./run-loop.js");
+
+      await expect(
+        runGatewayLoop({
+          start: vi.fn(async () => {
+            throw failure;
+          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          completeBoot,
+        }),
+      ).rejects.toBe(failure);
+
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "startup_failed",
+        reason: failure.message,
+        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+      });
     });
   });
 
