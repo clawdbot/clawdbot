@@ -118,7 +118,12 @@ function uniqueEngineId(prefix: string): string {
 function registerPromptTrackingEngine(engineId: string) {
   const calls: Array<Record<string, unknown>> = [];
   registerTestContextEngine(engineId, () => ({
-    info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+    info: {
+      id: engineId,
+      name: "Prompt Tracker",
+      version: "0.0.0",
+      acceptedHostParams: ["prompt"],
+    },
     async ingest() {
       return { ingested: false };
     },

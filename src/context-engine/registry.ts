@@ -2,6 +2,7 @@
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { getPluginCompatRecord } from "../plugins/compat/registry.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -57,6 +58,47 @@ type RegisterContextEngineForOwnerOptions = {
   lifecycle?: ContextEngineRegistrationLifecycle;
 };
 
+const HOST_PARAM_METHODS = "bootstrap maintain ingest ingestBatch afterTurn assemble compact".split(
+  " ",
+);
+export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
+);
+const LEGACY_HOST_PARAM_DEFAULT_COMPAT = getPluginCompatRecord(
+  "context-engine-legacy-host-param-default",
+);
+
+function applyContextEngineHostParamProjection(engine: ContextEngine): void {
+  const removeAfter = LEGACY_HOST_PARAM_DEFAULT_COMPAT.removeAfter;
+  const declared = engine.info.acceptedHostParams;
+  const accepted = declared ? new Set(declared) : undefined;
+  const engineRecord = engine as unknown as Record<PropertyKey, unknown>;
+  for (const methodName of HOST_PARAM_METHODS) {
+    const method = engineRecord[methodName];
+    if (typeof method !== "function") {
+      continue;
+    }
+    engineRecord[methodName] = (params: Record<string, unknown>) => {
+      // Removal(2026-08-12): undeclared engines receive full params after this legacy default.
+      // Contract: context-engine-legacy-host-param-default.
+      const currentAccepted =
+        accepted ??
+        (removeAfter && new Date().toISOString().slice(0, 10) <= removeAfter
+          ? new Set()
+          : undefined);
+      if (!currentAccepted) {
+        return method.call(engine, params);
+      }
+      const projected = Object.fromEntries(
+        Object.entries(params).filter(
+          ([key]) => !CONTEXT_ENGINE_HOST_PARAMS.has(key) || currentAccepted.has(key),
+        ),
+      );
+      return method.call(engine, projected);
+    };
+  }
+}
+
 type ResolvedContextEngineMetadata = {
   owner: string;
 };
@@ -80,6 +122,7 @@ function wrapResolvedContextEngine(
     factoryCtx?: ContextEngineFactoryContext;
   },
 ): ContextEngine {
+  applyContextEngineHostParamProjection(engine);
   const wrapped =
     metadata.defaultEngineId &&
     metadata.factoryCtx &&
