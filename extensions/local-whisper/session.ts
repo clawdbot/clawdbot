@@ -6,6 +6,7 @@ import { mulaw8KhzToPcm16Khz } from "./audio.js";
 import {
   spawnLocalWhisperWorker,
   type LocalWhisperWorker,
+  type LocalWhisperWorkerEvent,
   type LocalWhisperWorkerFactory,
   type LocalWhisperWorkerOptions,
 } from "./worker.js";
@@ -13,7 +14,7 @@ import {
 const CONNECT_TIMEOUT_MS = 120_000;
 const CLOSE_TIMEOUT_MS = 5_000;
 
-export type LocalWhisperSessionOptions = LocalWhisperWorkerOptions &
+type LocalWhisperSessionOptions = LocalWhisperWorkerOptions &
   RealtimeTranscriptionSessionCallbacks & {
     workerFactory?: LocalWhisperWorkerFactory;
     connectTimeoutMs?: number;
@@ -53,7 +54,7 @@ export function createLocalWhisperRealtimeTranscriptionSession(
         reject(new Error("Local Whisper worker ready timeout"));
       }, options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
 
-      currentWorker.onEvent((event) => {
+      currentWorker.onEvent((event: LocalWhisperWorkerEvent) => {
         if (event.event === "ready") {
           if (!settled) {
             settled = true;
