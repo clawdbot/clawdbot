@@ -158,7 +158,7 @@ export function buildMemoryFlushPlan(
     recordWriteProvenance: async (write) => {
       const writtenPath = normalizeAgentMemoryPath(write.relativePath);
       if (!writtenPath) {
-        return;
+        return undefined;
       }
       const hash = (value: string) => createHash("sha256").update(value).digest("hex");
       const existing = await readMemoryCoreWorkspaceEntry<{

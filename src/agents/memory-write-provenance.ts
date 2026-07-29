@@ -61,9 +61,9 @@ export function createMemoryWriteProvenanceObserver(params: {
         try {
           await rollback?.();
         } catch (rollbackError) {
-          throw new AggregateError(
-            [error, rollbackError],
-            "File write and memory provenance rollback failed",
+          throw new Error(
+            `File write failed and memory provenance rollback also failed: ${String(error)}`,
+            { cause: rollbackError },
           );
         }
         throw error;
