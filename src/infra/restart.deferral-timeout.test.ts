@@ -299,4 +299,33 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(hooks.onReady).toHaveBeenCalledOnce();
   });
+
+  it("fires force timeout when polling getPendingCount keeps throwing", async () => {
+    const hooks: RestartDeferralHooks = {
+      onCheckError: vi.fn(),
+      onReady: vi.fn(),
+      onTimeout: vi.fn(),
+    };
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => {
+        throw new Error("persistent");
+      },
+      maxWaitMs: 1_000,
+      hooks,
+      timeoutIntent: { force: true, reason: "gateway.restart.deferral-timeout" },
+    });
+
+    // Elapsed time has not yet reached the force timeout
+    vi.advanceTimersByTime(999);
+    expect(hooks.onTimeout).not.toHaveBeenCalled();
+
+    // Force timeout fires even though every inspection throws
+    vi.advanceTimersByTime(1);
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+    expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+      force: true,
+      reason: "gateway.restart.deferral-timeout",
+    });
+  });
 });
