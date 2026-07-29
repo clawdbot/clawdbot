@@ -72,6 +72,15 @@ describe("Control UI assistant media e2e", () => {
         expect(head.headers.get("etag")).toBe(ranged.headers.get("etag"));
         expect(await head.text()).toBe("");
 
+        const emptyFilePath = path.join(mediaDir, "empty.bin");
+        await fs.writeFile(emptyFilePath, Buffer.alloc(0));
+        const empty = await fetch(`${route}?source=${encodeURIComponent(emptyFilePath)}`, {
+          headers: { Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}` },
+        });
+        expect(empty.status).toBe(200);
+        expect(empty.headers.get("content-length")).toBe("0");
+        expect((await empty.arrayBuffer()).byteLength).toBe(0);
+
         const otherFilePath = path.join(mediaDir, "other-preview.txt");
         await fs.writeFile(otherFilePath, "other media\n", "utf8");
         const wrongSource = await fetch(

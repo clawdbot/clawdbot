@@ -359,6 +359,21 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body).toHaveLength(0);
   });
 
+  it("serves an empty managed image without a body", async () => {
+    const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);
+    await fs.writeFile(originalPath, Buffer.alloc(0));
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-length"]).toBe("0");
+    expect(result.body).toHaveLength(0);
+  });
+
   it("serves an exact transcript image through a short-lived artifact ticket", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;

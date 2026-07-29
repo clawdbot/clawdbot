@@ -651,14 +651,14 @@ export async function handleControlUiAssistantMediaRequest(
       ifRangeHeader: req.headers["if-range"],
     });
     writeByteHeaders(res, byteResponse);
-    if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable") {
+    if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
       await closeOpenedHandle();
       res.end();
       return true;
     }
     const stream = opened.handle.createReadStream({
       start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
-      ...(byteResponse.kind === "partial" ? { end: byteResponse.range.end } : {}),
+      end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
       autoClose: false,
     });
     const finishClose = () => {
