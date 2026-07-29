@@ -88,6 +88,17 @@ async function readMigrationFileSnapshot(params: {
 }
 
 async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefined> {
+  const entries = await fs.readdir(workspaceDir).catch(() => [] as string[]);
+  const betaArtifacts = entries.filter(
+    (entry) =>
+      entry.startsWith(`${DEFAULT_TOOLS_FILENAME}.doctor-importing-`) ||
+      entry.startsWith(`${DEFAULT_AGENTS_FILENAME}.doctor-backup-`),
+  );
+  if (betaArtifacts.length > 0) {
+    throw new Error(
+      `Interrupted v2026.7.2-beta.5 migration artifact(s) left untouched: ${betaArtifacts.join(", ")}. Restore the desired file manually before rerunning doctor.`,
+    );
+  }
   const toolsPath = path.join(workspaceDir, DEFAULT_TOOLS_FILENAME);
   const snapshot = await readMigrationFileSnapshot({
     filePath: toolsPath,
