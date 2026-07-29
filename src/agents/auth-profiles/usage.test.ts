@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
-import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
   clearAuthProfileCooldown,
@@ -296,6 +296,19 @@ describe("isProfileInCooldown", () => {
     expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3.1-flash-lite")).toBe(
       true,
     );
+  });
+
+  it("returns false for a sibling model when an overload cooldown is model-scoped", () => {
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "overloaded",
+        cooldownModel: "gpt-5.6-sol",
+      },
+    });
+    expect(isProfileInCooldown(store, "openai:default", undefined, "gpt-5.6-terra")).toBe(false);
+    expect(isProfileInCooldown(store, "openai:default", undefined, "gpt-5.6-sol")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default")).toBe(true);
   });
 
   it("does not bypass model-scoped cooldown when disabledUntil is active", () => {
@@ -1606,6 +1619,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     store: ReturnType<typeof makeStoreWithCopilot>;
     now: number;
     modelId?: string;
+    reason?: AuthProfileFailureReason;
   }): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(params.now);
@@ -1614,7 +1628,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
       await markAuthProfileFailure({
         store: params.store,
         profileId: "github-copilot:github",
-        reason: "rate_limit",
+        reason: params.reason ?? "rate_limit",
         modelId: params.modelId,
       });
     } finally {
@@ -1629,6 +1643,20 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     const stats = store.usageStats?.["github-copilot:github"];
     expect(stats?.cooldownReason).toBe("rate_limit");
     expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+  });
+
+  it("records cooldownModel on first overloaded failure", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({});
+    await markFailure({
+      store,
+      now,
+      reason: "overloaded",
+      modelId: "gpt-5.6-sol",
+    });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownReason).toBe("overloaded");
+    expect(stats?.cooldownModel).toBe("gpt-5.6-sol");
   });
 
   it("widens cooldownModel to undefined when a different model fails during active cooldown", async () => {

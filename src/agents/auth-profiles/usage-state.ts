@@ -18,7 +18,7 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
 // billing, format, server_error) remain profile-wide.
 /** Returns true when a failure should only cool down the failing model. */
 export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
-  return reason === "rate_limit" || reason === "timeout";
+  return reason === "rate_limit" || reason === "timeout" || reason === "overloaded";
 }
 
 /** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */
