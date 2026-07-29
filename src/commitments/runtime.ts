@@ -127,7 +127,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   if (
     !resolved.enabled ||
     shouldDisableBackgroundExtractionForTests() ||
-    (agentId ? nowMs < (terminalFailureCooldownUntilByAgent.get(agentId) ?? 0) : false) ||
+    agentIdCooldownActive(agentId, nowMs) ||
     !isUsefulText(input.userText) ||
     !isUsefulText(input.assistantText) ||
     !agentId ||
@@ -185,6 +185,20 @@ function isTerminalExtractionError(error: unknown): boolean {
   );
 }
 
+function evictExpiredCooldowns(): void {
+  const nowMs = Date.now();
+  for (const [agentId, cooldownUntil] of terminalFailureCooldownUntilByAgent) {
+    if (nowMs >= cooldownUntil) {
+      terminalFailureCooldownUntilByAgent.delete(agentId);
+    }
+  }
+}
+
+function agentIdCooldownActive(agentId: string, nowMs: number): boolean {
+  evictExpiredCooldowns();
+  return agentId ? nowMs < (terminalFailureCooldownUntilByAgent.get(agentId) ?? 0) : false;
+}
+
 function openTerminalFailureCooldown(
   agentId: string,
   error: unknown,
@@ -196,6 +210,7 @@ function openTerminalFailureCooldown(
     resolveExpiresAtMsFromDurationMs(TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS, {
       nowMs: fallbackNowMs,
     });
+  evictExpiredCooldowns();
   if (cooldownUntil !== undefined) {
     terminalFailureCooldownUntilByAgent.set(agentId, cooldownUntil);
   }
@@ -285,7 +300,7 @@ function takeAgentBatch(
   maxItems: number,
 ): Array<Omit<CommitmentExtractionItem, "existingPending"> & { cfg?: OpenClawConfig }> {
   const batch = [];
-  for (let index = 0; index < queue.length && batch.length < maxItems;) {
+  for (let index = 0; index < queue.length && batch.length < maxItems; ) {
     if (queue[index]?.agentId !== agentId) {
       index += 1;
       continue;
