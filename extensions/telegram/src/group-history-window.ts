@@ -51,11 +51,10 @@ function telegramHistoryEntryKey(entry: HistoryEntry): string | undefined {
 }
 
 function numericMessageId(value: string | undefined): number | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed || !/^(?:0|[1-9]\d*)$/.test(trimmed)) {
+  if (!value || !/^[1-9]\d*$/.test(value)) {
     return undefined;
   }
-  const parsed = Number(trimmed);
+  const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 

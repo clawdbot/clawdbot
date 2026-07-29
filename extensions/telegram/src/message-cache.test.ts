@@ -773,6 +773,24 @@ describe("telegram message cache", () => {
     ).toBe(false);
     expect(
       isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: " 1000 ", timestamp: timestampMs },
+        watermark,
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "1000", timestamp: timestampMs },
+        { messageId: " 999 ", timestampMs },
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "1", timestamp: timestampMs },
+        { messageId: "0", timestampMs },
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
         { messageId: "0x10", timestamp: timestampMs },
         { messageId: "15", timestampMs },
       ),
