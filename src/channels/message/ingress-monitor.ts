@@ -31,7 +31,13 @@ export function createChannelIngressError<TReason extends string>(
   Error & { readonly reason: TReason },
   [reason: TReason, message: string, errorOptions?: ErrorOptions]
 >;
-export function createChannelIngressError(name: string, options?: { withReason?: boolean }) {
+export function createChannelIngressError(
+  name: string,
+  options?: { withReason?: boolean },
+): ChannelIngressErrorClass<
+  Error,
+  [first: string, second?: string | ErrorOptions, third?: ErrorOptions]
+> {
   const IngressError = class extends Error {
     declare readonly reason?: string;
 
