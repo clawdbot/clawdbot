@@ -1349,8 +1349,11 @@ describe("scheduleRestartSentinelWake", () => {
           kind: "postCompactionDelegate",
           sessionKey: "agent:main:main",
           task: "remain pending while continuation is disabled",
-          createdAt: 1,
-          enqueuedAt: 1,
+          // Freshly armed: an entry stamped at epoch 1 would terminalize on the
+          // RFC §4.4 stale gate instead of reaching the disabled deferral.
+          createdAt: Date.now(),
+          firstArmedAt: Date.now(),
+          enqueuedAt: Date.now(),
           retryCount: 0,
         },
       }),
