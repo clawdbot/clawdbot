@@ -2022,8 +2022,9 @@ describe("createOpenClawCodingTools", () => {
 
   it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
+    const rollback = vi.fn(async () => {});
     const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => {},
+      async () => rollback,
     );
     registerMemoryCapability("memory-core", {
       flushPlanResolver: () => ({
@@ -2078,52 +2079,20 @@ describe("createOpenClawCodingTools", () => {
           contentAfter: "network project note\n",
         }),
       );
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rolls back apply_patch provenance when an exclusive create finds an existing file", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-existing-"));
-    const rollback = vi.fn(async () => {});
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => rollback,
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/existing.md",
-        recordWriteProvenance,
-      }),
-    });
-    try {
-      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-      const existingPath = path.join(workspaceDir, "memory/existing.md");
-      await fs.writeFile(existingPath, "keep\n", "utf8");
-      const applyPatch = requireToolExecute(
-        requireTool(
-          createOpenClawCodingTools({
-            workspaceDir,
-            senderIsOwner: true,
-            isTurnTainted: () => true,
-          }),
-          "apply_patch",
-        ),
-      );
-
       await expect(
-        applyPatch("add-existing-memory", {
-          input: "*** Begin Patch\n*** Add File: memory/existing.md\n+replacement\n*** End Patch",
+        applyPatch("patch-existing-memory", {
+          input: [
+            "*** Begin Patch",
+            "*** Add File: memory/project.md",
+            "+replacement",
+            "*** End Patch",
+          ].join("\n"),
         }),
       ).rejects.toThrow(/file already exists/i);
-
-      expect(recordWriteProvenance).toHaveBeenCalledOnce();
       expect(rollback).toHaveBeenCalledOnce();
-      await expect(fs.readFile(existingPath, "utf8")).resolves.toBe("keep\n");
+      await expect(fs.readFile(path.join(workspaceDir, "memory/project.md"), "utf8")).resolves.toBe(
+        "network project note\n",
+      );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
