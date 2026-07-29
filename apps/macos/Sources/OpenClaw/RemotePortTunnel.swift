@@ -769,10 +769,6 @@ final class RemotePortTunnel: @unchecked Sendable {
             self.process.isRunning
         }
 
-        var processIdentifier: pid_t {
-            self.process.processIdentifier
-        }
-
         var terminationStatus: TerminationStatus? {
             self.process.terminationStatus
         }
