@@ -108,18 +108,18 @@ export class ChatPane extends ChatPaneHeader {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    const runtimeConfigState = this.context.runtimeConfig.state;
-    const configSnapshot = runtimeConfigState.configSnapshot;
-    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
-      configNeedsApply: runtimeConfigState.configNeedsApply,
-      effectiveMode: state.chatEffectiveQueueMode,
-      sessionMetadataLoaded:
-        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-      sessionMode: state.chatQueueModeOverride,
-    });
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
-      serverQueueMode,
+      resolveControlUiServerQueueMode(
+        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
+        {
+          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
+          effectiveMode: state.chatEffectiveQueueMode,
+          sessionMetadataLoaded:
+            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+          sessionMode: state.chatQueueModeOverride,
+        },
+      ),
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
@@ -191,10 +191,9 @@ export class ChatPane extends ChatPaneHeader {
       column.panels.some((panel) => panel.slot === "chat"),
     );
     const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
-    const primaryWidth = sidebarPrimaryWidth(sidebarLayout, this.paneWidth);
     const chatLayoutWidth = sidebarRegionCollapsed
       ? this.paneWidth
-      : (sidebarChatColumn?.width ?? primaryWidth);
+      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -229,7 +228,6 @@ export class ChatPane extends ChatPaneHeader {
       activeRunIds: selectedSession?.activeRunIds,
       usageByRun: state.chatRunUsageById,
     });
-    const loadSidebarFullMessage = createSidebarFullMessageLoader(state, Boolean(catalogKey));
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -617,7 +615,7 @@ export class ChatPane extends ChatPaneHeader {
             detail: html`<openclaw-chat-detail-panel
               class="chat-sidebar"
               .content=${state.sidebarContent}
-              .loadFullMessage=${loadSidebarFullMessage}
+              .loadFullMessage=${createSidebarFullMessageLoader(state, Boolean(catalogKey))}
               .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
               .embedSandboxMode=${state.embedSandboxMode}
               .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}
