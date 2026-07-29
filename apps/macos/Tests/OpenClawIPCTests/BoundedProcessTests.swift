@@ -20,6 +20,15 @@ struct BoundedProcessTests {
         #expect(self.waitUntilGone(childPID))
     }
 
+    @Test func `preserves combined standard output and error ordering`() async throws {
+        let result = try await BoundedProcess.run(
+            path: "/bin/sh",
+            arguments: ["-c", "printf first; printf second >&2; printf third"],
+            timeout: 1)
+
+        #expect(String(data: result.output, encoding: .utf8) == "firstsecondthird")
+    }
+
     @Test func `captures parallel instant exits`() async throws {
         let results = try await withThrowingTaskGroup(of: Int32.self) { group in
             for _ in 0..<32 {

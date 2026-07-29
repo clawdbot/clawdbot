@@ -118,7 +118,7 @@ enum BoundedProcess {
             configuration,
             input: .none,
             output: .bytes(limit: self.outputLimit),
-            error: .bytes(limit: self.outputLimit))
+            error: .combinedWithOutput)
         { execution in
             let exitSignal = ProcessExitSignal(
                 processIdentifier: pid_t(execution.processIdentifier.value))
@@ -156,7 +156,7 @@ enum BoundedProcess {
         if executionResult.closureOutput {
             throw BoundedProcessError.timedOut
         }
-        let data = Data(executionResult.standardOutput + executionResult.standardError)
+        let data = Data(executionResult.standardOutput)
         let terminationStatus = switch executionResult.terminationStatus {
         case let .exited(code), let .signaled(code):
             Int32(code)
