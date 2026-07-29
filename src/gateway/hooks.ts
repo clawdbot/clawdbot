@@ -273,7 +273,7 @@ export function resolveHookDeliver(raw: unknown): boolean {
 }
 
 /** Normalize webhook delivery intent before any isolated cron work is scheduled. */
-export function normalizeHookAgentDelivery(params: {
+function normalizeHookAgentDelivery(params: {
   deliver: unknown;
   channel: unknown;
   to: unknown;
