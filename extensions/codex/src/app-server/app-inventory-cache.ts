@@ -146,6 +146,11 @@ export class CodexAppInventoryCache {
   /** Marks a key stale and records the reason as a diagnostic. */
   invalidate(key: string, reason: string, nowMs = Date.now()): number {
     this.revision += 1;
+    // Invalidation outranks in-flight refreshes: retire their publish token so
+    // pre-invalidation reads cannot republish as fresh, and drop the shared
+    // in-flight slot so the next read starts a post-invalidation refresh.
+    this.refreshTokens.set(key, (this.refreshTokens.get(key) ?? 0) + 1);
+    this.inFlight.delete(key);
     const diagnostic = { message: reason, atMs: nowMs };
     const entry = this.entries.get(key);
     if (entry) {
@@ -247,7 +252,8 @@ export class CodexAppInventoryCache {
       // Only publish this snapshot if no newer refresh started for the same key
       // while this request was in flight.
       if (this.refreshTokens.get(params.key) === refreshToken) {
-        this.entries.set(params.key, { ...snapshot, invalidated: false });
+        const published = resolvePublishedInventorySnapshot(this.entries.get(params.key), snapshot);
+        this.entries.set(params.key, { ...published, invalidated: false });
         this.diagnostics.delete(params.key);
       }
       return snapshot;
@@ -269,6 +275,62 @@ export class CodexAppInventoryCache {
       throw error;
     }
   }
+}
+
+/**
+ * Publish policy for refreshed snapshots. A complete refresh replaces the
+ * entry, but a targeted refresh only rewrites its own target rows in place —
+ * replacing the whole entry with a narrow snapshot makes agents that share
+ * the runtime identity see each other's plugin apps vanish and force a hosted
+ * connector refresh per turn. The refreshed snapshot stays authoritative for
+ * its target set, so target rows it no longer returns are deleted.
+ */
+function resolvePublishedInventorySnapshot(
+  existing: CodexAppInventorySnapshot | undefined,
+  snapshot: CodexAppInventorySnapshot,
+): CodexAppInventorySnapshot {
+  if (!snapshot.targetAppIds?.length || !existing) {
+    return snapshot;
+  }
+  const refreshedTargetIds = new Set(snapshot.targetAppIds);
+  const { targetAppIds: snapshotTargetAppIds, ...snapshotBase } = snapshot;
+  return {
+    ...snapshotBase,
+    apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
+    installedApps: mergeRefreshedRows(
+      existing.installedApps,
+      snapshot.installedApps,
+      refreshedTargetIds,
+    ),
+    // A merge into a complete entry keeps the entry complete (no targetAppIds).
+    ...(existing.targetAppIds?.length
+      ? {
+          targetAppIds: Array.from(
+            new Set([...existing.targetAppIds, ...snapshotTargetAppIds]),
+          ).toSorted(),
+        }
+      : {}),
+  };
+}
+
+/** Replaces refreshed target rows in place, deletes vanished ones, appends new ones. */
+function mergeRefreshedRows<Row extends { id: string }>(
+  existingRows: readonly Row[],
+  refreshedRows: readonly Row[],
+  refreshedTargetIds: ReadonlySet<string>,
+): Row[] {
+  const refreshedById = new Map(refreshedRows.map((row) => [row.id, row]));
+  const existingIds = new Set(existingRows.map((row) => row.id));
+  return [
+    ...existingRows.flatMap((row) => {
+      if (!refreshedTargetIds.has(row.id)) {
+        return [row];
+      }
+      const refreshed = refreshedById.get(row.id);
+      return refreshed ? [refreshed] : [];
+    }),
+    ...refreshedRows.filter((row) => !existingIds.has(row.id)),
+  ];
 }
 
 function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshParams): boolean {
