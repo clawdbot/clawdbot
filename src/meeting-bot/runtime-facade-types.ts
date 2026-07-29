@@ -2,9 +2,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
   MeetingBrowserJoinSession,
+  MeetingPlatformAdapter,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
-import type { MeetingPlatformAdapter } from "./platform-adapter.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import type { MeetingProbeContext } from "./runtime-probes.js";
 import type {
