@@ -377,6 +377,26 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it("rejects --reset-scope without --reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        resetScope: "full",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--reset-scope requires --reset. Re-run with openclaw onboard --reset --reset-scope full.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
   it("fails fast for invalid non-interactive --mode before reset", async () => {
     const runtime = makeRuntime();
 
