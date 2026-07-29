@@ -626,12 +626,15 @@ Invoke-OpenClaw --version
   }
 
   private runRefOnboard(): Promise<void> {
+    const tokenProviderArg = this.auth.tokenProvider
+      ? ` --token-provider ${psSingleQuote(this.auth.tokenProvider)}`
+      : "";
     return this.guestPowerShellBackground(
       "ref-onboard",
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
+Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)}${tokenProviderArg} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }
 ${this.windowsPluginIsolationScript()}`,
       720_000,

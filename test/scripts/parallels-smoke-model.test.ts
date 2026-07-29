@@ -451,9 +451,10 @@ fetch_host_metadata "https://example.test/metadata"`,
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
     expect(providerAuth).toContain("openai/gpt-5.6-luna");
-    expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
+    expect(providerAuth).toContain('tokenProvider: "openai"');
+    expect(providerAuth).toContain('tokenProvider: "anthropic"');
 
     for (const scriptPath of [...OS_TS_PATHS, TS_PATHS.npmUpdate]) {
       const script = readFileSync(scriptPath, "utf8");
@@ -462,6 +463,13 @@ fetch_host_metadata "https://example.test/metadata"`,
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("modelId");
     }
+
+    for (const scriptPath of [TS_PATHS.linux, TS_PATHS.macos]) {
+      expect(readFileSync(scriptPath, "utf8")).toContain(
+        '...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : [])',
+      );
+    }
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("tokenProviderArg");
   });
 
   it("repairs only the exact missing Codex platform package failure with a fresh npm cache", () => {
@@ -1171,9 +1179,10 @@ if (isPrlctl) {
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.6-luna",
+      tokenProvider: "openai",
     });
 
     expect(
@@ -1190,6 +1199,7 @@ if (isPrlctl) {
       authChoice: "apiKey",
       authKeyFlag: "anthropic-api-key",
       modelId: "anthropic/custom",
+      tokenProvider: "anthropic",
     });
   });
 
@@ -1201,9 +1211,10 @@ if (isPrlctl) {
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.6-luna",
+      tokenProvider: "openai",
     });
 
     expect(
@@ -1217,9 +1228,10 @@ if (isPrlctl) {
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
       modelId: "openai/custom-windows",
+      tokenProvider: "openai",
     });
   });
 

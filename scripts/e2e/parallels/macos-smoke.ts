@@ -918,6 +918,7 @@ fi`);
       "local",
       "--auth-choice",
       this.auth.authChoice,
+      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
       "--secret-input-mode",
       "ref",
       "--gateway-port",
