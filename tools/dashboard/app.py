@@ -41,6 +41,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from tools.ai_intelligence.ollama_config import OllamaConfig
+from tools.dashboard.document_inventory import ensure_document_inventory
 
 app = Flask(__name__)
 
@@ -2760,10 +2761,11 @@ DOCUMENTATION_FEATURED_PATHS = (
 
 def documentation_load_inventory():
     fallback = {"schema_version": 1, "generated_at": "Unknown", "documents": []}
-    if not DOCUMENTATION_INVENTORY.is_file():
-        return fallback
     try:
-        data = json.loads(DOCUMENTATION_INVENTORY.read_text(encoding="utf-8"))
+        data = ensure_document_inventory(
+            DOCUMENTATION_ROOT,
+            DOCUMENTATION_INVENTORY,
+        )
     except (OSError, ValueError, TypeError):
         return fallback
 
