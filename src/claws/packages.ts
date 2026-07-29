@@ -147,15 +147,22 @@ function resolveClawPluginSetupRequirements(params: {
   setup?: PluginManifestSetup;
   env: NodeJS.ProcessEnv;
 }): ClawLocalPrerequisite[] {
-  return (params.setup?.providers ?? []).flatMap((provider) => {
+  const providers = params.setup?.providers ?? [];
+  // Providers are alternative setup routes for one plugin. Any configured
+  // route satisfies readiness; otherwise expose every route to the operator.
+  const hasConfiguredProvider = providers.some(
+    (provider) =>
+      (provider.envVars ?? []).some((name) => Boolean(params.env[name]?.trim())) ||
+      resolveLocalProviderAuthEvidence(provider.authEvidence, params.env),
+  );
+  if (hasConfiguredProvider) {
+    return [];
+  }
+  return providers.flatMap((provider) => {
     const envVars = provider.envVars ?? [];
     const authEvidence = provider.authEvidence ?? [];
     const authMethods = provider.authMethods ?? [];
-    if (
-      (envVars.length === 0 && authEvidence.length === 0 && authMethods.length === 0) ||
-      envVars.some((name) => Boolean(params.env[name]?.trim())) ||
-      resolveLocalProviderAuthEvidence(authEvidence, params.env)
-    ) {
+    if (envVars.length === 0 && authEvidence.length === 0 && authMethods.length === 0) {
       return [];
     }
     return [

@@ -168,6 +168,27 @@ describe("preflightClawPackage plugin setup requirements", () => {
     ).resolves.not.toHaveProperty("requirements");
   });
 
+  it("accepts credentials for any declared provider", async () => {
+    probePluginSetup.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "evidence",
+      setup: {
+        providers: [
+          { id: "first", envVars: ["FIRST_API_KEY"] },
+          { id: "second", envVars: ["SECOND_API_KEY"] },
+        ],
+      },
+      clawhub: { integrity },
+    });
+
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: { SECOND_API_KEY: "configured" },
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.not.toHaveProperty("requirements");
+  });
+
   it("reports setup for an auth-method-only provider", async () => {
     probePluginSetup.mockResolvedValueOnce({
       ok: true,
