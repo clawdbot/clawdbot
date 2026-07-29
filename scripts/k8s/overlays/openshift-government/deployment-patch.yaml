@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw
+spec:
+  template:
+    spec:
+      serviceAccountName: openclaw
+      securityContext:
+        fsGroup: null
+      initContainers:
+        - name: init-config
+          image: ghcr.io/openclaw/openclaw:slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              install -d -m 0770 /opt/app-root/src/.openclaw/workspace
+              cp /config/openclaw.json /opt/app-root/src/.openclaw/openclaw.json
+              cp /config/AGENTS.md /opt/app-root/src/.openclaw/workspace/AGENTS.md
+              chmod 0660 \
+                /opt/app-root/src/.openclaw/openclaw.json \
+                /opt/app-root/src/.openclaw/workspace/AGENTS.md
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: null
+            runAsGroup: null
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: openclaw-home
+              mountPath: /opt/app-root/src/.openclaw
+            - name: config
+              mountPath: /config
+            - name: tmp-volume
+              mountPath: /tmp
+      containers:
+        - name: gateway
+          env:
+            - name: HOME
+              value: /opt/app-root/src
+            - name: OPENCLAW_CONFIG_DIR
+              value: /opt/app-root/src/.openclaw
+          volumeMounts:
+            - name: openclaw-home
+              mountPath: /opt/app-root/src/.openclaw
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: null
+            runAsGroup: null
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

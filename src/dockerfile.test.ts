@@ -82,6 +82,57 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });
 
+  it("provides a digest-pinned Red Hat runtime target for OpenShift", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const rhelRuntimeStart = collapsed.indexOf(
+      "FROM ${OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE} AS rhel-runtime",
+    );
+    const defaultRuntimeStart = collapsed.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    );
+    const rhelRuntime = collapsed.slice(rhelRuntimeStart, defaultRuntimeStart);
+
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE="registry\.access\.redhat\.com\/ubi9\/nodejs-24-minimal@sha256:[a-f0-9]{64}"/u,
+    );
+    expect(rhelRuntimeStart).toBeGreaterThan(-1);
+    expect(defaultRuntimeStart).toBeGreaterThan(rhelRuntimeStart);
+    expect(rhelRuntime).toContain("microdnf install -y");
+    expect(rhelRuntime).toContain("ca-certificates curl-minimal git-core");
+    expect(dockerfile).toContain(
+      "FROM ${OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE} AS rhel-runtime-assets",
+    );
+    expect(dockerfile).toContain("ENV COREPACK_HOME=/root/.cache/node/corepack");
+    expect(dockerfile).toContain("COPY --from=build ${COREPACK_HOME} ${COREPACK_HOME}");
+    expect(dockerfile).toContain(
+      "ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack",
+    );
+    expect(dockerfile).toContain("corepack enable");
+    expect(dockerfile).not.toContain("COPY --from=build /usr/local/bin/pnpm /usr/local/bin/pnpm");
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile",
+    );
+    expect(rhelRuntime).toContain("COPY --from=runtime-assets --chown=1001:0 /app/dist ./dist");
+    expect(rhelRuntime).toContain(
+      "COPY --from=rhel-runtime-assets --chown=1001:0 /app/node_modules ./node_modules",
+    );
+    expect(rhelRuntime).not.toContain(
+      "COPY --from=runtime-assets --chown=1001:0 /app/node_modules ./node_modules",
+    );
+    expect(rhelRuntime).toContain(
+      "COPY --from=build --chown=1001:0 /app/scripts/compliance/rhel-fips-check.mjs",
+    );
+    expect(dockerfile).toContain("FROM ${OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE} AS rhel-init-assets");
+    expect(rhelRuntime).toContain(
+      "COPY --from=rhel-init-assets /usr/libexec/podman/catatonit /usr/local/bin/catatonit",
+    );
+    expect(rhelRuntime).toContain('ENTRYPOINT ["/usr/local/bin/catatonit", "-g", "--"]');
+    expect(rhelRuntime).toContain("install -d -m 0770 -o 1001 -g 0");
+    expect(rhelRuntime).toContain("HOME=/opt/app-root/src");
+    expect(rhelRuntime).toContain("USER 1001");
+  });
+
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
@@ -109,12 +160,12 @@ describe("Dockerfile", () => {
     expect(storeSeedIndex).toBeLessThan(pruneIndex);
     expect(pruneIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("--config.offline=true");
-    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
+    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(4);
     expect(
       dockerfile.split("--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"").length -
         1,
-    ).toBe(2);
-    expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(2);
+    ).toBe(4);
+    expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(4);
   });
 
   it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {

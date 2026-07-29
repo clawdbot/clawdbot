@@ -16,6 +16,8 @@ ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+ARG OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE="registry.access.redhat.com/ubi9/nodejs-24-minimal@sha256:4e21f24502b8309d76c7a9fa8ec0ba0491d444dbf96b94348c750045b2072166"
+ARG OPENCLAW_UBI9_NODE24_MINIMAL_DIGEST="sha256:4e21f24502b8309d76c7a9fa8ec0ba0491d444dbf96b94348c750045b2072166"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
@@ -58,6 +60,10 @@ RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
 
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
+FROM ${OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE} AS rhel-init-assets
+USER 0
+RUN microdnf install -y podman && \
+    microdnf clean all
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
@@ -192,6 +198,129 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
       /app/node_modules/.bin/openclaw \
       /app/node_modules/.pnpm/openclaw@*/node_modules/openclaw && \
     node scripts/check-package-dist-imports.mjs /app
+
+# Reinstall production dependencies under the UBI ABI. Copying Debian-built
+# native addons into RHEL can bind them to a newer glibc and break at startup.
+FROM ${OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE} AS rhel-runtime-assets
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+USER 0
+WORKDIR /app
+ENV COREPACK_HOME=/root/.cache/node/corepack
+
+RUN microdnf install -y \
+      cmake gcc-c++ git-core make python3 && \
+    microdnf clean all
+
+# Reuse the repository-pinned Corepack package and pnpm cache from the standard
+# build stage without adding an unpinned package-manager install to the UBI path.
+COPY --from=build /usr/local/lib/node_modules/corepack /usr/local/lib/node_modules/corepack
+COPY --from=build ${COREPACK_HOME} ${COREPACK_HOME}
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack && \
+    corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY openclaw.mjs ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
+COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
+      --config.supportedArchitectures.libc=glibc
+
+# Application build output is portable JavaScript; dependency install scripts
+# above own the native ABI. Copy generated plugin/package assets before prune.
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=build /app/packages/ai/dist ./packages/ai/dist
+COPY --from=build /app/scripts ./scripts
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
+    CI=true pnpm prune --prod \
+      --config.offline=true \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
+      --config.supportedArchitectures.libc=glibc && \
+    OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
+    node scripts/postinstall-bundled-plugins.mjs && \
+    if [ -L /app/node_modules/@openclaw/ai ]; then \
+      ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
+      ai_runtime_tmp="$(mktemp -d)" && \
+      cp -a "$ai_runtime_target" "$ai_runtime_tmp/ai" && \
+      rm /app/node_modules/@openclaw/ai && \
+      mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai && \
+      rmdir "$ai_runtime_tmp"; \
+    fi && \
+    rm -rf \
+      /app/node_modules/openclaw \
+      /app/node_modules/.bin/openclaw \
+      /app/node_modules/.pnpm/openclaw@*/node_modules/openclaw && \
+    node scripts/check-package-dist-imports.mjs /app
+
+# ── Optional Red Hat/OpenShift runtime target ──────────────────
+# Build explicitly with: docker build --target rhel-runtime -t openclaw-rhel .
+# The default image remains the Debian runtime below.
+FROM ${OPENCLAW_UBI9_NODE24_MINIMAL_IMAGE} AS rhel-runtime
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_UBI9_NODE24_MINIMAL_DIGEST
+USER 0
+
+LABEL org.opencontainers.image.base.name="registry.access.redhat.com/ubi9/nodejs-24-minimal" \
+  org.opencontainers.image.base.digest="${OPENCLAW_UBI9_NODE24_MINIMAL_DIGEST}" \
+  org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.url="https://openclaw.ai" \
+  org.opencontainers.image.documentation="https://docs.openclaw.ai/install/red-hat-fips" \
+  org.opencontainers.image.licenses="MIT" \
+  org.opencontainers.image.title="OpenClaw Red Hat runtime" \
+  org.opencontainers.image.description="OpenClaw runtime profile for RHEL and OpenShift"
+
+WORKDIR /app
+
+RUN microdnf install -y \
+      ca-certificates curl-minimal git-core hostname lsof openssl procps-ng python3 && \
+    microdnf clean all
+
+COPY --from=runtime-assets --chown=1001:0 /app/dist ./dist
+COPY --from=rhel-runtime-assets --chown=1001:0 /app/node_modules ./node_modules
+COPY --from=runtime-assets --chown=1001:0 /app/package.json .
+COPY --from=runtime-assets --chown=1001:0 /app/pnpm-workspace.yaml .
+COPY --from=runtime-assets --chown=1001:0 /app/patches ./patches
+COPY --from=runtime-assets --chown=1001:0 /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=1001:0 /app/src/agents/templates ./src/agents/templates
+COPY --from=runtime-assets --chown=1001:0 /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=runtime-assets --chown=1001:0 /app/skills ./skills
+COPY --from=runtime-assets --chown=1001:0 /app/docs ./docs
+COPY --from=runtime-assets --chown=1001:0 /app/qa ./qa
+COPY --from=build --chown=1001:0 /app/scripts/compliance/rhel-fips-check.mjs ./scripts/compliance/rhel-fips-check.mjs
+COPY --from=rhel-init-assets /usr/libexec/podman/catatonit /usr/local/bin/catatonit
+COPY --from=rhel-init-assets /usr/share/licenses/podman/COPYING-catatonit /usr/share/licenses/catatonit/COPYING
+
+RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw && \
+    chmod 755 /app/openclaw.mjs /app/scripts/compliance/rhel-fips-check.mjs && \
+    install -d -m 0770 -o 1001 -g 0 \
+      /opt/app-root/src/.openclaw \
+      /opt/app-root/src/.openclaw/workspace \
+      /opt/app-root/src/.config/openclaw
+
+ENV HOME=/opt/app-root/src \
+    OPENCLAW_CONFIG_DIR=/opt/app-root/src/.openclaw \
+    NODE_ENV=production \
+    PATH="/opt/app-root/src/.local/bin:${PATH}"
+
+USER 1001
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["/usr/local/bin/catatonit", "-g", "--"]
+CMD ["node", "openclaw.mjs", "gateway"]
 
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime

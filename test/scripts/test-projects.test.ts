@@ -228,8 +228,8 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",
-    (path) => {
-      expect(resolveChangedTestTargetPlan([path])).toEqual({
+    (sourcePath) => {
+      expect(resolveChangedTestTargetPlan([sourcePath])).toEqual({
         mode: "targets",
         targets: [
           "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
@@ -1273,10 +1273,15 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps k8s manifest edits on manifest tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/k8s/manifests/configmap.yaml"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/k8s-manifests.test.ts"],
-    });
+    for (const changedPath of [
+      "scripts/k8s/manifests/configmap.yaml",
+      "scripts/k8s/overlays/openshift-government/deployment-patch.yaml",
+    ]) {
+      expect(resolveChangedTestTargetPlan([changedPath]), changedPath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/k8s-manifests.test.ts"],
+      });
+    }
   });
 
   it("keeps Crabbox runner script edits on their regression tests", () => {

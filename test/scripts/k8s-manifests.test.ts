@@ -5,12 +5,16 @@ import { parse } from "yaml";
 
 type Manifest = Record<string, unknown>;
 
-function readManifest(name: string): Manifest {
-  const parsed = parse(readFileSync(`scripts/k8s/manifests/${name}`, "utf8")) as unknown;
+function readManifestPath(path: string): Manifest {
+  const parsed = parse(readFileSync(path, "utf8")) as unknown;
   expect(parsed).toBeTypeOf("object");
   expect(parsed).not.toBeNull();
   expect(Array.isArray(parsed)).toBe(false);
   return parsed as Manifest;
+}
+
+function readManifest(name: string): Manifest {
+  return readManifestPath(`scripts/k8s/manifests/${name}`);
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -47,7 +51,7 @@ describe("k8s manifests", () => {
       apiVersion: "kustomize.config.k8s.io/v1beta1",
       kind: "Kustomization",
     });
-    expect(asStrings(kustomization.resources, "kustomization resources").sort()).toEqual([
+    expect(asStrings(kustomization.resources, "kustomization resources").toSorted()).toEqual([
       "configmap.yaml",
       "deployment.yaml",
       "pvc.yaml",
@@ -140,5 +144,89 @@ describe("k8s manifests", () => {
       metadata: { name: "openclaw-home-pvc" },
     });
     expect(requests).toMatchObject({ storage: "10Gi" });
+  });
+});
+
+describe("OpenShift government overlay", () => {
+  const overlayRoot = "scripts/k8s/overlays/openshift-government";
+
+  it("keeps the overlay resources and Red Hat image transform complete", () => {
+    const kustomization = readManifestPath(`${overlayRoot}/kustomization.yaml`);
+
+    expect(kustomization).toMatchObject({
+      apiVersion: "kustomize.config.k8s.io/v1beta1",
+      kind: "Kustomization",
+      resources: ["../../manifests", "networkpolicy.yaml", "serviceaccount.yaml"],
+      patches: [{ path: "deployment-patch.yaml" }],
+      images: [
+        {
+          name: "ghcr.io/openclaw/openclaw",
+          newName: "openclaw-rhel",
+          newTag: "local",
+        },
+      ],
+    });
+  });
+
+  it("removes fixed identities while retaining restricted-v2 controls", () => {
+    const deployment = readManifestPath(`${overlayRoot}/deployment-patch.yaml`);
+    const spec = asRecord(deployment.spec, "deployment spec");
+    const template = asRecord(spec.template, "deployment template");
+    const podSpec = asRecord(template.spec, "pod spec");
+    const podSecurity = asRecord(podSpec.securityContext, "pod security context");
+    const gateway = findNamed(asRecords(podSpec.containers, "containers"), "gateway");
+    const initConfig = findNamed(
+      asRecords(podSpec.initContainers, "init containers"),
+      "init-config",
+    );
+
+    expect(podSecurity.fsGroup).toBeNull();
+    expect(podSpec.serviceAccountName).toBe("openclaw");
+    for (const [name, container] of [
+      ["gateway", gateway],
+      ["init-config", initConfig],
+    ] as const) {
+      const security = asRecord(container.securityContext, `${name} security context`);
+      expect(security).toMatchObject({
+        allowPrivilegeEscalation: false,
+        capabilities: { drop: ["ALL"] },
+        readOnlyRootFilesystem: true,
+        runAsGroup: null,
+        runAsNonRoot: true,
+        runAsUser: null,
+      });
+    }
+  });
+
+  it("ships a default-deny boundary and tokenless service account", () => {
+    const networkPolicy = readManifestPath(`${overlayRoot}/networkpolicy.yaml`);
+    const serviceAccount = readManifestPath(`${overlayRoot}/serviceaccount.yaml`);
+    const spec = asRecord(networkPolicy.spec, "network policy spec");
+    const egress = asRecords(spec.egress, "network policy egress");
+    const dnsRule = asRecord(egress[0], "DNS egress rule");
+    const dnsTargets = asRecords(dnsRule.to, "DNS targets");
+    const dnsNamespace = asRecord(
+      asRecord(dnsTargets[0], "DNS target").namespaceSelector,
+      "DNS namespace selector",
+    );
+
+    expect(spec.policyTypes).toEqual(["Ingress", "Egress"]);
+    expect(asRecords(spec.ingress, "network policy ingress")).toHaveLength(1);
+    expect(egress).toHaveLength(2);
+    expect(dnsNamespace.matchLabels).toEqual({
+      "kubernetes.io/metadata.name": "openshift-dns",
+    });
+    expect(asRecords(dnsRule.ports, "DNS ports")).toEqual([
+      { protocol: "UDP", port: 53 },
+      { protocol: "TCP", port: 53 },
+      { protocol: "UDP", port: 5353 },
+      { protocol: "TCP", port: 5353 },
+    ]);
+    expect(serviceAccount).toMatchObject({
+      apiVersion: "v1",
+      kind: "ServiceAccount",
+      metadata: { name: "openclaw" },
+      automountServiceAccountToken: false,
+    });
   });
 });

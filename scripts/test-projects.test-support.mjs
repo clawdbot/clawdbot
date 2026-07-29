@@ -3780,7 +3780,7 @@ function resolveDocsI18nGoTargets(changedPath) {
 }
 
 function resolveK8sManifestTargets(changedPath) {
-  if (!/^scripts\/k8s\/manifests\/[^/]+\.yaml$/u.test(changedPath)) {
+  if (!/^scripts\/k8s\/(?:manifests|overlays\/[^/]+)\/[^/]+\.yaml$/u.test(changedPath)) {
     return null;
   }
   return ["test/scripts/k8s-manifests.test.ts"];
