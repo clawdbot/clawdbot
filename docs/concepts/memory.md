@@ -63,9 +63,14 @@ see raw vs. injected sizes and truncation status.
 
 ## Import from coding assistants
 
-The Control UI can import existing local memory from Codex and Claude Code.
+The Control UI can import existing local memory from Codex, Claude Code, and
+Hermes.
 Open **Settings** → **Import Memory**, choose the destination agent, review the
-detected files, and confirm the import. OpenClaw copies only Markdown memory:
+detected files, and confirm the import. For the existing default agent, you can
+instead open **Settings → Ask OpenClaw** and say `import memory`; this narrower
+chat wizard requires completed onboarding, copies only new detected memory, and
+reports per-source failures or possible partial copies. OpenClaw copies only
+Markdown memory:
 
 - Codex: the consolidated `MEMORY.md` and `memory_summary.md` files under
   `~/.codex/memories` (or `CODEX_HOME/memories`). Raw rollout and transcript
@@ -74,11 +79,14 @@ detected files, and confirm the import. OpenClaw copies only Markdown memory:
   `~/.claude/projects/*/memory`, plus a user-configured
   `autoMemoryDirectory` when present. Project instructions, sessions, settings,
   and credentials are not part of this memory-only action.
+- Hermes: `MEMORY.md` and `USER.md` from the detected Hermes home. Config,
+  credentials, and skills are not part of this memory-only action.
 
 Imported files stay separate under `memory/imports/codex/` and
-`memory/imports/claude-code/` in the selected agent workspace. They are indexed
-for `memory_search` and available through `memory_get`; they are not merged into
-the agent's bootstrap `MEMORY.md`. The source files are left unchanged.
+`memory/imports/claude-code/`, or `memory/imports/hermes/` in the selected agent
+workspace. They are indexed for `memory_search` and available through
+`memory_get`; they are not merged into the agent's bootstrap `MEMORY.md`. The
+source files are left unchanged.
 
 The preview marks destination conflicts. Enable **Replace existing imports** to
 replace those files; apply creates a verified pre-import backup and preserves

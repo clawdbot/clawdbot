@@ -52,6 +52,7 @@ import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import {
@@ -285,6 +286,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             ? normalizeOptionalString(realtimeContext.instructions)
             : buildRealtimeInstructions(realtimeContext.instructions);
         let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+        let activeVoiceSessionId: string | undefined;
+        const ownerConnId = normalizeOptionalString(client?.connId);
         const runAgentConsult: NonNullable<
           InternalRealtimeVoiceBrowserSessionCreateRequest["runAgentConsult"]
         > = async ({ prompt, signal }) => {
@@ -307,6 +310,39 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             thinkLevel: talkConfig?.consultThinkingLevel,
             fastMode: talkConfig?.consultFastMode,
             abortSignal: signal,
+            onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+              // The provider receives this closure before the durable voice id exists,
+              // but sideband delegations can start only after create returns it.
+              const voiceSessionId = activeVoiceSessionId;
+              if (!voiceSessionId) {
+                throw new Error("Realtime browser voice session is not ready for agent consult");
+              }
+              registerClientVoiceConsultRun({
+                agentId,
+                sessionKey,
+                voiceSessionId,
+                runId,
+                config: runtimeConfig,
+              });
+              if (!ownerConnId) {
+                return undefined;
+              }
+              const registration = registerChatAbortController({
+                chatAbortControllers: context.chatAbortControllers,
+                runId,
+                sessionId,
+                sessionKey,
+                agentId,
+                timeoutMs,
+                ownerConnId,
+                controlUiVisible: false,
+                kind: "chat-send",
+              });
+              return {
+                abortSignal: registration.controller.signal,
+                cleanup: registration.cleanup,
+              };
+            },
           });
         };
         const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {
@@ -382,7 +418,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             transcriptCapable: typedParams.capabilities?.includes("voice-transcript") === true,
             voiceSessionId: normalizeOptionalString(typedParams.voiceSessionId),
           });
-          const connId = normalizeOptionalString(client?.connId);
+          activeVoiceSessionId = voiceSessionId;
+          const connId = ownerConnId;
           if (connId) {
             const now = Date.now();
             pruneLegacyVoiceBindings(now);

@@ -13,7 +13,7 @@ function normalizePromotionTriggerPhrase(value: string): string {
 }
 
 export function buildPromotionRecallAnnotations(
-  candidate: Pick<PromotionCandidate, "conceptTags" | "score">,
+  candidate: Pick<PromotionCandidate, "conceptTags" | "score" | "projectKey">,
 ): string {
   const triggers = candidate.conceptTags
     .slice(0, 3)
@@ -21,5 +21,9 @@ export function buildPromotionRecallAnnotations(
     .filter(Boolean)
     .join(", ");
   const importance = Math.min(10, Math.max(3, Math.round(candidate.score * 10)));
-  return `<!-- trigger: ${triggers} --> <!-- importance: ${importance} -->`;
+  const project =
+    candidate.projectKey && !/[\r\n<>]/u.test(candidate.projectKey)
+      ? ` <!-- project: ${candidate.projectKey} -->`
+      : "";
+  return `<!-- trigger: ${triggers} --> <!-- importance: ${importance} -->${project}`;
 }

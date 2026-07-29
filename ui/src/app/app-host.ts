@@ -1799,6 +1799,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
       uiHints: runtimeConfig.configUiHints,
       identityAvailable: Boolean(gatewaySnapshot.selfUser),
+      basePath: context.basePath,
     });
     const onboarding = this.onboardingMode;
     const navDrawerOpen = this.navDrawerOpen && !onboarding;
@@ -1886,6 +1887,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       ? renderSettingsSidebar({
           basePath: context.basePath,
           activeRouteId: activeRoute,
+          activePathname: this.routeState.location?.pathname ?? "",
           activeSearch: this.routeState.location?.search ?? "",
           activeHash: this.routeState.location?.hash ?? "",
           offline: gatewaySnapshot.offlineStable,

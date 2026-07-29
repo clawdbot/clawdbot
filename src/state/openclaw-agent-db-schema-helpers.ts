@@ -50,13 +50,14 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
-  // Pre-provenance agent DBs lack the importance/triggers columns; memory-core's
+  // Older agent DBs lack the additive recall metadata columns; memory-core's
   // lazy ensure ALTERs them in on first memory use, so accept their absence here
   // or every existing deployment fails doctor and rolls back its update.
   allowedMissingColumns: [
     "standing_intents.creator_sender",
     "memory_index_chunks.importance",
     "memory_index_chunks.triggers",
+    "memory_index_chunks.project_key",
   ],
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],

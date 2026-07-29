@@ -49,6 +49,7 @@ type QaSessionTranscriptSummary = {
   assistantToolCallCounts: Record<string, number>;
   completedToolCallCounts: Record<string, number>;
   eventCursor: number;
+  userMessageCount: number;
   successfulToolCallCounts: Record<string, number>;
   finalText: string;
   hasDirectReplySelfMessage: boolean;
@@ -128,6 +129,7 @@ function summarizeSessionTranscriptEvents(
   let lastAssistantStopReason: string | undefined;
   let lastAssistantToolNames: string[] = [];
   let lastMessageRole: string | undefined;
+  let userMessageCount = 0;
 
   for (const event of events) {
     const message = readSessionTranscriptEventMessage(event);
@@ -135,6 +137,10 @@ function summarizeSessionTranscriptEvents(
       continue;
     }
     lastMessageRole = readNonEmptyString(message.role);
+    if (message.role === "user") {
+      userMessageCount += 1;
+      continue;
+    }
     if (message.role === "toolResult") {
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
@@ -199,6 +205,7 @@ function summarizeSessionTranscriptEvents(
     assistantToolCallCounts,
     completedToolCallCounts,
     eventCursor,
+    userMessageCount,
     successfulToolCallCounts,
     finalText,
     hasDirectReplySelfMessage: scanner.findings().length > 0,
@@ -215,6 +222,7 @@ function emptySessionTranscriptSummary(eventCursor: number): QaSessionTranscript
     assistantToolCallCounts: {},
     completedToolCallCounts: {},
     eventCursor,
+    userMessageCount: 0,
     successfulToolCallCounts: {},
     finalText: "",
     hasDirectReplySelfMessage: false,

@@ -3240,6 +3240,20 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds mantis discord smoke validation git fetches", () => {
+    const workflowPath = ".github/workflows/mantis-discord-smoke.yml";
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+
+    expect(gitFetchLines, workflowPath).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line) =>
+        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+      workflowPath,
+    ).toBe(true);
+  });
+
   it("bounds release ref validation fetches across checkout auth modes", () => {
     const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
 
@@ -4765,6 +4779,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaRunJob["timeout-minutes"]).toBe(60);
     const validateProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile input",
+    );
+    expect(validateProfileStep.run).toContain(
+      "readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios)",
     );
     expect(validateProfileStep.run).toContain(
       "taxonomy.profiles.find((entry) => entry.id === requested)",

@@ -1453,7 +1453,6 @@ function renderChatThreadContents(
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
-    waitingApproval: Boolean(props.waitingApproval),
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,

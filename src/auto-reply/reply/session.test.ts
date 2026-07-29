@@ -4259,116 +4259,6 @@ describe("persistSessionUsageUpdate", () => {
     await writeSessionStoreFast(storePath, { [sessionKey]: entry });
   }
 
-  it("uses lastCallUsage for totalTokens when provided", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 100_000,
-    });
-
-    const accumulatedUsage = { input: 180_000, output: 10_000, total: 190_000 };
-    const lastCallUsage = { input: 12_000, output: 2_000, total: 14_000 };
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: accumulatedUsage,
-      lastCallUsage,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      12_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      180_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(10_000);
-  });
-
-  it("keeps the prior total stale when last-call context is unavailable", async () => {
-    const storePath = await createStorePath("openclaw-usage-unavailable-context-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 148_874,
-      totalTokensFresh: true,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
-      lastCallUsage: {
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-        total: 927_907,
-      },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      148_874,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      12,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      819_661,
-    );
-  });
-
-  it.each([
-    {
-      name: "marks a fresh zero stale when a completed run has no context snapshot",
-      totalTokens: 0,
-      preserve: false,
-      expectedFresh: false,
-    },
-    {
-      name: "preserves fresh post-compaction totalTokens across model-only updates",
-      totalTokens: 42_000,
-      preserve: true,
-      expectedFresh: true,
-    },
-  ])("$name", async ({ totalTokens, preserve, expectedFresh }) => {
-    const storePath = await createStorePath("openclaw-usage-no-snapshot-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens,
-      totalTokensFresh: true,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      modelUsed: "claude-sonnet-4-6",
-      contextTokensUsed: 200_000,
-      preserveFreshTotalTokensOnStaleUsage: preserve,
-    });
-
-    const stored = expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session");
-    expect(stored.totalTokens).toBe(totalTokens);
-    expect(stored.totalTokensFresh).toBe(expectedFresh);
-  });
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
     const sessionKey = "main";
@@ -4471,6 +4361,218 @@ describe("persistSessionUsageUpdate", () => {
 
   it.each([
     {
+      name: "treats CLI usage as a fresh context snapshot when requested",
+      seed: {},
+      update: {
+        usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        cliSessionBinding: {
+          sessionId: "cli-session-1",
+          authProfileId: "anthropic:default",
+          extraSystemPromptHash: "prompt-hash",
+          mcpConfigHash: "mcp-hash",
+        },
+      },
+      expected: {
+        totalTokens: 32_000,
+        totalTokensFresh: true,
+        cliSessionIds: { "claude-cli": "cli-session-1" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "cli-session-1",
+            authProfileId: "anthropic:default",
+            extraSystemPromptHash: "prompt-hash",
+            mcpConfigHash: "mcp-hash",
+          },
+        },
+      },
+    },
+    {
+      name: "clears stale CLI binding when usage update reports an unflushed replacement",
+      seed: {
+        cliSessionIds: { "claude-cli": "stale-cli-session", "codex-cli": "codex-session" },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "stale-cli-session", authProfileId: "anthropic:old" },
+          "codex-cli": { sessionId: "codex-session" },
+        },
+        claudeCliSessionId: "stale-cli-session",
+      },
+      update: {
+        usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        clearCliSessionBinding: true,
+      },
+      expected: {
+        cliSessionIds: { "codex-cli": "codex-session" },
+        cliSessionBindings: { "codex-cli": { sessionId: "codex-session" } },
+        claudeCliSessionId: undefined,
+      },
+    },
+    {
+      name: "prefers fresh final usage over zero compactionTokensAfter",
+      seed: {
+        totalTokens: 1_794_391,
+        totalTokensFresh: true,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+      update: {
+        usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+        lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        contextTokensUsed: 1_048_576,
+        compactionTokensAfter: 0,
+      },
+      expected: {
+        totalTokens: 1_794_391,
+        totalTokensFresh: true,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+    },
+    {
+      name: "prefers fresh lastCallUsage over positive compactionTokensAfter",
+      seed: { totalTokens: 180_000, totalTokensFresh: true },
+      update: {
+        usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
+        lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
+        providerUsed: "openai",
+        compactionTokensAfter: 80_000,
+      },
+      expected: {
+        totalTokens: 95_000,
+        totalTokensFresh: true,
+        inputTokens: 100_000,
+        outputTokens: 3_000,
+        cacheRead: 4_000,
+      },
+    },
+    {
+      name: "uses positive compactionTokensAfter when final usage has no prompt total",
+      seed: {
+        totalTokens: 180_000,
+        totalTokensFresh: true,
+        inputTokens: 5_000,
+        outputTokens: 2_000,
+        cacheRead: 50_000,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          route: "compact_only",
+          shouldCompact: true,
+          estimatedPromptTokens: 180_000,
+          contextTokenBudget: 1_048_576,
+          promptBudgetBeforeReserve: 1_044_480,
+          reserveTokens: 4_096,
+          effectiveReserveTokens: 4_096,
+          remainingPromptBudgetTokens: 864_480,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 0,
+          unwindowedMessageCount: 0,
+        },
+      },
+      update: {
+        usage: { output: 125 },
+        lastCallUsage: { output: 125 },
+        providerUsed: "claude-cli",
+        contextTokensUsed: undefined,
+        compactionTokensAfter: 80_000,
+      },
+      expected: {
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        contextBudgetStatus: undefined,
+      },
+    },
+    {
+      name: "persists totalTokens from promptTokens when usage is unavailable",
+      seed: { inputTokens: 1_234, outputTokens: 456 },
+      update: { usage: undefined, promptTokens: 39_000 },
+      expected: {
+        totalTokens: 39_000,
+        totalTokensFresh: true,
+        inputTokens: 1_234,
+        outputTokens: 456,
+      },
+    },
+    {
+      name: "keeps non-clamped lastCallUsage totalTokens when exceeding context window",
+      seed: {},
+      update: {
+        usage: { input: 300_000, output: 10_000, total: 310_000 },
+        lastCallUsage: { input: 250_000, output: 5_000, total: 255_000 },
+        contextTokensUsed: 200_000,
+      },
+      expected: { totalTokens: 250_000, totalTokensFresh: true },
+    },
+    {
+      name: "uses lastCallUsage for totalTokens when provided",
+      seed: { totalTokens: 100_000 },
+      update: {
+        usage: { input: 180_000, output: 10_000, total: 190_000 },
+        lastCallUsage: { input: 12_000, output: 2_000, total: 14_000 },
+      },
+      expected: {
+        totalTokens: 12_000,
+        totalTokensFresh: true,
+        inputTokens: 180_000,
+        outputTokens: 10_000,
+      },
+    },
+    {
+      name: "keeps the prior total stale when last-call context is unavailable",
+      seed: { totalTokens: 148_874, totalTokensFresh: true },
+      update: {
+        usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
+        lastCallUsage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { state: "unavailable" },
+          total: 927_907,
+        },
+      },
+      expected: {
+        totalTokens: 148_874,
+        totalTokensFresh: false,
+        inputTokens: 12,
+        cacheRead: 819_661,
+      },
+    },
+    {
+      name: "marks a fresh zero stale when a completed run has no context snapshot",
+      seed: { totalTokens: 0, totalTokensFresh: true },
+      update: {
+        modelUsed: "claude-sonnet-4-6",
+        preserveFreshTotalTokensOnStaleUsage: false,
+      },
+      expected: { totalTokens: 0, totalTokensFresh: false },
+    },
+    {
+      name: "preserves fresh post-compaction totalTokens across model-only updates",
+      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      update: {
+        modelUsed: "claude-sonnet-4-6",
+        preserveFreshTotalTokensOnStaleUsage: true,
+      },
+      expected: { totalTokens: 42_000, totalTokensFresh: true },
+    },
+    {
       name: "uses lastCallUsage cache counters when available",
       seed: {},
       update: {
@@ -4506,7 +4608,12 @@ describe("persistSessionUsageUpdate", () => {
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 }, promptTokens: 42_000 },
       expected: { totalTokens: 42_000, totalTokensFresh: true },
     },
-  ])("$name", async ({ seed, update, expected, name }) => {
+  ] satisfies Array<{
+    name: string;
+    seed: Partial<SessionEntry>;
+    update: Omit<Parameters<typeof persistSessionUsageUpdate>[0], "storePath" | "sessionKey">;
+    expected: Partial<SessionEntry>;
+  }>)("$name", async ({ seed, update, expected, name }) => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
@@ -4528,311 +4635,6 @@ describe("persistSessionUsageUpdate", () => {
       name,
     );
   });
-  it("treats CLI usage as a fresh context snapshot when requested", async () => {
-    const storePath = await createStorePath("openclaw-usage-cli-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, { sessionId: "s1", updatedAt: Date.now() });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      cliSessionBinding: {
-        sessionId: "cli-session-1",
-        authProfileId: "anthropic:default",
-        extraSystemPromptHash: "prompt-hash",
-        mcpConfigHash: "mcp-hash",
-      },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      32_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBe("cli-session-1");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toEqual({
-      sessionId: "cli-session-1",
-      authProfileId: "anthropic:default",
-      extraSystemPromptHash: "prompt-hash",
-      mcpConfigHash: "mcp-hash",
-    });
-  });
-
-  it("clears stale CLI binding when usage update reports an unflushed replacement", async () => {
-    const storePath = await createStorePath("openclaw-usage-cli-clear-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      cliSessionIds: {
-        "claude-cli": "stale-cli-session",
-        "codex-cli": "codex-session",
-      },
-      cliSessionBindings: {
-        "claude-cli": {
-          sessionId: "stale-cli-session",
-          authProfileId: "anthropic:old",
-        },
-        "codex-cli": {
-          sessionId: "codex-session",
-        },
-      },
-      claudeCliSessionId: "stale-cli-session",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      clearCliSessionBinding: true,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "codex-cli"
-      ],
-    ).toBe("codex-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "codex-cli"
-      ],
-    ).toEqual({
-      sessionId: "codex-session",
-    });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBeUndefined();
-  });
-
-  it("prefers fresh final usage over zero compactionTokensAfter", async () => {
-    const storePath = await createStorePath("openclaw-usage-compaction-reset-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 1_794_391,
-      totalTokensFresh: true,
-      inputTokens: 20,
-      outputTokens: 10_855,
-      cacheRead: 1_761_324,
-      cacheWrite: 33_047,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-      lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      contextTokensUsed: 1_048_576,
-      compactionTokensAfter: 0,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      1_794_391,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      20,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(10_855);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      1_761_324,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
-      33_047,
-    );
-  });
-
-  it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
-    const storePath = await createStorePath("openclaw-usage-compaction-positive-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 180_000,
-      totalTokensFresh: true,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
-      lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
-      providerUsed: "openai",
-      contextTokensUsed: 200_000,
-      compactionTokensAfter: 80_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      95_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      100_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(3_000);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      4_000,
-    );
-  });
-
-  it("uses positive compactionTokensAfter when final usage has no prompt total", async () => {
-    const storePath = await createStorePath("openclaw-usage-compaction-fallback-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 180_000,
-      totalTokensFresh: true,
-      inputTokens: 5_000,
-      outputTokens: 2_000,
-      cacheRead: 50_000,
-      contextBudgetStatus: {
-        schemaVersion: 1,
-        source: "pre-prompt-estimate",
-        updatedAt: 1,
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-        route: "compact_only",
-        shouldCompact: true,
-        estimatedPromptTokens: 180_000,
-        contextTokenBudget: 1_048_576,
-        promptBudgetBeforeReserve: 1_044_480,
-        reserveTokens: 4_096,
-        effectiveReserveTokens: 4_096,
-        remainingPromptBudgetTokens: 864_480,
-        overflowTokens: 0,
-        toolResultReducibleChars: 0,
-        messageCount: 0,
-        unwindowedMessageCount: 0,
-      },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { output: 125 },
-      lastCallUsage: { output: 125 },
-      providerUsed: "claude-cli",
-      compactionTokensAfter: 80_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      80_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextBudgetStatus,
-    ).toBeUndefined();
-  });
-
-  it("persists totalTokens from promptTokens when usage is unavailable", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      inputTokens: 1_234,
-      outputTokens: 456,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: undefined,
-      promptTokens: 39_000,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      39_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      1_234,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(456);
-  });
-
-  it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, { sessionId: "s1", updatedAt: Date.now() });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 300_000, output: 10_000, total: 310_000 },
-      lastCallUsage: { input: 250_000, output: 5_000, total: 255_000 },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      250_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-  });
-
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
     const sessionKey = "main";

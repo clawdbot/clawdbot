@@ -318,7 +318,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(body, 200).replace(/\\n/g, "\\\\n");
+      const preview = truncateUtf16Safe(body, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 

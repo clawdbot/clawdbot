@@ -82,10 +82,28 @@ describe("findSettingsSearchBlocks", () => {
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "memory",
-        search: "?section=memory&tab=settings",
+        pathname: "/settings/memory/settings",
         hash: "#memory-backend",
       }),
     ]);
+
+    expect(
+      findSettingsSearchBlocks({
+        query: "backend",
+        schema: {
+          type: "object",
+          properties: {
+            memory: {
+              type: "object",
+              properties: { backend: { type: "string", title: "Backend" } },
+            },
+          },
+        },
+        value: { memory: { backend: "builtin" } },
+        uiHints: { "memory.backend": { advanced: false } },
+        basePath: "/ui",
+      }),
+    ).toEqual([expect.objectContaining({ pathname: "/ui/settings/memory/settings" })]);
   });
 
   it("opens every Memory schema match on the merged Settings tab", () => {
@@ -117,7 +135,10 @@ describe("findSettingsSearchBlocks", () => {
       uiHints,
     });
     expect(searchOnly).toEqual([
-      expect.objectContaining({ routeId: "memory", search: "?section=memory&tab=settings" }),
+      expect.objectContaining({
+        routeId: "memory",
+        pathname: "/settings/memory/settings",
+      }),
     ]);
 
     const sectionWide = findSettingsSearchBlocks({
@@ -129,7 +150,7 @@ describe("findSettingsSearchBlocks", () => {
     expect(sectionWide).toEqual([
       expect.objectContaining({
         routeId: "memory",
-        search: "?section=memory&tab=settings",
+        pathname: "/settings/memory/settings",
         hash: "#config-section-memory",
       }),
     ]);
@@ -144,7 +165,7 @@ describe("findSettingsSearchBlocks", () => {
     expect(backendOnly).toEqual([
       expect.objectContaining({
         routeId: "memory",
-        search: "?section=memory&tab=settings",
+        pathname: "/settings/memory/settings",
         hash: "#memory-backend",
       }),
     ]);
@@ -180,7 +201,10 @@ describe("findSettingsSearchBlocks", () => {
     // Another plugin owns the slot: memory.backend and its sub-config are unread.
     expect(find({ plugins: { slots: { memory: "memory-lancedb" } } })).toEqual([]);
     expect(find({ memory: { backend: "qmd" } })).toEqual([
-      expect.objectContaining({ routeId: "memory", search: "?section=memory&tab=settings" }),
+      expect.objectContaining({
+        routeId: "memory",
+        pathname: "/settings/memory/settings",
+      }),
     ]);
   });
 

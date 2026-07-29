@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
-import { normalizeUpdateChannel } from "../infra/update-channels.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
@@ -343,7 +343,10 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
           officialPluginUpdateChannel: params.opts.all
-            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
+            ? resolveRegistryUpdateChannel({
+                configChannel: normalizeUpdateChannel(cfg.update?.channel),
+                currentVersion: VERSION,
+              })
             : undefined,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           coreVersion: VERSION,

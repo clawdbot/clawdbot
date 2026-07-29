@@ -28,7 +28,7 @@ import {
 } from "../../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
+import { moveChatModelProviderFocus, selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
 export type ChatModelControlsProps = {
   activeRunId: string | null;
@@ -456,25 +456,51 @@ function renderChatModelReasoningSelect(params: {
   const speedTooltip = fastMode.supported
     ? "Fast responses finish sooner and can use more of your usage limits."
     : "Speed control is not supported for this model.";
+  const resetSliderPreview = (input: HTMLInputElement, restoreValue = false) => {
+    if (restoreValue) {
+      input.value = String(sliderIndex);
+    }
+    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(sliderIndex)}%`);
+    input.setAttribute("aria-valuetext", reasoningValueLabel);
+    const panel = input.closest(".chat-controls__reasoning-panel");
+    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
+      label.hidden = true;
+    });
+    const committedLabel = panel?.querySelector<HTMLElement>(
+      "[data-chat-thinking-preview-committed]",
+    );
+    if (committedLabel) {
+      committedLabel.hidden = false;
+    }
+  };
   const onSliderDrag = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
     const stop = sliderStops[Number(input.value)];
     if (!stop) {
       return;
     }
-    // Style/attribute-only drag preview; change commits on release and the
-    // re-render refreshes the visible value label. Never write into rendered
-    // text here: setting textContent on a Lit-managed span ejects the
-    // ChildPart markers and permanently breaks every later menu render.
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
     input.setAttribute("aria-valuetext", formatCombinedPickerThinkingLabel(stop.label));
+    const panel = input.closest(".chat-controls__reasoning-panel");
+    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
+      label.hidden = label.dataset.chatThinkingPreviewIndex !== input.value;
+    });
+    const committedLabel = panel?.querySelector<HTMLElement>(
+      "[data-chat-thinking-preview-committed]",
+    );
+    if (committedLabel) {
+      committedLabel.hidden = true;
+    }
   };
   const onSliderCommit = (event: Event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    const stop = sliderStops[Number(input.value)];
+    // Preview visibility is DOM-owned during a drag, so restore Lit's
+    // committed baseline before either the optimistic update or a failed patch.
+    resetSliderPreview(input);
     if (thinkingDisabled) {
       return;
     }
-    const input = event.currentTarget as HTMLInputElement;
-    const stop = sliderStops[Number(input.value)];
     if (!stop || stop.value === selectedThinkingValue) {
       return;
     }
@@ -629,7 +655,26 @@ function renderChatModelReasoningSelect(params: {
                 hasModelOverride: selectedModelValue !== "",
                 onReset: () => commitModel(""),
               })}
-              <div class="chat-controls__model-browser">
+              <div
+                class="chat-controls__model-browser"
+                @mouseleave=${(event: MouseEvent) => {
+                  const browser = event.currentTarget as HTMLElement;
+                  if (browser.contains(document.activeElement)) {
+                    return;
+                  }
+                  selectChatModelProvider(event, selectedProvider);
+                }}
+                @focusout=${(event: FocusEvent) => {
+                  const browser = event.currentTarget as HTMLElement;
+                  if (
+                    event.relatedTarget instanceof Node &&
+                    browser.contains(event.relatedTarget)
+                  ) {
+                    return;
+                  }
+                  selectChatModelProvider(event, selectedProvider);
+                }}
+              >
                 <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
                   <div class="chat-controls__inline-select-section-label">
                     ${t("sessionsView.provider")}
@@ -645,7 +690,21 @@ function renderChatModelReasoningSelect(params: {
                           data-chat-model-provider=${provider}
                           type="button"
                           aria-pressed=${active ? "true" : "false"}
+                          tabindex=${active ? "0" : "-1"}
                           @click=${(event: MouseEvent) => selectChatModelProvider(event, provider)}
+                          @mouseenter=${(event: MouseEvent) => {
+                            const browser = (event.currentTarget as HTMLElement).closest(
+                              ".chat-controls__model-browser",
+                            );
+                            // Keyboard focus owns the active tab until it leaves; hover must
+                            // not hide the panel containing the focused model option.
+                            if (browser?.contains(document.activeElement)) {
+                              return;
+                            }
+                            selectChatModelProvider(event, provider);
+                          }}
+                          @focus=${(event: FocusEvent) => selectChatModelProvider(event, provider)}
+                          @keydown=${moveChatModelProviderFocus}
                         >
                           ${renderChatModelProviderIcon(provider)}
                           <span>${providerDisplayLabel(provider)}</span>
@@ -695,7 +754,20 @@ function renderChatModelReasoningSelect(params: {
                               ? ""
                               : "chat-controls__reasoning-value--inherit"}"
                           >
-                            ${reasoningValueText}
+                            ${sliderStops.length > 1
+                              ? html`
+                                  <span data-chat-thinking-preview-committed>
+                                    ${reasoningValueText}
+                                  </span>
+                                  ${sliderStops.map(
+                                    (stop, index) => html`
+                                      <span data-chat-thinking-preview-index=${index} hidden>
+                                        ${formatCombinedPickerThinkingLabel(stop.label)}
+                                      </span>
+                                    `,
+                                  )}
+                                `
+                              : reasoningValueText}
                           </span>
                           ${hasThinkingOverride
                             ? html`
@@ -762,6 +834,10 @@ function renderChatModelReasoningSelect(params: {
                                 @change=${onSliderCommit}
                                 @click=${onUnanchoredSliderClick}
                                 @keydown=${onUnanchoredSliderKeyDown}
+                                @pointercancel=${(event: PointerEvent) =>
+                                  resetSliderPreview(event.currentTarget as HTMLInputElement, true)}
+                                @blur=${(event: FocusEvent) =>
+                                  resetSliderPreview(event.currentTarget as HTMLInputElement, true)}
                               />
                             </div>
                           `

@@ -70,17 +70,31 @@ function buildPromotionSection(
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
-
+  const projectGroups = new Map<string, PromotionCandidate[]>();
   for (const candidate of candidates) {
-    const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
-    lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
-    // Cap only the visible MEMORY.md text. The recall store keeps the full
-    // rehydrated snippet so ranking, provenance, and dream narratives remain
-    // tied to the source entry instead of this presentation budget.
-    lines.push(
-      `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata} ${buildPromotionRecallAnnotations(candidate)}`,
-    );
+    const group =
+      candidate.projectKey && !/[\r\n<>]/u.test(candidate.projectKey) ? candidate.projectKey : "";
+    projectGroups.set(group, [...(projectGroups.get(group) ?? []), candidate]);
+  }
+
+  for (const [projectKey, groupCandidates] of projectGroups) {
+    if (projectGroups.size > 1) {
+      lines.push(projectKey ? `### Project: ${projectKey}` : "### Global", "");
+    }
+    for (const candidate of groupCandidates) {
+      const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
+      const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+      lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+      // Cap only the visible MEMORY.md text. The recall store keeps the full
+      // rehydrated snippet so ranking, provenance, and dream narratives remain
+      // tied to the source entry instead of this presentation budget.
+      lines.push(
+        `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata} ${buildPromotionRecallAnnotations(candidate)}`,
+      );
+    }
+    if (projectGroups.size > 1) {
+      lines.push("");
+    }
   }
 
   lines.push("");
@@ -154,6 +168,7 @@ function consolidationCandidateFingerprint(candidate: PromotionCandidate): strin
     endLine: candidate.endLine,
     snippet: candidate.snippet,
     provenance: candidate.provenance,
+    projectKey: candidate.projectKey,
   });
 }
 

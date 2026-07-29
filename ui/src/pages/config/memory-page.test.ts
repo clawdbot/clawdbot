@@ -1,16 +1,36 @@
 /* @vitest-environment jsdom */
 
+import { ContextProvider } from "@lit/context";
 import { describe, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationNavigationOptions,
+} from "../../app/context.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import "./memory-page.ts";
 
 type MemoryPageElement = HTMLElement & {
   configObject: Record<string, unknown>;
-  tab: string | null;
-  updateComplete: Promise<unknown>;
+  routeData: ConfigRouteData | null;
+  updateComplete: Promise<boolean>;
+  requestUpdate: () => void;
 };
+
+function memoryRoute(url: string): ConfigRouteData {
+  const parsed = new URL(url, "https://control.test");
+  return configRouteData({
+    pathname: parsed.pathname,
+    search: parsed.search,
+    hash: parsed.hash,
+  });
+}
+
+function memoryTabRoute(tab: "overview" | "memories" | "dreams" | "settings") {
+  return memoryRoute(`/settings/memory${tab === "overview" ? "" : `/${tab}`}`);
+}
 
 function engine(id: string, enabled: boolean): PluginCatalogItem {
   return {
@@ -33,7 +53,10 @@ function createPage(params: {
   catalog?: readonly PluginCatalogItem[];
   patchForm?: (path: Array<string | number>, value: unknown) => void;
   setEnabled?: () => Promise<unknown>;
-  navigate?: (routeId: string, options?: { search?: string }) => void;
+  navigate?: (routeId: string, options?: ApplicationNavigationOptions) => void;
+  replace?: (routeId: string, options?: ApplicationNavigationOptions) => void;
+  routeData?: ConfigRouteData;
+  basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
   memoryStatus?: (agentId: string) => Promise<unknown>;
   lookupSchemaPath?: (call: number) => Promise<unknown>;
@@ -69,7 +92,7 @@ function createPage(params: {
   };
   const element = document.createElement("openclaw-memory-settings") as MemoryPageElement;
   element.configObject = params.configObject;
-  element.tab = "settings";
+  element.routeData = params.routeData ?? memoryTabRoute("settings");
   const runtimeConfig = {
     state: {
       client: {},
@@ -91,8 +114,10 @@ function createPage(params: {
     patchForm: params.patchForm ?? vi.fn(),
     removeFormValue: vi.fn(),
     refresh: () => Promise.resolve(),
+    ensureLoaded: () => Promise.resolve(),
   };
-  (element as unknown as { context: ApplicationContext }).context = {
+  const context = {
+    basePath: params.basePath ?? "",
     gateway,
     runtimeConfig,
     agents: {
@@ -107,7 +132,14 @@ function createPage(params: {
       ensureList: () => Promise.resolve(),
     },
     navigate: params.navigate ?? vi.fn(),
+    replace: params.replace ?? vi.fn(),
   } as unknown as ApplicationContext;
+  (element as unknown as { context: ApplicationContext }).context = context;
+  const contextProvider = new ContextProvider(element, {
+    context: applicationContext,
+    initialValue: context,
+  });
+  contextProvider.setValue(context);
   const setPhase = (phase: string) => {
     gateway.snapshot = { ...gateway.snapshot, phase };
     runtimeConfig.state = { ...runtimeConfig.state, connected: phase === "connected" };
@@ -152,9 +184,21 @@ function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | 
 }
 
 function selectTab(element: HTMLElement, tab: string) {
-  element
-    .querySelector("wa-tab-group")
-    ?.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: tab }, bubbles: true }));
+  const target = element.querySelector(`#memory-tab-${tab}`);
+  target?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+  );
+  target?.dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true }));
+  dispatchTabShow(element, tab);
+}
+
+function dispatchTabShow(element: HTMLElement, tab: string) {
+  element.querySelector("wa-tab-group")?.dispatchEvent(
+    new CustomEvent("wa-tab-show", {
+      detail: { name: tab },
+      bubbles: true,
+    }),
+  );
 }
 
 function activeEngine(element: HTMLElement): string | null {
@@ -356,10 +400,10 @@ describe("MemorySettingsPage catalog state", () => {
 });
 
 describe("MemorySettingsPage tab routing", () => {
-  it("honors every ?tab= arrival, including a repeat after a manual tab change", async () => {
+  it("renders every canonical tab path and honors browser history restoration", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.tab = "settings";
+    element.routeData = memoryTabRoute("settings");
     document.body.append(element);
     try {
       await element.updateComplete;
@@ -367,19 +411,23 @@ describe("MemorySettingsPage tab routing", () => {
 
       // A manual click rewrites the URL rather than shadowing it with local state.
       selectTab(element, "overview");
-      expect(navigate).toHaveBeenCalledWith("memory", undefined);
-      element.tab = null;
+      expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
+      element.routeData = memoryTabRoute("overview");
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
 
-      // Same intent as the first arrival: an adopt-once page would ignore this.
-      element.tab = "settings";
+      // The router feeding an older history entry back must restore that tab.
+      element.routeData = memoryTabRoute("settings");
       await element.updateComplete;
       expect(visibleTab(element)).toBe("settings");
 
-      element.tab = "memories";
+      element.routeData = memoryTabRoute("memories");
       await element.updateComplete;
       expect(visibleTab(element)).toBe("memories");
+
+      element.routeData = memoryTabRoute("dreams");
+      await element.updateComplete;
+      expect(visibleTab(element)).toBe("dreams");
     } finally {
       element.remove();
     }
@@ -388,24 +436,115 @@ describe("MemorySettingsPage tab routing", () => {
   it("writes the chosen tab into the URL so history restores it", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.tab = "overview";
+    element.routeData = memoryTabRoute("overview");
     document.body.append(element);
     try {
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
 
       selectTab(element, "dreams");
-      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=dreams" });
+      expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory/dreams" });
       // Nothing moves until the router feeds the new tab back in.
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
 
       selectTab(element, "memories");
-      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=memories" });
+      expect(navigate).toHaveBeenCalledWith("memory", {
+        pathname: "/settings/memory/memories",
+      });
     } finally {
       element.remove();
     }
   });
+
+  it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
+    const navigate = vi.fn();
+    const { element } = createPage({ configObject: {}, catalog: [], navigate });
+    element.routeData = memoryTabRoute("overview");
+    document.body.append(element);
+    try {
+      await element.updateComplete;
+      const space = new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      });
+      element.querySelector("#memory-tab-dreams")?.dispatchEvent(space);
+
+      expect(space.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledOnce();
+      expect(navigate).toHaveBeenCalledWith("memory", {
+        pathname: "/settings/memory/dreams",
+      });
+    } finally {
+      element.remove();
+    }
+  });
+
+  it.each([
+    ["/settings/memory", null],
+    ["/settings/memory/memories", null],
+    ["/settings/memory/dreams", null],
+    ["/settings/memory/settings", null],
+    ["/settings/memory?tab=memories", "/settings/memory/memories"],
+    ["/settings/memory?tab=dreams", "/settings/memory/dreams"],
+    ["/settings/memory?tab=settings", "/settings/memory/settings"],
+    ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
+    ["/settings/memory?tab=search", "/settings/memory/settings"],
+    ["/settings/memory?tab=overview", "/settings/memory"],
+    ["/settings/memory?section=memory", "/settings/memory/settings"],
+    ["/settings/memory#memory-backend", "/settings/memory/settings#memory-backend"],
+    ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
+    [
+      "/settings/memory#config-section-memory-search",
+      "/settings/memory/settings#config-section-memory-search",
+    ],
+  ] as const)(
+    "performs at most one replace for %s and never oscillates back to a query tab",
+    async (sourceUrl, expectedUrl) => {
+      const replace = vi.fn();
+      const navigate = vi.fn();
+      const { element } = createPage({
+        configObject: {},
+        catalog: [],
+        replace,
+        navigate,
+        routeData: memoryRoute(sourceUrl),
+      });
+      document.body.append(element);
+      try {
+        await element.updateComplete;
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          element.routeData = { ...element.routeData } as ConfigRouteData;
+          await element.updateComplete;
+        }
+        dispatchTabShow(element, "overview");
+        dispatchTabShow(element, "dreams");
+
+        expect(replace).toHaveBeenCalledTimes(expectedUrl ? 1 : 0);
+        expect(navigate).not.toHaveBeenCalled();
+        if (!expectedUrl) {
+          return;
+        }
+        const canonical = memoryRoute(expectedUrl);
+        expect(replace).toHaveBeenCalledWith("memory", {
+          pathname: canonical.pathname,
+          search: canonical.search,
+          hash: canonical.hash,
+        });
+
+        element.routeData = canonical;
+        await element.updateComplete;
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          element.routeData = { ...element.routeData } as ConfigRouteData;
+          await element.updateComplete;
+        }
+        expect(replace).toHaveBeenCalledOnce();
+      } finally {
+        element.remove();
+      }
+    },
+  );
 
   it("loads Overview status once per activation, agent change, and reconnect", async () => {
     const memoryStatus = vi.fn((agentId: string) =>
@@ -416,7 +555,7 @@ describe("MemorySettingsPage tab routing", () => {
       agents: [{ id: "main" }, { id: "research" }],
       memoryStatus,
     });
-    element.tab = "overview";
+    element.routeData = memoryTabRoute("overview");
     document.body.append(element);
     try {
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
@@ -448,7 +587,7 @@ describe("MemorySettingsPage tab routing", () => {
       catalog: [engine("engine-a", true), engine("engine-b", true)],
       memoryStatus,
     });
-    element.tab = "overview";
+    element.routeData = memoryTabRoute("overview");
     document.body.append(element);
     try {
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
@@ -467,7 +606,7 @@ describe("MemorySettingsPage tab routing", () => {
     try {
       await element.updateComplete;
       setPhase("disconnected");
-      element.tab = "overview";
+      element.routeData = memoryTabRoute("overview");
       await waitForFast(() =>
         expect(element.textContent).toContain(
           "The gateway is offline, so memory status is unavailable.",

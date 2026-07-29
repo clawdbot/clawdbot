@@ -53,8 +53,27 @@ function scoreTriggerPhrase(message: string, phrase: string): number {
 }
 
 export function isPromotedTrustedMemoryEntry(
-  entry: Pick<MemorySearchResult, "path" | "source" | "originClass">,
+  entry: Pick<MemorySearchResult, "path" | "source" | "originClass" | "projectKey">,
+  activeProjectKeys: readonly string[] = [],
 ): boolean {
+  if (entry.projectKey) {
+    const storedProjectKeys = [
+      ...new Set(
+        entry.projectKey
+          .split(";")
+          .map((key) => key.trim())
+          .filter(Boolean),
+      ),
+    ];
+    // A mixed chunk may contain content from every tagged project. Require all
+    // of them to be active so lane-1 can never leak a foreign project's content.
+    if (
+      storedProjectKeys.length === 0 ||
+      !storedProjectKeys.every((key) => activeProjectKeys.includes(key))
+    ) {
+      return false;
+    }
+  }
   if (entry.originClass === "owner" || entry.originClass === "agent") {
     return true;
   }
@@ -80,9 +99,10 @@ export function scoreTriggerMatch(message: string, entry: MemorySearchResult): n
 export function selectStrongTriggerMatches(
   message: string,
   entries: MemorySearchResult[],
+  activeProjectKeys: readonly string[] = [],
 ): TriggerRecallMatch[] {
   return entries
-    .filter(isPromotedTrustedMemoryEntry)
+    .filter((entry) => isPromotedTrustedMemoryEntry(entry, activeProjectKeys))
     .map((entry) => Object.assign({}, entry, { matchScore: scoreTriggerMatch(message, entry) }))
     .filter((entry) => entry.matchScore >= STRONG_TRIGGER_MATCH_SCORE)
     .toSorted(
@@ -109,9 +129,11 @@ export async function resolveTriggerRecall(params: {
   agentId: string;
   query: string;
   message: string;
+  activeProjectKeys?: string[];
   signal?: AbortSignal;
 }): Promise<{ context?: string; hasStrongHit: boolean; injectedCount: number }> {
   params.signal?.throwIfAborted();
+  const activeProjectKeys = params.activeProjectKeys ?? [];
   const lookup = await waitForTriggerLookup(
     getActiveMemorySearchManager({
       cfg: params.cfg,
@@ -133,9 +155,12 @@ export async function resolveTriggerRecall(params: {
         // deterministic and local, so query embedding is disabled.
         lexicalOnly: true,
         qmdSearchModeOverride: "search",
+        activeProjectKeys: [...activeProjectKeys],
       })
       .catch(() => []),
-    lookup.manager.listTriggerCandidates().catch(() => []),
+    lookup.manager
+      .listTriggerCandidates({ activeProjectKeys: [...activeProjectKeys] })
+      .catch(() => []),
   ]);
   const [retrieved, triggerCandidates] = await waitForTriggerLookup(lookupWork, params.signal);
   const candidates = [
@@ -146,7 +171,7 @@ export async function resolveTriggerRecall(params: {
       ]),
     ).values(),
   ];
-  const matches = selectStrongTriggerMatches(params.message, candidates);
+  const matches = selectStrongTriggerMatches(params.message, candidates, activeProjectKeys);
   const context = buildTriggerRecallContext(matches);
   return {
     ...(context ? { context } : {}),

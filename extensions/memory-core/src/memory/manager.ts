@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  readCuratedProjectMemoryCandidates,
   readMemoryFile,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
@@ -87,6 +88,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
@@ -410,6 +412,8 @@ async function closeMemoryIndexManagersForScope(params: {
     await closeMemoryIndexManagersForScopeUnlocked(params);
   });
 }
+
+type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
@@ -1107,21 +1111,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
   }
 
-  async search(
+  async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
+    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const minScore = opts?.minScore ?? this.settings.query.minScore;
+    const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
+    const candidateMaxResults = hasActiveProject
+      ? Math.min(200, Math.max(maxResults, maxResults * 4))
+      : maxResults;
+    const candidateMinScore = hasActiveProject ? minScore / 1.15 : minScore;
+    const results = await this.searchUnranked(query, {
+      ...opts,
+      maxResults: candidateMaxResults,
+      minScore: candidateMinScore,
+    });
+    const ranked = applyProjectRanking(results, opts?.activeProjectKeys);
+    return hasActiveProject
+      ? ranked.filter((entry) => entry.score >= minScore).slice(0, maxResults)
+      : ranked;
+  }
+
+  private async searchUnranked(
     query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      /** Keyword/FTS only: skip query embedding and vector search (reply-path contract). */
-      lexicalOnly?: boolean;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      /** When set, only these chunk sources are considered (must be enabled for this manager). */
-      sources?: MemorySource[];
-      /** Caller-owned cancellation; aborts in-flight embedding work when the caller stops waiting. */
-      signal?: AbortSignal;
-    },
+    opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       opts?.onDebug?.({ backend: "builtin" });
@@ -1198,12 +1209,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         !embeddingBootstrapKeywordOnly &&
         preflight.shouldInitializeProvider &&
         !this.provider &&
-        this.providerLifecycle.mode === "degraded" &&
-        this.providerLifecycle.providerId !== this.settings.provider
+        (this.providerLifecycle.mode === "pending" ||
+          (this.providerLifecycle.mode === "degraded" &&
+            this.providerLifecycle.providerId !== this.settings.provider))
       ) {
         // A failed fallback must yield ownership back to the configured primary.
-        // Retrying the degraded fallback here can strand a valid existing index.
+        // Reinitialize it before identity validation; leaving the lifecycle pending
+        // makes a valid existing index look mismatched and drops keyword results.
         this.resetProviderInitializationForRetry();
+        await this.ensureProviderInitialized();
       }
       this.assertRequiredProviderAvailable("search");
       if (
@@ -1479,9 +1493,41 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
   }
 
-  async listTriggerCandidates(opts?: { limit?: number }): Promise<MemorySearchResult[]> {
+  async listTriggerCandidates(opts?: {
+    limit?: number;
+    activeProjectKeys?: string[];
+  }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return readCuratedMemoryTriggerCandidates(this.db, limit).map((row) => {
+    return readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys).map(
+      (row) => {
+        const result: MemorySearchResult = {
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 0,
+          snippet: row.text,
+          source: "memory",
+        };
+        if (typeof row.importance === "number") {
+          result.importance = row.importance;
+        }
+        if (typeof row.triggers === "string" && row.triggers.trim()) {
+          result.triggers = row.triggers.trim();
+        }
+        if (typeof row.project_key === "string" && row.project_key.trim()) {
+          result.projectKey = row.project_key.trim();
+        }
+        return result;
+      },
+    );
+  }
+
+  async listCuratedProjectCandidates(opts: {
+    activeProjectKeys: string[];
+    limit?: number;
+  }): Promise<MemorySearchResult[]> {
+    const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
+    return readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys).map((row) => {
       const result: MemorySearchResult = {
         path: row.path,
         startLine: row.start_line,
@@ -1495,6 +1541,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       if (typeof row.triggers === "string" && row.triggers.trim()) {
         result.triggers = row.triggers.trim();
+      }
+      if (typeof row.project_key === "string" && row.project_key.trim()) {
+        result.projectKey = row.project_key.trim();
       }
       return result;
     });
@@ -1599,6 +1648,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
         ...(typeof row?.triggers === "string" && row.triggers.trim()
           ? { triggers: row.triggers.trim() }
+          : {}),
+        ...(typeof row?.project_key === "string" && row.project_key.trim()
+          ? { projectKey: row.project_key.trim() }
           : {}),
       };
     });
@@ -1820,6 +1872,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         vectorScore: r.score,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         exactPathSpecificity: resolveExactPathSpecificity(params.query, r.path),
         ...(r.provenance ? { provenance: r.provenance } : {}),
       })),
@@ -1833,6 +1886,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         textScore: r.textScore,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         rankingScore: r.score,
         pathScore: r.pathScore,
         exactPathSpecificity: r.exactPathSpecificity,

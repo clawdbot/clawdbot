@@ -365,6 +365,7 @@ export default definePluginEntry({
                 agentId: effectiveAgentId,
                 query: searchQuery,
                 message: event.prompt,
+                activeProjectKeys: ctx.activeProjectKeys,
                 signal: AbortSignal.timeout(HOOK_TIMEOUT_RECOVERY_GRACE_MS),
               }).catch((error: unknown) => {
                 api.logger.debug?.(

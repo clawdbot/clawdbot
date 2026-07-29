@@ -588,7 +588,15 @@ function getThinkingSliderValues(container: Element): string[] {
 }
 
 function getThinkingReasoningValueLabel(container: Element): string {
-  return container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ?? "";
+  const preview = container.querySelector(
+    "[data-chat-thinking-preview-committed]:not([hidden]), " +
+      "[data-chat-thinking-preview-index]:not([hidden])",
+  );
+  return (
+    preview?.textContent?.trim() ??
+    container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ??
+    ""
+  );
 }
 
 function getThinkingResetButton(container: Element): HTMLButtonElement | null {
@@ -4619,7 +4627,7 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models by provider and switches the visible provider section", () => {
+  it("previews provider models on hover and keyboard focus", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -4630,6 +4638,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = renderModelControls(state);
+    document.body.append(container);
 
     const providerButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
@@ -4647,7 +4656,7 @@ describe("chat model controls", () => {
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="anthropic"]')?.hidden,
     ).toBe(true);
 
-    providerButtons[1]?.click();
+    providerButtons[1]?.dispatchEvent(new MouseEvent("mouseenter"));
 
     expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("false");
     expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
@@ -4659,6 +4668,32 @@ describe("chat model controls", () => {
     );
     expect(anthropicModels?.hidden).toBe(false);
     expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
+
+    const browser = container.querySelector<HTMLElement>(".chat-controls__model-browser");
+    browser?.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(anthropicModels?.hidden).toBe(true);
+
+    providerButtons[2]?.dispatchEvent(new FocusEvent("focus"));
+    expect(providerButtons[2]?.getAttribute("aria-pressed")).toBe("true");
+    expect(providerButtons.map((button) => button.tabIndex)).toEqual([-1, -1, 0]);
+    expect(
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')?.hidden,
+    ).toBe(false);
+
+    providerButtons[2]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft" }));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(providerButtons.map((button) => button.tabIndex)).toEqual([-1, 0, -1]);
+    providerButtons[2]?.dispatchEvent(new MouseEvent("mouseenter"));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+    browser?.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+
+    browser?.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: document.body }),
+    );
+    expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("true");
+    container.remove();
   });
 
   it("groups legacy Codex model references under OpenAI", () => {
@@ -5002,11 +5037,16 @@ describe("chat model controls", () => {
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
-      // Drag preview is attribute-only: mutating rendered text would eject
-      // Lit's ChildPart markers and freeze later menu renders.
       expect(slider.getAttribute("aria-valuetext")).toBe("Low");
-      expect(getThinkingReasoningValueLabel(container)).toBe("High");
+      expect(getThinkingReasoningValueLabel(container)).toBe("Low");
       slider.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
+
+      slider.value = "0";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("pointercancel"));
+      expect(slider.value).toBe(String(getThinkingSliderValues(container).indexOf("high")));
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
 

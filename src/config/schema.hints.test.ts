@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 // Verifies schema hint metadata and sensitive path handling.
 import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
@@ -8,7 +10,7 @@ import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { collectMatchingSchemaPaths, mapSensitivePaths } = testApi;
+const { collectMatchingSchemaPaths, mapSensitivePaths, SECTION_DOCS_URLS } = testApi;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.discord",
   "channels.imessage",
@@ -19,6 +21,30 @@ const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.telegram",
   "channels.whatsapp",
 ] as const;
+
+describe("section docs URLs", () => {
+  it("maps every URL to an existing task-oriented docs page", () => {
+    const hints = buildBaseHints();
+    const docsOrigin = "https://docs.openclaw.ai";
+
+    for (const [path, docsUrl] of Object.entries(SECTION_DOCS_URLS)) {
+      const docsPath = docsUrl.slice(docsOrigin.length).replace(/^\//u, "");
+      const candidates = [
+        resolve(process.cwd(), "docs", `${docsPath}.md`),
+        resolve(process.cwd(), "docs", docsPath, "index.md"),
+      ];
+
+      expect(docsUrl.startsWith(`${docsOrigin}/`), docsUrl).toBe(true);
+      expect(
+        candidates.some((candidate) => existsSync(candidate)),
+        docsUrl,
+      ).toBe(true);
+      expect(hints[path]?.docsUrl, path).toBe(docsUrl);
+    }
+
+    expect(hints.meta?.docsUrl).toBeUndefined();
+  });
+});
 
 describe("isSensitiveConfigPath", () => {
   it("matches whitelist suffixes case-insensitively", () => {

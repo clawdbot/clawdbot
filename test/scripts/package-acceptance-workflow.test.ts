@@ -3417,17 +3417,9 @@ describe("package artifact reuse", () => {
     const telegramStatus = workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, "advisory_status");
     expect(telegramStatus["continue-on-error"]).toBeUndefined();
     const telegramRecord = workflowStep(telegramStatus, "Record advisory status");
-    expectTextToIncludeAll(telegramRecord.run, [
-      "run_id=",
-      "run_attempt=",
-      "target_sha=",
-      "workflow_sha=",
-      "job=",
-      "variant=",
-      "status=",
-      "job_status=",
-      "step_outcomes=",
-    ]);
+    expect(telegramRecord.run?.trim()).toBe(
+      "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
+    );
     const telegramStatusUpload = workflowStep(telegramStatus, "Upload advisory status");
     expect(telegramStatusUpload.if).toBe("always()");
     expect(telegramStatusUpload.uses).toBe(UPLOAD_ARTIFACT_V7);

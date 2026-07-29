@@ -6,6 +6,7 @@ import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -43,6 +44,12 @@ export function renderSettingsPage(
       ${children}
     </div>
   `;
+}
+
+export function renderDocsLink(url: string, label: unknown): TemplateResult {
+  return html`<a href=${url} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
+    >${label}</a
+  >`;
 }
 
 /** Section = plain text heading + one group surface containing rows. */

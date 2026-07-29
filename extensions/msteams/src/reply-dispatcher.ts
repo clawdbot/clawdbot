@@ -10,6 +10,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createChannelMessageReplyPipeline,
@@ -165,7 +166,15 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     channel: "msteams",
   });
+  // Teams native streams are provider-visible before outbound modifiers run. Keep them off
+  // whenever a hook can rewrite or cancel so the original payload cannot escape the final gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   const streamController = createTeamsReplyStreamController({
+    allowProviderPreview,
     conversationType,
     context: params.context,
     feedbackLoopEnabled,
@@ -378,6 +387,7 @@ export function createMSTeamsReplyDispatcher(params: {
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(msteamsCfg);
   const shouldSuppressDefaultToolProgressMessages =
+    streamController.hasStream() &&
     teamsStreamMode === "progress" &&
     suppressDefaultToolProgressMessages &&
     previewToolProgressEnabled;

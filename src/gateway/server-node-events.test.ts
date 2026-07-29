@@ -2309,4 +2309,82 @@ describe("agent request events", () => {
     );
   });
 });
+
+describe("chat subscribe/unsubscribe events", () => {
+  beforeEach(() => {
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+  });
+
+  it("canonicalizes the session key for chat.subscribe", async () => {
+    const nodeSubscribe = vi.fn();
+    const ctx = { ...buildCtx(), nodeSubscribe };
+
+    // parseSessionKeyFromPayloadJSON trims whitespace; canonicalization
+    // may further normalize (e.g. lowercasing, agent-key resolution).
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      ...buildSessionLookup(sessionKey),
+      canonicalKey: `agent:main:${sessionKey.toLowerCase()}`,
+    }));
+
+    await handleNodeEvent(
+      ctx,
+      "node-c1",
+      {
+        event: "chat.subscribe",
+        payloadJSON: JSON.stringify({ sessionKey: "  Main  " }),
+      },
+      { connId: "node-c1-connection" },
+    );
+
+    // The canonicalized key (not the parsed raw key) must be passed to
+    // nodeSubscribe. On unfixed main, nodeSubscribe receives the parsed
+    // key ("Main"), causing a mismatch with delivery which uses the
+    // canonical form ("agent:main:main").
+    expect(nodeSubscribe).toHaveBeenCalledWith("node-c1", "agent:main:main", "node-c1-connection");
+    // loadSessionEntry is called with the parsed (trimmed) key from the payload.
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("Main");
+  });
+
+  it("canonicalizes the session key for chat.unsubscribe", async () => {
+    const nodeUnsubscribe = vi.fn();
+    const ctx = { ...buildCtx(), nodeUnsubscribe };
+
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      ...buildSessionLookup(sessionKey),
+      canonicalKey: `agent:other:${sessionKey.toLowerCase()}`,
+    }));
+
+    await handleNodeEvent(
+      ctx,
+      "node-c2",
+      {
+        event: "chat.unsubscribe",
+        payloadJSON: JSON.stringify({ sessionKey: "\tOtherAgent " }),
+      },
+      { connId: "node-c2-connection" },
+    );
+
+    // parseSessionKeyFromPayloadJSON trims "\tOtherAgent " to "OtherAgent".
+    // The fix canonicalizes it to the canonical key.
+    expect(nodeUnsubscribe).toHaveBeenCalledWith(
+      "node-c2",
+      "agent:other:otheragent",
+      "node-c2-connection",
+    );
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("OtherAgent");
+  });
+
+  it("skips the event when the payload is missing a session key", async () => {
+    const nodeSubscribe = vi.fn();
+    const ctx = { ...buildCtx(), nodeSubscribe };
+
+    await handleNodeEvent(ctx, "node-c3", {
+      event: "chat.subscribe",
+      payloadJSON: JSON.stringify({ other: 1 }),
+    });
+
+    expect(nodeSubscribe).not.toHaveBeenCalled();
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
