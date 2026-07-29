@@ -1,6 +1,6 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -212,6 +212,84 @@ describe("claws lifecycle cli e2e", () => {
     await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toContain(
       "operator settings",
     );
+  });
+
+  it("adopts an existing workspace through preview, apply, and status without rewriting files", async () => {
+    const source = "src/claws/fixtures/workspace-agent.claw.json";
+    const stateDir = tempDirs.make("openclaw-claws-adopt-e2e-");
+    const workspace = join(stateDir, "existing-workspace");
+    await mkdir(join(workspace, "reference"), { recursive: true });
+    const canonicalWorkspace = await realpath(workspace);
+    for (const path of ["SOUL.md", "HEARTBEAT.md", "reference/policy.md"]) {
+      await copyFile(join("src/claws/fixtures/workspace", path), join(workspace, path));
+    }
+    const soulMtimeBefore = (await stat(join(workspace, "SOUL.md"))).mtimeMs;
+
+    const preview = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        source,
+        "--workspace",
+        workspace,
+        "--adopt-existing-workspace",
+        "--dry-run",
+        "--json",
+      ],
+      { stateDir },
+    );
+    const plan = parseJson(preview.stdout) as {
+      planIntegrity: string;
+      actions: Array<{ kind: string; action: string }>;
+    };
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "workspace", action: "adopt" }),
+        expect.objectContaining({ kind: "workspaceFile", action: "adopt" }),
+      ]),
+    );
+
+    const added = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        source,
+        "--workspace",
+        workspace,
+        "--adopt-existing-workspace",
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      { stateDir },
+    );
+    expect(parseJson(added.stdout)).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      status: "complete",
+      workspaceCreated: true,
+      installRecord: { agentId: "workspace-agent", status: "complete" },
+    });
+    expect((await stat(join(workspace, "SOUL.md"))).mtimeMs).toBe(soulMtimeBefore);
+
+    const status = await runOpenClaw(["claws", "status", "workspace-agent", "--json"], {
+      stateDir,
+    });
+    expect(parseJson(status.stdout)).toMatchObject({
+      schemaVersion: "openclaw.clawStatus.v1",
+      summary: { claws: 1, driftedFiles: 0 },
+      records: [
+        {
+          install: { agentId: "workspace-agent", workspace: canonicalWorkspace },
+          agentState: "present",
+          workspaceFiles: [
+            expect.objectContaining({ path: "HEARTBEAT.md", state: "unchanged" }),
+            expect.objectContaining({ path: "SOUL.md", state: "unchanged" }),
+            expect.objectContaining({ path: "reference/policy.md", state: "unchanged" }),
+          ],
+        },
+      ],
+    });
   });
 
   it("reports and removes a Claw-created agent through plan-first lifecycle commands", async () => {
