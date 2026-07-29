@@ -352,6 +352,9 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     const generation = this.generation + 1;
+    // Outer event sequence numbers belong to one WebSocket generation.
+    // A replacement socket must establish its own baseline.
+    this.lastSeq = null;
     this.connectNonce = null;
     this.connectSent = false;
     this.connectRequestSent = false;
