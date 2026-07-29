@@ -67,6 +67,13 @@ export async function deliverGoogleChatReply(params: {
 
   const chunkLimit = account.config.textChunkLimit ?? 4000;
   const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
+  const recordOutboundStatus = () => {
+    try {
+      statusSink?.({ lastOutboundAt: Date.now() });
+    } catch (err) {
+      runtime.error?.(`Google Chat outbound status update failed: ${String(err)}`);
+    }
+  };
   const sendTextMessage = async (chunk: string) => {
     await sendGoogleChatMessage({
       account,
@@ -87,20 +94,22 @@ export async function deliverGoogleChatReply(params: {
           messageName: typingMessage.name,
           text: chunk,
         });
-        firstTextChunk = false;
-        statusSink?.({ lastOutboundAt: Date.now() });
-        continue;
       } catch (err) {
         // The typing placeholder may already be gone; resend the chunk as a new
         // message below. Only the resend failing counts as a delivery failure.
         runtime.error?.(`Google Chat message send failed: ${String(err)}`);
         typingMessage = undefined;
       }
+      if (typingMessage) {
+        firstTextChunk = false;
+        recordOutboundStatus();
+        continue;
+      }
     }
     // Core delivery contract: a failed send must reject so the reply dispatcher
     // routes to onError instead of recording a dropped chunk as delivered.
     await sendTextMessage(chunk);
     firstTextChunk = false;
-    statusSink?.({ lastOutboundAt: Date.now() });
+    recordOutboundStatus();
   }
 }
