@@ -49,6 +49,11 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import {
+  emitSessionAutoResetHook,
+  hasSessionAutoResetListeners,
+  isSessionAutoResetReason,
+} from "../hooks/session-auto-reset.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
@@ -130,6 +135,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   storePath: string;
   sessionFile?: string;
   agentId?: string;
+  workspaceDir?: string;
   reason:
     | "new"
     | "reset"
@@ -152,7 +158,10 @@ export function emitGatewaySessionEndPluginHook(params: {
   // is being closed here and must not be re-finalized by a later shutdown drain.
   forgetActiveSessionForShutdown(params.sessionId);
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("session_end")) {
+  const shouldEmitAutoReset =
+    isSessionAutoResetReason(params.reason) && hasSessionAutoResetListeners();
+  const shouldEmitPluginHook = hookRunner?.hasHooks("session_end") === true;
+  if (!shouldEmitAutoReset && !shouldEmitPluginHook) {
     return;
   }
   const transcript = resolveStableSessionEndTranscript({
@@ -162,6 +171,27 @@ export function emitGatewaySessionEndPluginHook(params: {
     agentId: params.agentId,
     archivedTranscripts: params.archivedTranscripts,
   });
+  if (shouldEmitAutoReset) {
+    emitSessionAutoResetHook({
+      cfg: params.cfg,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: params.reason,
+      sessionFile: transcript.sessionFile,
+      transcriptArchived: transcript.transcriptArchived,
+      nextSessionId: params.nextSessionId,
+      nextSessionKey: params.nextSessionKey,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      storePath: params.storePath,
+    });
+  }
+  if (!shouldEmitPluginHook) {
+    return;
+  }
+  if (!hookRunner) {
+    return;
+  }
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
