@@ -182,6 +182,10 @@ describe("findSettingsSearchBlocks", () => {
         routeId: "config",
         hash: "#settings-general-model",
       }),
+      expect.objectContaining({
+        routeId: "appearance",
+        hash: "#settings-appearance-sidebar",
+      }),
     ]);
   });
 
