@@ -363,7 +363,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     });
     const blobUrl = URL.createObjectURL(blob);
     let peaks: readonly number[] | undefined;
-    let decodedDuration: number | undefined;
+    let acceptedDecodedDuration: number | undefined;
     if (canDecodeChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
       let context: AudioContext | null = null;
       try {
@@ -371,12 +371,13 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         // A 16 kHz decode bounds PCM; >20% duration mismatches are discarded.
         context = new AudioContextConstructor({ sampleRate: CHAT_AUDIO_WAVEFORM_SAMPLE_RATE });
         const decoded = await context.decodeAudioData(bytes.slice(0));
-        decodedDuration = Number.isFinite(decoded.duration) ? decoded.duration : undefined;
+        const decodedDuration = Number.isFinite(decoded.duration) ? decoded.duration : undefined;
         if (
           decodedDuration !== undefined &&
           decodedDuration <= durationSeconds * WAVEFORM_DECODE_DURATION_TOLERANCE
         ) {
           peaks = computeChatAudioWaveformPeaks(decoded);
+          acceptedDecodedDuration = decodedDuration;
         }
       } catch {
         // A playable browser source can still use the fetched Blob when Web Audio cannot decode it.
@@ -392,7 +393,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       blobUrl,
       sizeBytes: bytes.byteLength,
       ...(peaks ? { peaks } : {}),
-      ...(decodedDuration !== undefined ? { durationSeconds: decodedDuration } : {}),
+      ...(acceptedDecodedDuration !== undefined
+        ? { durationSeconds: acceptedDecodedDuration }
+        : {}),
     });
     if (retained) {
       this.applyPreparedAudio(cacheKey, retained);

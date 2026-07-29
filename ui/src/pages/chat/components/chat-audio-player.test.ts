@@ -380,6 +380,9 @@ describe("ChatAudioPlayer", () => {
     player.serverDurationMs = 100_000;
     const media = player.querySelector("audio")!;
     Object.defineProperty(media, "paused", { configurable: true, value: true });
+    setMediaNumber(media, "duration", 100);
+    media.dispatchEvent(new Event("loadedmetadata"));
+    await player.updateComplete;
     vi.spyOn(media, "play").mockResolvedValue(undefined);
 
     player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
@@ -389,6 +392,11 @@ describe("ChatAudioPlayer", () => {
 
     expect(decodeAudioData).toHaveBeenCalledOnce();
     expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
+    expect(
+      Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["0:00", "1:40"]);
   });
 
   it("does not buffer or cache a chunked waveform response above 8 MiB", async () => {

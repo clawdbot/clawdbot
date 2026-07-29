@@ -352,6 +352,23 @@ function managedAttachmentRefreshDelayMs(refreshAttempts: number): number {
   return ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS * 2 ** Math.max(0, refreshAttempts - 1);
 }
 
+function retainManagedAttachmentUntilExpiry(
+  resource: ChatMediaResource<ManagedAttachmentAvailability>,
+  availability: Extract<ManagedAttachmentAvailability, { status: "available" }> | null,
+  refreshAttempts: number,
+): Extract<ManagedAttachmentAvailability, { status: "available" }> | null {
+  if (!availability?.expiresAt || availability.expiresAt <= Date.now()) {
+    return null;
+  }
+  const retained = {
+    ...availability,
+    refreshAfter: availability.expiresAt,
+    refreshAttempts,
+  };
+  setManagedAttachmentAvailability(resource, retained);
+  return retained;
+}
+
 function isManagedOutgoingMediaSource(source: string): boolean {
   try {
     const parsed = new URL(source, window.location.origin);
@@ -398,27 +415,9 @@ function setManagedAttachmentAvailability(
           ? availability.checkedAt + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
           : undefined;
   scheduleChatMediaResourceRefresh(resource, refreshAt, () => {
-    if (resource.value !== availability) {
-      return;
-    }
-    if (availability.status === "unavailable") {
+    if (resource.value?.status === "unavailable") {
       resource.retryAttempted = true;
       resource.value = undefined;
-    } else if (
-      availability.status === "available" &&
-      availability.expiresAt !== undefined &&
-      availability.expiresAt <= Date.now()
-    ) {
-      const checking: ManagedAttachmentAvailability = {
-        status: "checking",
-        ...(!resource.pending && availability.refreshAfter !== undefined
-          ? { refreshAfter: availability.refreshAfter }
-          : {}),
-        refreshAttempts: availability.refreshAttempts,
-      };
-      setManagedAttachmentAvailability(resource, checking);
-      notifyChatMediaResourceSubscribers(resource);
-      return;
     }
     bumpAssistantAttachmentAvailabilityRenderVersion();
     notifyChatMediaResourceSubscribers(resource);
@@ -476,6 +475,20 @@ function resolveManagedAttachmentAvailability(
     if (
       cached.expiresAt !== undefined &&
       cached.expiresAt <= now &&
+      (cached.refreshAttempts ?? 0) >= ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES
+    ) {
+      resource.retryAttempted = true;
+      const unavailable: ManagedAttachmentAvailability = {
+        status: "unavailable",
+        reason: t("chat.attachments.unavailable"),
+        checkedAt: now,
+      };
+      setManagedAttachmentAvailability(resource, unavailable);
+      return unavailable;
+    }
+    if (
+      cached.expiresAt !== undefined &&
+      cached.expiresAt <= now &&
       (resource.pending || (cached.refreshAfter !== undefined && cached.refreshAfter > now))
     ) {
       const checking: ManagedAttachmentAvailability = {
@@ -511,7 +524,7 @@ function resolveManagedAttachmentAvailability(
     }
     const refreshAttempts = current?.refreshAttempts ?? cached?.refreshAttempts ?? 0;
     if (refreshAttempts >= ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES) {
-      return null;
+      return retainManagedAttachmentUntilExpiry(resource, current, refreshAttempts);
     }
     const nextRefreshAttempts = refreshAttempts + 1;
     const refreshAfter = Date.now() + managedAttachmentRefreshDelayMs(nextRefreshAttempts);
@@ -559,6 +572,17 @@ function resolveManagedAttachmentAvailability(
         expiresAt - Date.now() <= ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS &&
         refreshAttempts >= ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES
       ) {
+        const incoming: Extract<ManagedAttachmentAvailability, { status: "available" }> = {
+          status: "available",
+          url,
+          expiresAt,
+        };
+        const retained =
+          retainManagedAttachmentUntilExpiry(resource, current, refreshAttempts) ??
+          retainManagedAttachmentUntilExpiry(resource, incoming, refreshAttempts);
+        if (retained) {
+          return retained;
+        }
         resource.retryAttempted = true;
         const unavailable: ManagedAttachmentAvailability = {
           status: "unavailable",
