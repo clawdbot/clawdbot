@@ -257,6 +257,8 @@ export async function runCliFallbackCandidate(params: {
                         itemId: payload.itemId,
                         kind: "preamble",
                         progressText: payload.text,
+                        // The block bridge owns durability; this event remains a progress preview.
+                        ...(bridgeCliDurableCommentary ? { suppressDurableProgress: true } : {}),
                       }),
                     );
                   }

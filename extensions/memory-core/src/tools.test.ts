@@ -248,6 +248,30 @@ describe("memory_search unavailable payloads", () => {
     expect(details.results.map((entry) => entry.score)).toEqual([1, 1, 1, 2]);
   });
 
+  it("excludes annotation carriers from surfaced search snippets", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet:
+          "Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 --> <!-- project: alpha-key -->",
+        source: "memory" as const,
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("clean-snippet", { query: "gateway", corpus: "memory" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).toBe("Keep the gateway local.");
+  });
+
   it("passes the host local-service hook to tool memory managers", async () => {
     const acquireLocalService = vi.fn(async () => undefined);
     const tool = createMemorySearchTool({

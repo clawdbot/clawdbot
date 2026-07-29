@@ -140,15 +140,18 @@
                   "minScore": {
                     "type": "number",
                     "minimum": 0,
-                    "maximum": 1
+                    "maximum": 1,
+                    "default": 0.75
                   },
                   "minRecallCount": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "default": 3
                   },
                   "minUniqueQueries": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "default": 3
                   },
                   "recencyHalfLifeDays": {
                     "type": "integer",

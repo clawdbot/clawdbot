@@ -80,7 +80,10 @@ import {
   type MessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "./message-account-selection.js";
-import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import {
+  normalizeMessageActionInput,
+  resolveImplicitMessageActionTarget,
+} from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
@@ -802,8 +805,7 @@ function hasPotentialActionTargetInput(
 ): boolean {
   return Boolean(
     hasExplicitSingularTargetParam(params) ||
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
+    resolveImplicitMessageActionTarget(input.toolContext) ||
     hasPotentialPluginActionParam(params),
   );
 }

@@ -8399,6 +8399,11 @@
       "translated": "$count çalışan daha"
     },
     {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "$duration içinde tamamlandı"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "1 token"
@@ -8407,11 +8412,6 @@
       "id": "native.android.e7059e3a756908c4",
       "source": "$count tokens",
       "translated": "$count token"
-    },
-    {
-      "id": "native.android.c32ff602fa622e4b",
-      "source": "Done in $duration",
-      "translated": "$duration içinde tamamlandı"
     },
     {
       "id": "native.android.d2797e7488fe5021",
@@ -8759,11 +8759,6 @@
       "translated": "Dinleniyor"
     },
     {
-      "id": "native.android.1f198e7aceb8411f",
-      "source": "Speech recognizer unavailable",
-      "translated": "Konuşma tanıyıcı kullanılamıyor"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "Başlatılamadı: $message"
@@ -8772,6 +8767,11 @@
       "id": "native.android.a9216e087452b75b",
       "source": "Connecting…",
       "translated": "Bağlanıyor…"
+    },
+    {
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "Konuşma tanıyıcı kullanılamıyor"
     },
     {
       "id": "native.android.24bc808758b925ca",
@@ -20374,6 +20374,16 @@
       "translated": "Exec onayları kaydedilemedi. Bilinen son ayarlar gösteriliyor; değişikliği tekrar deneyin."
     },
     {
+      "id": "native.apple.b28538e2e444510f",
+      "source": "Exec approvals need migration — run openclaw doctor --fix with OPENCLAW_STATE_DIR set to \\(error.stateDirectoryURL.path).",
+      "translated": "Çalıştırma onaylarının taşınması gerekiyor — OPENCLAW_STATE_DIR değerini \\(error.stateDirectoryURL.path) olarak ayarlayıp openclaw doctor --fix komutunu çalıştırın."
+    },
+    {
+      "id": "native.apple.49e886ab7a093e63",
+      "source": "Exec approvals unavailable. Retry to refresh.",
+      "translated": "Çalıştırma onayları kullanılamıyor. Yenilemek için tekrar deneyin."
+    },
+    {
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
@@ -26422,6 +26432,11 @@
       "id": "native.apple.6fbcf8a03da3315a",
       "source": "Surfacing",
       "translated": "Yüzeye çıkılıyor"
+    },
+    {
+      "id": "native.apple.286932b5ea17b3f8",
+      "source": "1 second",
+      "translated": "1 saniye"
     },
     {
       "id": "native.apple.578503dfeef25502",

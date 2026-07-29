@@ -999,7 +999,7 @@ describe("short-term promotion", () => {
             snippet: 'Always use "Happy Together" calendar for flights and reservations.',
             score: 0.92,
             query: "__dreaming_grounded_backfill__:lasting-update",
-            signalCount: 2,
+            signalCount: 1,
             dayBucket: "2026-04-03",
           },
           {
@@ -1009,6 +1009,16 @@ describe("short-term promotion", () => {
             snippet: 'Always use "Happy Together" calendar for flights and reservations.',
             score: 0.82,
             query: "__dreaming_grounded_backfill__:candidate",
+            signalCount: 1,
+            dayBucket: "2026-04-03",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            score: 0.86,
+            query: "__dreaming_grounded_backfill__:durable-fact",
             signalCount: 1,
             dayBucket: "2026-04-03",
           },
@@ -1024,7 +1034,7 @@ describe("short-term promotion", () => {
 
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.groundedCount).toBe(3);
-      expect(ranked[0]?.uniqueQueries).toBe(2);
+      expect(ranked[0]?.uniqueQueries).toBe(3);
       expect(ranked[0]?.avgScore).toBeGreaterThan(0.85);
 
       const applied = await applyShortTermPromotions({

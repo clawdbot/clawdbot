@@ -9,6 +9,7 @@ import {
   renderSettingsSection,
   renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -39,6 +40,9 @@ export type MemoryAddonRow = {
   label: string;
   description: string;
   state: MemoryPluginState;
+  busy: boolean;
+  error: string | null;
+  notice: string | null;
 };
 
 type MemoryViewProps = {
@@ -61,6 +65,8 @@ type MemoryViewProps = {
   backendBusy: boolean;
   onBackendChange: (backend: MemoryBackend) => void;
   addons: readonly MemoryAddonRow[];
+  canToggleAddons: boolean;
+  onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
   memoryImportHref: string;
   /** New status-led landing view. */
@@ -241,12 +247,40 @@ function renderAddonsSection(props: MemoryViewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.addons.title"), description: t("memoryPage.addons.description") },
     html`
-      ${props.addons.map((addon) =>
-        renderSettingsRow({
-          title: addon.label,
-          description: addon.description,
-          control: renderAddonStatus(addon.state),
-        }),
+      ${props.addons.map(
+        (addon) => html`
+          ${props.canToggleAddons && (addon.state === "enabled" || addon.state === "disabled")
+            ? renderSettingsToggleRow({
+                title: addon.label,
+                ariaLabel: t("memoryPage.addons.toggleAriaLabel", { plugin: addon.label }),
+                description: addon.description,
+                checked: addon.state === "enabled",
+                disabled: addon.busy,
+                onChange: (enabled) => props.onAddonChange(addon.id, enabled),
+              })
+            : renderSettingsRow({
+                title: addon.label,
+                description: addon.description,
+                control: renderAddonStatus(addon.state),
+              })}
+          ${addon.error === null
+            ? nothing
+            : renderSettingsRow({
+                title: t("memoryPage.addons.changeFailed", { plugin: addon.label }),
+                description: addon.error,
+                control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+              })}
+          ${addon.notice === null
+            ? nothing
+            : renderSettingsRow({
+                title: t("pluginsPage.needsAttention"),
+                description: addon.notice,
+                control: renderSettingsStatus({
+                  kind: "warn",
+                  label: t("pluginsPage.needsAttention"),
+                }),
+              })}
+        `,
       )}
       ${renderSettingsRow({
         title: t("memoryPage.addons.manage"),

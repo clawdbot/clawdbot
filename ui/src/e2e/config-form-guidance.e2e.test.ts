@@ -226,7 +226,7 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       const disclosure = page.locator(".config-advanced-ghost");
       await expect.poll(() => disclosure.count()).toBe(1);
       await expect.poll(() => disclosure.textContent()).toContain("2 advanced settings hidden");
-      await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(0);
+      await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(1);
       await expect
         .poll(() => page.getByText("Show Advanced Settings", { exact: true }).count())
         .toBe(0);

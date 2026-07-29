@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import {
+  createOpenAIQuicksilverBrowserSessionBroker,
+  OPENAI_QUICKSILVER_OFFER_PATH,
+  resolveOpenAIChatGptSubscriptionAuth,
+} from "./realtime-quicksilver-session.js";
 import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
@@ -128,10 +134,19 @@ async function sendSessionClose(socket: WebSocket): Promise<void> {
 async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
-  const credential = readCodexCliCredentialsCached({
-    allowKeychainPrompt: false,
-    ttlMs: 0,
-  });
+  try {
+    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
+    if (profile) {
+      return profile;
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== "AuthProfileMigrationRequiredError") {
+      throw error;
+    }
+  }
+  // The live probe may run while an older local OpenClaw profile awaits Doctor.
+  // Codex CLI OAuth proves the same bearer/account wire without changing runtime fallback rules.
+  const credential = readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 0 });
   if (!credential) {
     return undefined;
   }
@@ -140,7 +155,28 @@ async function resolveLiveOAuthProfile(): Promise<
   return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
 }
 
-describeLive("GPT-Live OAuth WebRTC", () => {
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Live realtime broker did not bind a TCP port");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+describeLive("OpenAI OAuth WebRTC", () => {
   it(
     "creates a call and joins the authenticated sideband",
     async ({ skip }) => {
@@ -175,6 +211,9 @@ describeLive("GPT-Live OAuth WebRTC", () => {
           }),
         });
 
+        if (call.kind !== "gpt-live") {
+          throw new Error("GPT-Live call unexpectedly used the GA realtime wire shape");
+        }
         expect(call.status).toBe(201);
         expect(call.callId).toMatch(/^rtc_[\w-]+$/);
         expect(call.answerSdp).toMatch(/^v=0/m);
@@ -192,6 +231,100 @@ describeLive("GPT-Live OAuth WebRTC", () => {
         sideband?.close(1000, "test cleanup");
         await closeBrowserPeer(page).catch(() => undefined);
         await browser.close();
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  it(
+    "creates all GA realtime models through the single-use OAuth broker",
+    async ({ skip }) => {
+      const auth = await resolveLiveOAuthProfile();
+      if (!auth) {
+        skip("No OpenClaw ChatGPT OAuth profile is available");
+        return;
+      }
+
+      const realtime = createOpenAIQuicksilverBrowserSessionBroker({
+        getConfig: () => ({}),
+        logger: { debug: () => undefined, warn: () => undefined },
+      });
+      const server = createServer((req, res) => {
+        if (req.url === "/") {
+          res.statusCode = 200;
+          res.setHeader("content-type", "text/html; charset=utf-8");
+          res.end("<!doctype html><title>OpenClaw realtime live proof</title>");
+          return;
+        }
+        if (req.url === OPENAI_QUICKSILVER_OFFER_PATH) {
+          void realtime.handler(req, res);
+          return;
+        }
+        res.statusCode = 404;
+        res.end("Not found");
+      });
+      const baseUrl = await listen(server);
+      const { chromium } = await import("playwright");
+      const browser = await chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--use-fake-device-for-media-stream"],
+      });
+      const page = await browser.newPage();
+      try {
+        await page.goto(baseUrl);
+        for (const model of ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"]) {
+          try {
+            const reservation = await realtime.broker.createBrowserSession(
+              { providerConfig: {}, model, voice: "marin" },
+              auth,
+            );
+            if (reservation.transport !== "webrtc") {
+              throw new Error("GA realtime broker did not return a WebRTC reservation");
+            }
+            if (!reservation.offerUrl) {
+              throw new Error("GA realtime broker did not return an offer URL");
+            }
+            const offerSdp = await createBrowserOffer(page);
+            const brokerResponse = await page.evaluate(
+              async ({ offerUrl, token, sdp }) => {
+                const response = await fetch(offerUrl, {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/sdp",
+                  },
+                  body: sdp,
+                });
+                return { status: response.status, answerSdp: await response.text() };
+              },
+              {
+                offerUrl: `${baseUrl}${reservation.offerUrl}`,
+                token: reservation.clientSecret,
+                sdp: offerSdp,
+              },
+            );
+
+            expect(brokerResponse, model).toEqual({
+              status: 201,
+              answerSdp: expect.stringMatching(/^v=0/m),
+            });
+            await applyBrowserAnswer(page, brokerResponse.answerSdp);
+            await expect(
+              page.evaluate(
+                () =>
+                  (globalThis as BrowserWithGptLivePeer).openclawGptLivePeer?.remoteDescription
+                    ?.type,
+              ),
+              model,
+            ).resolves.toBe("answer");
+          } finally {
+            await closeBrowserPeer(page).catch(() => undefined);
+          }
+        }
+      } finally {
+        await browser.close();
+        await realtime.cleanup();
+        await closeServer(server);
       }
     },
     LIVE_TIMEOUT_MS,

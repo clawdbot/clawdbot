@@ -3098,7 +3098,9 @@ struct GatewayNodeSessionTests {
         #expect(shareDeviceId != primaryIdentity.deviceId)
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?
             .token == "primary-node-token")
-        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node") == nil)
+        // Profile selects identity resolution, not a token namespace; (device_id, role) is the canonical key.
+        // Per-profile identities keep caches disjoint in practice, and Node reads the same table by that key.
+        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.token == "share-node-token")
         #expect(
             DeviceAuthStore
                 .loadToken(deviceId: shareDeviceId, role: "node", profile: .shareExtension)?.token ==

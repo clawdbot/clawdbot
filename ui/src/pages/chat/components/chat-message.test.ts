@@ -3089,6 +3089,139 @@ describe("grouped chat rendering", () => {
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
   });
 
+  it("checks local assistant audio against server metadata while preview roots load", async () => {
+    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-audio") };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-audio-bootstrap-roots",
+          role: "assistant",
+          content: `Your recording\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const audio = expectElement(container, "audio", HTMLAudioElement);
+    expect(audio.getAttribute("src")).toBe(
+      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
+    );
+  });
+
+  it("checks local assistant images against server metadata while preview roots load", async () => {
+    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.png`;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-image") };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-image-bootstrap-roots",
+          role: "assistant",
+          content: [{ type: "image", url: source, alt: "Local bootstrap image" }],
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const image = expectElement(container, ".chat-message-image", HTMLImageElement);
+    expect(image.getAttribute("src")).toBe(
+      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-image`,
+    );
+  });
+
+  it.each([
+    {
+      code: "outside-allowed-folders",
+      reason: "Outside allowed folders",
+      source: "/home/node/private/bootstrap-secret.mp3",
+    },
+    {
+      code: "file-not-found",
+      reason: "File not found",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
+    },
+  ] as const)(
+    "keeps server-rejected $code media blocked while preview roots load",
+    async ({ code, reason, source }) => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toContain("meta=1");
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+        return { ok: true, json: async () => ({ available: false, code, reason }) };
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      const container = document.createElement("div");
+      const renderMessage = () =>
+        renderAssistantMessage(
+          container,
+          {
+            id: `assistant-bootstrap-blocked-${code}`,
+            role: "assistant",
+            content: `Unavailable recording\nMEDIA:${source}`,
+            timestamp: Date.now(),
+          },
+          {
+            showToolCalls: false,
+            basePath: "/openclaw",
+            assistantAttachmentAuthToken: "session-token",
+            localMediaPreviewRoots: [],
+            onRequestUpdate: renderMessage,
+          },
+        );
+
+      renderMessage();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await flushAssistantAttachmentAvailabilityChecks();
+
+      await vi.waitFor(() => {
+        expect(
+          container.querySelector(
+            ".chat-assistant-attachment-card--audio .chat-assistant-attachment-card__reason",
+          )?.textContent,
+        ).toContain(reason);
+      });
+      expect(container.querySelector("audio")).toBeNull();
+      expect(container.querySelector(".chat-assistant-attachment-card__link")).toBeNull();
+    },
+  );
+
   it("renders verified local assistant attachments through the authenticated media route", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()} test image.png`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {

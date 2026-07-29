@@ -1043,9 +1043,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         pluginsHref: pathForRoute("plugins", this.context.basePath),
         memoryImportHref: pathForRoute("memory-import", this.context.basePath),
         routeData: this.routeData,
-        // Memory's engine and backend are product decisions, not power-user
-        // knobs: this page forces the advanced tier open so they never hide
-        // behind the global Advanced toggle.
         buildEditor: (keys) =>
           renderConfig({
             ...props,
@@ -1054,7 +1051,6 @@ export class ConfigPage extends OpenClawLightDomElement {
             activeSubsection: null,
             showModeToggle: false,
             embeddedEditor: true,
-            forceShowAdvanced: true,
             navRootLabel: t("tabs.memory"),
           }),
       });
