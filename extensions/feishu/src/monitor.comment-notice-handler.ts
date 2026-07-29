@@ -79,7 +79,7 @@ export function createFeishuDriveCommentNoticeHandler(params: {
           `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
       );
       try {
-        await enqueue(buildCommentNoticeQueueKey(event), async () => {
+        await enqueue(buildCommentNoticeQueueKey(event), async (_signal: AbortSignal) => {
           await handleFeishuCommentEvent({
             cfg,
             accountId,

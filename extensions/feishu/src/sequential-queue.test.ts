@@ -24,12 +24,12 @@ describe("createSequentialQueue", () => {
     const gate = createDeferred();
     const order: string[] = [];
 
-    const first = enqueue("feishu:default:chat-1", async () => {
+    const first = enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {
       order.push("first:start");
       await gate.promise;
       order.push("first:end");
     });
-    const second = enqueue("feishu:default:chat-1", async () => {
+    const second = enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {
       order.push("second:start");
       order.push("second:end");
     });
@@ -49,12 +49,12 @@ describe("createSequentialQueue", () => {
     const gateB = createDeferred();
     const order: string[] = [];
 
-    const first = enqueue("feishu:default:chat-1", async () => {
+    const first = enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {
       order.push("chat-1:start");
       await gateA.promise;
       order.push("chat-1:end");
     });
-    const second = enqueue("feishu:default:chat-1:btw:om_2", async () => {
+    const second = enqueue("feishu:default:chat-1:btw:om_2", async (_signal: AbortSignal) => {
       order.push("btw:start");
       await gateB.promise;
       order.push("btw:end");
@@ -81,7 +81,7 @@ describe("createSequentialQueue", () => {
 
     try {
       await expect(
-        enqueue("feishu:default:chat-1", async () => {
+        enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {
           throw new Error("boom");
         }),
       ).rejects.toThrow("boom");
@@ -91,7 +91,7 @@ describe("createSequentialQueue", () => {
       });
       expect(unhandled).toStrictEqual([]);
 
-      await expect(enqueue("feishu:default:chat-1", async () => {})).resolves.toBeUndefined();
+      await expect(enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {})).resolves.toBeUndefined();
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -107,17 +107,19 @@ describe("createSequentialQueue", () => {
       },
     });
     const order: string[] = [];
+    let stuckSignal: AbortSignal | undefined;
 
     // Stuck task — never resolves until the test cleans up.
     const stuckGate = createDeferred();
-    const stuck = enqueue("feishu:default:chat-stuck", async () => {
+    const stuck = enqueue("feishu:default:chat-stuck", async (signal: AbortSignal) => {
       order.push("stuck:start");
+      stuckSignal = signal;
       await stuckGate.promise;
       order.push("stuck:end");
     });
 
     // Second same-key task — would be starved indefinitely without the cap.
-    const followUp = enqueue("feishu:default:chat-stuck", async () => {
+    const followUp = enqueue("feishu:default:chat-stuck", async (_signal: AbortSignal) => {
       order.push("follow-up:ran");
     });
 
@@ -126,6 +128,8 @@ describe("createSequentialQueue", () => {
 
     expect(order).toEqual(["stuck:start", "follow-up:ran"]);
     expect(timeouts).toEqual([{ key: "feishu:default:chat-stuck", timeoutMs: 25 }]);
+    // Signal should be aborted when the task is evicted
+    expect(stuckSignal?.aborted).toBe(true);
 
     // Drain the leaked stuck task so it doesn't trip the unhandled-rejection guard.
     stuckGate.resolve();
@@ -140,7 +144,7 @@ describe("createSequentialQueue", () => {
     });
     const gate = createDeferred();
 
-    const first = enqueue("feishu:default:chat-large-timeout", async () => {
+    const first = enqueue("feishu:default:chat-large-timeout", async (_signal: AbortSignal) => {
       await gate.promise;
     });
 
@@ -163,12 +167,12 @@ describe("createSequentialQueue", () => {
     const gate = createDeferred();
     const order: string[] = [];
 
-    const first = enqueue("feishu:default:chat-1", async () => {
+    const first = enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {
       order.push("first:start");
       await gate.promise;
       order.push("first:end");
     });
-    const second = enqueue("feishu:default:chat-1", async () => {
+    const second = enqueue("feishu:default:chat-1", async (_signal: AbortSignal) => {
       order.push("second:ran");
     });
 
@@ -180,5 +184,50 @@ describe("createSequentialQueue", () => {
     gate.resolve();
     await Promise.all([first, second]);
     expect(order).toEqual(["first:start", "first:end", "second:ran"]);
+  });
+
+  it("aborts the signal on timeout and task can observe it", async () => {
+    vi.useFakeTimers();
+    const enqueue = createSequentialQueue({
+      taskTimeoutMs: 50,
+    });
+    const gate = createDeferred();
+    const order: string[] = [];
+    let capturedSignal: AbortSignal | undefined;
+
+    const first = enqueue("feishu:default:chat-abort", async (signal: AbortSignal) => {
+      order.push("first:start");
+      capturedSignal = signal;
+      await gate.promise;
+      order.push("first:end");
+    });
+
+    // Advance past the timeout — the signal should be aborted
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.resolve();
+
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(order).toEqual(["first:start"]);
+
+    // Clean up
+    gate.resolve();
+    await first;
+  });
+
+  it("passes a non-aborted signal when no timeout fires", async () => {
+    const enqueue = createSequentialQueue();
+    const gate = createDeferred();
+    let capturedSignal: AbortSignal | undefined;
+
+    const first = enqueue("feishu:default:chat-no-timeout", async (signal: AbortSignal) => {
+      capturedSignal = signal;
+      await gate.promise;
+    });
+
+    await Promise.resolve();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    gate.resolve();
+    await first;
   });
 });

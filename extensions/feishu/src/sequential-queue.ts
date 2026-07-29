@@ -9,10 +9,10 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
  * (see #64324) while letting cross-chat work proceed in parallel.
  *
  * `taskTimeoutMs` bounds how long the queue will block subsequent same-key
- * tasks behind a single in-flight task. After the cap, the in-flight task
- * is evicted from the blocking chain so newer messages for the same key
- * can proceed. The original task is NOT aborted — it continues running in
- * the background; it just stops starving the queue.
+ * tasks behind a single in-flight task. After the cap, the in-flight task's
+ * AbortSignal is triggered and the task is evicted from the blocking chain
+ * so newer messages for the same key can proceed. The original task may
+ * continue running past the signal, but it stops starving the queue.
  *
  * Without this cap, a single hung dispatch (e.g. an agent call that never
  * resolves) keeps later same-chat messages in `queued` state until the
@@ -44,7 +44,10 @@ export function createSequentialQueue(options: SequentialQueueOptions = {}) {
   const taskTimeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
   const onTaskTimeout = options.onTaskTimeout;
 
-  return (key: string, task: () => Promise<void>): Promise<void> => {
+  return (
+    key: string,
+    task: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> => {
     const previous = queues.get(key) ?? Promise.resolve();
     const wrapped = () => boundedRun(key, task, taskTimeoutMs, onTaskTimeout);
     const next = previous.then(wrapped, wrapped);
@@ -61,17 +64,19 @@ export function createSequentialQueue(options: SequentialQueueOptions = {}) {
 
 async function boundedRun(
   key: string,
-  task: () => Promise<void>,
+  task: (signal: AbortSignal) => Promise<void>,
   timeoutMs: number,
   onTaskTimeout: ((key: string, timeoutMs: number) => void) | undefined,
 ): Promise<void> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return task();
+    return task(new AbortController().signal);
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TASK_TIMEOUT_MS);
+  const abortController = new AbortController();
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<void>((resolve) => {
     timeoutHandle = setTimeout(() => {
+      abortController.abort();
       try {
         onTaskTimeout?.(key, resolvedTimeoutMs);
       } catch {
@@ -81,7 +86,7 @@ async function boundedRun(
     }, resolvedTimeoutMs);
   });
   try {
-    await Promise.race([task(), timeoutPromise]);
+    await Promise.race([task(abortController.signal), timeoutPromise]);
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);

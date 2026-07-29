@@ -195,7 +195,7 @@ export function createFeishuMessageReceiveHandler({
       botOpenId: getBotOpenId(accountId),
       botName: getBotName(accountId),
     });
-    const task = () =>
+    const task = (_signal: AbortSignal) =>
       handleMessage({
         cfg,
         event,
