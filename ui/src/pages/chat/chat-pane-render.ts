@@ -147,8 +147,6 @@ export class ChatPane extends ChatPaneHeader {
       agentsLoaded: this.context.agents.state.agentsList !== null,
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: agentDefaultModel,
-      sessionModel: selectedSession?.model,
-      sessionModelOverride: state.sessions.state.modelOverrides[state.sessionKey],
     });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({

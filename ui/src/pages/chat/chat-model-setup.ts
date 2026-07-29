@@ -7,17 +7,13 @@ type ChatModelSetupState = {
   agentsLoaded: boolean;
   selectedAgentFound: boolean;
   agentModel?: string | null;
-  sessionModel?: string | null;
-  sessionModelOverride?: string | null;
 };
 
 export function requiresChatModelSetup(state: ChatModelSetupState): boolean {
   if (state.catalog || !state.connected || !state.agentsLoaded || !state.selectedAgentFound) {
     return false;
   }
-  return ![state.agentModel, state.sessionModel, state.sessionModelOverride].some((model) =>
-    model?.trim(),
-  );
+  return !state.agentModel?.trim();
 }
 
 export function createChatModelSetupBanner(onAction: () => void): ChatComposerDisabledBanner {

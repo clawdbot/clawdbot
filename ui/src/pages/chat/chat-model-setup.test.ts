@@ -13,18 +13,14 @@ describe("requiresChatModelSetup", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { agentModel: "openai/gpt-5.4" },
-    { sessionModel: "anthropic/claude-sonnet-4-6" },
-    { sessionModelOverride: "openai/gpt-5-mini" },
-  ])("accepts an available model route: %j", (models) => {
+  it("accepts a configured agent model", () => {
     expect(
       requiresChatModelSetup({
         catalog: false,
         connected: true,
         agentsLoaded: true,
         selectedAgentFound: true,
-        ...models,
+        agentModel: "openai/gpt-5.4",
       }),
     ).toBe(false);
   });

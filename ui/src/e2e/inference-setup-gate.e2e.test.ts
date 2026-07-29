@@ -29,17 +29,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": {
-          count: 0,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          sessions: [],
-          ts: Date.now(),
-        },
-      },
-    });
+    await installMockGateway(page);
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -49,6 +39,29 @@ suite.define(() => {
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await expect.poll(() => page.getByRole("button", { name: "Connect AI" }).count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
+      await page.getByRole("button", { name: "Connect AI" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("blocks the new-session composer until a model is connected", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.getByRole("heading", { name: "Connect an AI model" }).waitFor();
+
+      await expect.poll(() => page.locator(".new-session-page__composer").count()).toBe(0);
+      await expect.poll(() => page.locator("textarea").count()).toBe(0);
+      await captureProof(page, "new-session-desktop.png");
       await page.getByRole("button", { name: "Connect AI" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
