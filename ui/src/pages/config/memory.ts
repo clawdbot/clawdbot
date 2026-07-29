@@ -298,7 +298,6 @@ export function renderMemory(props: MemoryViewProps) {
         ],
         ariaLabel: t("memoryPage.tablistLabel"),
         panelId: MEMORY_PANEL_ID,
-        userSelectionOnly: true,
         onSelect: (tab) => props.onTabChange(tab),
       })}
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">

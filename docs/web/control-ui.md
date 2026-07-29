@@ -182,7 +182,7 @@ official external plugins, and one-click MCP connectors for popular services.
 Typing in the search box queries
 [ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
 section with download counts and source-verification badges. Deep links can
-target the store directly with `/settings/plugins?tab=discover`.
+target the store directly with `/settings/plugins/discover`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
