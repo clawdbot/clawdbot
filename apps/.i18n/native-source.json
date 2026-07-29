@@ -29907,7 +29907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 766,
+      "line": 765,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host)",
       "surface": "apple",
@@ -29915,7 +29915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 766,
+      "line": 765,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host):\\(port)",
       "surface": "apple",
@@ -32595,7 +32595,23 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 802,
+      "line": 184,
+      "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
+      "source": "Exec approvals need migration — run openclaw doctor --fix with OPENCLAW_STATE_DIR set to \\(error.stateDirectoryURL.path).",
+      "surface": "apple",
+      "id": "native.apple.b28538e2e444510f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 187,
+      "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
+      "source": "Exec approvals unavailable. Retry to refresh.",
+      "surface": "apple",
+      "id": "native.apple.49e886ab7a093e63"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 913,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovalsStore.swift",
       "source": "missing:\\(hash)",
       "surface": "apple",
