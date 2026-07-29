@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
-import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+<<<<<<< HEAD
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
@@ -11,6 +12,12 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import {
+  collectMemoryWikiOpenItems,
+  countMemoryWikiOpenItems,
+  WIKI_OPEN_ITEM_KINDS,
+  type MemoryWikiOpenItemKind,
+} from "./open-items.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
@@ -78,6 +85,13 @@ const WikiClaimSchema = Type.Object(
     confidence: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
     evidence: Type.Optional(Type.Array(WikiClaimEvidenceSchema)),
     updatedAt: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
+const WikiOpenItemsSchema = Type.Object(
+  {
+    kinds: Type.Optional(Type.Array(stringEnum(WIKI_OPEN_ITEM_KINDS), { minItems: 1 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 );
@@ -228,6 +242,50 @@ export function createWikiLintTool(
           issuesByCategory: result.issuesByCategory,
           reportPath,
         },
+      };
+    },
+  };
+}
+
+export function createWikiOpenItemsTool(
+  config: ResolvedMemoryWikiConfig,
+  appConfig?: OpenClawConfig,
+): AnyAgentTool {
+  return {
+    name: "wiki_open_items",
+    label: "Wiki Open Items",
+    description:
+      "List unresolved wiki items — open questions, contradictions, and low-confidence pages or claims — with their text and page location so they can be reviewed or resolved.",
+    parameters: WikiOpenItemsSchema,
+    execute: async (_toolCallId, rawParams) => {
+      const params = rawParams as { kinds?: MemoryWikiOpenItemKind[]; limit?: number };
+      await syncImportedSourcesIfNeeded(config, appConfig);
+      const result = await collectMemoryWikiOpenItems(config.vault.path);
+      const kindFilter = params.kinds && params.kinds.length > 0 ? new Set(params.kinds) : null;
+      let items = kindFilter
+        ? result.items.filter((item) => kindFilter.has(item.kind))
+        : result.items;
+      if (typeof params.limit === "number") {
+        items = items.slice(0, params.limit);
+      }
+      const text =
+        items.length === 0
+          ? "No open wiki items."
+          : items
+              .map((item, index) => {
+                const claimSuffix = item.claimId ? ` (claim ${item.claimId})` : "";
+                const confidenceSuffix =
+                  typeof item.confidence === "number"
+                    ? ` (confidence ${item.confidence.toFixed(2)})`
+                    : "";
+                return `${index + 1}. [${item.kind}] ${item.text}\nPage: ${item.pagePath}${claimSuffix}${confidenceSuffix}`;
+              })
+              .join("\n\n");
+      return {
+        content: [{ type: "text", text }],
+        // counts describe the returned (filtered/limited) items; vaultCounts is
+        // the unfiltered whole-vault tally so callers can tell the two apart.
+        details: { counts: countMemoryWikiOpenItems(items), vaultCounts: result.counts, items },
       };
     },
   };

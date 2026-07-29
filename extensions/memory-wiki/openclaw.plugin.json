@@ -11,7 +11,7 @@
   "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
   "catalog": { "featured": true, "order": 30 },
   "contracts": {
-    "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_search", "wiki_status"]
+    "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_open_items", "wiki_search", "wiki_status"]
   },
   "skills": ["./skills"],
   "uiHints": {
