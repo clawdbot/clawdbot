@@ -73,6 +73,17 @@ describe("Agents route location", () => {
     });
   });
 
+  it.each([".", ".."])('drops the legacy dot-segment agent id "%s"', (agentId) => {
+    expect(
+      resolveAgentsRouteLocation(location(`/settings/agents?agent=${encodeURIComponent(agentId)}`)),
+    ).toEqual({
+      location: location(`/settings/agents?agent=${encodeURIComponent(agentId)}`),
+      requestedAgentId: null,
+      panel: "files",
+      canonicalLocation: location("/settings/agents"),
+    });
+  });
+
   it("recovers the dynamic pathname without leaking the internal router parameter", () => {
     expect(
       resolveAgentsRouteLocation(

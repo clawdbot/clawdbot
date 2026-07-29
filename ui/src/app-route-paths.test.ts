@@ -54,6 +54,8 @@ describe("Agent panel route paths", () => {
 
   it("rejects malformed, slash-containing, and nested agent paths", () => {
     expect(() => pathForAgentPanel("agent/child")).toThrow("Invalid agent id");
+    expect(() => pathForAgentPanel(".")).toThrow("Invalid agent id");
+    expect(() => pathForAgentPanel("..")).toThrow("Invalid agent id");
     expect(agentRouteFromPath("/settings/agents/agent%2Fchild")).toBeNull();
     expect(agentRouteFromPath("/settings/agents/%")).toBeNull();
     expect(agentRouteFromPath("/settings/agents/research/tools/extra")).toBeNull();

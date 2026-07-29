@@ -112,7 +112,7 @@ export function pathForAgentPanel(
   panel: AgentsPanel | null = null,
   basePath = "",
 ): string {
-  if (!agentId || agentId.includes("/")) {
+  if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
     throw new Error("Invalid agent id for a route path.");
   }
   const encodedAgentId = encodeURIComponent(agentId).replaceAll(".", "%2E");
@@ -137,7 +137,7 @@ export function agentRouteFromPath(pathname: string, basePath = ""): AgentRouteP
   } catch {
     return null;
   }
-  if (!agentId || agentId.includes("/")) {
+  if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
     return null;
   }
   const rawPanel = segments[1] ?? null;

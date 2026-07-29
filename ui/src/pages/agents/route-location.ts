@@ -28,7 +28,7 @@ function routeLocation(location: RouteLocation): RouteLocation {
 
 function legacyAgentId(params: URLSearchParams): string | null {
   const agentId = params.get("agent")?.trim() ?? "";
-  return agentId && !agentId.includes("/") ? agentId : null;
+  return agentId && !agentId.includes("/") && agentId !== "." && agentId !== ".." ? agentId : null;
 }
 
 export function resolveAgentsRouteLocation(
