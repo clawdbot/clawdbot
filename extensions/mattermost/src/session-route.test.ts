@@ -195,6 +195,26 @@ describe("mattermost session route", () => {
     expect(channelRoute.baseSessionKey).toBe("agent:main:mattermost:channel:pub999");
   });
 
+  it("lets an authoritative public channel override a stale same-peer group session", () => {
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "mattermost:channel:pub999",
+      resolvedTarget: {
+        to: "channel:pub999",
+        kind: "channel",
+        source: "directory",
+      },
+      currentSessionKey: "agent:main:mattermost:group:pub999:thread:stale-root",
+    });
+
+    const channelRoute = expectRoute(route);
+    expect(channelRoute.peer).toEqual({ kind: "channel", id: "pub999" });
+    expect(channelRoute.baseSessionKey).toBe("agent:main:mattermost:channel:pub999");
+    expect(channelRoute.sessionKey).not.toContain("mattermost:group:pub999");
+  });
+
   it("ignores a non-canonical session key containing an embedded Mattermost route", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},

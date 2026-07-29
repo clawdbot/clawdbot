@@ -1,3 +1,7 @@
+import {
+  stripTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { CronJob } from "../types.js";
 
@@ -12,6 +16,7 @@ export function selectCronRouteCurrentSessionKey(
   job: CronJob,
   agentSessionKey: string,
   deliveryProvider: string,
+  deliveryTarget: string,
 ): string {
   const bound = (job.sessionKey ?? "").trim();
   const parsedBound = parseAgentSessionKey(bound);
@@ -22,7 +27,13 @@ export function selectCronRouteCurrentSessionKey(
   const conversation = /^([^:]+):(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.exec(
     parsedBound.rest,
   );
-  if (conversation?.[1]?.toLowerCase() !== deliveryProvider.trim().toLowerCase()) {
+  const targetPeerId = stripTargetKindPrefix(
+    stripTargetProviderPrefix(deliveryTarget, deliveryProvider),
+  );
+  if (
+    conversation?.[1]?.toLowerCase() !== deliveryProvider.trim().toLowerCase() ||
+    conversation[3] !== targetPeerId
+  ) {
     return agentSessionKey;
   }
   return bound;

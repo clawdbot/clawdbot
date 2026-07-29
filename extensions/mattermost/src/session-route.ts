@@ -63,8 +63,9 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   const isGroup =
     !isUser &&
     (resolvedKind === "group" ||
-      lower.startsWith("group:") ||
-      mattermostSessionKeyPeerKind(params.currentSessionKey, rawId) === "group");
+      (resolvedKind !== "channel" &&
+        (lower.startsWith("group:") ||
+          mattermostSessionKeyPeerKind(params.currentSessionKey, rawId) === "group")));
   const kind: "direct" | "group" | "channel" = isUser ? "direct" : isGroup ? "group" : "channel";
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
