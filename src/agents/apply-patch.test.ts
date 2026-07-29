@@ -476,6 +476,70 @@ describe("applyPatch", () => {
     }
   });
 
+  it("preserves CRLF line endings for changed and context lines", async () => {
+    const initial =
+      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("hello");\r\n  }\r\n}\r\n';
+    const memory = createMemoryPatchSandbox({ "source.txt": initial });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+   static void Main() {
+-    Console.WriteLine("hello");
++    Console.WriteLine("world");
+   }
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.noOp).toBeUndefined();
+    expect(memory.files.get("/sandbox/source.txt")).toBe(
+      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("world");\r\n  }\r\n}\r\n',
+    );
+  });
+
+  it("preserves CRLF line endings when the hunk spans the whole file", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nbaz\r\n");
+  });
+
+  it("preserves CRLF line endings for inserted lines", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@ foo
++middle
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nmiddle\r\nbar\r\n");
+  });
+
+  it("keeps LF files on LF after a real update hunk", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
+  });
+
   it("applies a real deletion of the sole blank line", async () => {
     const memory = createMemoryPatchSandbox({ "source.txt": "\n" });
     const patch = `*** Begin Patch

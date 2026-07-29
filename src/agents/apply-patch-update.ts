@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
+import { detectLineEnding, normalizeToLF, restoreLineEndings } from "./line-endings.js";
 
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
@@ -33,7 +34,8 @@ export async function applyUpdateHunk(
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });
 
-  const originalLines = originalContents.split("\n");
+  const lineEnding = detectLineEnding(originalContents);
+  const originalLines = normalizeToLF(originalContents).split("\n");
   if (originalLines.length > 0 && originalLines[originalLines.length - 1] === "") {
     originalLines.pop();
   }
@@ -43,7 +45,7 @@ export async function applyUpdateHunk(
   if (newLines.length === 0 || newLines[newLines.length - 1] !== "") {
     newLines = [...newLines, ""];
   }
-  return newLines.join("\n");
+  return restoreLineEndings(newLines.join("\n"), lineEnding);
 }
 
 function computeReplacements(

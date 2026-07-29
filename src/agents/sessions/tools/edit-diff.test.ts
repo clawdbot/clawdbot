@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyEditsToNormalizedContent, generateDiffString, normalizeToLF } from "./edit-diff.js";
+import { normalizeToLF } from "../../line-endings.js";
+import { applyEditsToNormalizedContent, generateDiffString } from "./edit-diff.js";
 
 function getMismatchMessage(
   content: string,

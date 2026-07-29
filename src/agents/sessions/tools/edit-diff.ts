@@ -7,27 +7,8 @@ import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
+import { normalizeToLF } from "../../line-endings.js";
 import { resolveToCwd } from "./path-utils.js";
-
-export function detectLineEnding(content: string): "\r\n" | "\n" {
-  const crlfIdx = content.indexOf("\r\n");
-  const lfIdx = content.indexOf("\n");
-  if (lfIdx === -1) {
-    return "\n";
-  }
-  if (crlfIdx === -1) {
-    return "\n";
-  }
-  return crlfIdx < lfIdx ? "\r\n" : "\n";
-}
-
-export function normalizeToLF(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
-  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
-}
 
 /**
  * Normalize text for fuzzy matching. Applies progressive transformations:
