@@ -24,6 +24,7 @@ import {
   readQaBootstrapScenarioCatalog,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
+import { resolveQaScenarioLaneChannel } from "./scenario-lane.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -220,7 +221,14 @@ async function resolveQaFlowChannelGroups(
     }
     const groups = new Map<string | undefined, QaSeedScenarioWithSource[]>();
     for (const scenario of scenarios) {
-      const channel = normalizeQaSuiteScenarioChannel(scenario);
+      const channel = resolveQaScenarioLaneChannel({
+        scenario,
+        channelDriver: runParams.channelDriver ?? "qa-channel",
+        supportsChannel: (channelId) =>
+          runParams.adapterFactories?.some((factory) =>
+            factory.matches({ channelId, driver: "live" }),
+          ) === true,
+      });
       const group = groups.get(channel) ?? [];
       group.push(scenario);
       groups.set(channel, group);

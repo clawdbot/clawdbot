@@ -299,7 +299,7 @@ describe("qa suite runtime launcher", () => {
     const adapterFactories = [
       {
         id: "portable-driver",
-        matches: vi.fn(),
+        matches: vi.fn(({ channelId }) => ["matrix", "slack", "telegram"].includes(channelId)),
         create: vi.fn(),
       },
     ];
@@ -310,11 +310,16 @@ describe("qa suite runtime launcher", () => {
       providerMode: "mock-openai",
       channelDriver: "live",
       adapterFactories,
-      scenarioIds: ["channel-chat-baseline", "telegram-help-command", "matrix-restart-resume"],
+      scenarioIds: [
+        "channel-chat-baseline",
+        "telegram-help-command",
+        "matrix-restart-resume",
+        "thread-isolation",
+      ],
     });
 
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "pluggable-channels");
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(3);
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(4);
     expect(runQaFlowSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         adapterFactories,
@@ -337,6 +342,13 @@ describe("qa suite runtime launcher", () => {
         channelId: "matrix",
         outputDir: path.join(outputDir, "flow", "matrix"),
         scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "slack",
+        scenarioIds: ["thread-isolation"],
       }),
     );
   });

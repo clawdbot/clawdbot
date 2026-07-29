@@ -9,6 +9,41 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+export function resolveQaScenarioLaneChannel(params: {
+  scenario: QaSeedScenario;
+  channelDriver: QaScorecardChannelDriver;
+  channel?: string | null;
+  defaultChannel?: string;
+  supportsChannel?: (channel: string) => boolean;
+}): string | undefined {
+  if (params.channelDriver === "qa-channel") {
+    return "qa-channel";
+  }
+  const selectedChannel = params.channel?.trim().toLowerCase();
+  if (selectedChannel) {
+    return selectedChannel;
+  }
+  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
+  if (scenarioChannel) {
+    return scenarioChannel;
+  }
+  if (params.channelDriver === "live" && params.scenario.execution.kind === "flow") {
+    const liveChannels = params.scenario.execution.channels?.filter(
+      (channel) => channel !== "qa-channel",
+    );
+    const supportedChannel = liveChannels?.find(
+      (channel) => !params.supportsChannel || params.supportsChannel(channel),
+    );
+    if (supportedChannel) {
+      return supportedChannel;
+    }
+    if (liveChannels?.[0]) {
+      return liveChannels[0];
+    }
+  }
+  return params.defaultChannel?.trim().toLowerCase() || undefined;
+}
+
 export function describeQaProviderLaneMismatches(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
