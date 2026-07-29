@@ -132,6 +132,7 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { resolveControlUiRefreshRequiredBanner } from "./update-overlay-helpers.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -2073,10 +2074,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             : html`<openclaw-update-banner
                 .props=${{
                   statusBanner: overlaySnapshot.controlUiRefreshRequired
-                    ? {
-                        tone: "info",
-                        text: "Server updated — refresh for full capabilities",
-                      }
+                    ? resolveControlUiRefreshRequiredBanner()
                     : null,
                   action: overlaySnapshot.controlUiRefreshRequired
                     ? { label: t("common.refresh"), onClick: this.refreshControlUi }
