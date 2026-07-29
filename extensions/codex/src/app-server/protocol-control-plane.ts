@@ -39,7 +39,7 @@ export type CodexPluginMarketplaceEntry = {
   plugins: CodexPluginSummary[];
 };
 
-export type CodexMarketplaceLoadErrorInfo = {
+type CodexMarketplaceLoadErrorInfo = {
   marketplacePath: string;
   message: string;
 };
@@ -135,7 +135,7 @@ export type CodexAppsInstalledResponse = {
   apps: CodexInstalledApp[];
 };
 
-export type CodexAppToolSummary = {
+type CodexAppToolSummary = {
   name: string;
   title: string | null;
   description: string;
@@ -144,7 +144,7 @@ export type CodexAppToolSummary = {
   isReadOnly: boolean;
 };
 
-export type CodexConnectorMetadata = {
+type CodexConnectorMetadata = {
   id: string;
   name: string;
   description: string | null;
@@ -213,7 +213,7 @@ export type CodexConfigReadResponse = {
   layers?: JsonValue[] | null;
 };
 
-export type CodexConfigMergeStrategy = "replace" | "upsert";
+type CodexConfigMergeStrategy = "replace" | "upsert";
 
 export type CodexConfigEdit = {
   keyPath: string;
@@ -233,7 +233,7 @@ export type CodexConfigBatchWriteParams = {
   reloadUserConfig?: boolean;
 };
 
-export type CodexConfigLayerSource =
+type CodexConfigLayerSource =
   | { type: "mdm"; domain: string; key: string }
   | { type: "system"; file: string }
   | { type: "enterpriseManaged"; id: string; name: string }
@@ -243,7 +243,7 @@ export type CodexConfigLayerSource =
   | { type: "legacyManagedConfigTomlFromFile"; file: string }
   | { type: "legacyManagedConfigTomlFromMdm" };
 
-export type CodexConfigLayerMetadata = {
+type CodexConfigLayerMetadata = {
   name: CodexConfigLayerSource;
   version: string;
 };
@@ -257,13 +257,13 @@ type CodexWireJsonValue =
   | CodexWireJsonValue[]
   | { [key in string]?: CodexWireJsonValue };
 
-export type CodexConfigOverriddenMetadata = {
+type CodexConfigOverriddenMetadata = {
   message: string;
   overridingLayer: CodexConfigLayerMetadata;
   effectiveValue: CodexWireJsonValue;
 };
 
-export type CodexConfigWriteStatus = "ok" | "okOverridden";
+type CodexConfigWriteStatus = "ok" | "okOverridden";
 
 export type CodexConfigWriteResponse = {
   status: CodexConfigWriteStatus;
