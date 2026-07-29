@@ -175,7 +175,7 @@ enum ChatMarkdownBlockSegmenter {
                 continue
             }
 
-            if let html = self.disclosureHTML(child, source: source, lineRange: lineRange) {
+            if let html = self.htmlBlockSource(child, source: source, lineRange: lineRange) {
                 extractions.append(Extraction(lineRange: lineRange, html: html))
                 continue
             }
@@ -269,6 +269,11 @@ enum ChatMarkdownBlockSegmenter {
         }
 
         for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
+            if case let .html(html) = extraction.content,
+               !disclosureTokenizer.shouldTokenize(html)
+            {
+                continue
+            }
             appendProse(until: extraction.lineRange.lowerBound)
             switch extraction.content {
             case let .block(block):
@@ -420,7 +425,10 @@ enum ChatMarkdownBlockSegmenter {
     private static func containsDisclosure(in document: Document, source: SourceBuffer) -> Bool {
         document.children.contains { child in
             guard let lineRange = source.lineRange(for: child.range) else { return false }
-            return self.disclosureHTML(child, source: source, lineRange: lineRange) != nil
+            guard let html = self.htmlBlockSource(child, source: source, lineRange: lineRange) else {
+                return false
+            }
+            return DisclosureTokenizer.startsWithCandidateLine(html)
         }
     }
 
@@ -456,14 +464,13 @@ enum ChatMarkdownBlockSegmenter {
         code.hasSuffix("\n") ? String(code.dropLast()) : code
     }
 
-    private static func disclosureHTML(
+    private static func htmlBlockSource(
         _ child: any Markup,
         source: SourceBuffer,
         lineRange: Range<Int>) -> String?
     {
         guard child is Markdown.HTMLBlock else { return nil }
-        let html = source.text(in: lineRange)
-        return DisclosureTokenizer.startsWithCandidateLine(html) ? html : nil
+        return source.text(in: lineRange)
     }
 
     private static func foldDisclosures(_ unfolded: [UnfoldedBlock]) -> [ChatMarkdownBlock] {
@@ -571,6 +578,10 @@ enum ChatMarkdownBlockSegmenter {
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             return firstContentLine.map { Self.tags(in: String($0)) != nil } ?? false
+        }
+
+        func shouldTokenize(_ source: String) -> Bool {
+            !self.balanceStack.isEmpty || Self.startsWithCandidateLine(source)
         }
 
         mutating func tokenize(
