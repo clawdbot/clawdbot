@@ -1057,8 +1057,14 @@ class OpenClawShell extends OpenClawLightDomElement {
           agentId,
         ),
     );
-    // A not-found route is proof that an unlisted active key cannot recover
-    // itself. A deletion event is authoritative even before list refresh.
+    // Session lists are filtered and windowed. Only a failed route for this
+    // active key, or an authoritative deletion, proves it needs replacement.
+    const activeSessionRow = findUiSessionRow(context, sessionKey);
+    const attemptedPathname = this.routeState.location?.pathname;
+    const activeRouteFailed =
+      !attemptedPathname ||
+      attemptedPathname ===
+        sessionNavigationTarget({ context, face, sessionKey }).options.pathname;
     const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
     const knownAgents = context.agents.state.agentsList?.agents;
     // A parseable retired agent is not a navigable owner; never turn its
@@ -1069,7 +1075,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         ? parsedAgentId
         : resolveSessionNavigationAgentId(context);
     const replacementSessionKey =
-      !sessionWasDeleted && findUiSessionRow(context, sessionKey)?.key
+      !sessionWasDeleted && (activeSessionRow?.key || !activeRouteFailed)
         ? sessionKey
         : buildAgentMainSessionKey({
             agentId: replacementAgentId,

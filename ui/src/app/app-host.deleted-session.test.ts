@@ -12,7 +12,7 @@ import "./app-host.ts";
 type DeletedSessionShell = {
   runtime: { context: ApplicationContext };
   activeSessionKey: string;
-  routeState: { routeId?: RouteId };
+  routeState: { routeId?: RouteId; location?: RouteLocation };
   didConsiderNativeRouteRestore: boolean;
   replaceChatWithCurrentSession: () => void;
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
@@ -133,6 +133,25 @@ describe("OpenClaw shell deleted-session recovery", () => {
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
       pathname: "/chat/main/existing-thread",
+    });
+  });
+
+  it("keeps an active session outside the filtered list when another route fails", () => {
+    const existingKey = "agent:main:outside-window";
+    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      activeSessionKey: existingKey,
+      sessionKeys: [mainKey],
+    });
+    shell.routeState = {
+      routeId: "chat",
+      location: { pathname: "/chat/main/unrelated-missing", search: "", hash: "" },
+    };
+
+    shell.replaceChatWithCurrentSession();
+
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
+      pathname: "/chat/main/outside-window",
     });
   });
 
