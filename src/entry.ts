@@ -269,10 +269,6 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
   }
 }
 
-type RunMainOrRootHelpDeps = {
-  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
-};
-
 export async function runMainOrRootHelp(
   argv: string[],
   deps: RunMainOrRootHelpDeps = {},
@@ -322,3 +318,7 @@ export async function runMainOrRootHelp(
     },
   });
 }
+
+type RunMainOrRootHelpDeps = {
+  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
+};
