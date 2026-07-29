@@ -170,7 +170,7 @@ plugins.
     | `/new [model]` | Archive the current session and start a fresh one. A model-looking tail keeps the model-override behavior. In text commands a free-text tail is preserved as the prompt; on native slash-command surfaces the title field names the new session instead. Use `/new --name Planning notes` or `/new name:Planning notes` to name the new session explicitly |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
-    | `/close` | Close and archive the current session. Alias: `/delete` |
+    | `/close` | Close the current session and archive its transcript (incognito sessions are deleted without an archive). Refuses the main session — use `/reset` there instead. Alias: `/delete` |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
