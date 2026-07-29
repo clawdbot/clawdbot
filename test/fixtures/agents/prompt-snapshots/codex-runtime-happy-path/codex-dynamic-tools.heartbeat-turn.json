@@ -1631,7 +1631,7 @@
               "type": "string"
             },
             "scratch": {
-              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
               "type": "string"
             },
             "summary": {
