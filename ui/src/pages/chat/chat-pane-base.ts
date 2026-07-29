@@ -40,6 +40,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
+import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
@@ -103,6 +104,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) boardProvider?: BoardProvider;
 
   protected readonly chatState = new ChatStateController<ChatPageHost>(this);
+  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
+    this.requestUpdate(),
+  );
   protected readonly transcript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);

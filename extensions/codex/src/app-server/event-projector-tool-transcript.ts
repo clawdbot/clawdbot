@@ -442,7 +442,7 @@ export class CodexToolTranscriptProjection {
 
   synthesizeMissingToolResults(params: {
     synthesize: boolean;
-    recordPromptError: boolean;
+    terminalDisposition: "prompt_error" | "tool_error" | "diagnostic_only";
   }): string | undefined {
     if (!params.synthesize) {
       return undefined;
@@ -484,8 +484,11 @@ export class CodexToolTranscriptProjection {
         output: text,
       });
     }
-    if (!params.recordPromptError) {
+    if (params.terminalDisposition === "tool_error") {
       this.recordMissingToolError(missingTranscriptIds, missingTrajectoryIds);
+      return undefined;
+    }
+    if (params.terminalDisposition === "diagnostic_only") {
       return undefined;
     }
     const missingCount = new Set([...missingTranscriptIds, ...missingTrajectoryIds]).size;

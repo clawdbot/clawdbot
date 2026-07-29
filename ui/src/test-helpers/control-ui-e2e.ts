@@ -820,7 +820,14 @@ function installControlUiMockGateway(
       return;
     }
     const patch = { ...sessionPatches.get(params.key) };
-    for (const key of ["model", "thinkingLevel", "fastMode", "category", "pinned"] as const) {
+    for (const key of [
+      "model",
+      "thinkingLevel",
+      "fastMode",
+      "category",
+      "pinned",
+      "toolOverrides",
+    ] as const) {
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }
