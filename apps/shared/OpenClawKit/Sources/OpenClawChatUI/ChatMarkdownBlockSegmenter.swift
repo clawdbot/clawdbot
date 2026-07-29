@@ -114,8 +114,7 @@ enum ChatMarkdownBlockSegmenter {
     /// container and reference semantics; nested list content stays attached
     /// to its owning list item.
     static func segments(markdown: String, isComplete: Bool) -> [ChatMarkdownBlock] {
-        let source = SourceBuffer(markdown)
-        let document = Document(parsing: source.markdown)
+        let (source, document) = self.parsedSourcePreservingDisclosureReferences(markdown)
         let mathResult = self.mathExtractions(
             source: source,
             document: document,
@@ -235,14 +234,12 @@ enum ChatMarkdownBlockSegmenter {
         }
 
         appendProse(until: source.lines.count)
-        let hasDisclosure = unfolded.contains(where: \.opensDisclosure)
         let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
             if case .list = block { return true }
             return false
         }
-        if !hasDisclosure,
-           blocks.count > 1 || reparsesListContent,
+        if blocks.count > 1 || reparsesListContent,
            self.containsReferenceLink(document, source: source)
         {
             return self.proseOnly(source.lines)
@@ -349,16 +346,60 @@ enum ChatMarkdownBlockSegmenter {
 
     private static func containsReferenceLink(_ document: Document, source: SourceBuffer) -> Bool {
         func search(_ markup: any Markup) -> Bool {
-            if markup is Markdown.Link || markup is Markdown.Image,
-               let range = markup.range,
-               let raw = source.text(in: range)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               raw.hasSuffix("]")
-            {
+            if self.isReferenceLink(markup, source: source) {
                 return true
             }
             return markup.children.contains(where: search)
         }
         return search(document)
+    }
+
+    private static func parsedSourcePreservingDisclosureReferences(
+        _ markdown: String) -> (SourceBuffer, Document)
+    {
+        let source = SourceBuffer(markdown)
+        let document = Document(parsing: source.markdown)
+        guard self.containsDisclosure(in: document, source: source),
+              let resolved = self.resolvingReferenceLinks(in: document, source: source)
+        else { return (source, document) }
+
+        let resolvedSource = SourceBuffer(resolved)
+        return (resolvedSource, Document(parsing: resolvedSource.markdown))
+    }
+
+    private static func containsDisclosure(in document: Document, source: SourceBuffer) -> Bool {
+        document.children.contains { child in
+            guard let lineRange = source.lineRange(for: child.range) else { return false }
+            return self.disclosureHTML(child, source: source, lineRange: lineRange) != nil
+        }
+    }
+
+    private static func resolvingReferenceLinks(in document: Document, source: SourceBuffer) -> String? {
+        var replacements: [SourceReplacement] = []
+
+        func collect(_ markup: any Markup) {
+            if self.isReferenceLink(markup, source: source),
+               let range = markup.range
+            {
+                replacements.append(SourceReplacement(range: range, markdown: markup.format()))
+                return
+            }
+            for child in markup.children {
+                collect(child)
+            }
+        }
+
+        collect(document)
+        guard !replacements.isEmpty else { return nil }
+        return source.replacing(replacements)
+    }
+
+    private static func isReferenceLink(_ markup: any Markup, source: SourceBuffer) -> Bool {
+        guard markup is Markdown.Link || markup is Markdown.Image,
+              let range = markup.range,
+              let raw = source.text(in: range)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return false }
+        return raw.hasSuffix("]")
     }
 
     private static func dropStructuralCodeNewline(_ code: String) -> String {
@@ -449,11 +490,6 @@ enum ChatMarkdownBlockSegmenter {
         case disclosureOpen(isExpanded: Bool)
         case disclosureSummary(String)
         case disclosureClose
-
-        var opensDisclosure: Bool {
-            if case .disclosureOpen = self { return true }
-            return false
-        }
     }
 
     private struct DisclosureTokenizer {
@@ -553,6 +589,8 @@ enum ChatMarkdownBlockSegmenter {
                             appendLiteral(tag.raw)
                         }
                     case .summaryOpen:
+                        // The web block rule also pairs summary tags within one line;
+                        // multiline summaries deliberately remain literal on every surface.
                         let closeIndex = tags[(index + 1)...].firstIndex { candidate in
                             if case .summaryClose = candidate.kind { return true }
                             return false
@@ -690,6 +728,11 @@ enum ChatMarkdownBlockSegmenter {
         let extractions: [Extraction]
         /// Rejected math stays prose and owns any block-looking syntax inside its span.
         let protectedRanges: [Range<Int>]
+    }
+
+    private struct SourceReplacement {
+        let range: SourceRange
+        let markdown: String
     }
 
     private struct MathDelimiter {
@@ -864,6 +907,32 @@ enum ChatMarkdownBlockSegmenter {
             else { return nil }
             let middle = self.lines[(startLine + 1)..<endLine]
             return ([first] + middle + [last]).joined(separator: "\n")
+        }
+
+        func replacing(_ replacements: [SourceReplacement]) -> String? {
+            var bytes = Array(self.markdown.utf8)
+            let byteReplacements = replacements.compactMap { replacement -> (Range<Int>, [UInt8])? in
+                guard let lower = self.utf8Offset(for: replacement.range.lowerBound),
+                      let upper = self.utf8Offset(for: replacement.range.upperBound),
+                      lower <= upper
+                else { return nil }
+                return (lower..<upper, Array(replacement.markdown.utf8))
+            }
+            guard byteReplacements.count == replacements.count else { return nil }
+            for replacement in byteReplacements.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) {
+                bytes.replaceSubrange(replacement.0, with: replacement.1)
+            }
+            return String(bytes: bytes, encoding: .utf8)
+        }
+
+        private func utf8Offset(for location: SourceLocation) -> Int? {
+            let lineIndex = location.line - 1
+            let columnOffset = location.column - 1
+            guard self.lines.indices.contains(lineIndex),
+                  columnOffset >= 0,
+                  columnOffset <= self.lines[lineIndex].utf8.count
+            else { return nil }
+            return self.lines[..<lineIndex].reduce(0) { $0 + $1.utf8.count + 1 } + columnOffset
         }
 
         func dedentedText(in range: SourceRange) -> String? {

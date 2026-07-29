@@ -119,6 +119,51 @@ struct ChatMarkdownBlockSegmenterTests {
             isComplete: true)))
     }
 
+    @Test @MainActor func `details preserve document scoped reference links`() throws {
+        let destination = try #require(URL(string: "https://example.com"))
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            [docs][id]
+
+            <details>
+            <summary>More</summary>
+
+            Body
+
+            </details>
+
+            [id]: https://example.com
+            """,
+            isComplete: true)
+        guard case let .prose(prose) = try #require(snapshot.blocks.first),
+              case .disclosure = try #require(snapshot.blocks.dropFirst().first)
+        else {
+            Issue.record("expected resolved prose followed by a disclosure")
+            return
+        }
+        #expect(prose.attributed.runs.contains { $0.link == destination })
+
+        let nestedSnapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            <details>
+            <summary>More</summary>
+
+            [docs][id]
+
+            [id]: https://example.com
+
+            </details>
+            """,
+            isComplete: true)
+        guard case let .disclosure(disclosure) = try #require(nestedSnapshot.blocks.first),
+              case let .prose(nestedProse) = try #require(disclosure.blocks.first)
+        else {
+            Issue.record("expected resolved prose inside the disclosure")
+            return
+        }
+        #expect(nestedProse.attributed.runs.contains { $0.link == destination })
+    }
+
     @Test func `unsupported nested details balance without closing outer disclosure`() throws {
         let blocks = self.segments("""
         <details>

@@ -887,6 +887,8 @@ private class DisclosureTokenizer {
             }
           }
           TagKind.SUMMARY_OPEN -> {
+            // The web block rule also pairs summary tags within one line;
+            // multiline summaries deliberately remain literal on every surface.
             val closeIndex = ((index + 1) until tags.size).firstOrNull { tags[it].kind == TagKind.SUMMARY_CLOSE }
             val frame = balanceStack.lastOrNull()
             if (closeIndex != null && frame?.isStructural == true && !frame.hasSummary) {
