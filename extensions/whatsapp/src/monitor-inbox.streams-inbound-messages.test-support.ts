@@ -979,68 +979,175 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("drains serialized same-lane messages after close", async () => {
-    vi.useFakeTimers();
-    try {
-      let releaseFirst: (() => void) | undefined;
-      const firstTurn = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
-      const onMessage = vi.fn(async () => {
-        if (onMessage.mock.calls.length === 1) {
-          await firstTurn;
-        }
-      });
-      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-        debounceMs: 50,
-      });
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-1"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "first",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(50);
-      await waitForMessageCalls(onMessage, 1);
-      expect(inboundMessage(onMessage).payload.body).toBe("first");
+  it("lets a later same-key flush steer while the earlier turn is still active", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-steer-1"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.body).toBe("first");
 
-      const second = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-2"),
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-steer-2"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "steer",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
+
+    releaseFirst?.();
+    await listener.close();
+  });
+
+  it("drains admitted same-lane turns before close completes", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-1"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const second = buildNotifyMessageUpsert({
+      id: nextMessageId("debounce-close-2"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "second",
+      timestamp: 1_700_000_001,
+      pushName: "Tester",
+    });
+    const third = buildNotifyMessageUpsert({
+      id: nextMessageId("debounce-close-3"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "third",
+      timestamp: 1_700_000_002,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [...second.messages, ...third.messages],
+    });
+
+    let closed = false;
+    const closePromise = listener.close().then(() => {
+      closed = true;
+    });
+    await waitForMessageCalls(onMessage, 3);
+    expect(closed).toBe(false);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+    expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+
+    releaseFirst?.();
+    await closePromise;
+    expect(closed).toBe(true);
+  });
+
+  it("keeps a reused debounce key pending after the earlier turn completes", async () => {
+    let releaseFirst!: () => void;
+    let finishFirst!: () => void;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstFinished = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+        finishFirst();
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 60_000,
+      shouldDebounce: (message) => message.payload.body !== "first",
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-reused-key-1"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-reused-key-2"),
         remoteJid: "999@s.whatsapp.net",
         text: "second",
         timestamp: 1_700_000_001,
         pushName: "Tester",
-      });
-      const third = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-3"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "third",
-        timestamp: 1_700_000_002,
-        pushName: "Tester",
-      });
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [...second.messages, ...third.messages],
-      });
+      }),
+    );
+    await settleInboundWork();
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
-      const closePromise = listener.close();
-      expect(onMessage).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await firstFinished;
+    await settleInboundWork();
 
-      releaseFirst?.();
-      await closePromise;
-
-      expect(onMessage).toHaveBeenCalledTimes(3);
-      expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-      expect(inboundMessage(onMessage, 1).admission?.conversation.kind).toBe("direct");
-      expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
-      expect(inboundMessage(onMessage, 2).admission?.conversation.kind).toBe("direct");
-    } finally {
-      vi.useRealTimers();
-    }
+    const closeStarted = Date.now();
+    await listener.close();
+    expect(Date.now() - closeStarted).toBeLessThan(5_000);
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
   });
 
   it("completes shutdown under a long durable debounce without waiting for the window", async () => {
