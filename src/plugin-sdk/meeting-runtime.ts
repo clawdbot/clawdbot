@@ -55,7 +55,6 @@ export type {
   MeetingPluginChromeHealth,
   MeetingPluginJoinRequest,
   MeetingPluginJoinResult,
-  MeetingPluginProbeHealth,
   MeetingPluginSession,
   MeetingRealtimeSessionBlock,
   MeetingSessionRecord,
