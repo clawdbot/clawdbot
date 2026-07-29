@@ -57,7 +57,10 @@ export function formatTimeAgo(
   let value: number;
   let unit: RelativeUnit;
   if (seconds < 60) {
-    value = options.suffix === false ? seconds : 0;
+    if (options.suffix !== false) {
+      return t("common.justNow");
+    }
+    value = seconds;
     unit = "second";
   } else if (minutes < 60) {
     value = minutes;
@@ -91,7 +94,7 @@ export function formatRelativeTimestamp(
     if (options.suffix === false) {
       return formatUnit(seconds, "second");
     }
-    return isPast ? formatRelative(0, "second") : formatRelative(seconds, "second");
+    return isPast ? t("common.justNow") : formatRelative(seconds, "second");
   }
 
   const minutes = Math.round(seconds / 60);

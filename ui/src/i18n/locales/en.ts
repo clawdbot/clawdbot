@@ -49,6 +49,7 @@ export const en: TranslationMap = {
     none: "none",
     na: "n/a",
     never: "never",
+    justNow: "just now",
     unknown: "Unknown",
     configured: "Configured",
     running: "Running",
@@ -5044,7 +5045,7 @@ export const en: TranslationMap = {
     attachments: {
       attachedFile: "Attached file",
       outsideAllowedFolders: "Outside allowed folders",
-      unavailable: "Attachment unavailable",
+      unavailable: "Unavailable",
       checking: "Checking...",
     },
     voice: {

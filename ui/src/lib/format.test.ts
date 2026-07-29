@@ -47,7 +47,7 @@ describe("formatAgo", () => {
   });
 
   it("returns a localized current-time label for recent past timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("now");
+    expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
   });
 
   it("returns 'Xm ago' for past timestamps", () => {
