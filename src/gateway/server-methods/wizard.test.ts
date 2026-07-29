@@ -6,7 +6,7 @@ import { createDeferred } from "../../shared/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-import { wizardHandlers } from "./wizard.js";
+import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
 describe("wizard session lookup", () => {
   it.each([
@@ -175,6 +175,36 @@ describe("wizard setup ownership", () => {
       context,
     } as never);
     expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+
+    for (const session of tracker.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+
+  it.each([
+    { label: "false", params: { installDaemon: false }, expected: false },
+    { label: "true", params: { installDaemon: true }, expected: true },
+    { label: "omitted", params: {}, expected: undefined },
+  ])("projects installDaemon when $label", async ({ params, expected }) => {
+    let receivedInstallDaemon: boolean | undefined;
+    const tracker = createWizardSessionTracker();
+    const wizardRunner: SetupWizardRunner = async (opts, _runtime, prompter) => {
+      receivedInstallDaemon = opts.installDaemon;
+      await prompter.note("ready");
+    };
+    const respond = vi.fn();
+
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local", ...params },
+      respond,
+      context: { ...tracker, wizardRunner },
+    } as never);
+
+    expect(receivedInstallDaemon).toBe(expected);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
 
     for (const session of tracker.wizardSessions.values()) {
       session.cancel();

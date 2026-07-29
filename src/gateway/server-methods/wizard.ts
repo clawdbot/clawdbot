@@ -121,6 +121,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 {
                   mode: params.mode,
                   workspace: readStringValue(params.workspace),
+                  installDaemon: params.installDaemon,
                 },
                 runtime,
                 prompter,
