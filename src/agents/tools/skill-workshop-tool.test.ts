@@ -121,7 +121,7 @@ describe("skill_workshop tool", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: false,
+              mode: "off",
             },
           },
         },
@@ -134,11 +134,11 @@ describe("skill_workshop tool", () => {
   it("does not nudge the foreground model when autonomy is enabled", () => {
     const disabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { enabled: false } } } },
+      config: { skills: { workshop: { autonomous: { mode: "off" } } } },
     });
     const enabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
     expect(enabled.description).toBe(disabled.description);

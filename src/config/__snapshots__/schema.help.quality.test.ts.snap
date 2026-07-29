@@ -306,7 +306,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "skills.load.allowSymlinkTargets.*",
   "skills.load.extraDirs.*",
   "skills.workshop.approvalPolicy",
-  "skills.workshop.autonomous.enabled",
+  "skills.workshop.autonomous.mode",
   "talk.provider",
   "talk.providers.*.apiKey",
   "talk.providers.*.apiKey.id",

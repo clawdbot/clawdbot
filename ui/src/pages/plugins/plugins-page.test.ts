@@ -11,6 +11,7 @@ import {
   createContext,
   createGateway,
   createPlugin,
+  createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
   deferred,
@@ -19,6 +20,12 @@ import {
   type RuntimeConfigTestState,
 } from "./plugins-page.test-support.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
+
+function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
+  page
+    .querySelector(`#plugins-tab-${tab}`)
+    ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+}
 
 describe("PluginsPage", () => {
   beforeEach(async () => {
@@ -34,7 +41,7 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
+      location: createPluginsRouteLocation(),
       result,
       error: null,
     };
@@ -117,7 +124,7 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
+      location: createPluginsRouteLocation(),
       result,
       error: null,
     };
@@ -187,7 +194,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result,
         error: null,
       },
@@ -198,67 +205,6 @@ describe("PluginsPage", () => {
     expect(
       page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
     ).toContain("UI");
-  });
-
-  it("applies a ?tab=discover deep link from route data", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      result: createResult(),
-      error: null,
-      initialTab: "discover",
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
-
-    expect(page.activeTab).toBe("discover");
-    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
-    );
-    await tabGroup?.updateComplete;
-    expect(
-      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
-    ).toBe(true);
-  });
-
-  it("routes the skills and workshop hub tabs through navigation", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const context = createContext(
-      harness.gateway,
-      vi.fn(async () => undefined),
-    );
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: createResult(),
-      error: null,
-    };
-    const { page } = await mountPage(context, routeData);
-
-    page.querySelector<HTMLButtonElement>("#plugins-tab-skills")?.click();
-    expect(context.navigate).toHaveBeenCalledWith("skills");
-    page.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
-    expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
-    expect(page.activeTab).toBe("installed");
-
-    // Catalog tabs switch locally for instant feedback and keep the URL in
-    // sync with the ?tab=discover deep link.
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
-    expect(page.activeTab).toBe("discover");
-    expect(context.navigate).toHaveBeenCalledWith("plugins", { search: "?tab=discover" });
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>("#plugins-tab-installed")?.click();
-    expect(page.activeTab).toBe("installed");
-    expect(context.navigate).toHaveBeenCalledWith("plugins", undefined);
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
@@ -273,7 +219,7 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
+      location: createPluginsRouteLocation(),
       result: createResult(),
       error: null,
     };
@@ -313,13 +259,13 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "w";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -359,7 +305,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: "discover",
+        location: createPluginsRouteLocation("/settings/plugins/discover"),
         result: createResult(),
         error: null,
       },
@@ -421,7 +367,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -454,7 +400,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -496,13 +442,13 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "calendar";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -546,7 +492,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -594,7 +540,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -644,7 +590,7 @@ describe("PluginsPage", () => {
     const { page } = await mountPage(createContext(harness.gateway, refreshConfig), {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
+      location: createPluginsRouteLocation(),
       result: disabledResult,
       error: null,
     });
@@ -699,7 +645,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
         error: null,
       },
@@ -750,7 +696,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -822,7 +768,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -863,13 +809,13 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
@@ -903,7 +849,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },

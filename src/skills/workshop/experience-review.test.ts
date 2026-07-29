@@ -15,7 +15,7 @@ function completedRun(
     success?: boolean;
     sessionKey?: string;
     runId?: string;
-    enabled?: boolean;
+    mode?: "off" | "propose" | "auto";
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     modelMetadata?: boolean;
@@ -63,7 +63,7 @@ function completedRun(
     config: {
       skills: {
         workshop: {
-          autonomous: { enabled: options.enabled ?? true },
+          autonomous: { mode: options.mode ?? "propose" },
         },
       },
     },
@@ -131,7 +131,7 @@ describe("skill experience review scheduler", () => {
     const runReview = vi.fn().mockResolvedValue(undefined);
     const prepareReview = vi.fn(async (candidate) =>
       prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { deny: ["skill_workshop"] },
       }),
     );
@@ -160,7 +160,7 @@ describe("skill experience review scheduler", () => {
     };
     await expect(
       prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         channels: {
           whatsapp: {
             groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } },
@@ -179,7 +179,7 @@ describe("skill experience review scheduler", () => {
           modelIterations: 10,
         },
         {
-          skills: { workshop: { autonomous: { enabled: true } } },
+          skills: { workshop: { autonomous: { mode: "propose" } } },
           agents: { defaults: { sandbox: { mode: "non-main" } } },
         },
       ),
@@ -197,7 +197,7 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ iterations: 9 }));
     scheduler.schedule(completedRun({ success: false }));
     scheduler.schedule(completedRun({ compacted: true, sessionKey: "agent:main:compacted" }));
-    scheduler.schedule(completedRun({ enabled: false }));
+    scheduler.schedule(completedRun({ mode: "off" }));
     scheduler.schedule(
       completedRun({ modelMetadata: false, sessionKey: "agent:main:missing-model" }),
     );

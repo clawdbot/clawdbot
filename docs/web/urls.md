@@ -160,7 +160,7 @@ no route-specific URL parameters.
 | Logs                | `/logs`                     | -                         | -                                                |
 | Skill Workshop      | `/skills/workshop`          | -                         | -                                                |
 | Skills              | `/skills`                   | -                         | -                                                |
-| Plugins             | `/settings/plugins`         | -                         | `?tab=discover\|installed`                       |
+| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                     |
 | Automations         | `/cron`                     | -                         | -                                                |
 | Tasks               | `/tasks`                    | -                         | -                                                |
 | Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                 |
@@ -174,6 +174,10 @@ Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
 `?section=memory` are replaced once with the corresponding path while keeping
 any setting anchor.
+
+Plugin catalog tabs also use paths instead of `?tab=`. Older links with
+`?tab=discover|installed` are replaced once with the corresponding path while
+keeping other query parameters and the fragment.
 
 ## Special documents and startup modes
 

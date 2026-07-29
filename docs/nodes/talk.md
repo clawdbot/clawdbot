@@ -9,9 +9,9 @@ title: "Talk mode"
 Talk mode covers five runtime shapes:
 
 - **Native macOS/iOS/Android Talk**: native speech recognition, Gateway chat, and `talk.speak` TTS. Apple Speech recognition on macOS/iOS may use network services; Android behavior depends on the installed speech service. Nodes advertise the `talk` capability and declare which `talk.*` commands they support.
-- **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
+- **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport, including framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
-- **Android Talk (realtime)**: Android always uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready; it never opens a client-owned WebRTC session. When realtime is not ready, Android stays on native speech recognition, Gateway chat, and `talk.speak`. Caveat: readiness is computed for the configured transport's surface, so a browser-only model such as `gpt-live-*` can read ready while the relay session Android opens is rejected with an explicit error; an Android-side gate is a tracked follow-up.
+- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready and the configured model supports relay; it never opens a client-owned WebRTC session. Browser-only `gpt-live-*` models skip relay, so Android stays on native speech recognition, Gateway chat, and `talk.speak` just as it does when realtime is not ready.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
@@ -124,10 +124,20 @@ The Gateway owns the authenticated sideband and routes delegated work through
 the configured OpenClaw agent; the browser receives neither the OAuth token nor
 a Platform API key.
 
-For GA `gpt-realtime-*` browser and iOS WebRTC sessions, Platform credentials
-remain required in this order: the configured realtime API key, an `openai`
-API-key profile, then `OPENAI_API_KEY`. ChatGPT OAuth does not configure those
-GA sessions, Voice Call, Gateway relay, or Discord realtime voice.
+For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
+browser sessions, Platform credentials remain preferred in this order: the
+configured realtime API key, an `openai` API-key profile, then
+`OPENAI_API_KEY`. With none configured, browser Talk falls back to an OpenClaw
+ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
+broker, so the OAuth token never reaches the browser. A configured Platform
+credential that cannot be resolved fails closed instead of silently falling
+through to OAuth.
+
+iOS client-owned WebRTC, Voice Call, Gateway relay, provider WebSocket
+transports, Discord realtime voice, and Android realtime remain
+Platform-key-only. GA browser Talk keeps the existing client-owned data channel
+and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
+change under OAuth.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

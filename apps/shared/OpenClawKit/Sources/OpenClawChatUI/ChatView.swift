@@ -492,7 +492,8 @@ public struct OpenClawChatView: View {
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity)
+                runIdentity: self.viewModel.workingIndicatorIdentity,
+                outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
         }
 
@@ -787,7 +788,8 @@ public struct OpenClawChatView: View {
     }
 
     private var showsWorkingIndicator: Bool {
-        self.viewModel.hasBlockingRunActivity && !self.hasVisibleStreamingAssistantText
+        self.viewModel.hasBlockingRunActivity &&
+            (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
     }
 
     private var turnRecapObservation: ChatTurnRecapObservation {

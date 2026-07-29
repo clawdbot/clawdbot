@@ -5,6 +5,7 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -378,7 +379,9 @@ class SkillsPage extends OpenClawLightDomElement {
       this.context.navigate("skill-workshop");
       return;
     }
-    this.context.navigate("plugins", tab === "discover" ? { search: "?tab=discover" } : undefined);
+    this.context.navigate("plugins", {
+      pathname: pathForPluginsHubTab(tab, this.context.basePath),
+    });
   }
 
   override render() {

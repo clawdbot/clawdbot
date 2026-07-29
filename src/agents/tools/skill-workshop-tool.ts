@@ -183,6 +183,8 @@ type SkillWorkshopToolOptions = {
   origin?: SkillProposalOrigin;
   /** Internal reviewers may inspect and draft bounded pending proposals, never change lifecycle state. */
   proposalOnly?: boolean;
+  /** Marks proposals created by an autonomous capture pipeline. */
+  autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional durable completion latch shared across runner retries. */
@@ -393,6 +395,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
+            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
@@ -412,6 +415,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
+            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,

@@ -3329,6 +3329,7 @@ describe("legacy model compat migrate", () => {
               "xai/grok-4-fast-reasoning",
               "openai/gpt-4o-transcribe",
               "openai/gpt-4o-mini-tts",
+              "openai/constructor",
             ],
           },
           models: {
@@ -3402,6 +3403,7 @@ describe("legacy model compat migrate", () => {
         "xai/grok-4.3",
         "openai/gpt-4o-transcribe",
         "openai/gpt-4o-mini-tts",
+        "openai/constructor",
       ],
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");

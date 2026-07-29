@@ -2397,7 +2397,7 @@ describe("short-term promotion", () => {
       await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
         "# 2026-05-28",
         "",
-        "## New model routing (16:23)",
+        "## 🚀 New model routing (16:23)",
         "- Keep Xiaomi Mimo as the low-cost default.",
       ]);
       await recordShortTermRecalls({
@@ -2436,10 +2436,11 @@ describe("short-term promotion", () => {
 
       expect(applied.applied).toBe(1);
       expect(applied.appliedCandidates[0]?.snippet).toBe(
-        "New model routing (16:23): Keep Xiaomi Mimo as the low-cost default.",
+        "🚀 New model routing (16:23): Keep Xiaomi Mimo as the low-cost default.",
       );
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).toContain("New model routing (16:23)");
+      expect(memoryText).toContain("🚀 New model routing (16:23)");
+      expect(Buffer.from(memoryText, "utf8").toString("utf8")).toBe(memoryText);
       expect(memoryText).not.toContain("Old model routing");
     });
   });
@@ -4176,6 +4177,54 @@ describe("short-term promotion", () => {
   });
 
   describe("UTF-16 snippet bounds", () => {
+    it("keeps the dreaming narrative lead well-formed at a surrogate boundary", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "x".repeat(199);
+        const snippet = `${prefix}🚀Candidate: durable memory`;
+        const originalRegExpTest = Object.getOwnPropertyDescriptor(RegExp.prototype, "test")
+          ?.value as typeof RegExp.prototype.test;
+        const inspectedLeads: string[] = [];
+
+        vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
+          this: RegExp,
+          value: string,
+        ) {
+          if (this.source === "\\b(?:Candidate|Reflections?):") {
+            inspectedLeads.push(value);
+            expect(Buffer.from(value, "utf8").toString("utf8")).toBe(value);
+          }
+          return originalRegExpTest.call(this, value);
+        });
+
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 dreaming lead",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet,
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        expect(inspectedLeads.length).toBeGreaterThan(0);
+        expect(ranked).toHaveLength(1);
+        expect(ranked[0]?.snippet).toBe(snippet);
+      });
+    });
+
     it("stores a complete-code-point short-term recall snippet", async () => {
       await withTempWorkspace(async (workspaceDir) => {
         const prefix = "y".repeat(testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS - 1);

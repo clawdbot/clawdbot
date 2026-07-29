@@ -424,3 +424,98 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
   });
 });
+
+describe("config.patch ID-keyed arrays", () => {
+  it("rejects duplicate IDs before applying an ID-merged array patch", async () => {
+    storedConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.invalid",
+            models: [{ id: "one", name: "One" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const { respond } = await invokeConfigPatch({
+      raw: {
+        models: {
+          providers: {
+            custom: {
+              models: [
+                { id: "one", name: "First" },
+                { id: "one", name: "Second" },
+              ],
+            },
+          },
+        },
+      },
+      baseHash: "base-hash",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("duplicate ID one") }),
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+  });
+
+  it("allows duplicate IDs for an explicit array replacement", async () => {
+    storedConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.invalid",
+            models: [{ id: "one", name: "One" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const { respond } = await invokeConfigPatch({
+      raw: {
+        models: {
+          providers: {
+            custom: {
+              models: [
+                { id: "one", name: "First" },
+                { id: "one", name: "Second" },
+              ],
+            },
+          },
+        },
+      },
+      baseHash: "base-hash",
+      replacePaths: ["models.providers.custom.models"],
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "next-hash-1" }),
+      undefined,
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+
+    const followUp = await invokeConfigPatch({
+      raw: {
+        models: {
+          providers: {
+            custom: { models: [{ id: "one", name: "Third" }] },
+          },
+        },
+      },
+      baseHash: "next-hash-1",
+    });
+
+    expect(followUp.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("current config contains duplicate ID one"),
+      }),
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+  });
+});

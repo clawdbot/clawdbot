@@ -169,6 +169,7 @@ export async function invokeGatewayTool(params: {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
+  signal?: AbortSignal;
 }): Promise<ToolsInvokeOutcome> {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
@@ -294,6 +295,7 @@ export async function invokeGatewayTool(params: {
         workspaceDir,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
+      signal: params.signal,
       approvalMode: params.approvalMode,
     });
     if (hookResult.blocked) {
@@ -308,12 +310,13 @@ export async function invokeGatewayTool(params: {
         },
       };
     }
+    params.signal?.throwIfAborted();
     return {
       ok: true,
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, hookResult.params),
+      result: await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal),
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
@@ -328,7 +331,9 @@ export async function invokeGatewayTool(params: {
         },
       };
     }
-    logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
+    if (!params.signal?.aborted) {
+      logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
+    }
     return {
       ok: false,
       status: 500,

@@ -15,6 +15,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
+import { resolveActiveRecallForRun } from "./recall-state.js";
 import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
@@ -715,12 +716,13 @@ describe("active-memory plugin", () => {
     stateDir = "";
   });
 
-  it("registers a before_prompt_build hook", () => {
+  it("registers prompt-build and run-cleanup hooks", () => {
     const [hookName, handler, options] = firstHookRegistration();
     expect(hookName).toBe("before_prompt_build");
     expect(typeof handler).toBe("function");
     expect(options).toEqual({ timeoutMs: 153_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
+    expect(typeof hooks.agent_end).toBe("function");
   });
 
   it("does not synthesize a main agent when every configured agent opts out", () => {
@@ -845,6 +847,178 @@ describe("active-memory plugin", () => {
     );
 
     expect(secondSessionKey).not.toBe(firstSessionKey);
+  });
+
+  it("shares recall results across changed-prompt retries in one run", async () => {
+    const context = {
+      runId: "run-changed-prompt-retry",
+      sessionKey: "agent:main:changed-prompt-retry",
+    };
+
+    const first = await runPromptBuild({ prompt: "what wings should i order?" }, context);
+    const second = await runPromptBuild(
+      { prompt: "actually, what did I order last time?" },
+      context,
+    );
+
+    expectPrependContextContains(first, "lemon pepper wings");
+    expectPrependContextContains(second, "lemon pepper wings");
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins concurrent recall attempts in one run", async () => {
+    let releaseRecall: () => void = () => {
+      throw new Error("recall gate was not initialized");
+    };
+    const recallGate = new Promise<void>((resolve) => {
+      releaseRecall = resolve;
+    });
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await recallGate;
+      await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
+      return { payloads: [{ text: "- lemon pepper wings" }] };
+    });
+    const context = {
+      runId: "run-concurrent-attempts",
+      sessionKey: "agent:main:concurrent-attempts",
+    };
+
+    const first = runPromptBuild({ prompt: "what wings should i order?" }, context);
+    await vi.waitFor(() => {
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    });
+    const second = runPromptBuild({ prompt: "what wings did I order last time?" }, context);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    releaseRecall();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expectPrependContextContains(firstResult, "lemon pepper wings");
+    expectPrependContextContains(secondResult, "lemon pepper wings");
+  });
+
+  it("waits for timeout cleanup before replacing a recall in the same run", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    registerPluginConfig({ timeoutMs: 100, logging: true });
+    let releaseCleanup: () => void = () => {
+      throw new Error("cleanup gate was not initialized");
+    };
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    hoisted.closeActiveMemorySearchManager.mockImplementationOnce(async () => {
+      await cleanupGate;
+    });
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
+    );
+    const context = {
+      runId: "run-timeout-retry",
+      sessionKey: "agent:main:timeout-retry",
+    };
+
+    await expect(
+      runPromptBuild({ prompt: "what wings should i order before timeout?" }, context),
+    ).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+    });
+
+    const retry = runPromptBuild({ prompt: "what wings should i order after timeout?" }, context);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+
+    releaseCleanup();
+    await expect(retry).resolves.toEqual(
+      expect.objectContaining({ prependContext: expect.stringContaining("lemon pepper wings") }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts a rejected replacement after timeout cleanup settles", async () => {
+    let releaseCleanup: () => void = () => {
+      throw new Error("cleanup gate was not initialized");
+    };
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const initialResult = { status: "timeout" as const, elapsedMs: 1, summary: null };
+    await expect(
+      resolveActiveRecallForRun("run-rejected-replacement", async (onTimeoutCleanup) => {
+        onTimeoutCleanup(cleanupGate);
+        return initialResult;
+      }),
+    ).resolves.toEqual(initialResult);
+
+    let rejectedReplacementStarts = 0;
+    const rejectedReplacement = resolveActiveRecallForRun("run-rejected-replacement", async () => {
+      rejectedReplacementStarts++;
+      throw new Error("retry deadline expired");
+    });
+    releaseCleanup();
+    await expect(rejectedReplacement).rejects.toThrow("retry deadline expired");
+
+    const freshResult = {
+      status: "ok" as const,
+      elapsedMs: 2,
+      rawReply: "recovered",
+      summary: "recovered",
+    };
+    let freshStarts = 0;
+    await expect(
+      resolveActiveRecallForRun("run-rejected-replacement", async () => {
+        freshStarts++;
+        return freshResult;
+      }),
+    ).resolves.toEqual(freshResult);
+    expect({ freshStarts, rejectedReplacementStarts }).toEqual({
+      freshStarts: 1,
+      rejectedReplacementStarts: 1,
+    });
+  });
+
+  it("deduplicates cache-disabled private recall until the run ends", async () => {
+    setMemorySlot("memory-core");
+    configFile = {
+      ...configFile,
+      agents: {
+        defaults: {
+          model: { primary: "github-copilot/gpt-5.4-mini" },
+        },
+        list: [
+          {
+            id: "main",
+            memory: { search: { rememberAcrossConversations: true } },
+          },
+        ],
+      },
+    };
+    const context = {
+      runId: "run-private-recall",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageProvider: "telegram",
+      channelId: "owner",
+    };
+    seedSession(context.sessionKey, "s-private-recall", 0);
+
+    await runPromptBuild({ prompt: "what wings should i order?" }, context);
+    await runPromptBuild({ prompt: "what wings should i order?" }, context);
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: context.sessionKey,
+      scope: "same-agent-private",
+      corpus: "configured",
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+
+    await requireHook("agent_end")({ runId: context.runId, messages: [], success: true }, context);
+    await runPromptBuild({ prompt: "what wings should i order?" }, context);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
   });
 
   it("retries transient SQLite recall cleanup failures", async () => {

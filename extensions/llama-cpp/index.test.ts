@@ -68,6 +68,8 @@ describe("llama.cpp provider plugin", () => {
         id: "llama-cpp",
         label: "Local model (llama.cpp)",
         createStreamFn: expect.any(Function),
+        normalizeToolSchemas: expect.any(Function),
+        inspectToolSchemas: expect.any(Function),
         auth: [expect.objectContaining({ id: "local" })],
       }),
     );

@@ -422,14 +422,18 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     suppressAutomaticSourceDelivery &&
     allowSuppressedSourceProgressCallbacks &&
     canForwardItemEvents;
+  const shouldDeliverDurableCommentaryProgress = (
+    payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0],
+  ) =>
+    deliverStandaloneCommentaryProgress &&
+    payload.kind === "preamble" &&
+    payload.suppressDurableProgress !== true;
   const forwardItemEvent = canForwardItemEvents
     ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
         ...itemEventForwardingOptions,
         waitForDirectBlockReplyDelivery: true,
         onForward: (payload) =>
-          preserveProgressCallbackStartOrder &&
-          deliverStandaloneCommentaryProgress &&
-          payload.kind === "preamble"
+          preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
             ? noteCommentaryProgress(payload)
             : undefined,
         onVisible: (payload) => {
@@ -453,8 +457,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         }
         if (
           (!forwardItemEvent || !preserveProgressCallbackStartOrder) &&
-          deliverStandaloneCommentaryProgress &&
-          payload.kind === "preamble"
+          shouldDeliverDurableCommentaryProgress(payload)
         ) {
           await noteCommentaryProgress(payload);
         }
