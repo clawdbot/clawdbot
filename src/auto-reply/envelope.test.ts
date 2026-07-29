@@ -65,24 +65,21 @@ describe("formatAgentEnvelope", () => {
   });
 
   it("falls back to the host timezone for an invalid configured user timezone", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
-      const options = resolveEnvelopeFormatOptions({
-        agents: { defaults: { userTimezone: "Not/A_Timezone" } },
-      });
-      expect(formatEnvelopeTimestamp(ts, options)).toBe(
-        formatEnvelopeTimestamp(ts, { timezone: "local" }),
-      );
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
+    const options = resolveEnvelopeFormatOptions({
+      agents: { defaults: { userTimezone: "Not/A_Timezone" } },
     });
+    expect(options.timezone).toBe("local");
+    expect(formatEnvelopeTimestamp(ts, options)).toBe(
+      formatEnvelopeTimestamp(ts, { timezone: "local" }),
+    );
   });
 
   it("keeps the UTC fallback for an invalid explicit timezone option", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
-      expect(formatEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
-        formatEnvelopeTimestamp(ts, { timezone: "utc" }),
-      );
-    });
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
+    expect(formatEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
+      formatEnvelopeTimestamp(ts, { timezone: "utc" }),
+    );
   });
 
   it("omits timestamps when configured", () => {
