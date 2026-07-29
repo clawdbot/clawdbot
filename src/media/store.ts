@@ -28,9 +28,9 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
-export const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
+const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
-export const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 let playbackCacheOperationTail = Promise.resolve();
@@ -52,6 +52,9 @@ function setMediaStoreNetworkDepsForTest(deps?: {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    enforcePlaybackTranscodeCacheLimit,
+    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
+    PLAYBACK_TRANSCODE_TTL_MS,
     setMediaStoreNetworkDepsForTest,
   };
 }
@@ -283,7 +286,7 @@ export async function writePlaybackTranscodeCache(params: {
 }
 
 /** Serializes maintenance quota scans with cache insertions. */
-export async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
+async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
   await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
 }
 

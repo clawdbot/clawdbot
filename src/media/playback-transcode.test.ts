@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import {
+  getPlaybackTranscodePolicyForTest,
+  resolvePlaybackModeForTest,
+} from "./playback-transcode.test-support.js";
 
 const { probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
   probePlaybackMediaFileDescriptor: vi.fn(),
@@ -99,7 +103,7 @@ async function readSourceBoundedForTest(
 
 describe("playback transcode policy", () => {
   it("keeps only cross-client containers native and closes both target recipes", () => {
-    expect(playback.PLAYBACK_TRANSCODE_POLICY).toEqual({
+    expect(getPlaybackTranscodePolicyForTest()).toEqual({
       audio: {
         nativeMimeTypes: [
           "audio/m4a",
@@ -157,17 +161,15 @@ describe("playback transcode policy", () => {
       },
     });
 
-    const audioPolicy = playback.PLAYBACK_TRANSCODE_POLICY.audio;
-    const videoPolicy = playback.PLAYBACK_TRANSCODE_POLICY.video;
-    expect(playback.resolvePlaybackMode("audio/aac", audioPolicy)).toBe("transcode");
-    expect(playback.resolvePlaybackMode("audio/mpeg", audioPolicy)).toBe("native");
-    expect(playback.resolvePlaybackMode("audio/x-caf", audioPolicy)).toBe("transcode");
-    expect(playback.resolvePlaybackMode("audio/amr", audioPolicy)).toBe("transcode");
-    expect(playback.resolvePlaybackMode("audio/ogg", audioPolicy)).toBe("transcode");
-    expect(playback.resolvePlaybackMode("video/mp4; codecs=avc1", videoPolicy)).toBe("native");
-    expect(playback.resolvePlaybackMode("video/x-matroska", videoPolicy)).toBe("transcode");
-    expect(playback.resolvePlaybackMode("video/webm", videoPolicy)).toBe("transcode");
-    expect(playback.resolvePlaybackMode("video/x-playlist", videoPolicy)).toBeUndefined();
+    expect(resolvePlaybackModeForTest("audio/aac", "audio")).toBe("transcode");
+    expect(resolvePlaybackModeForTest("audio/mpeg", "audio")).toBe("native");
+    expect(resolvePlaybackModeForTest("audio/x-caf", "audio")).toBe("transcode");
+    expect(resolvePlaybackModeForTest("audio/amr", "audio")).toBe("transcode");
+    expect(resolvePlaybackModeForTest("audio/ogg", "audio")).toBe("transcode");
+    expect(resolvePlaybackModeForTest("video/mp4; codecs=avc1", "video")).toBe("native");
+    expect(resolvePlaybackModeForTest("video/x-matroska", "video")).toBe("transcode");
+    expect(resolvePlaybackModeForTest("video/webm", "video")).toBe("transcode");
+    expect(resolvePlaybackModeForTest("video/x-playlist", "video")).toBeUndefined();
   });
 
   it.each([

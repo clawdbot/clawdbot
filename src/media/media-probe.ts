@@ -248,18 +248,6 @@ export async function probeMediaFilesWithinBudget(
   return results;
 }
 
-/** Probes the exact file identity already validated and opened by a security boundary. */
-export async function probeMediaFileDescriptor(
-  fd: number,
-  kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
-): Promise<MediaProbeResult> {
-  return toMediaProbeResult(
-    await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options),
-    kind,
-  );
-}
-
 /** Probes duration and first-stream codecs from an already validated local descriptor. */
 export async function probePlaybackMediaFileDescriptor(
   fd: number,

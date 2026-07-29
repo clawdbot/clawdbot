@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  probeMediaFileDescriptor,
   probeMediaFilesWithinBudget,
   probePlaybackMediaFileDescriptor,
   probeVideoDimensions,
@@ -97,7 +96,9 @@ describe("probeMediaFile", () => {
   it("probes an inherited descriptor through stdin", async () => {
     runFfprobe.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-    await expect(probeMediaFileDescriptor(17, "audio")).resolves.toEqual({ durationMs: 2000 });
+    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+      durationMs: 2000,
+    });
     expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
       stdinFileDescriptor: 17,
     });
@@ -157,7 +158,9 @@ describe("probeMediaFile", () => {
       )
       .mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-    await expect(probeMediaFileDescriptor(17, "audio")).resolves.toEqual({ durationMs: 2000 });
+    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+      durationMs: 2000,
+    });
     expect(runFfprobe).toHaveBeenNthCalledWith(
       2,
       expect.arrayContaining(["-protocol_whitelist", "pipe", "pipe:0"]),

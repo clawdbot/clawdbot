@@ -27,7 +27,7 @@ type PlaybackPolicyEntry = {
  * Native means safe across the supported browser, AVPlayer, and ExoPlayer clients.
  * Client-specific formats stay in the transcode path because metadata cannot know its consumer.
  */
-export const PLAYBACK_TRANSCODE_POLICY = {
+const PLAYBACK_TRANSCODE_POLICY = {
   audio: {
     nativeMimeTypes: [
       "audio/m4a",
@@ -181,7 +181,7 @@ async function readPlaybackSourceBounded(
 }
 
 /** Returns whether a sniffed audio/video type needs the cross-client playback target. */
-export function resolvePlaybackMode(
+function resolvePlaybackMode(
   mimeType: string,
   policy: PlaybackPolicyEntry,
 ): PlaybackMode | undefined {
@@ -198,7 +198,9 @@ export function resolvePlaybackMode(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
     createPlaybackTranscodeCacheKey,
+    PLAYBACK_TRANSCODE_POLICY,
     readPlaybackSourceBounded,
+    resolvePlaybackMode,
   };
 }
 
