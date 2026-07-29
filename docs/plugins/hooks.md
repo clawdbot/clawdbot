@@ -93,6 +93,14 @@ receive a cancellation signal. The hook dispatch can release its Gateway
 admission while that plugin work is still in progress. Plugins that own
 long-running work must provide their own cancellation and shutdown lifecycle.
 
+Policy hooks `before_tool_call` and `before_install` use a 15-second default per
+handler. A timeout fails closed: the tool call or installation is rejected
+instead of continuing without a policy decision.
+
+`gateway_stop` uses a five-second default per handler. Timed-out handlers are
+logged and shutdown continues so plugin cleanup cannot consume the Gateway
+process watchdog.
+
 Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
 15-second default per handler. If one times out, OpenClaw logs the plugin error
 and continues with the latest payload so the serialized delivery lane can

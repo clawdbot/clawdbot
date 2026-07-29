@@ -131,8 +131,13 @@ class CustodianSurface extends OpenClawLightDomElement {
         </section>
       `;
     }
+    const emptyError = store.messages.length === 0 && store.error !== null && !store.sending;
     return html`
-      <section class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""}">
+      <section
+        class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""} ${emptyError
+          ? "custodian-surface--empty-error"
+          : ""}"
+      >
         <div class="custodian__messages" aria-live="polite">
           ${!this.onboarding && store.eventNudge && !store.eventNudgePending
             ? eventNudgeState.renderCustodianEventNudge({

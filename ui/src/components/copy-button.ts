@@ -1,14 +1,15 @@
 // Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
+import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
-export const COPY_LABEL = "Copy as markdown";
-const COPIED_LABEL = "Copied";
-const ERROR_LABEL = "Copy failed";
+export function copyMarkdownLabel(): string {
+  return t("chat.actions.copyAsMarkdown");
+}
 
 type CopyButtonOptions = {
   text: () => string;
@@ -23,7 +24,7 @@ function setButtonLabel(button: HTMLButtonElement, label: string) {
 }
 
 function createCopyButton(options: CopyButtonOptions): TemplateResult {
-  const idleLabel = options.label ?? COPY_LABEL;
+  const idleLabel = options.label ?? copyMarkdownLabel();
   return html`
     <openclaw-tooltip .content=${idleLabel}>
       <button
@@ -52,7 +53,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
 
           if (!copied) {
             btn.dataset.error = "1";
-            setButtonLabel(btn, ERROR_LABEL);
+            setButtonLabel(btn, t("common.copyFailed"));
 
             window.setTimeout(() => {
               if (!btn.isConnected) {
@@ -65,7 +66,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
           }
 
           btn.dataset.copied = "1";
-          setButtonLabel(btn, COPIED_LABEL);
+          setButtonLabel(btn, t("common.copied"));
 
           window.setTimeout(() => {
             if (!btn.isConnected) {
@@ -85,7 +86,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
   `;
 }
 
-export function renderCopyButton(text: string, label = COPY_LABEL): TemplateResult {
+export function renderCopyButton(text: string, label?: string): TemplateResult {
   return createCopyButton({ text: () => text, label });
 }
 
