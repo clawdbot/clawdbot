@@ -24,6 +24,12 @@ const HIDDEN_STYLE_PATTERNS = (
   const escapedProp = prop.replace(/-/g, "\\-");
   return [new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, "i"), valuePattern] as const;
 });
+// CSS identifiers include non-ASCII; ASCII folding must not match Unicode lookalikes.
+const SCALE_TRANSFORM_PATTERN =
+  /(?<![\w\u0080-\uFFFF-])(scale(?:3d|x|y)?)([\t\n\f\r ]*)\(([^()]*)\)/gi;
+const SCALE_COMPONENT_PATTERN = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?%?$/iu;
+const SCALE_COMPONENT_WHITESPACE_PATTERN = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
+const ZERO_SCALE_COMPONENT_PATTERN = /^[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?%?$/iu;
 
 // Class names associated with visually hidden content
 const HIDDEN_CLASS_NAMES = new Set([
@@ -57,6 +63,38 @@ function hasHiddenClass(className: string): boolean {
   return classes.some((cls) => HIDDEN_CLASS_NAMES.has(cls));
 }
 
+function hasCollapsedVisibleScale(transform: string): boolean {
+  for (const match of transform.matchAll(SCALE_TRANSFORM_PATTERN)) {
+    const name = normalizeLowercaseStringOrEmpty(match[1]);
+    const components = (match[3] ?? "")
+      .split(",")
+      .map((value) => value.replace(SCALE_COMPONENT_WHITESPACE_PATTERN, ""));
+    // Only the existing bare `scale (0)` behavior predates strict CSS function tokens.
+    if (match[2] && (name !== "scale" || components.length !== 1 || components[0] !== "0")) {
+      continue;
+    }
+    const expectedCount = name === "scale3d" ? 3 : name === "scale" ? undefined : 1;
+    if (
+      (expectedCount === undefined
+        ? components.length < 1 || components.length > 2
+        : components.length !== expectedCount) ||
+      components.some((value) => !SCALE_COMPONENT_PATTERN.test(value))
+    ) {
+      continue;
+    }
+
+    // Only collapsed X/Y axes hide visible HTML; zero Z still renders a 2D element.
+    if (
+      components
+        .slice(0, name === "scale3d" ? 2 : components.length)
+        .some((value) => ZERO_SCALE_COMPONENT_PATTERN.test(value))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isStyleHidden(style: string): boolean {
   for (const [propertyPattern, valuePattern] of HIDDEN_STYLE_PATTERNS) {
     const match = style.match(propertyPattern);
@@ -75,11 +113,11 @@ function isStyleHidden(style: string): boolean {
     }
   }
 
-  // transform: scale(0)
+  // Any zero X/Y scale collapses visible content, including chained transforms.
   const transform = style.match(/(?:^|;)\s*transform\s*:\s*([^;]+)/i);
   const transformValue = transform?.at(1);
   if (transformValue) {
-    if (/scale\s*\(\s*0\s*\)/i.test(transformValue)) {
+    if (hasCollapsedVisibleScale(transformValue)) {
       return true;
     }
     if (/translateX\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {

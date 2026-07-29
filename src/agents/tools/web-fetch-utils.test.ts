@@ -7,6 +7,67 @@ import {
   truncateText,
 } from "./web-fetch-utils.js";
 
+describe("web-fetch basic HTML transform visibility", () => {
+  it.each([
+    ["markdown", "scale(0, 0)"],
+    ["markdown", "scale3d(0, 0, 0)"],
+    ["markdown", "scale(0, 1)"],
+    ["markdown", "scale3d(1, 0, 1)"],
+    ["markdown", "scaleX(0e-400)"],
+    ["markdown", "scale (0)"],
+    ["text", "scale(0, 0)"],
+    ["text", "scale3d(0, 0, 0)"],
+    ["text", "scale(0, 1)"],
+    ["text", "scale3d(1, 0, 1)"],
+    ["text", "scaleY(-0.00e-400)"],
+    ["text", "sCaLe\t( 0 )"],
+  ] as const)(
+    "removes collapsed transforms from %s extraction: %s",
+    async (extractMode, transform) => {
+      const result = await extractBasicHtmlContent({
+        html: `<p>Visible answer</p><div style="transform:${transform}">Hidden prompt</div>`,
+        extractMode,
+      });
+
+      expect(result?.text).toContain("Visible answer");
+      expect(result?.text).not.toContain("Hidden prompt");
+    },
+  );
+
+  it.each([
+    ["markdown", "scale3d(1, 1, 0)"],
+    ["markdown", "scale3d (0, 0, 0)"],
+    ["markdown", "scaleX (0)"],
+    ["markdown", "éscale(0)"],
+    ["markdown", "ſcale(0)"],
+    ["markdown", "scale(\u00a00)"],
+    ["markdown", "scale(0,\u00a01)"],
+    ["markdown", "scale (0, 1)"],
+    ["markdown", "scaleX(1e-400)"],
+    ["markdown", "scaleX(1e-400%)"],
+    ["text", "scale3d(1, 1, 0)"],
+    ["text", "scale3d (0, 0, 0)"],
+    ["text", "scaleY\t(0)"],
+    ["text", "é-scale(0)"],
+    ["text", "scale(0\u00a0)"],
+    ["text", "scaleX\u00a0(0)"],
+    ["text", "scale3d(0,\u00a01,1)"],
+    ["text", "scale (0%)"],
+    ["text", "scaleY(-1e-400)"],
+    ["text", "scale(.0001e-400, 1)"],
+  ] as const)(
+    "preserves visible or invalid transforms in %s extraction: %s",
+    async (extractMode, transform) => {
+      const result = await extractBasicHtmlContent({
+        html: `<p style="transform:${transform}">Visible answer</p>`,
+        extractMode,
+      });
+
+      expect(result?.text).toContain("Visible answer");
+    },
+  );
+});
+
 describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   const grin = String.fromCodePoint(0x1f600); // 😀 — an astral (> U+FFFF) code point
   const doubleT = String.fromCodePoint(0x1d54b); // 𝕋 — mathematical double-struck capital T

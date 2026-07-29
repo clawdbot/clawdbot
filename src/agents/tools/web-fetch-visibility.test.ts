@@ -93,6 +93,95 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Scaled");
   });
 
+  it.each([
+    "scale(0, 0)",
+    "scale(0, 1)",
+    "scale(1, 0)",
+    "scale(-0, 1)",
+    "scale(+0, 1)",
+    "scale(.0, 1)",
+    "scale(0.0, 1)",
+    "scale(0e2, 1)",
+    "scale(0e-400, 1)",
+    "scale (0)",
+    "sCaLe\t( 0 )",
+    "scale(\f0\t,\n1\r)",
+    "scale(0%, 100%)",
+    "scaleX(0)",
+    "scaleY(0)",
+    "scaleX(-0.0)",
+    "scaleX(0e-400)",
+    "scaleY(0%)",
+    "scaleY(-0.00e-400)",
+    "scale3d(0, 0, 0)",
+    "scale3d(0, 1, 1)",
+    "scale3d(0.00e-400, 1, 1)",
+    "scale3d(1, 0, 1)",
+    "scale3d(.0, 100%, 1)",
+    "SCALE3D(1, +0, -1)",
+    "sCaLe( +0.00e-2 , 1 )",
+    "ScAlEx( 0% )",
+    "scale3d(\t1,\t-0.0,\t1 )",
+    "translateX(10px) scale(0, 1)",
+    "rotate(10deg) scale3d(1, 0, 1)",
+  ])("strips elements whose transform collapses a visible axis: %s", async (transform) => {
+    const html = `<p>Visible</p><div style="transform:${transform}">Hidden prompt</div>`;
+    const result = await sanitizeHtml(html);
+
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("Hidden prompt");
+  });
+
+  it.each([
+    "scale(1)",
+    "scale(-1)",
+    "scale(0.1)",
+    "scale(1e-2)",
+    "scale(1e-400)",
+    "scale(.0001e-400, 1)",
+    "scale (0, 1)",
+    "scale (+0)",
+    "scale (0%)",
+    "éscale(0)",
+    "é-scale(0)",
+    "ſcale(0)",
+    "scale(\u00a00)",
+    "scale(0\u00a0)",
+    "scale(0,\u00a01)",
+    "scaleX\u00a0(0)",
+    "scale(10%)",
+    "scale(-1, 1)",
+    "scale(1, -1)",
+    "scale3d(1, 1, 0)",
+    "scale3d(-1, 1, 0)",
+    "scale3d(0.1, 1, 0)",
+    "scale3d(1e-400, 1, 1)",
+    "scale3d (0, 0, 0)",
+    "scale3d(0,\u00a01,1)",
+    "scaleX(1e-400)",
+    "scaleX(1e-400%)",
+    "scaleX (0)",
+    "scaleY(-1e-400)",
+    "scaleY\t(0)",
+    "scaleZ(0)",
+    "ScAlEz( +0.0 )",
+    "scale(0px, 1)",
+    "scale(0., 1)",
+    "custom-scale(0)",
+    "-scale(0)",
+    "scale(0, 1, 2)",
+    "scale3d(0, 1)",
+    "scale3d(0, 1, 1, 1)",
+    "scaleX(0, 1)",
+    "rotate(10deg) scale(-1, 1)",
+  ])("preserves elements whose visible axes are not collapsed: %s", async (transform) => {
+    const html = `<p>Visible</p><div style="transform:${transform}">Visible transform</div>`;
+    const result = await sanitizeHtml(html);
+
+    expect(result).toContain("Visible");
+    expect(result).toContain("Visible transform");
+  });
+
   it("strips transform:translateX far-offscreen elements", async () => {
     const html = '<p>Show</p><div style="transform:translateX(-9999px)">Translated</div>';
     const result = await sanitizeHtml(html);
