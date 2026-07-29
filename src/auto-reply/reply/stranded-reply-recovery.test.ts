@@ -85,6 +85,34 @@ describe("resolveStrandedReplyRecovery", () => {
     }
   });
 
+  it("creates the same retry for a substantive CJK private final", () => {
+    // Full-width terminators carry no trailing whitespace, so a CJK reply of the
+    // same shape used to score zero sentence terminators and skip recovery entirely.
+    const base = createMockFollowupRun({ prompt: "question" });
+    const substantiveCjkFinal =
+      "近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。" +
+      "近 30 日最大單一產品占 44.2%，亦超過 40% 門檻。建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。" +
+      "成長主因仍待業務確認，我尚未取得該線的回覆。";
+
+    const recovery = resolveStrandedReplyRecovery({
+      base,
+      finalText: substantiveCjkFinal,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isHeartbeat: false,
+      isRoomEvent: false,
+    });
+
+    expect(recovery.kind).toBe("retry");
+    if (recovery.kind === "retry") {
+      expect(recovery.run.strandedReplyRetry).toBe(true);
+      expect(recovery.run.disableCollectBatching).toBe(true);
+      expect(recovery.run.prompt).toContain(substantiveCjkFinal);
+      expect(recovery.run.prompt).toContain("message(action=send)");
+    }
+  });
+
   it("returns a diagnostic rather than a second retry", () => {
     const base = createMockFollowupRun({ prompt: "question", strandedReplyRetry: true });
 

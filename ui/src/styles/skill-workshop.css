@@ -1444,6 +1444,7 @@
 .sw-today {
   max-width: 720px;
   width: 100%;
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 8px 24px 64px;
   overflow-y: auto;

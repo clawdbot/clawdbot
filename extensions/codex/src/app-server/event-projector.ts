@@ -339,8 +339,13 @@ export class CodexAppServerEventProjector {
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
-        recordPromptError:
-          legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
+        // Preserve audit synthesis on every path, but completed answers must not
+        // promote bookkeeping gaps into user-visible terminal failure evidence.
+        terminalDisposition: this.aborted
+          ? "tool_error"
+          : hasDeliverableAssistantOnCompletedTurn
+            ? "diagnostic_only"
+            : "prompt_error",
       });
     if (synthesizedMissingToolResultError) {
       this.synthesizedMissingToolResultError = synthesizedMissingToolResultError;

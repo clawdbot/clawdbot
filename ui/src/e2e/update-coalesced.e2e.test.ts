@@ -116,6 +116,74 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
     }
   });
 
+  it("reports the final version after a managed update handoff reconnects", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-managed-handoff");
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "update.run": {
+          ok: true,
+          handoff: { status: "started" },
+          result: { reason: "managed-service-handoff-started", status: "skipped" },
+        },
+        "update.status": {
+          sequence: [
+            {
+              sentinel: {
+                kind: "update",
+                status: "skipped",
+                stats: { reason: "managed-service-handoff-started" },
+              },
+            },
+            {
+              sentinel: {
+                kind: "update",
+                status: "ok",
+                stats: { after: { version: "1.0.0" } },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "stable",
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+        },
+      });
+
+      await page.getByRole("button", { name: /Update Gateway/ }).click();
+      await gateway.waitForRequest("update.run");
+      await gateway.closeLatest(1012, "managed update handoff");
+
+      await page
+        .getByText("Expected v2.0.0, running v1.0.0", { exact: false })
+        .waitFor({ timeout: 15_000 });
+      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      expect(await gateway.getRequests("update.status")).toHaveLength(2);
+      expect(pageErrors).toEqual([]);
+      await page.screenshot({
+        path: path.join(artifactDir, "managed-handoff-version-mismatch.png"),
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows and routes the update target from live Mac app ownership", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-ownership");
     const context = await browser.newContext({

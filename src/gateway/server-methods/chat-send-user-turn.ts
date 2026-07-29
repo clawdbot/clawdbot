@@ -80,6 +80,14 @@ function buildChatSendUserTurnMedia(
             // Every offload keeps its claim-check alias so persisted marker
             // ownership survives; only non-images skip native image hydration.
             url: offloadedRef.mediaRef,
+            kind: offloadedRef.kind,
+            fileName: offloadedRef.label,
+            sizeBytes: offloadedRef.sizeBytes,
+            ...(offloadedRef.durationMs !== undefined
+              ? { durationMs: offloadedRef.durationMs }
+              : {}),
+            ...(offloadedRef.width !== undefined ? { width: offloadedRef.width } : {}),
+            ...(offloadedRef.height !== undefined ? { height: offloadedRef.height } : {}),
             ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
           }
         : {}),
