@@ -2592,6 +2592,28 @@ describe("deliverOutboundPayloads", () => {
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
   });
 
+  it("strips complete inline runtime context blocks before channel delivery", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "clean-inline-runtime-context",
+      roomId: "!room",
+    });
+    setTestOutbound({ sendText });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private runtime metadata<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("before  after");
+  });
+
   it("runs reply payload hooks before the final message_sending policy pass", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_payload_sending" || hookName === "message_sending",
