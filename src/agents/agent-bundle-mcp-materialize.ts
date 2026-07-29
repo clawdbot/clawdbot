@@ -196,6 +196,9 @@ function serverAllowsUtilityTool(
   operation: string,
   sessionDeniedOnly: boolean,
 ): boolean {
+  // Two disjoint passes share this gate: the executable pass (sessionDeniedOnly=false)
+  // admits only non-denied utilities; the denied-inventory pass admits only denied ones.
+  // Membership must EQUAL the pass selector, hence the != rejection.
   if ((server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly) {
     return false;
   }
