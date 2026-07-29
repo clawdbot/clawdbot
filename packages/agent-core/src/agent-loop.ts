@@ -669,14 +669,21 @@ async function executeToolCallsSequential(
     );
     let finalized: FinalizedToolCallOutcome;
     if (preparation.kind === "immediate") {
-      finalized = {
-        toolCall,
-        result: preparation.result,
-        isError: preparation.isError,
-        executionStarted: false,
-        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      };
+      finalized = await finalizeToolCallOutcome(
+        currentContext,
+        assistantMessage,
+        {
+          toolCall,
+          result: preparation.result,
+          isError: preparation.isError,
+          executionStarted: false,
+          ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
+          ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+        },
+        toolCall.arguments,
+        config,
+        signal,
+      );
     } else {
       const executed = await executePreparedToolCall(
         preparation,
@@ -745,14 +752,21 @@ async function executeToolCallsParallel(
       resolvedToolCalls,
     );
     if (preparation.kind === "immediate") {
-      const finalized = {
-        toolCall,
-        result: preparation.result,
-        isError: preparation.isError,
-        executionStarted: false,
-        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      } satisfies FinalizedToolCallOutcome;
+      const finalized = await finalizeToolCallOutcome(
+        currentContext,
+        assistantMessage,
+        {
+          toolCall,
+          result: preparation.result,
+          isError: preparation.isError,
+          executionStarted: false,
+          ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
+          ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+        },
+        toolCall.arguments,
+        config,
+        signal,
+      );
       await emitToolExecutionEnd(finalized, emit);
       finalizedCalls.push(finalized);
       if (signal?.aborted) {
@@ -1106,13 +1120,75 @@ async function finalizeExecutedToolCall(
     }
   }
 
-  return {
-    toolCall: prepared.toolCall,
-    result,
-    isError,
-    executionStarted: executed.executionStarted,
-    ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-  };
+  return await finalizeToolCallOutcome(
+    currentContext,
+    assistantMessage,
+    {
+      toolCall: prepared.toolCall,
+      result,
+      isError,
+      executionStarted: executed.executionStarted,
+      ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+    },
+    prepared.args,
+    config,
+    signal,
+  );
+}
+
+async function finalizeToolCallOutcome(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  finalized: FinalizedToolCallOutcome,
+  args: unknown,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+): Promise<FinalizedToolCallOutcome> {
+  if (!config.afterToolOutcome) {
+    return finalized;
+  }
+  try {
+    const afterResult = await config.afterToolOutcome(
+      {
+        assistantMessage,
+        toolCall: finalized.toolCall,
+        args,
+        result: finalized.result,
+        isError: finalized.isError,
+        executionStarted: finalized.executionStarted,
+        ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+        context: currentContext,
+      },
+      signal,
+    );
+    if (!afterResult) {
+      return finalized;
+    }
+    return {
+      ...finalized,
+      result: {
+        ...finalized.result,
+        content: afterResult.content ?? finalized.result.content,
+        details: afterResult.details ?? finalized.result.details,
+        terminate: afterResult.terminate ?? finalized.result.terminate,
+      },
+      isError: afterResult.isError ?? finalized.isError,
+    };
+  } catch (error) {
+    const errorResult = createErrorToolResult(
+      error instanceof Error ? error.message : String(error),
+    );
+    return {
+      ...finalized,
+      result: {
+        ...errorResult,
+        ...(finalized.result.terminate === undefined
+          ? {}
+          : { terminate: finalized.result.terminate }),
+      },
+      isError: true,
+    };
+  }
 }
 
 function createErrorToolResult(message: string): AgentToolResult<unknown> {
