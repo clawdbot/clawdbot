@@ -52,6 +52,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   private async handlePostAgentRun(): Promise<PostAgentRunAction> {
     const msg = this.lastAssistantMessage;
     this.lastAssistantMessage = undefined;
+    this.lastAssistantMessageId = undefined;
     const endedForTurnHandoff = this.lastRunEndedForTurnHandoff;
     this.lastRunEndedForTurnHandoff = false;
     if (endedForTurnHandoff) {

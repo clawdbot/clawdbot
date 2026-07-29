@@ -208,6 +208,10 @@ export const ChatFinalEventSchema = closedObject({
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
   yielded: Type.Optional(Type.Literal(true)),
+  // Stable transcript id of the assistant message this run produced, when
+  // available. Lets clients dedup on (sessionKey, messageId) instead of
+  // re-deriving "the last transcript entry".
+  messageId: Type.Optional(NonEmptyString),
 });
 
 /** Terminal event for user-initiated or coordinator-initiated cancellation. */
@@ -217,6 +221,7 @@ export const ChatAbortedEventSchema = closedObject({
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   stopReason: Type.Optional(Type.String()),
+  messageId: Type.Optional(NonEmptyString),
 });
 
 /** Terminal event for failed chat runs with an optional normalized failure kind. */

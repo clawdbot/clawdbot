@@ -203,6 +203,12 @@ export function handleAgentEnd(
     const phase =
       ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
     const errorData = isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {};
+    // Stable id of the assistant message this run persisted, when it produced
+    // one. Threaded through so the Gateway terminal event can reference the
+    // produced message instead of clients re-deriving the transcript tail.
+    const messageIdData = evt?.lastAssistantMessageId
+      ? { messageId: evt.lastAssistantMessageId }
+      : {};
     emitAgentEvent({
       runId: ctx.params.runId,
       ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -216,6 +222,7 @@ export function handleAgentEnd(
         phase,
         ...errorData,
         ...terminalMeta,
+        ...messageIdData,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
         endedAt: Date.now(),
@@ -231,6 +238,7 @@ export function handleAgentEnd(
             phase,
             ...errorData,
             ...terminalMeta,
+            ...messageIdData,
             ...(livenessState ? { livenessState } : {}),
             ...(replayInvalid ? { replayInvalid } : {}),
           },

@@ -291,6 +291,8 @@ export abstract class AgentSessionBase {
 
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  /** Stable transcript id of the last assistant message persisted this run. */
+  protected lastAssistantMessageId: string | undefined = undefined;
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
@@ -339,7 +341,13 @@ export abstract class AgentSessionBase {
     // Notify all listeners
     this.emit(
       event.type === "agent_end"
-        ? { ...event, willRetry: this.willRetryAfterAgentEnd(event) }
+        ? {
+            ...event,
+            willRetry: this.willRetryAfterAgentEnd(event),
+            ...(this.lastAssistantMessageId
+              ? { lastAssistantMessageId: this.lastAssistantMessageId }
+              : {}),
+          }
         : event,
     );
 
@@ -363,10 +371,15 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        this.sessionManager.appendMessage(event.message, {
+        const appendedMessageId = this.sessionManager.appendMessage(event.message, {
           invalidateSerializedPrefixCache:
             messageChangedByExtension || toolResultChangedByExtension,
         });
+        // Remember the persisted id of the assistant turn so agent_end can carry
+        // a stable reference to the message this run produced.
+        if (event.message.role === "assistant") {
+          this.lastAssistantMessageId = appendedMessageId;
+        }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
