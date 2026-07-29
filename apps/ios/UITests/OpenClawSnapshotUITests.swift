@@ -507,6 +507,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
     }
 
+    func testChatComposerReturnInsertsNewlineWithoutSending() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-composer-return"))
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("first line\nsecond line")
+
+        XCTAssertEqual(input.value as? String, "first line\nsecond line")
+        XCTAssertTrue(app.buttons["chat-send-message"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["first line\nsecond line"].exists)
+        self.attachScreenshot(named: "chat-composer-return")
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(

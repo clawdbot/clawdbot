@@ -29,7 +29,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
         if self.shouldFocus, self.isEnabled, !textView.isFirstResponder {
             textView.becomeFirstResponder()
-        } else if (!self.shouldFocus || !self.isEnabled), textView.isFirstResponder {
+        } else if !self.shouldFocus || !self.isEnabled, textView.isFirstResponder {
             textView.resignFirstResponder()
         }
 

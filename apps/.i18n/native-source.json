@@ -40051,7 +40051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1011,
+      "line": 1045,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Loading commands",
       "surface": "apple",
@@ -40059,7 +40059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1020,
+      "line": 1054,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Commands unavailable",
       "surface": "apple",
@@ -40067,7 +40067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1029,
+      "line": 1063,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Retry",
       "surface": "apple",
@@ -40075,7 +40075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1038,
+      "line": 1072,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "No matching commands",
       "surface": "apple",
@@ -40083,7 +40083,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1270,
+      "line": 1304,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop response",
       "surface": "apple",
@@ -40091,7 +40091,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1295,
+      "line": 1329,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Send message",
       "surface": "apple",
@@ -40099,7 +40099,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1309,
+      "line": 1343,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -40107,7 +40107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1435,
+      "line": 1469,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Message…",
       "surface": "apple",
