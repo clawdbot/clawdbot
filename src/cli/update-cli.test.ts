@@ -2850,6 +2850,19 @@ describe("update-cli", () => {
     },
   ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
 
+  it.each([
+    { name: "text", options: { dryRun: true, channel: "beta" } },
+    { name: "JSON", options: { dryRun: true, json: true, channel: "beta" } },
+  ])("reads config without recording observations during a $name dry run", async ({ options }) => {
+    await updateCommand(options);
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+      observe: false,
+    });
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+  });
+
   it("does not clean managed-service handoffs during a JSON dry run", async () => {
     await updateCommand({ dryRun: true, json: true, channel: "beta" });
 

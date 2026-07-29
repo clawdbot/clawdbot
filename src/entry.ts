@@ -213,7 +213,11 @@ export async function tryHandleRootHelpFastPath(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<boolean> {
-  if (resolveCliContainerTarget(argv, deps.env)) {
+  const env = deps.env ?? process.env;
+  if (
+    env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1" ||
+    resolveCliContainerTarget(argv, env)
+  ) {
     return false;
   }
   if (!isRootHelpInvocation(argv)) {
@@ -230,7 +234,7 @@ export async function tryHandleRootHelpFastPath(
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
       deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
       (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
-    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(deps.env);
+    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
     if (!liveRootHelpOptions) {
       const outputPrecomputedRootHelpText =
         deps.outputPrecomputedRootHelpText ??

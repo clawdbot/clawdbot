@@ -9,6 +9,7 @@ import {
   installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
   installPluginFromPath,
+  parseClawHubPluginSpec,
   promptYesNo,
   readConfigFileSnapshotForWrite,
   resetPluginsCliTestState,
@@ -137,6 +138,21 @@ describe("plugin install mutation-free preflight", () => {
       error: "--pin is not supported with git: installs.",
     },
     {
+      label: "ClawHub pin",
+      args: ["clawhub:demo", "--pin"],
+      error: "--pin is only supported with npm registry installs.",
+    },
+    {
+      label: "npm-pack pin",
+      args: ["npm-pack:/tmp/openclaw-plugin-preflight-test.tgz", "--pin"],
+      error: "--pin is only supported with npm registry installs.",
+    },
+    {
+      label: "local path pin",
+      args: [".", "--pin"],
+      error: "--pin is only supported with npm registry installs.",
+    },
+    {
       label: "registry link",
       args: ["npm:demo", "--link"],
       error: "--link requires a local path.",
@@ -162,6 +178,10 @@ describe("plugin install mutation-free preflight", () => {
       error: "Plugin path not found:",
     },
   ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
+    if (args[0] === "clawhub:demo") {
+      parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    }
+
     await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(
       "__exit__:1",
     );
