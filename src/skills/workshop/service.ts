@@ -31,6 +31,7 @@ import {
   stripProposalFrontmatterForSkill,
 } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
+import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { assertProposalContainsNoLiteralSecrets, scanProposalBundle } from "./proposal-scan.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
@@ -733,6 +734,22 @@ export async function applySkillProposal(
         filePath: record.target.skillFile,
         symlinkPolicy,
       });
+      if (record.evaluation?.id !== evaluated.evaluation.id) {
+        throw new Error("Skill proposal evaluation changed before apply; retry the operation.");
+      }
+      // Apply always creates the evaluation above. The hash is absent only when
+      // no evaluator bundle ran, so there is no evaluated target tree to bind.
+      if (evaluated.evaluation.targetTreeSha256) {
+        let currentTargetTreeSha256: string;
+        try {
+          currentTargetTreeSha256 = await readSkillProposalTargetTreeSha256(record.target.skillDir);
+        } catch {
+          throw new Error("Skill target changed after evaluation; retry the operation.");
+        }
+        if (currentTargetTreeSha256 !== evaluated.evaluation.targetTreeSha256) {
+          throw new Error("Skill target changed after evaluation; retry the operation.");
+        }
+      }
       const targetState = await readApplyTargetState(record, supportFiles, input);
       const shouldDispatchSkillChange = hasCommittedSkillChangeHooks();
       const beforeSkill =

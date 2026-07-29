@@ -136,6 +136,44 @@ describe("Skill Workshop lifecycle hooks", () => {
     );
   });
 
+  it("rejects apply when an untouched target asset changes after evaluation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-evaluation-race-");
+    const skillDir = path.join(workspaceDir, "skills", "existing");
+    await writeSkill({
+      dir: skillDir,
+      name: "existing",
+      description: "Existing skill",
+      body: "# Existing\n\nBefore.\n",
+    });
+    const untouchedAsset = path.join(skillDir, "references", "untouched.txt");
+    await fs.mkdir(path.dirname(untouchedAsset), { recursive: true });
+    await fs.writeFile(untouchedAsset, "before\n");
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      agentId: "main",
+      skillName: "existing",
+      content: "# Existing\n\nAfter.\n",
+    });
+    hookMocks.proposalChanged.mockImplementation(async (event) => {
+      if (event.action === "evaluation_completed") {
+        await fs.writeFile(untouchedAsset, "changed after evaluation\n");
+      }
+    });
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("Skill target changed after evaluation");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Before.",
+    );
+    await expect(fs.readFile(untouchedAsset, "utf8")).resolves.toBe("changed after evaluation\n");
+  });
+
   it("records and dispatches scanner quarantine transitions", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-quarantine-");
     const proposal = await proposeCreateSkill({

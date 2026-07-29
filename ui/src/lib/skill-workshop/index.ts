@@ -46,6 +46,7 @@ export type SkillWorkshopEvaluation = {
   startedAt: string;
   completedAt: string;
   correlationId?: string;
+  targetTreeSha256?: string;
   outcomes: SkillWorkshopEvaluationOutcome[];
 };
 

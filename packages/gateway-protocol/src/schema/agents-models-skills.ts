@@ -650,6 +650,7 @@ export const SkillProposalEvaluationSchema = closedObject({
   startedAt: NonEmptyString,
   completedAt: NonEmptyString,
   correlationId: Type.Optional(NonEmptyString),
+  targetTreeSha256: Type.Optional(Sha256String),
   outcomes: Type.Array(SkillProposalEvaluationOutcomeSchema, { maxItems: 64 }),
 });
 

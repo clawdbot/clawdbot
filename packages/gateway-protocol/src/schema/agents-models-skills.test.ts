@@ -349,6 +349,7 @@ describe("SkillProposalEvaluationSchema", () => {
     trigger: "apply",
     startedAt: "2026-05-30T00:01:00.000Z",
     completedAt: "2026-05-30T00:01:01.000Z",
+    targetTreeSha256: "c".repeat(64),
     outcomes: [
       {
         pluginId: "quality-plugin",

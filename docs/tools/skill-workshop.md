@@ -184,7 +184,8 @@ Evaluations are explicit from the CLI, Control UI, Gateway
 `skills.proposals.evaluate` method, or agent `skill_workshop` action. Results
 are stored on the exact proposal revision and in the append-only proposal event
 ledger. Evaluator failures remain attributed results; only a completed
-`decision: "block"` prevents apply.
+`decision: "block"` prevents apply. Apply also revalidates the evaluated target
+tree, so any live skill asset drift requires a fresh evaluation.
 
 The lifecycle supports external optimization loops without embedding one.
 Controllers can consume `skills.proposals.events.list`, evaluate an exact

@@ -11,6 +11,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createSkillProposalEvent } from "./plugin-hooks.js";
 import { listSkillProposalEvents, listSkillProposals, proposeCreateSkill } from "./service.js";
+import { parseSkillProposalEvaluation } from "./store-record.js";
 import { updateSkillProposalRecord } from "./store.js";
 
 let testState: OpenClawTestState;
@@ -98,5 +99,20 @@ describe("Skill Workshop SQLite store", () => {
       payload: { evaluation: "manual", outcomeCount: 0 },
       evaluation: { id: evaluation.id },
     });
+  });
+
+  it("rejects non-string evaluation tree hashes", () => {
+    expect(
+      parseSkillProposalEvaluation({
+        id: "evaluation-invalid-tree-hash",
+        proposedVersion: "v1",
+        revisionHash: "a".repeat(64),
+        trigger: "manual",
+        startedAt: "2026-07-29T00:00:00.000Z",
+        completedAt: "2026-07-29T00:00:01.000Z",
+        targetTreeSha256: ["b".repeat(64)],
+        outcomes: [],
+      }),
+    ).toBeNull();
   });
 });

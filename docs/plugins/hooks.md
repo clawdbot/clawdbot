@@ -223,7 +223,8 @@ Stored outcomes identify the evaluator, plugin id, plugin package version,
 status, and returned result. Timeouts and thrown errors are recorded as
 attributed error outcomes; they do not fail the whole evaluation. Applying a
 proposal is blocked only when a completed evaluator returns
-`decision: "block"`.
+`decision: "block"`. Apply revalidates the evaluated target tree under the
+Workshop mutation lock, so any live skill asset drift requires reevaluation.
 
 `skill_proposal_changed` fires after the matching proposal row and append-only
 lifecycle event commit. It carries the event id, sequence, exact proposal

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { root, walkDirectory } from "../../infra/fs-safe.js";
+import { pathExists, root, walkDirectory } from "../../infra/fs-safe.js";
 import type {
   PluginHookSkillBundleFile,
   PluginHookSkillBundleSnapshot,
@@ -20,38 +20,62 @@ export async function buildSkillProposalEvaluationBundles(params: {
 }): Promise<{
   candidate: PluginHookSkillBundleSnapshot;
   baseline?: PluginHookSkillBundleSnapshot;
+  targetTreeSha256: string;
 }> {
+  const targetFiles = await readSkillTreeFiles(params.proposal.record.target.skillDir);
+  const targetTreeSha256 = hashSkillTree(targetFiles);
+  const skillMdPath =
+    params.proposal.record.kind === "create"
+      ? "SKILL.md"
+      : resolveTargetSkillRelativePath(params.proposal, targetFiles, {
+          recordedTargetExists: await pathExists(params.proposal.record.target.skillFile),
+        });
   const candidateSkillMd = fileFromBuffer(
-    "SKILL.md",
+    skillMdPath,
     Buffer.from(stripProposalFrontmatterForSkill(params.proposal.content), "utf8"),
   );
   const proposedFiles = params.supportFiles.map((file) =>
     fileFromBuffer(file.path, Buffer.from(file.content, "utf8")),
   );
+  const candidateFiles = new Map(targetFiles.map((file) => [file.path, file]));
   if (params.proposal.record.kind === "create") {
+    if (await pathExists(params.proposal.record.target.skillFile)) {
+      throw new Error(`Target skill already exists: ${params.proposal.record.target.skillFile}`);
+    }
+    candidateFiles.set(candidateSkillMd.path, candidateSkillMd);
+    for (const file of proposedFiles) {
+      const targetFile = path.join(params.proposal.record.target.skillDir, file.path);
+      if (await pathExists(targetFile)) {
+        throw new Error(`Target support file already exists: ${targetFile}`);
+      }
+      candidateFiles.set(file.path, file);
+    }
     return {
-      candidate: snapshotFromFiles([candidateSkillMd, ...proposedFiles]),
+      candidate: snapshotFromFiles([...candidateFiles.values()], skillMdPath),
+      targetTreeSha256,
     };
   }
 
-  const baselineFiles = await readSkillTreeFiles(params.proposal.record.target.skillDir);
-  const baseline = snapshotFromFiles(baselineFiles);
-  const candidateFiles = new Map(baselineFiles.map((file) => [file.path, file]));
+  const baseline = snapshotFromFiles(targetFiles, skillMdPath);
   candidateFiles.set(candidateSkillMd.path, candidateSkillMd);
   for (const file of proposedFiles) {
     candidateFiles.set(file.path, file);
   }
   return {
     baseline,
-    candidate: snapshotFromFiles([...candidateFiles.values()]),
+    candidate: snapshotFromFiles([...candidateFiles.values()], skillMdPath),
+    targetTreeSha256,
   };
 }
 
-export async function readSkillProposalBaselineTreeSha256(skillDir: string): Promise<string> {
-  return snapshotFromFiles(await readSkillTreeFiles(skillDir)).treeSha256;
+export async function readSkillProposalTargetTreeSha256(skillDir: string): Promise<string> {
+  return hashSkillTree(await readSkillTreeFiles(skillDir));
 }
 
 async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {
+  if (!(await pathExists(skillDir))) {
+    return [];
+  }
   const scanned = await walkDirectory(skillDir, {
     maxDepth: 16,
     maxEntries: MAX_EVALUATION_FILES * 2,
@@ -107,24 +131,63 @@ function fileFromBuffer(relativePath: string, content: Buffer): PluginHookSkillB
 
 function snapshotFromFiles(
   inputFiles: readonly PluginHookSkillBundleFile[],
+  skillMdPath: string,
 ): PluginHookSkillBundleSnapshot {
   const files = inputFiles.toSorted((a, b) => a.path.localeCompare(b.path));
-  const skillMd = files.find((file) => file.path === "SKILL.md");
+  const skillMd = files.find((file) => file.path === skillMdPath);
   if (!skillMd) {
-    throw new Error("Skill evaluation bundle is missing SKILL.md.");
+    throw new Error(`Skill evaluation bundle is missing ${skillMdPath}.`);
   }
-  const treeSha256 = sha256Hex(
-    JSON.stringify(
-      files.map((file) => ({
-        path: file.path,
-        sha256: file.sha256,
-        sizeBytes: file.sizeBytes,
-      })),
-    ),
-  );
   return {
     skillMd,
-    files: files.filter((file) => file.path !== "SKILL.md"),
-    treeSha256,
+    files: files.filter((file) => file.path !== skillMdPath),
+    treeSha256: hashSkillTree(files),
   };
+}
+
+function hashSkillTree(files: readonly PluginHookSkillBundleFile[]): string {
+  return sha256Hex(
+    JSON.stringify(
+      files
+        .toSorted((a, b) => a.path.localeCompare(b.path))
+        .map((file) => ({
+          path: file.path,
+          sha256: file.sha256,
+          sizeBytes: file.sizeBytes,
+        })),
+    ),
+  );
+}
+
+function resolveTargetSkillRelativePath(
+  proposal: SkillProposalReadResult,
+  targetFiles: readonly PluginHookSkillBundleFile[],
+  options: { recordedTargetExists: boolean },
+): string {
+  const relativePath = path.relative(
+    path.resolve(proposal.record.target.skillDir),
+    path.resolve(proposal.record.target.skillFile),
+  );
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.startsWith(`..${path.sep}`)) {
+    throw new Error("Skill evaluation target file must be inside the skill directory.");
+  }
+  const portablePath = relativePath.split(path.sep).join("/");
+  if (targetFiles.some((file) => file.path === portablePath)) {
+    return portablePath;
+  }
+  // Case-fold only when the recorded path resolves on this filesystem. Otherwise
+  // evaluation could replace a different file than apply on case-sensitive hosts.
+  if (!options.recordedTargetExists) {
+    return portablePath;
+  }
+  const caseMatches = targetFiles.filter(
+    (file) => file.path.toLowerCase() === portablePath.toLowerCase(),
+  );
+  if (caseMatches.length === 1) {
+    return caseMatches[0].path;
+  }
+  if (caseMatches.length > 1) {
+    throw new Error(`Skill evaluation target filename is ambiguous: ${portablePath}.`);
+  }
+  return portablePath;
 }

@@ -21,6 +21,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   }),
 }));
 
+import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
 import {
   applySkillProposal,
   evaluateSkillProposal,
@@ -97,6 +98,7 @@ describe("Skill Workshop proposal evaluation", () => {
       revisionHash: proposal.revisionHash,
       trigger: "manual",
       correlationId: "optimization-run-1",
+      targetTreeSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       outcomes: [
         {
           evaluatorId: "nvidia.skill-eval",
@@ -232,6 +234,87 @@ describe("Skill Workshop proposal evaluation", () => {
     expect(
       (await inspectSkillProposal(proposal.record.id, { workspaceDir }))?.record.evaluation,
     ).toBe(undefined);
+  });
+
+  it.each(["skill.md", "SKILL.MD"])(
+    "preserves the target marker casing in evaluation bundles for %s",
+    async (skillFileName) => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-filename-");
+      const skillDir = path.join(workspaceDir, "skills", "existing-marker-case");
+      await fs.mkdir(skillDir, { recursive: true });
+      const canonicalSkillFile = path.join(skillDir, "SKILL.md");
+      await fs.writeFile(
+        canonicalSkillFile,
+        "---\nname: existing-marker-case\ndescription: Existing skill\n---\n\n# Existing\n",
+      );
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        agentId: "main",
+        skillName: "existing-marker-case",
+        content: "# Existing\n\nUpdated.\n",
+      });
+      const intermediateSkillFile = path.join(skillDir, "marker.tmp");
+      await fs.rename(canonicalSkillFile, intermediateSkillFile);
+      await fs.rename(intermediateSkillFile, path.join(skillDir, skillFileName));
+
+      const buildBundles = () =>
+        buildSkillProposalEvaluationBundles({
+          proposal,
+          supportFiles: [],
+        });
+      if (
+        !(await fs.stat(canonicalSkillFile).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        await expect(buildBundles()).rejects.toThrow("missing SKILL.md");
+        return;
+      }
+
+      const bundles = await buildBundles();
+      expect(bundles.baseline?.skillMd.path).toBe(skillFileName);
+      expect(bundles.candidate.skillMd.path).toBe(skillFileName);
+      expect(bundles.candidate.files.map((file) => file.path)).not.toContain("SKILL.md");
+    },
+  );
+
+  it("uses filesystem path equivalence for create support-file collisions", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-create-collision-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Create Collision",
+      description: "Reject support files that resolve to an existing target",
+      content: "# Create Collision\n",
+      supportFiles: [{ path: "references/input.txt", content: "candidate\n" }],
+    });
+    const existingFile = path.join(proposal.record.target.skillDir, "references", "INPUT.txt");
+    await fs.mkdir(path.dirname(existingFile), { recursive: true });
+    await fs.writeFile(existingFile, "existing\n");
+    const requestedFile = path.join(proposal.record.target.skillDir, "references", "input.txt");
+    const requestedFileExists = await fs.stat(requestedFile).then(
+      () => true,
+      () => false,
+    );
+
+    const buildBundles = () =>
+      buildSkillProposalEvaluationBundles({
+        proposal,
+        supportFiles: [{ path: "references/input.txt", content: "candidate\n" }],
+      });
+    if (requestedFileExists) {
+      await expect(buildBundles()).rejects.toThrow("Target support file already exists");
+    } else {
+      await expect(buildBundles()).resolves.toMatchObject({
+        candidate: {
+          files: expect.arrayContaining([
+            expect.objectContaining({ path: "references/INPUT.txt" }),
+            expect.objectContaining({ path: "references/input.txt" }),
+          ]),
+        },
+      });
+    }
   });
 
   it("rejects a draft file that no longer matches its persisted revision", async () => {

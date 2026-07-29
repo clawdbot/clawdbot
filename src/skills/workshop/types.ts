@@ -32,6 +32,7 @@ export type SkillProposalEvaluation = {
   startedAt: string;
   completedAt: string;
   correlationId?: string;
+  targetTreeSha256?: string;
   outcomes: PluginHookSkillProposalEvaluationOutcome[];
 };
 

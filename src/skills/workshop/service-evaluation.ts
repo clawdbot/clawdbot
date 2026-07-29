@@ -15,7 +15,7 @@ import {
 } from "./plugin-hooks.js";
 import {
   buildSkillProposalEvaluationBundles,
-  readSkillProposalBaselineTreeSha256,
+  readSkillProposalTargetTreeSha256,
 } from "./proposal-bundle.js";
 import { readRequiredProposal } from "./service-query.js";
 import {
@@ -124,6 +124,7 @@ export async function evaluateSkillProposal(
     startedAt,
     completedAt,
     ...(correlationId ? { correlationId } : {}),
+    ...(bundles ? { targetTreeSha256: bundles.targetTreeSha256 } : {}),
     outcomes: normalizeEvaluationOutcomes(rawOutcomes),
   };
   const pendingRecord = { ...read.record, evaluation };
@@ -162,26 +163,16 @@ export async function evaluateSkillProposal(
       } catch {
         throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
       }
-      if (bundles && current.record.kind === "create") {
-        let targetContent: string | null;
+      if (bundles) {
+        let currentTargetTreeSha256: string;
         try {
-          targetContent = await readWorkspaceSkillFile(current.record.target.skillFile);
-        } catch {
-          throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
-        }
-        if (targetContent !== null) {
-          throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
-        }
-      } else if (bundles?.baseline) {
-        let currentBaselineTreeSha256: string;
-        try {
-          currentBaselineTreeSha256 = await readSkillProposalBaselineTreeSha256(
+          currentTargetTreeSha256 = await readSkillProposalTargetTreeSha256(
             current.record.target.skillDir,
           );
         } catch {
           throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
         }
-        if (currentBaselineTreeSha256 !== bundles.baseline.treeSha256) {
+        if (currentTargetTreeSha256 !== bundles.targetTreeSha256) {
           throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
         }
       }
