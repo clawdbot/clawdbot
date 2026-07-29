@@ -264,6 +264,8 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
 
 const CONVERSATION_HOOK_NAMES = [
   "before_model_resolve",
+  "agent_turn_prepare",
+  "before_prompt_build",
   "before_agent_reply",
   "llm_input",
   "llm_output",

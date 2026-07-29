@@ -15,6 +15,7 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
+import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -192,6 +193,7 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     next: TResult,
     registration: PluginHookRegistration<K>,
   ) => TResult;
+  isolateEventPerHandler?: boolean;
   mergeNullResults?: boolean;
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
@@ -613,7 +615,10 @@ export function createHookRunner(
     for (const hook of hooks) {
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
-        const promise = Promise.resolve(handler(event, ctx));
+        const handlerEvent = policy.isolateEventPerHandler
+          ? cloneHookIsolationValue(hookName, event)
+          : event;
+        const promise = Promise.resolve(handler(handlerEvent, ctx));
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
@@ -636,6 +641,9 @@ export function createHookRunner(
           }
         }
       } catch (err) {
+        if (err instanceof HookIsolationError) {
+          throw err;
+        }
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     }
@@ -1211,17 +1219,24 @@ export function createHookRunner(
       event,
       ctx,
       {
+        // A plugin may mutate its local event, but direct writes must not alter
+        // the caller's params or the event observed by another plugin.
+        isolateEventPerHandler: true,
         mergeResults: (acc, next, reg) => {
           if (acc?.block === true) {
             return acc;
           }
-          const approvalPluginId = acc?.requireApproval?.pluginId;
-          const freezeParamsForDifferentPlugin =
-            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
+          const approvalAlreadyRequested = acc?.requireApproval !== undefined;
+          let params = lastDefined(acc?.params, next.params);
+          if (approvalAlreadyRequested) {
+            params = acc?.params;
+          } else if (next.requireApproval && params !== undefined) {
+            // Approval covers one detached snapshot. Later hooks may still
+            // block, but they cannot change what the operator reviewed.
+            params = cloneHookIsolationValue("before_tool_call", params);
+          }
           return {
-            params: freezeParamsForDifferentPlugin
-              ? acc?.params
-              : lastDefined(acc?.params, next.params),
+            params,
             block: stickyTrue(acc?.block, next.block),
             blockReason: lastDefined(acc?.blockReason, next.blockReason),
             requireApproval:

@@ -18,6 +18,7 @@ import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
 } from "../infra/plugin-approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -446,18 +447,25 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
   if (!approval) {
     return undefined;
   }
+  // Detach the approval payload from plugin- and caller-owned objects before
+  // the request can outlive this policy pass.
+  const baseParamsSnapshot = cloneHookIsolationValue("before_tool_call", params.baseParams);
+  const overrideParamsSnapshot =
+    params.result?.params === undefined
+      ? undefined
+      : cloneHookIsolationValue("before_tool_call", params.result.params);
   warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
-      params: params.baseParams,
+      params: cloneHookIsolationValue("before_tool_call", baseParamsSnapshot),
       deferredApproval: {
         approval,
         toolName: params.toolName,
         ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
         ...(params.ctx ? { ctx: params.ctx } : {}),
-        baseParams: params.baseParams,
-        overrideParams: params.result?.params,
+        baseParams: baseParamsSnapshot,
+        overrideParams: overrideParamsSnapshot,
       },
     };
   }
@@ -469,7 +477,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
       disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: approval.description || approval.title || "Plugin approval required",
-      params: params.baseParams,
+      params: baseParamsSnapshot,
     };
   }
   if (params.approvalMode === "deny") {
@@ -479,7 +487,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
       kind: "veto",
       deniedReason: "plugin-approval",
       reason: "approval_required",
-      params: params.baseParams,
+      params: baseParamsSnapshot,
     };
   }
   return await requestPluginToolApproval({
@@ -488,8 +496,8 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
     ...(params.ctx ? { ctx: params.ctx } : {}),
     signal: params.signal,
-    baseParams: params.baseParams,
-    overrideParams: params.result?.params,
+    baseParams: baseParamsSnapshot,
+    overrideParams: overrideParamsSnapshot,
   });
 }
 
