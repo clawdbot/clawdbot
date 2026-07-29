@@ -281,12 +281,22 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
   consumedSubagentFanoutResultCallIds: Set<string>;
-  pendingImageGenerationCalls: Map<string, string>;
+  pendingImageGenerationCalls: Map<string, { namespace: string; prompt: string }>;
   subagentFanoutPhaseByNamespace: Map<string, number>;
   subagentFanoutNamespaceByCallId: Map<string, string>;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;
 };
+
+export function resolveMockScenarioStateNamespace(body: Record<string, unknown>): string {
+  return typeof body.prompt_cache_key === "string" && body.prompt_cache_key.trim()
+    ? body.prompt_cache_key.trim()
+    : "default";
+}
+
+export function buildMockScenarioStateCallKey(namespace: string, callId: string): string {
+  return JSON.stringify([namespace, callId]);
+}
 
 const SUBAGENT_FANOUT_PHASE_NAMESPACE_RE = /fanout mock phase namespace:\s*([a-z0-9:_-]+)/i;
 

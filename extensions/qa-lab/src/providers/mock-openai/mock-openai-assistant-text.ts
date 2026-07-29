@@ -14,6 +14,8 @@ import {
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   type MockScenarioState,
+  buildMockScenarioStateCallKey,
+  resolveMockScenarioStateNamespace,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
@@ -116,16 +118,22 @@ export function buildAssistantText(
       : "";
   const completedImageEvent = extractCompletedImageGenerationEvent(input);
   const completionCallId = extractToolOutputCallId(input);
-  const pendingImageCallId =
-    (completionCallId && scenarioState.pendingImageGenerationCalls.has(completionCallId)
-      ? completionCallId
+  const scenarioNamespace = resolveMockScenarioStateNamespace(body);
+  const completionCallKey = completionCallId
+    ? buildMockScenarioStateCallKey(scenarioNamespace, completionCallId)
+    : "";
+  const pendingImageCallKey =
+    (completionCallKey && scenarioState.pendingImageGenerationCalls.has(completionCallKey)
+      ? completionCallKey
       : undefined) ??
     (completedImageEvent
       ? [...scenarioState.pendingImageGenerationCalls.entries()].find(
-          ([, pendingPrompt]) => pendingPrompt === completedImageEvent.taskLabel,
+          ([, pending]) =>
+            pending.namespace === scenarioNamespace &&
+            pending.prompt === completedImageEvent.taskLabel,
         )?.[0]
       : undefined);
-  const hasPendingImageCall = Boolean(pendingImageCallId);
+  const hasPendingImageCall = Boolean(pendingImageCallKey);
   const trustedToolMediaPath = hasPendingImageCall ? mediaPath : "";
   const trustedCompletedImageMediaPath = hasPendingImageCall
     ? (completedImageEvent?.mediaPath ?? "")
@@ -292,8 +300,8 @@ export function buildAssistantText(
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     (trustedToolMediaPath || trustedCompletedImageMediaPath)
   ) {
-    if (pendingImageCallId) {
-      scenarioState.pendingImageGenerationCalls.delete(pendingImageCallId);
+    if (pendingImageCallKey) {
+      scenarioState.pendingImageGenerationCalls.delete(pendingImageCallKey);
     }
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${trustedToolMediaPath || trustedCompletedImageMediaPath}`;
   }

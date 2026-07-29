@@ -69,6 +69,8 @@ import {
   QA_RESTART_RECOVERY_PROMPT_RE,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
+  buildMockScenarioStateCallKey,
+  resolveMockScenarioStateNamespace,
   resolveSubagentFanoutPhaseNamespace,
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
@@ -209,6 +211,7 @@ async function buildResponsesPayload(
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const allInputText = extractAllRequestTexts(input, body);
+  const scenarioStateNamespace = resolveMockScenarioStateNamespace(body);
   const scenarioToolOutput =
     toolOutput ||
     (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
@@ -1234,7 +1237,10 @@ async function buildResponsesPayload(
         });
     const callId = extractPlannedToolCallId(events);
     if (callId) {
-      scenarioState.pendingImageGenerationCalls.set(callId, imageArgs.prompt);
+      scenarioState.pendingImageGenerationCalls.set(
+        buildMockScenarioStateCallKey(scenarioStateNamespace, callId),
+        { namespace: scenarioStateNamespace, prompt: imageArgs.prompt },
+      );
     }
     return events;
   }
@@ -1243,8 +1249,13 @@ async function buildResponsesPayload(
     findSuccessfulSessionsSpawnToolResultCallId(input, "qa-fanout-beta") ?? "";
   const successfulBetaSpawn = Boolean(fanoutResultCallId);
   const fanoutNamespace =
-    scenarioState.subagentFanoutNamespaceByCallId.get(fanoutResultCallId) ?? requestFanoutNamespace;
-  const consumedFanoutResultKey = `${fanoutNamespace}:${fanoutResultCallId}`;
+    scenarioState.subagentFanoutNamespaceByCallId.get(
+      buildMockScenarioStateCallKey(requestFanoutNamespace, fanoutResultCallId),
+    ) ?? requestFanoutNamespace;
+  const consumedFanoutResultKey = buildMockScenarioStateCallKey(
+    fanoutNamespace,
+    fanoutResultCallId,
+  );
   if (
     successfulBetaSpawn &&
     !scenarioState.consumedSubagentFanoutResultCallIds.has(consumedFanoutResultKey)
@@ -1277,7 +1288,10 @@ async function buildResponsesPayload(
         });
     const callId = extractPlannedToolCallId(events);
     if (callId) {
-      scenarioState.subagentFanoutNamespaceByCallId.set(callId, requestFanoutNamespace);
+      scenarioState.subagentFanoutNamespaceByCallId.set(
+        buildMockScenarioStateCallKey(requestFanoutNamespace, callId),
+        requestFanoutNamespace,
+      );
     }
     return events;
   }

@@ -3455,7 +3455,42 @@ describe("qa mock openai server", () => {
         "agent:qa:subagent:alpha-a",
       ),
     });
-    expect(await secondA.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    const secondABody = await secondA.text();
+    expect(secondABody).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    const betaA = sseToolCall(secondABody, "sessions_spawn");
+
+    const finalA = await postResponses(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: completedSpawnInput(
+        promptFor("agent:qa:fanout:1:session-a"),
+        betaA,
+        "agent:qa:subagent:beta-a",
+      ),
+    });
+    expect(outputText(await finalA.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+
+    const finalB = await postResponses(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        ...completedSpawnInput(
+          promptFor("agent:qa:fanout:1:session-b"),
+          firstB.call,
+          "agent:qa:subagent:alpha-b",
+        ),
+        betaA,
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(betaA, "missing-beta-call-id"),
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:qa:subagent:beta-b",
+          }),
+        },
+      ],
+    });
+    expect(outputText(await finalB.json())).toBe("subagent-1: ok\nsubagent-2: ok");
 
     const retry = await firstSpawn("agent:qa:fanout:2:session-retry");
     expect(retry.body).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
@@ -4265,6 +4300,61 @@ describe("qa mock openai server", () => {
     expect(outputText(completion)).toBe(
       "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
     );
+  });
+
+  it("isolates pending image calls when sessions reuse a call id", async () => {
+    const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      prompt_cache_key: "image-session-a",
+      tools: [IMAGE_GENERATE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const imageCall = outputToolCall(imagePlan, "image_generate");
+    const callId = outputToolCallId(imageCall, "call_mock_image_generate_collision");
+    const completionEvent = (mediaPath: string) =>
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "OpenClaw runtime context (internal):",
+        "",
+        "[Internal task completion event]",
+        "source: image_generation",
+        "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+        "status: completed successfully",
+        "Generated media:",
+        `MEDIA:${mediaPath}`,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n");
+    const completionInput = (mediaPath: string) => [
+      makeUserInput(prompt),
+      imageCall,
+      {
+        type: "function_call_output" as const,
+        call_id: callId,
+        output: JSON.stringify({
+          content: [{ type: "text", text: "Background image generation started." }],
+          details: { async: true, status: "started" },
+        }),
+      },
+      makeUserInput(completionEvent(mediaPath)),
+    ];
+
+    const collidingSession = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      prompt_cache_key: "image-session-b",
+      tools: [MESSAGE_TOOL],
+      input: completionInput("/tmp/session-b.png"),
+    });
+    expect(outputText(collidingSession)).not.toContain("MEDIA:/tmp/session-b.png");
+
+    const owningSession = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      prompt_cache_key: "image-session-a",
+      tools: [MESSAGE_TOOL],
+      input: completionInput("/tmp/session-a.png"),
+    });
+    expect(outputText(owningSession)).toContain("MEDIA:/tmp/session-a.png");
   });
 
   it("does not replay a historical image completion on a new marker turn", async () => {
