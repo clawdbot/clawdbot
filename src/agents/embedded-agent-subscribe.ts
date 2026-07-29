@@ -144,10 +144,10 @@ function collectPendingMediaFromInternalEvents(
 ): {
   mediaUrls: string[];
   attachments: NonNullable<AgentInternalEvent["attachments"]>;
-  trustedLocalMedia: boolean;
+  trustByUrl: Map<string, boolean>;
 } {
   if (!events?.length) {
-    return { mediaUrls: [], attachments: [], trustedLocalMedia: false };
+    return { mediaUrls: [], attachments: [], trustByUrl: new Map() };
   }
   const pending: string[] = [];
   const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
@@ -187,12 +187,7 @@ function collectPendingMediaFromInternalEvents(
       attachments.push(metadata ?? {});
     }
   }
-  return {
-    mediaUrls: pending,
-    attachments,
-    trustedLocalMedia:
-      pending.length > 0 && pending.every((mediaUrl) => trustedByUrl.get(mediaUrl) === true),
-  };
+  return { mediaUrls: pending, attachments, trustByUrl: trustedByUrl };
 }
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
@@ -274,8 +269,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,
+    pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
     pendingToolAudioAsVoice: false,
-    pendingToolTrustedLocalMedia: initialPendingToolMedia.trustedLocalMedia,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
@@ -1342,8 +1337,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
+    state.pendingToolMediaTrustByUrl.clear();
     state.pendingToolAudioAsVoice = false;
-    state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();

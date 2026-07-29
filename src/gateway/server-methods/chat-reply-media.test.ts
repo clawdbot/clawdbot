@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
@@ -309,6 +310,35 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: [{ text: `MEDIA:${audioPath}`, trustedLocalMedia: true }],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+  });
+
+  it("projects a selectively trusted generated URL from a mixed pending batch", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const trustedPath = path.join(workspaceDir, "trusted.mp3");
+    const untrustedPath = path.join(workspaceDir, "untrusted.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(trustedPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await fs.writeFile(untrustedPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    const payload = consumePendingToolMediaIntoReply(
+      {
+        pendingToolMediaUrls: [trustedPath, untrustedPath],
+        pendingToolMediaTrustByUrl: new Map([
+          [trustedPath, true],
+          [untrustedPath, false],
+        ]),
+        pendingToolAudioAsVoice: false,
+      },
+      { mediaUrls: [trustedPath] },
+    );
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [payload],
       managedMediaLocalRoots: [workspaceDir],
     });
 

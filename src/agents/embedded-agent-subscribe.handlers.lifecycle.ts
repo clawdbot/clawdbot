@@ -92,7 +92,7 @@ export function handleAgentEnd(
       ctx.state.pendingToolAudioAsVoice ||
       ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
     toolTrustedLocalMedia:
-      ctx.state.pendingToolTrustedLocalMedia ||
+      [...ctx.state.pendingToolMediaTrustByUrl.values()].some(Boolean) ||
       ctx.state.deferredBlockReplies.some((payload) => payload.trustedLocalMedia),
     hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
     didDeliverSourceReplyViaMessageTool:

@@ -63,8 +63,8 @@ function createContext(
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
+      pendingToolMediaTrustByUrl: new Map(),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
