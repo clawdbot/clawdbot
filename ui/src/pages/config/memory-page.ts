@@ -9,6 +9,7 @@ import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-m
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
@@ -55,6 +56,7 @@ const MEMORY_ADDON_PLUGINS = [
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
+const DREAMING_DOCS_URL = "https://docs.openclaw.ai/concepts/dreaming";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -455,7 +457,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   private renderDreamingControls() {
     const pluginId = this.dreamingPluginId();
     return html`
-      <p class="settings-page__intro">${t("memoryPage.dreaming.intro", { plugin: pluginId })}</p>
+      <p class="settings-page__intro">
+        ${t("memoryPage.dreaming.intro", { plugin: pluginId })}
+        ${renderDocsLink(DREAMING_DOCS_URL, t("common.learnMore"))}
+      </p>
       ${this.support === "unsupported"
         ? renderDreamingUnsupported(pluginId)
         : renderDreamingSettings({

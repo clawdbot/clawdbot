@@ -9,6 +9,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
@@ -36,6 +37,8 @@ import {
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
+
+const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 export type ModelProvidersRouteData = {
   data: ModelProvidersData;
@@ -717,6 +720,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("model-providers")}</div>
+          <div class="page-subtitle">
+            ${t("modelProviders.subtitle")}
+            ${renderDocsLink(MODEL_PROVIDERS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
         <div class="page-header-actions">
           ${renderAgentScopeControl({

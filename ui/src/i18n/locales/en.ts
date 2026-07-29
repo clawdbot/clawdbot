@@ -1142,6 +1142,7 @@ export const en: TranslationMap = {
   // keys now serve Models, General, Privacy & Security, Appearance, and Profile.
   // Renaming would force retranslation of every key, so the name stays.
   quickSettings: {
+    intro: "Settings sync to your Gateway configuration file.",
     language: "Language",
     model: {
       title: "Model & Thinking",
@@ -1348,6 +1349,7 @@ export const en: TranslationMap = {
         "Notifications are disabled for OpenClaw in macOS. Allow them in System Settings > Notifications.",
     },
     appearance: {
+      intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choose a theme family.",
       importedTheme: "Imported theme",
