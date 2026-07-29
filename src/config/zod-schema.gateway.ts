@@ -1,8 +1,4 @@
 import { z } from "zod";
-import {
-  isValidControlUiChatMessageMaxWidth,
-  normalizeControlUiChatMessageMaxWidth,
-} from "./control-ui-css.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
@@ -13,7 +9,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 export const GatewayConfigSchema = z
   .strictObject({
-    port: z.number().int().positive().optional(),
+    port: z.number().int().min(1).max(65_535).optional(),
     mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
     bind: z
       .union([
@@ -27,6 +23,8 @@ export const GatewayConfigSchema = z
     customBindHost: z.string().optional(),
     controlUi: z
       .strictObject({
+        // Shipped legacy input. Doctor removes it after recording migration state.
+        dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),
@@ -36,18 +34,8 @@ export const GatewayConfigSchema = z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
-        chatMessageMaxWidth: z
-          .string()
-          .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
-          .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
-            message:
-              "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
-          })
-          .optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
-        allowInsecureAuth: z.boolean().optional(),
-        dangerouslyDisableDeviceAuth: z.boolean().optional(),
       })
       .optional(),
     terminal: z
@@ -113,9 +101,7 @@ export const GatewayConfigSchema = z
     remote: GatewayRemoteConfigSchema,
     reload: z
       .strictObject({
-        mode: z
-          .union([z.literal("off"), z.literal("restart"), z.literal("hot"), z.literal("hybrid")])
-          .optional(),
+        mode: z.union([z.literal("off"), z.literal("hybrid")]).optional(),
       })
       .optional(),
     tls: z
@@ -227,13 +213,13 @@ export const GatewayConfigSchema = z
             enabled: z.boolean().optional(),
           })
           .optional(),
-        skills: z
+        allowSkills: z.boolean().optional(),
+        commands: z
           .strictObject({
-            enabled: z.boolean().optional(),
+            allow: z.array(z.string()).optional(),
+            deny: z.array(z.string()).optional(),
           })
           .optional(),
-        allowCommands: z.array(z.string()).optional(),
-        denyCommands: z.array(z.string()).optional(),
       })
       .optional(),
   })

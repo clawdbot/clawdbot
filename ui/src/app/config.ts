@@ -43,7 +43,6 @@ type ApplicationConfig = {
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
-  chatMessageMaxWidth: string | null;
   terminalEnabled: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
@@ -80,7 +79,6 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
-  chatMessageMaxWidth: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   pluginFrameGrants: [],
 };
@@ -157,10 +155,6 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
           ? "strict"
           : "scripts",
     allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
-    chatMessageMaxWidth:
-      typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
-        ? parsed.chatMessageMaxWidth
-        : null,
     terminalEnabled: parsed.terminalEnabled === true,
     pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
       ? parsed.pluginFrameGrants.filter(

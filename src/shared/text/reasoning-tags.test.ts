@@ -45,6 +45,11 @@ describe("stripReasoningTagsFromText", () => {
         input: "Before <thinking>some thought</thinking> after",
         expected: "Before  after",
       },
+      {
+        name: "strips tags separated by Unicode whitespace",
+        input: "<think\u00a0>hidden</think>After",
+        expected: "After",
+      },
       { name: "strips thought tags", input: "A <thought>hmm</thought> B", expected: "A  B" },
       {
         name: "strips antthinking tags",
@@ -105,7 +110,7 @@ describe("stripReasoningTagsFromText", () => {
       },
       {
         name: "preserves final tags inside code examples",
-        input: "Use `<final>` for final answers in code: ```\n<final>42</final>\n```",
+        input: "Use `<final>` for final answers in code:\n```\n<final>42</final>\n```",
       },
       {
         name: "preserves mixed literal think tags and code blocks",
@@ -139,6 +144,10 @@ describe("stripReasoningTagsFromText", () => {
       {
         input: "Internal reasoning </think> final answer",
         expected: "final answer",
+      },
+      {
+        input: "<reasoning>outer<think>secret</think>",
+        expected: "",
       },
       {
         input: "Use `<think>` to open and `</think>` to close. Final sentence.",
@@ -272,6 +281,60 @@ describe("stripReasoningTagsFromText", () => {
       stripReasoningTagsFromText(pathological);
       const elapsed = Date.now() - start;
       expect(elapsed).toBeLessThan(1000);
+    });
+
+    it("recovers malformed quoted tags iteratively at large input sizes", () => {
+      const input = `<think data-x="${"x".repeat(110_000)}<think>hidden</think>After`;
+
+      const output = stripReasoningTagsFromText(input, { trim: "none" });
+
+      expect(output).not.toContain("hidden");
+      expect(output.endsWith("After")).toBe(true);
+    });
+  });
+
+  describe("shared Markdown reasoning contract", () => {
+    it.each([
+      {
+        name: "keeps visible text after a self-closing tag",
+        input: "Before<thinking/>After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "treats quoted greater-than delimiters as attribute content",
+        input: 'Before <think data-x=">">hidden</think> After',
+        expected: "Before  After",
+      },
+      {
+        name: "strips tags between unequal backtick runs",
+        input: "before ```<think>private</think>`` after",
+        expected: "before ````` after",
+      },
+      {
+        name: "ends inline-code ownership at a paragraph-to-list transition",
+        input: "Paragraph `literal\n- <think>private</think> `visible",
+        expected: "Paragraph `literal\n-  `visible",
+      },
+      {
+        name: "keeps inline code across a soft line break in one paragraph",
+        input: "Paragraph `literal\ncontinued <think>example</think>` after",
+        expected: "Paragraph `literal\ncontinued <think>example</think>` after",
+      },
+    ] as const)("$name", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input, { trim: "none" })).toBe(expected);
+    });
+
+    it("does not mistake a close tag after an unmatched backtick for code", () => {
+      expect(
+        stripReasoningTagsFromText("Visible <think>secret ` </think> after", {
+          scope: "leading",
+          trim: "none",
+        }),
+      ).toBe("Visible  after");
+    });
+
+    it("preserves valid output before an adjacent orphan close", () => {
+      expect(stripReasoningTagsFromText("Before<think>x</think></think>After")).toBe("BeforeAfter");
     });
   });
 

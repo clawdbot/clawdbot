@@ -680,7 +680,11 @@ describe("gateway node command allowlist", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
+        JSON.stringify(
+          { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
+          null,
+          2,
+        ),
       );
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);

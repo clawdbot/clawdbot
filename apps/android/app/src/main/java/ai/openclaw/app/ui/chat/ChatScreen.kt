@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ChatDraft
+import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
@@ -11,6 +13,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatPlanStepStatus
@@ -22,12 +25,14 @@ import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
+import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.chatOutboxQueueFailureText
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -54,6 +59,7 @@ import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.relativeSessionTime
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -93,6 +99,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -152,6 +159,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
+import java.time.Instant
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -246,6 +254,7 @@ fun ChatScreen(
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
@@ -262,6 +271,10 @@ fun ChatScreen(
   val questions by viewModel.chatQuestions.collectAsState()
   val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
+  val sessionBranches by viewModel.chatSessionBranches.collectAsState()
+  val sessionBranchesLoading by viewModel.chatSessionBranchesLoading.collectAsState()
+  val sessionBranchSwitching by viewModel.chatSessionBranchSwitching.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val chatShareDrafts by viewModel.chatShareDrafts.collectAsState()
@@ -269,6 +282,7 @@ fun ChatScreen(
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
+  val outboxPresentationRestored by viewModel.chatOutboxPresentationRestored.collectAsState()
   val messageSpeechState by viewModel.chatMessageSpeech.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
@@ -311,6 +325,14 @@ fun ChatScreen(
       sessionKey = sessionKey,
       mainSessionKey = mainSessionKey,
     )
+  val currentSessionOutboxItems =
+    outboxItemsForSession(
+      items = outboxItems,
+      sessionKey = sessionKey,
+      mainSessionKey = mainSessionKey,
+      ownerAgentId = composerOwner.agentId,
+      messages = messages,
+    )
   val activeAgentId = sessionAgentId
   val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
   val context = LocalContext.current
@@ -345,6 +367,7 @@ fun ChatScreen(
   val sendInFlight = composerOwner in sendStates
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
   var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
+  var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
   var sendCheckpointFull by rememberSaveable(composerOwner) { mutableStateOf(false) }
 
@@ -519,8 +542,12 @@ fun ChatScreen(
         owner = composerOwner,
         mainSessionKey = mainSessionKey,
       ) ?: return@LaunchedEffect
-    inputDrafts[composerOwner] =
+    val merged =
       mergeChatDraft(draft = claimed, currentInput = input, currentOwner = composerOwner) ?: return@LaunchedEffect
+    inputDrafts[composerOwner] = merged
+    // Rewind/fork replace the composer wholesale; an attachment staged during the
+    // in-flight round-trip is accepted collateral rather than a draft revision field.
+    claimed.attachments?.let { composerState.replaceAttachments(composerOwner, it) }
   }
 
   LaunchedEffect(composerOwner, pendingSendAdmissionIds) {
@@ -605,6 +632,10 @@ fun ChatScreen(
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
       workspaceGit = workspaceGit,
+      branches = sessionBranches,
+      branchesLoading = sessionBranchesLoading,
+      branchSwitchEnabled =
+        outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
       onNewChat = {
         startNewChat(false)
       },
@@ -615,6 +646,10 @@ fun ChatScreen(
       },
       onOpenDashboard = { onOpenDashboard(sessionKey) },
       onOpenBackgroundTasks = { showBackgroundTasks = true },
+      onOpenBranchSwitcher = {
+        showBranchSwitcher = true
+        scope.launch { viewModel.refreshChatSessionBranches() }
+      },
     )
 
     ChatAgentSelector(
@@ -647,20 +682,16 @@ fun ChatScreen(
       messages = messages,
       transcriptAnchor = transcriptAnchor,
       historyLoading = historyLoading,
-      pendingRunCount = pendingRunCount,
+      activeRunCount = selectedActiveRun.count,
+      activeRunId = selectedActiveRun.runId,
+      activeRunClockKey = selectedActiveRun.clockKey,
+      activeRunOutputTokens = selectedActiveRun.outputTokens,
       pendingToolCalls = pendingToolCalls,
       questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
-      outboxItems =
-        outboxItemsForSession(
-          items = outboxItems,
-          sessionKey = sessionKey,
-          mainSessionKey = mainSessionKey,
-          ownerAgentId = composerOwner.agentId,
-          messages = messages,
-        ),
+      outboxItems = currentSessionOutboxItems,
       recoveryOutboxItems =
         outboxItemsForRecovery(
           items = outboxItems,
@@ -671,15 +702,57 @@ fun ChatScreen(
       onSkipQuestion = viewModel::skipChatQuestion,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
       onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
+      sessionActionsEnabled =
+        pendingRunCount == 0 &&
+          !sessionBranchSwitching &&
+          outboxPresentationRestored &&
+          currentSessionOutboxItems.none { it.status != ChatOutboxStatus.Failed },
+      onRewindMessage = { entryId ->
+        val expectedInput = inputDrafts[composerOwner].orEmpty()
+        scope.launch {
+          val result = viewModel.rewindChatAtEntry(entryId) ?: return@launch
+          viewModel.setChatDraft(
+            ChatDraft(
+              text = result.editorText.orEmpty(),
+              placement = ChatDraftPlacement.Replace,
+              owner = composerOwner,
+              expectedExistingText = expectedInput,
+              acceptsEmptyText = true,
+              attachments = result.editorAttachments.toPendingAttachments(),
+            ),
+          )
+        }
+      },
+      onForkMessage = { entryId ->
+        scope.launch {
+          val result = viewModel.forkChatAtEntry(entryId) ?: return@launch
+          val newOwner = composerOwner.copy(sessionKey = result.sessionKey)
+          val expectedInput = inputDrafts[newOwner].orEmpty()
+          viewModel.switchChatSession(result.sessionKey, composerOwner.agentId)
+          viewModel.setChatDraft(
+            ChatDraft(
+              text = result.editorText.orEmpty(),
+              placement = ChatDraftPlacement.Replace,
+              owner = newOwner,
+              expectedExistingText = expectedInput,
+              acceptsEmptyText = true,
+              attachments = result.editorAttachments.toPendingAttachments(),
+            ),
+          )
+        }
+      },
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
+      loadImageArtifact = viewModel::loadChatImageArtifact,
       modifier = Modifier.weight(1f),
     )
 
     if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
       PlanChecklistPill(steps = planSteps)
     }
+
+    ChatSwarmProgress(groups = swarmGroups)
 
     ChatComposer(
       value = input,
@@ -827,6 +900,22 @@ fun ChatScreen(
         showModelPicker = false
       },
       onToggleFavorite = viewModel::toggleModelFavorite,
+    )
+  }
+
+  if (showBranchSwitcher) {
+    BranchSwitcherSheet(
+      branches = sessionBranches,
+      loading = sessionBranchesLoading || sessionBranchSwitching,
+      onDismiss = { showBranchSwitcher = false },
+      onSelect = { leafEntryId ->
+        scope.launch {
+          if (viewModel.switchChatSessionBranch(leafEntryId)) {
+            showBranchSwitcher = false
+            viewModel.refreshChatSessionBranches()
+          }
+        }
+      },
     )
   }
   if (showBackgroundTasks) {
@@ -981,11 +1070,15 @@ private fun ChatHeader(
   pendingRunCount: Int,
   newChatEnabled: Boolean,
   workspaceGit: Boolean,
+  branches: List<SessionBranch>,
+  branchesLoading: Boolean,
+  branchSwitchEnabled: Boolean,
   onNewChat: () -> Unit,
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
   onOpenDashboard: () -> Unit,
   onOpenBackgroundTasks: () -> Unit,
+  onOpenBranchSwitcher: () -> Unit,
 ) {
   var actionsMenuExpanded by remember { mutableStateOf(false) }
   val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
@@ -1034,6 +1127,17 @@ private fun ChatHeader(
               onRefresh()
             },
           )
+          if (branches.size > 1) {
+            DropdownMenuItem(
+              text = { Text(nativeString("Switch branch")) },
+              leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+              enabled = branchSwitchEnabled && !branchesLoading,
+              onClick = {
+                actionsMenuExpanded = false
+                onOpenBranchSwitcher()
+              },
+            )
+          }
           DropdownMenuItem(
             text = { Text(nativeString("Dashboard")) },
             leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
@@ -1137,7 +1241,10 @@ private fun ChatMessageList(
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
-  pendingRunCount: Int,
+  activeRunCount: Int,
+  activeRunId: String?,
+  activeRunClockKey: String?,
+  activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
@@ -1151,16 +1258,20 @@ private fun ChatMessageList(
   onSkipQuestion: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
+  sessionActionsEnabled: Boolean,
+  onRewindMessage: (String) -> Unit,
+  onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
+  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
-    remember(messages, pendingRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(messages, activeRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
-        pendingRunCount = pendingRunCount,
+        pendingRunCount = activeRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
         outboxItems = outboxItems,
@@ -1168,9 +1279,16 @@ private fun ChatMessageList(
         questions = questions,
       )
     }
-  val indicatorVisible = pendingRunCount > 0
+  val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
-  val workingRun = workingRunTracker.resolve(indicatorVisible, session, SystemClock.elapsedRealtime())
+  val workingRun =
+    workingRunTracker.resolve(
+      indicatorVisible = indicatorVisible,
+      clockKey = activeRunClockKey,
+      authoritativeRunId = activeRunId,
+      nowElapsedMs = SystemClock.elapsedRealtime(),
+      outputTokens = activeRunOutputTokens,
+    )
   val turnRecapResolver = remember { TurnRecapResolver() }
   val turnRecap =
     turnRecapResolver.resolve(
@@ -1209,15 +1327,20 @@ private fun ChatMessageList(
           is ChatTimelineItem.Message ->
             ChatBubble(
               messageId = item.message.id,
+              entryId = item.message.entryId,
               role = item.message.role,
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
               onReplyMessage = onReplyMessage,
+              sessionActionsEnabled = sessionActionsEnabled,
+              onRewindMessage = onRewindMessage,
+              onForkMessage = onForkMessage,
               speechState = speechState,
               onToggleListen = onToggleListen,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
+              loadImageArtifact = loadImageArtifact,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -1248,20 +1371,29 @@ private fun ChatMessageList(
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
               messageId = null,
+              entryId = null,
               role = "assistant",
               live = true,
               content = listOf(ChatMessageContent(text = item.text)),
               timestampMs = null,
               onReplyMessage = onReplyMessage,
+              sessionActionsEnabled = false,
+              onRewindMessage = onRewindMessage,
+              onForkMessage = onForkMessage,
               speechState = null,
               onToggleListen = onToggleListen,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
+              loadImageArtifact = loadImageArtifact,
             )
           ChatTimelineItem.Thinking -> {
             val run = workingRun
             if (run != null) {
-              ChatTypingIndicatorBubble(runKey = run.key, observedAtElapsedMs = run.observedAtElapsedMs)
+              ChatTypingIndicatorBubble(
+                runKey = run.clockKey,
+                observedAtElapsedMs = run.observedAtElapsedMs,
+                outputTokens = run.outputTokens,
+              )
             }
           }
         }
@@ -1315,10 +1447,10 @@ private fun ChatMessageList(
 }
 
 internal data class ChatWorkingRun(
-  val key: String,
+  val clockKey: String,
   val observedAtElapsedMs: Long,
   val authoritativeRunId: String?,
-  val authoritativeStartedAtMs: Long?,
+  val outputTokens: Long?,
 )
 
 internal class ChatWorkingRunTracker(
@@ -1328,35 +1460,30 @@ internal class ChatWorkingRunTracker(
 
   fun resolve(
     indicatorVisible: Boolean,
-    session: ChatSessionEntry?,
+    clockKey: String?,
+    authoritativeRunId: String?,
     nowElapsedMs: Long,
+    outputTokens: Long?,
   ): ChatWorkingRun? {
     if (!indicatorVisible) {
       current = null
       return null
     }
-    val runId = session?.activeRunIds?.lastOrNull()
-    val startedAt = session?.startedAt?.takeIf { session.endedAt == null }
+    val resolvedClockKey = clockKey ?: "$sessionKey:active"
     val previous = current
-    val replacementByRunId = previous?.authoritativeRunId != null && runId != null && previous.authoritativeRunId != runId
-    val replacementByStart =
-      previous?.authoritativeStartedAtMs != null && startedAt != null && previous.authoritativeStartedAtMs != startedAt
-    val replacement = replacementByRunId || replacementByStart
-    if (previous == null || replacement) {
+    if (previous == null || previous.clockKey != resolvedClockKey) {
       return ChatWorkingRun(
-        key = runId ?: "$sessionKey:${startedAt ?: nowElapsedMs}",
+        clockKey = resolvedClockKey,
         observedAtElapsedMs = nowElapsedMs,
-        authoritativeRunId = runId,
-        authoritativeStartedAtMs = startedAt,
+        authoritativeRunId = authoritativeRunId,
+        outputTokens = outputTokens,
       ).also { current = it }
     }
-    val adoptsRunId = previous.authoritativeRunId == null && runId != null
-    val adoptsStartedAt = previous.authoritativeStartedAtMs == null && startedAt != null
-    if (adoptsRunId || adoptsStartedAt) {
+    if (previous.authoritativeRunId != authoritativeRunId || previous.outputTokens != outputTokens) {
       current =
         previous.copy(
-          authoritativeRunId = runId ?: previous.authoritativeRunId,
-          authoritativeStartedAtMs = startedAt ?: previous.authoritativeStartedAtMs,
+          authoritativeRunId = authoritativeRunId,
+          outputTokens = outputTokens,
         )
     }
     return current
@@ -1494,27 +1621,39 @@ internal val starterPrompts =
 @Composable
 private fun ChatBubble(
   messageId: String?,
+  entryId: String?,
   role: String,
   live: Boolean,
   content: List<ChatMessageContent>,
   timestampMs: Long?,
   onReplyMessage: (String) -> Unit,
+  sessionActionsEnabled: Boolean,
+  onRewindMessage: (String) -> Unit,
+  onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
   inlineWidgetResolverReady: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
+  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank()
+        "image" -> {
+          val displayable = !part.base64.isNullOrBlank() || !part.artifactId.isNullOrBlank()
+          val visible = displayable && visibleImageCount < 4
+          if (displayable) visibleImageCount += 1
+          visible
+        }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
         else -> part.isAudioAttachment()
       }
     }
+  val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
@@ -1536,6 +1675,9 @@ private fun ChatBubble(
     ChatMessageActionHost(
       text = messageText,
       onReply = onReplyMessage,
+      showSessionActions = isUser && entryId != null && sessionActionsEnabled,
+      onRewind = entryId?.let { value -> { onRewindMessage(value) } },
+      onFork = entryId?.let { value -> { onForkMessage(value) } },
       enabled = !live,
       listenActive = messageSpeech != null,
       onToggleListen = toggleListen,
@@ -1576,10 +1718,19 @@ private fun ChatBubble(
               part.type == "text" -> Unit
               part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
               part.type == "image" ->
-                ChatBase64Image(
-                  base64 = checkNotNull(part.base64),
-                  mimeType = part.mimeType,
-                )
+                if (!part.base64.isNullOrBlank()) {
+                  ChatBase64Image(
+                    base64 = part.base64,
+                    mimeType = part.mimeType,
+                  )
+                } else {
+                  ChatManagedImage(
+                    artifactId = checkNotNull(part.artifactId),
+                    label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
+                    resolverReady = inlineWidgetResolverReady,
+                    loadImage = loadImageArtifact,
+                  )
+                }
               part.type == "canvas" && normalizedRole == "assistant" ->
                 ChatInlineWidget(
                   preview = checkNotNull(part.widget),
@@ -1588,6 +1739,13 @@ private fun ChatBubble(
                 )
               else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
+          }
+          if (omittedImageCount > 0) {
+            Text(
+              text = nativeString("Additional images hidden: \${omittedImageCount}", omittedImageCount),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
           }
           if (messageId != null) {
             ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent)
@@ -2083,6 +2241,83 @@ private fun ChatModelChip(
       )
     }
   }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BranchSwitcherSheet(
+  branches: List<SessionBranch>,
+  loading: Boolean,
+  onDismiss: () -> Unit,
+  onSelect: (String) -> Unit,
+) {
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surface,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Column(modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+      Text(
+        text = nativeString("Switch branch"),
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+        style = ClawTheme.type.title,
+        color = ClawTheme.colors.text,
+      )
+      HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+      LazyColumn(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(bottom = 24.dp),
+      ) {
+        itemsIndexed(branches, key = { _, branch -> branch.leafEntryId }) { _, branch ->
+          Surface(
+            onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
+            enabled = !loading && !branch.active,
+            color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
+            contentColor = ClawTheme.colors.text,
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(horizontal = 20.dp, vertical = 12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                  text = branch.headline.trim().takeIf(String::isNotEmpty) ?: nativeString("Untitled branch"),
+                  style = ClawTheme.type.body,
+                  color = ClawTheme.colors.text,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = branchMetadataText(branch),
+                  style = ClawTheme.type.caption,
+                  color = ClawTheme.colors.textMuted,
+                )
+              }
+              if (branch.active) {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = nativeString("Current branch"),
+                  tint = ClawTheme.colors.primary,
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+internal fun branchMessageCountText(count: Int): String = nativeString("Messages: \$count", count)
+
+internal fun branchMetadataText(branch: SessionBranch): String {
+  val count = branchMessageCountText(branch.messageCount)
+  val updated =
+    branch.updatedAt
+      ?.let { timestamp -> runCatching { Instant.parse(timestamp).toEpochMilli() }.getOrNull() }
+      ?.let(::relativeSessionTime)
+  return if (updated == null) count else nativeString("\$count · \$updated", count, updated)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

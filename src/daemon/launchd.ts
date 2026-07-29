@@ -804,8 +804,7 @@ export async function repairLaunchAgentBootstrap(args: {
   const serviceTarget = `${domain}/${label}`;
   // Rewrite first so legacy inline environment secrets move into the private
   // env file before the plist becomes world-readable for launchd.
-  const warn =
-    args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
+  const warn = args.warn ?? ((message: string) => console.warn(formatLine("Warning", message)));
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);

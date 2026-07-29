@@ -235,7 +235,7 @@ export function resolveDispatchTelegramContext(params: {
     params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
   );
   const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
-    promptContext: params.context.ctxPayload.UntrustedStructuredContext ?? [],
+    promptContext: params.context.ctxPayload.ChannelStructuredContext ?? [],
     entries: recoveredPromptHistoryEntries,
   });
   const recoveredPromptContext =
@@ -286,7 +286,7 @@ export function resolveDispatchTelegramContext(params: {
             OriginatingTo: recoveredRoutingTarget,
             To: recoveredRoutingTarget,
             TransportThreadId: threadSpec.id,
-            UntrustedStructuredContext: recoveredPromptContext,
+            ChannelStructuredContext: recoveredPromptContext,
           },
   };
 }

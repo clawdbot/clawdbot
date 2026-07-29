@@ -33,7 +33,7 @@ import type {
   TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCliRegistrar,
   PluginTextTransformRegistration,
   ProviderPlugin,
@@ -51,7 +51,7 @@ type CapturedPluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
   parentPath: string[];
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: OpenClawPluginCliRootCommandDescriptor[];
 };
 
 export type CapturedPluginRegistration = {
@@ -185,12 +185,22 @@ export function createCapturedPluginRegistration(params?: {
       handlers: {
         registerCli(registrar, opts) {
           const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
+          const rootRegistration = parentPath.length === 0;
           const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => ({
-              name: descriptor.name.trim(),
-              description: descriptor.description.trim(),
-              hasSubcommands: descriptor.hasSubcommands,
-            }))
+            .map((descriptor) => {
+              const machineOutput = rootRegistration
+                ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
+                : undefined;
+              const normalized: OpenClawPluginCliRootCommandDescriptor = {
+                name: descriptor.name.trim(),
+                description: descriptor.description.trim(),
+                hasSubcommands: descriptor.hasSubcommands,
+              };
+              if (machineOutput) {
+                normalized.machineOutput = machineOutput;
+              }
+              return normalized;
+            })
             .filter((descriptor) => descriptor.name && descriptor.description);
           const commands = normalizeStringEntries([
             ...(opts?.commands ?? []),

@@ -48,9 +48,9 @@ on:
         default: true
         type: boolean
       kova_ref:
-        description: openclaw/Kova Git ref to install
+        description: Optional openclaw/Kova Git ref override; defaults to the fixture compatible with the target config schema
         required: false
-        default: f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c
+        default: ""
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -67,9 +67,11 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.25
-  OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa
+  OCM_VERSION: v0.2.29
+  OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf
   KOVA_REPOSITORY: openclaw/Kova
+  KOVA_CANONICAL_CONFIG_REF: 517952b835640a368c4af6dfe6dc8365ae841b57
+  KOVA_LEGACY_LIST_CONFIG_REF: f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -83,12 +85,14 @@ jobs:
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       tested_ref: ${{ steps.resolve.outputs.tested_ref }}
       tested_sha: ${{ steps.resolve.outputs.tested_sha }}
+      kova_ref: ${{ steps.resolve.outputs.kova_ref }}
     steps:
       - name: Resolve OpenClaw target ref
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF_INPUT: ${{ inputs.target_ref }}
+          KOVA_REF_INPUT: ${{ inputs.kova_ref }}
         shell: bash
         run: |
           set -euo pipefail
@@ -98,24 +102,41 @@ jobs:
             exit 1
           fi
           if [[ -z "$requested" ]]; then
-            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            echo "tested_ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "tested_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
-          if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
-            echo "::error::Unable to resolve OpenClaw target_ref '${requested}'."
-            exit 1
+            resolved_sha="$GITHUB_SHA"
+            tested_ref="$GITHUB_REF_NAME"
+          else
+            encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
+            if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
+              echo "::error::Unable to resolve OpenClaw target_ref '${requested}'."
+              exit 1
+            fi
+            tested_ref="$requested"
           fi
           if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::OpenClaw target_ref '${requested}' resolved to invalid SHA '${resolved_sha}'."
+            echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
             exit 1
           fi
+
+          kova_ref="${KOVA_REF_INPUT:-}"
+          if [[ -z "$kova_ref" ]]; then
+            schema_content="$({
+              gh api "repos/${GITHUB_REPOSITORY}/contents/src/config/zod-schema.agent-defaults.ts?ref=${resolved_sha}" --jq '.content' |
+                base64 --decode
+            })"
+            if grep -Fqx '    mediaModels: z' <<<"$schema_content"; then
+              kova_ref="$KOVA_CANONICAL_CONFIG_REF"
+            elif grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then
+              kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
+            else
+              echo "::error::Target ${resolved_sha} has no recognized Kova config-fixture contract. Supply kova_ref explicitly after validating the fixture."
+              exit 1
+            fi
+          fi
+
           echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
-          echo "tested_ref=$requested" >> "$GITHUB_OUTPUT"
+          echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
+          echo "kova_ref=$kova_ref" >> "$GITHUB_OUTPUT"
 
   kova:
     name: ${{ matrix.title }}
@@ -154,7 +175,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c' }}
+      KOVA_REF: ${{ needs.resolve_target.outputs.kova_ref }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -195,7 +216,7 @@ jobs:
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_ref }}
           fetch-depth: 1
@@ -203,7 +224,7 @@ jobs:
 
       - name: Checkout performance workflow helpers
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: .artifacts/performance-workflow
@@ -583,14 +604,14 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
     steps:
       - name: Checkout OpenClaw source target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_ref }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout source performance helpers
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: .artifacts/performance-workflow
@@ -852,7 +873,7 @@ jobs:
 
       - name: Checkout performance publisher helper
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: .artifacts/performance-publisher
@@ -1136,7 +1157,7 @@ jobs:
         id: clawgrit_app_token
         if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: Iv23liOECG0slfuhz093
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}

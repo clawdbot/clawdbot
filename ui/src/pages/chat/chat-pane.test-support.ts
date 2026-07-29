@@ -1,6 +1,9 @@
 import type { TemplateResult } from "lit";
 import { vi } from "vitest";
 import type {
+  SessionSuggestion,
+  SessionSuggestionEvent,
+  SessionTypingEvent,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   TaskSuggestion,
@@ -14,7 +17,7 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -39,9 +42,31 @@ export type TestChatPane = HTMLElement & {
   refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
   sessionPullRequests: ControlUiSessionPullRequest[];
   taskSuggestions: TaskSuggestion[];
+  presencePayload?: { presence: unknown[] };
+  sessionSuggestionAddOperation: symbol | undefined;
+  sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
+  addCurrentSessionSuggestion: () => Promise<void>;
+  resetSessionSuggestions: () => void;
+  sessionSuggestions: SessionSuggestion[];
+  sessionSuggestionsRequestVersion: number;
+  sessionSuggestionsRefreshPromise: Promise<void> | undefined;
+  sessionSuggestionTargetSignature: string;
+  syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
+  handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
+  handleSessionTypingEvent: (event: SessionTypingEvent) => void;
+  typingActors: Map<string, { label: string; expiresAt: number }>;
+  refreshSessionSuggestions: () => Promise<void>;
+  resolveCurrentSessionSuggestion: (
+    suggestion: SessionSuggestion,
+    resolution: "send" | "queue" | "edit" | "dismiss",
+  ) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;
+  deferSessionHydrationUntilTranscript: (
+    sessionKey: string,
+    transcriptLoad: Promise<unknown>,
+  ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
@@ -96,8 +121,12 @@ export function createSessionContext(
     gateway: {
       snapshot: {
         client,
-        connected: true,
-        hello: { features: { methods: ["taskSuggestions.list"] } },
+        phase: "connected" as const,
+        hello: {
+          features: {
+            methods: ["taskSuggestions.list", "session.suggestions.list"],
+          },
+        },
       },
     },
     agents: { state: { agentsList: null } },
@@ -144,7 +173,9 @@ export function createTestChatPane(params: {
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarFocusPanelId: "",
+    sidebarFocusVersion: 0,
+    sidebarLayout: { columns: [] },
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
@@ -153,6 +184,13 @@ export function createTestChatPane(params: {
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
+  state.updateSidebarLayout = (layout) => {
+    state.sidebarLayout = layout;
+  };
+  state.updateSidebarActivePanel = (panelId) => {
+    state.sidebarFocusPanelId = panelId;
+    state.sidebarFocusVersion += 1;
+  };
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
   pane.connectedClient = params.client;

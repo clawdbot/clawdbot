@@ -10,6 +10,11 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
@@ -22,9 +27,10 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
+  "chunker" | "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 
 const activeBuses = new Map<string, NostrBusHandle>();
@@ -193,7 +199,10 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 payload && typeof payload === "object" && "text" in payload
                   ? ((payload as { text?: string }).text ?? "")
                   : "";
-              if (!outboundText.trim()) {
+              // Inbound DM replies bypass the outbound adapter; sanitize before
+              // Markdown conversion so private tool traces cannot reach a relay.
+              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              if (!sanitizedText) {
                 return;
               }
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
@@ -201,7 +210,12 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 channel: "nostr",
                 accountId: account.accountId,
               });
-              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+              const message = stripMarkdown(
+                runtime.channel.text.convertMarkdownTables(sanitizedText, tableMode),
+              );
+              if (message) {
+                await reply(message);
+              }
             },
             onRecordError: (err) => {
               ctx.log?.error?.(
@@ -306,6 +320,10 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  // The outbound planner ignores textChunkLimit unless the adapter also
+  // supplies its chunker, causing oversized encrypted events to be rejected.
+  chunker: chunkTextForOutbound,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -324,7 +342,10 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       channel: "nostr",
       accountId: aid,
     });
-    const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
+    const message = stripMarkdown(core.channel.text.convertMarkdownTables(text ?? "", tableMode));
+    if (!message) {
+      throw new Error("Nostr send requires non-empty text after markdown stripping.");
+    }
     const normalizedTo = normalizePubkey(to);
     const eventId = await bus.sendDm(normalizedTo, message);
     return attachChannelToResult("nostr", {

@@ -14,6 +14,41 @@ import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fix
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
+const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
+  {
+    name: "standard OpenAI snake_case token fields",
+    raw: {
+      prompt_tokens: 17,
+      completion_tokens: 5,
+      total_tokens: 22,
+      prompt_tokens_details: { cached_tokens: 6 },
+    },
+    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
+  },
+  {
+    name: "camelCase OpenAI-compatible token fields",
+    raw: {
+      promptTokens: 17,
+      completionTokens: 5,
+      total_tokens: 22,
+      prompt_tokens_details: { cached_tokens: 6 },
+    },
+    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
+  },
+  {
+    name: "existing input/output field precedence",
+    raw: {
+      input_tokens: 19,
+      prompt_tokens: 99,
+      output_tokens: 7,
+      completion_tokens: 77,
+      total_tokens: 26,
+      prompt_tokens_details: { cached_tokens: 4 },
+    },
+    normalized: { input: 15, output: 7, cacheRead: 4, cacheWrite: undefined, total: 26 },
+  },
+] as const;
+
 function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {
   return parseCliOutput({ raw, backend, providerId, outputMode: "json" });
 }
@@ -362,6 +397,31 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
+    "normalizes $name from CLI JSON output",
+    ({ raw, normalized }) => {
+      const result = parseCliJson(
+        JSON.stringify({
+          session_id: "openai-compatible-session",
+          response: "OpenAI-compatible response",
+          usage: raw,
+        }),
+        {
+          command: "openai-compatible",
+          output: "json",
+          sessionIdFields: ["session_id"],
+        },
+        "openai-compatible-cli",
+      );
+
+      expect(result).toEqual({
+        text: "OpenAI-compatible response",
+        sessionId: "openai-compatible-session",
+        usage: normalized,
+      });
+    },
+  );
 });
 
 describe("parseCliJsonl", () => {
@@ -433,6 +493,36 @@ describe("parseCliJsonl", () => {
       },
     });
   });
+
+  it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
+    "normalizes $name from CLI JSONL output",
+    ({ raw, normalized }) => {
+      const result = parseCliJsonl(
+        [
+          JSON.stringify({ type: "init", session_id: "openai-compatible-session" }),
+          JSON.stringify({
+            type: "result",
+            session_id: "openai-compatible-session",
+            result: "OpenAI-compatible response",
+            usage: raw,
+          }),
+        ].join("\n"),
+        {
+          command: "openai-compatible",
+          output: "jsonl",
+          jsonlDialect: "claude-stream-json",
+          sessionIdFields: ["session_id"],
+        },
+        "openai-compatible-cli",
+      );
+
+      expect(result).toEqual({
+        text: "OpenAI-compatible response",
+        sessionId: "openai-compatible-session",
+        usage: normalized,
+      });
+    },
+  );
 
   it("parses Gemini stream-json message and result events", () => {
     const result = parseCliJsonl(
@@ -755,6 +845,55 @@ describe("parseCliJsonl", () => {
       cacheWrite: undefined,
       total: undefined,
     });
+  });
+
+  it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-checkpoint" }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-checkpoint-1",
+          message: {
+            id: "provider-message-1",
+            role: "assistant",
+            content: [{ type: "text", text: "first" }],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-checkpoint-2",
+          message: {
+            id: "provider-message-2",
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "subagent-checkpoint",
+          parent_tool_use_id: "tool-use-1",
+          message: {
+            id: "provider-subagent-message",
+            role: "assistant",
+            content: [{ type: "text", text: "nested" }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-checkpoint",
+          result: "done",
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.resumeCheckpointId).toBe("assistant-checkpoint-2");
   });
 
   it("preserves Claude session metadata even when the final result text is empty", () => {
@@ -1089,6 +1228,42 @@ describe("parseCliOutput", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
+    "normalizes $name while incrementally streaming CLI JSONL",
+    ({ raw, normalized }) => {
+      const parser = createCliJsonlStreamingParser({
+        backend: {
+          command: "openai-compatible",
+          output: "jsonl",
+          jsonlDialect: "claude-stream-json",
+          sessionIdFields: ["session_id"],
+        },
+        providerId: "openai-compatible-cli",
+        onAssistantDelta: () => {},
+      });
+
+      parser.push(
+        [
+          JSON.stringify({ type: "init", session_id: "openai-compatible-session" }),
+          JSON.stringify({
+            type: "result",
+            session_id: "openai-compatible-session",
+            result: "OpenAI-compatible response",
+            usage: raw,
+          }),
+          "",
+        ].join("\n"),
+      );
+      parser.finish();
+
+      expect(parser.getOutput()).toEqual({
+        text: "OpenAI-compatible response",
+        sessionId: "openai-compatible-session",
+        usage: normalized,
+      });
+    },
+  );
+
   it("surfaces codex-exec todo snapshots as typed plan updates", () => {
     const plans: Array<{ steps: Array<{ step: string; status: string }> }> = [];
     const parser = createCliJsonlStreamingParser({

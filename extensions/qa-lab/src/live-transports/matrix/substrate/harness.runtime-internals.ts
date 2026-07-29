@@ -5,24 +5,14 @@ import type { FetchLike } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
-export const MATRIX_QA_DEFAULT_PORT = 28008;
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-type MatrixQaHarnessManifest = {
-  image: string;
-  serverName: string;
-  homeserverPort: number;
-  composeFile: string;
-  dataDir: string;
-};
-
 export type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
-  manifestPath: string;
   image: string;
   serverName: string;
   homeserverPort: number;
@@ -161,11 +151,17 @@ function renderMatrixQaCompose(params: {
   registrationToken: string;
   serverName: string;
 }) {
+  // Omitting `published` lets Docker atomically choose and bind the host port;
+  // probing a free numeric port before Compose starts races parallel harnesses.
+  const portMapping =
+    params.homeserverPort === 0
+      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
+      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
   return `services:
   ${MATRIX_QA_SERVICE}:
     image: ${params.image}
     ports:
-      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
+${portMapping}
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "true"
@@ -192,7 +188,6 @@ export async function writeMatrixQaHarnessFiles(params: {
   const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
   const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
   const dataDir = path.join(params.outputDir, "data");
-  const manifestPath = path.join(params.outputDir, "matrix-qa-harness.json");
 
   await fs.mkdir(dataDir, { recursive: true });
   await fs.writeFile(
@@ -205,22 +200,9 @@ export async function writeMatrixQaHarnessFiles(params: {
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  const manifest: MatrixQaHarnessManifest = {
-    image,
-    serverName,
-    homeserverPort: params.homeserverPort,
-    composeFile,
-    dataDir,
-  };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-
   return {
     outputDir: params.outputDir,
     composeFile,
-    manifestPath,
     image,
     serverName,
     homeserverPort: params.homeserverPort,

@@ -135,7 +135,7 @@ function stripSignatureFieldsFromThinkingBlock(
  *
  * Returns the original reference when nothing was stripped.
  */
-export function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
+function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
   if (!isAssistantMessageWithContent(message)) {
     return message;
   }

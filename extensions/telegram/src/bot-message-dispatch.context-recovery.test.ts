@@ -24,7 +24,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
-      MediaPath: "/tmp/sticker.webp",
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -52,7 +53,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
       Body: body,
       BodyForAgent: body,
       RawBody: "What is this?",
-      MediaPath: "/tmp/sticker.webp",
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -83,7 +85,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
       Body: "reply-chain context",
       BodyForAgent: "reply-chain context",
       RawBody: "",
-      MediaPath: "/tmp/sticker.webp",
+      media: [{ path: "/tmp/sticker.webp", kind: "sticker" as const }],
+      CommandAuthorized: true,
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -95,6 +98,29 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
 
     expect(ctxPayload.Body).toBe("[Sticker] A contextual sticker\nreply-chain context");
     expect(ctxPayload.BodyForAgent).toBe("[Sticker] A contextual sticker\nreply-chain context");
+  });
+
+  it("does not describe supplemental media when the sticker fact has no path", async () => {
+    const ctxPayload = {
+      Body: "supplemental context",
+      BodyForAgent: "supplemental context",
+      RawBody: "",
+      media: [
+        { kind: "sticker" as const },
+        { path: "/tmp/replied-image.png", kind: "image" as const },
+      ],
+      CommandAuthorized: true,
+      Sticker: {
+        fileId: "sticker-file",
+        fileUniqueId: "sticker-unique",
+      },
+      StickerMediaIncluded: true,
+    } as TelegramMessageContext["ctxPayload"];
+
+    await dispatchWithContext({ context: createContext({ ctxPayload }) });
+
+    expect(describeStickerImage).not.toHaveBeenCalled();
+    expect(ctxPayload.BodyForAgent).toBe("supplemental context");
   });
 
   it("streams drafts in private threads and forwards thread id", async () => {
@@ -245,7 +271,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           To: "telegram:-1003774691294",
           TransportThreadId: 1,
-          UntrustedStructuredContext: [
+          ChannelStructuredContext: [
             {
               label: "Conversation context",
               source: "telegram",
@@ -327,7 +353,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     ]);
     expect(outboundCtxPayload.Body).toBe("current topic question");
     expect(outboundCtxPayload.BodyForAgent).toBe("current topic question");
-    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+    expect(outboundCtxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         label: "Conversation context",
         source: "telegram",
@@ -346,10 +372,10 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
         }),
       }),
     ]);
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "general topic context",
     );
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "spoofed current marker from history",
     );
     expect(recordInboundSession).toHaveBeenCalledWith(
@@ -396,7 +422,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
           MessageThreadId: 1,
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           TransportThreadId: 1,
-          UntrustedStructuredContext: [
+          ChannelStructuredContext: [
             {
               label: "Conversation context",
               source: "telegram",
@@ -434,13 +460,13 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     });
     const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
     expect(outboundCtxPayload.Body).toBe("current topic question");
-    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+    expect(outboundCtxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         label: "Attachment context",
         type: "attachment",
       }),
     ]);
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "general topic context",
     );
   });

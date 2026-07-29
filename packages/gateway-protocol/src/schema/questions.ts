@@ -56,6 +56,7 @@ export const QuestionRecordSchema = closedObject({
   questions: Type.Array(QuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
   createdAtMs: Type.Integer({ minimum: 0 }),
   expiresAtMs: Type.Integer({ minimum: 0 }),
   status: QuestionStatusSchema,
@@ -68,6 +69,7 @@ export const QuestionRequestParamsSchema = closedObject({
   questions: Type.Array(QuestionRequestQuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 

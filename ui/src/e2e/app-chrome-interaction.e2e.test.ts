@@ -117,7 +117,10 @@ describeControlUiE2e("Control UI app chrome interaction mocked Gateway E2E", () 
       await captureUiProof(page, "01-chat-selectable-transcript.png");
 
       await page.setViewportSize({ height: 650, width: 1440 });
-      await page.goto(`${server.baseUrl}settings/general`);
+      // Appearance renders schema-independent theme/UI sections that overflow
+      // 650px even against the mock gateway's tiny config fixture; General
+      // became short enough to fit once the host panel moved to Gateway.
+      await page.goto(`${server.baseUrl}settings/appearance`);
       const settingsSidebar = page.locator(".settings-sidebar");
       const settingsTitle = settingsSidebar.locator(".settings-sidebar__title");
       const settingsSearch = settingsSidebar.locator(".settings-sidebar__search-input");

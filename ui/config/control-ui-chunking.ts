@@ -51,7 +51,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (
+    moduleIdIncludesPackage(id, "zod") ||
+    moduleIdIncludesPackage(id, "json5") ||
+    moduleIdIncludesPackage(id, "libphonenumber-js")
+  ) {
     return "config-runtime";
   }
 
@@ -79,9 +83,10 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      // 448 KiB packs the core graph into fewer chunks; the previous 400 KiB
-      // boundary split one core chunk in two, costing ~1.4 KiB startup gzip.
-      maxSize: 448 * 1024,
+      // 512 KiB packs the grown core graph into fewer chunks; the previous
+      // 448 KiB boundary split one core chunk in two, costing ~1.9 KiB startup
+      // gzip (same tradeoff as the earlier 400->448 bump).
+      maxSize: 512 * 1024,
     },
   ],
 };

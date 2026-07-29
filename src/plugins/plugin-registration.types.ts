@@ -86,11 +86,34 @@ export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void
  * advertising it at the root CLI level, provide descriptors that cover every
  * top-level command root registered by that plugin CLI surface.
  */
-export type OpenClawPluginCliCommandDescriptor = {
+type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
 };
+
+/** Root-command metadata that is available before a plugin registrar is activated. */
+export type OpenClawPluginCliRootCommandDescriptor = OpenClawPluginCliCommandDescriptor & {
+  machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
+};
+
+type OpenClawPluginRootCliRegistrationOptions = {
+  /** Omit or pass an empty path for root commands. */
+  parentPath?: readonly [];
+  commands?: readonly string[];
+  descriptors?: readonly OpenClawPluginCliRootCommandDescriptor[];
+};
+
+/** Backward-compatible registration shape for dynamic root or nested paths. */
+type OpenClawPluginLegacyCliRegistrationOptions = {
+  parentPath?: readonly string[];
+  commands?: readonly string[];
+  descriptors?: readonly OpenClawPluginCliCommandDescriptor[];
+};
+
+export type OpenClawPluginCliRegistrationOptions =
+  | OpenClawPluginRootCliRegistrationOptions
+  | OpenClawPluginLegacyCliRegistrationOptions;
 
 export type OpenClawPluginNodeCliFeatureOptions = {
   /** Explicit node feature command names owned under `openclaw nodes`. */
@@ -192,7 +215,7 @@ export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
    * Platforms where these node-handled commands should be allowlisted by default.
-   * Omit for commands that require explicit `gateway.nodes.allowCommands`.
+   * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
   defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
   /**

@@ -1,8 +1,9 @@
-export type BoardFace = "chat" | "dashboard";
+import type { SessionBoardFace } from "../../../../src/shared/session-types.js";
+
+export type BoardFace = SessionBoardFace;
 export type BoardVisibleChatDock = "bottom" | "left" | "right";
 
 export type BoardSessionView = {
-  face: BoardFace;
   activeTabId?: string;
   reopenDockByTab?: Record<string, BoardVisibleChatDock>;
 };
@@ -21,9 +22,6 @@ export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
       continue;
     }
     const view = rawView as Record<string, unknown>;
-    if (view.face !== "chat" && view.face !== "dashboard") {
-      continue;
-    }
     const activeTabId = typeof view.activeTabId === "string" ? view.activeTabId.trim() : "";
     const reopenDockByTab: Record<string, BoardVisibleChatDock> = {};
     if (
@@ -38,8 +36,10 @@ export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
         }
       }
     }
+    if (!activeTabId && Object.keys(reopenDockByTab).length === 0) {
+      continue;
+    }
     normalized[sessionKey] = {
-      face: view.face,
       ...(activeTabId ? { activeTabId } : {}),
       ...(Object.keys(reopenDockByTab).length > 0 ? { reopenDockByTab } : {}),
     };
@@ -57,7 +57,7 @@ export function updateBoardSessionView(
     return normalizeBoardSessionViews(current);
   }
   const views = normalizeBoardSessionViews(current);
-  const previous = views[key] ?? { face: "chat" as const };
+  const previous = views[key] ?? {};
   delete views[key];
   views[key] = {
     ...previous,

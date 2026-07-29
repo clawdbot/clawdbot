@@ -1,6 +1,6 @@
-/** Registry-loading adapters for model-list row construction. */
-import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+/** Registry-loading adapters for model-list row construction. */
+import { loadPreparedAgentModelRegistry as loadAgentModelRegistry } from "../../agents/prepared-model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";

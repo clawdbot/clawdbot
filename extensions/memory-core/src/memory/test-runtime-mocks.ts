@@ -2,13 +2,19 @@
 import { vi } from "vitest";
 
 // Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
-vi.mock("chokidar", () => ({
-  default: {
-    watch: () => ({ on: () => {}, close: async () => {} }),
-  },
-  watch: () => ({ on: () => {}, close: async () => {} }),
-}));
+function createWatcherMock() {
+  const watcher = {
+    on: () => watcher,
+    once: () => watcher,
+    add: () => watcher,
+    unwatch: async () => watcher,
+    close: async () => undefined,
+    getWatched: () => ({}),
+  };
+  return watcher;
+}
 
-vi.mock("./sqlite-vec.js", () => ({
-  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+vi.mock("chokidar", () => ({
+  default: { watch: createWatcherMock },
+  watch: createWatcherMock,
 }));

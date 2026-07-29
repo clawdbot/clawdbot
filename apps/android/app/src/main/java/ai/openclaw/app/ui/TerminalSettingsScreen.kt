@@ -56,8 +56,8 @@ internal fun TerminalSettingsScreen(
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         val page = controlPage
         if (isConnected && page != null) {
-          // Recreate the WebView only when the gateway page or credentials
-          // change; recompositions must not restart live shell sessions.
+          // GatewayControlPage equality includes the accepted TLS pin, so trust changes
+          // recreate the WebView while unrelated recompositions preserve live shells.
           key(page) {
             ControlUiWebView(
               page = page,

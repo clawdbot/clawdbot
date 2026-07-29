@@ -78,6 +78,7 @@ vi.mock("./runtime-plugins.js", () => ({
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
     mocks.loadStaticCatalog(...args),
+  resolveBundledStaticCatalogModel: () => undefined,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -760,7 +761,7 @@ describe("prepared model runtime snapshots", () => {
       .mockImplementationOnce(async () => await new Promise<never>(() => {}));
 
     await expect(
-      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true }),
+      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });

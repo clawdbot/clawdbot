@@ -54,76 +54,36 @@ function resolveFeishuSessionConversation(params: { kind: "group" | "channel"; r
 /** Builds channel registry stubs with conversation resolvers for session tests. */
 export function createSessionConversationTestRegistry() {
   return createTestRegistry([
-    {
-      pluginId: "discord",
+    ...(
+      [
+        { id: "discord", label: "Discord", preferSessionLookupForAnnounceTarget: true },
+        { id: "slack", label: "Slack" },
+        { id: "matrix", label: "Matrix" },
+      ] as const
+    ).map(({ id, label, ...metaOverrides }) => ({
+      pluginId: id,
       source: "test",
       plugin: {
-        id: "discord",
+        id,
         meta: {
-          id: "discord",
-          label: "Discord",
-          selectionLabel: "Discord",
-          docsPath: "/channels/discord",
-          blurb: "Discord test stub.",
-          preferSessionLookupForAnnounceTarget: true,
+          id,
+          label,
+          selectionLabel: label,
+          docsPath: `/channels/${id}`,
+          blurb: `${label} test stub.`,
+          ...metaOverrides,
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
           resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+          resolveSessionTarget: ({ id: targetId }: { id: string }) => `channel:${targetId}`,
         },
         config: {
           listAccountIds: () => ["default"],
           resolveAccount: () => ({}),
         },
       },
-    },
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: {
-        id: "slack",
-        meta: {
-          id: "slack",
-          label: "Slack",
-          selectionLabel: "Slack",
-          docsPath: "/channels/slack",
-          blurb: "Slack test stub.",
-        },
-        capabilities: { chatTypes: ["direct", "channel", "thread"] },
-        messaging: {
-          resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-        },
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({}),
-        },
-      },
-    },
-    {
-      pluginId: "matrix",
-      source: "test",
-      plugin: {
-        id: "matrix",
-        meta: {
-          id: "matrix",
-          label: "Matrix",
-          selectionLabel: "Matrix",
-          docsPath: "/channels/matrix",
-          blurb: "Matrix test stub.",
-        },
-        capabilities: { chatTypes: ["direct", "channel", "thread"] },
-        messaging: {
-          resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-        },
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({}),
-        },
-      },
-    },
+    })),
     {
       pluginId: "telegram",
       source: "test",

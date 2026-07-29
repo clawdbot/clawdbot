@@ -358,7 +358,7 @@ export async function installPluginFromManagedNpmRoot(
       if (install.code !== 0) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
-          error: `npm install failed after syncing managed peer dependencies: ${install.stderr.trim() || install.stdout.trim()}`,
+          error: `npm install failed after syncing managed peer dependencies: ${formatNpmCommandFailureOutput(install)}`,
         });
       }
     }

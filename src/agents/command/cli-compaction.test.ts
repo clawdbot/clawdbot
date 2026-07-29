@@ -104,6 +104,76 @@ describe("runCliTurnCompactionLifecycle", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("accepts no compactable entries only from a successful compaction result", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-no-compactable-entries",
+      updatedAt: Date.now(),
+      sessionFile: "unused.jsonl",
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const runLifecycle = (
+      ok: boolean,
+      reason = "no real conversation messages",
+      compacted = false,
+    ) => {
+      setCliCompactionTestDeps({
+        openSessionManager: () => ({ getBranch: () => [] }) as never,
+        ensureContextEnginesInitialized: () => {},
+        resolveContextEngine: async () => ({
+          info: { id: "test", name: "Test" },
+          async ingest() {
+            return { ingested: false };
+          },
+          async assemble(params) {
+            return { messages: params.messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok, compacted, reason };
+          },
+        }),
+        createPreparedEmbeddedAgentSettingsManager: async () => ({
+          getCompactionReserveTokens: () => 200,
+          getCompactionKeepRecentTokens: () => 0,
+          applyOverrides: () => {},
+        }),
+        applyAgentAutoCompactionGuard: async () => ({ supported: true, disabled: false }),
+        shouldPreemptivelyCompactBeforePrompt: () => ({
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 600,
+          promptBudgetBeforeReserve: 800,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          effectiveReserveTokens: 200,
+        }),
+        resolveLiveToolResultMaxChars: () => 20_000,
+      });
+      return runCliTurnCompactionLifecycle({
+        cfg: {} as OpenClawConfig,
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "agent:main:no-compactable-entries",
+        sessionEntry,
+        sessionAgentId: "main",
+        storePath: path.join(tmpDir, "sessions.json"),
+        workspaceDir: tmpDir,
+        agentDir: tmpDir,
+        provider: "test-provider",
+        model: "test-model",
+      });
+    };
+
+    await expect(runLifecycle(true)).resolves.toBe(sessionEntry);
+    await expect(runLifecycle(false)).rejects.toThrow(
+      "CLI transcript compaction failed for test-provider/test-model: no real conversation messages",
+    );
+    await expect(runLifecycle(false, "already under target")).resolves.toBe(sessionEntry);
+    await expect(runLifecycle(false, "contradictory result", true)).rejects.toThrow(
+      "CLI transcript compaction failed for test-provider/test-model: contradictory result",
+    );
+  });
+
   it("compacts over-budget CLI transcripts and clears external CLI resume state", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli";
@@ -116,7 +186,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
-      sessionFile,
+      sessionFile: sessionKey,
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
@@ -201,7 +271,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenanceCall?.reason).toBe("compaction");
     expect(maintenanceCall?.sessionId).toBe(sessionId);
     expect(maintenanceCall?.sessionKey).toBe(sessionKey);
-    expect(maintenanceCall?.sessionFile).toBe(sessionFile);
+    expect(maintenanceCall?.sessionFile).toBe(sessionKey);
     expect(updatedEntry?.compactionCount).toBe(1);
     // Once OpenClaw rewrites the transcript, external CLI resume ids are stale
     // and must be cleared so the next turn starts from the compacted prompt.
@@ -295,12 +365,11 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: successorSessionId,
-        sessionFile: `sqlite:main:${successorSessionId}:${storePath}`,
+        sessionFile: sessionKey,
       }),
     );
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        newSessionFile: `sqlite:main:${successorSessionId}:${storePath}`,
         newSessionId: successorSessionId,
         tokensAfter: 100,
       }),
@@ -317,7 +386,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
-      sessionFile,
+      sessionFile: sessionKey,
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
@@ -552,7 +621,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactAgentHarnessSessionCalls[0]?.[0]).toMatchObject({
       sessionId,
       sessionKey,
-      sessionFile,
+      sessionFile: sessionKey,
       provider: "openai",
       model: "gpt-5.5",
       contextTokenBudget: 1_000,
@@ -732,7 +801,18 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
   });
 
-  it("surfaces nonrecoverable native harness CLI compaction failures", async () => {
+  it.each([
+    {
+      name: "a normal failed result",
+      compacted: false,
+      reason: "timed out waiting for codex app-server compaction",
+    },
+    {
+      name: "a contradictory compacted failure",
+      compacted: true,
+      reason: "contradictory native result",
+    },
+  ])("surfaces nonrecoverable native harness CLI compaction failures for $name", async (result) => {
     const sessionKey = "agent:main:codex-native-failure";
     const sessionId = "session-codex-native-failure";
     const sessionFile = path.join(tmpDir, "session-codex-native-failure.jsonl");
@@ -755,8 +835,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => undefined);
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: false,
-      compacted: false,
-      reason: "timed out waiting for codex app-server compaction",
+      compacted: result.compacted,
+      reason: result.reason,
     }));
     const recordCliCompactionInStore = vi.fn();
     setCliCompactionTestDeps({
@@ -795,9 +875,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         provider: "codex",
         model: "gpt-5.5",
       }),
-    ).rejects.toThrow(
-      "CLI native harness compaction failed for codex/gpt-5.5: timed out waiting for codex app-server compaction",
-    );
+    ).rejects.toThrow(`CLI native harness compaction failed for codex/gpt-5.5: ${result.reason}`);
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);
@@ -1082,7 +1160,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         sessionKey,
         tokensAfter: 42,
         newSessionId: "session-codex-owned-engine-rotated",
-        newSessionFile: path.join(tmpDir, "session-codex-owned-engine-rotated.jsonl"),
       }),
     );
   });
@@ -1512,17 +1589,17 @@ describe("runCliTurnCompactionLifecycle", () => {
   it("initializes built-in context engines before resolving CLI compaction engine", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli-init";
-    const sessionFile = path.join(tmpDir, "session-init.jsonl");
-    await writeSessionFile({ sessionFile, sessionId });
+    const storePath = path.join(tmpDir, "sessions-cli-init.json");
 
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
-      sessionFile,
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
     };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
     const calls: string[] = [];
     setCliCompactionTestDeps({
       ensureContextEnginesInitialized: () => {
@@ -1554,6 +1631,8 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionId,
       sessionKey,
       sessionEntry,
+      sessionStore,
+      storePath,
       sessionAgentId: "main",
       workspaceDir: tmpDir,
       agentDir: tmpDir,

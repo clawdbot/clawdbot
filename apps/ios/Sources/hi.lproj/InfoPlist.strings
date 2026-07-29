@@ -1,4 +1,3 @@
-"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "जब आप कैलेंडर एक्सेस सक्षम करते हैं, तो OpenClaw इवेंट और शेड्यूलिंग संदर्भ दिखाने के लिए आपके कैलेंडर का उपयोग करता है.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */

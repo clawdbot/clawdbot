@@ -33,7 +33,6 @@ function setLookupEntry(
   key: string | undefined,
   entry: RegisteredChannelPluginEntry,
 ): void {
-  // First writer wins so canonical ids keep priority over later aliases.
   if (key && !map.has(key)) {
     map.set(key, entry);
   }
@@ -60,6 +59,9 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
     const id = normalizeOptionalLowercaseString(entry.plugin.id ?? "");
     setLookupEntry(byKey, id, entry);
     setLookupEntry(byId, id, entry);
+  }
+  // Canonical ids are registered first so aliases can never shadow them.
+  for (const entry of entries) {
     for (const alias of entry.plugin.meta?.aliases ?? []) {
       setLookupEntry(byKey, normalizeOptionalLowercaseString(alias), entry);
     }

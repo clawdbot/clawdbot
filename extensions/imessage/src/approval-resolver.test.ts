@@ -22,6 +22,7 @@ describe("resolveIMessageApproval", () => {
     };
     approvalGatewayRuntimeHoisted.resolveApprovalOverGatewaySpy.mockResolvedValue(result);
     const { resolveIMessageApproval } = await import("./approval-resolver.js");
+    const gatewayRuntime = { request: vi.fn() } as never;
 
     await expect(
       resolveIMessageApproval({
@@ -30,6 +31,7 @@ describe("resolveIMessageApproval", () => {
         approvalKind: "exec",
         decision: "allow-once",
         senderId: "+15551230000",
+        gatewayRuntime,
       }),
     ).resolves.toBe(result);
 
@@ -40,6 +42,7 @@ describe("resolveIMessageApproval", () => {
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
+      gatewayRuntime,
       clientDisplayName: "iMessage approval (+15551230000)",
     });
   });

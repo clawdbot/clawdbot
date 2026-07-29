@@ -298,7 +298,12 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
     try {
       await page.goto(`${server.baseUrl}usage`);
       await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
-      await page.locator(".agent-scope-control__select").selectOption("");
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
       await expect
         .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
         .toMatchObject({ agentScope: "all" });
@@ -329,7 +334,8 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
         .poll(() => page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent())
         .toContain("openai");
       const messagesHint = page.locator("#usage-summary-hint-messages");
-      const messagesTooltip = page.locator("#usage-summary-hint-messages-tooltip");
+      const messagesTooltipHost = messagesHint.locator("xpath=..");
+      const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
       await messagesHint.hover();
       await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
       await page.mouse.move(1, 1);
@@ -343,7 +349,7 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await messagesHint.click();
       await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
       await expect
-        .poll(() => messagesTooltip.textContent())
+        .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
         .toContain("Total user and assistant messages in range.");
       await page.getByRole("button", { name: "Cost", exact: true }).click();
       await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();

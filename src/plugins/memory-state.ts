@@ -111,6 +111,15 @@ export type MemoryFlushPlan = {
   prompt: string;
   systemPrompt: string;
   relativePath: string;
+  recordWriteProvenance?: (params: {
+    workspaceDir: string;
+    relativePath: string;
+    contentBefore: string;
+    contentAfter: string;
+    originClass: "agent" | "untrusted";
+    observedAt: number;
+  }) => Promise<(() => Promise<void>) | void>;
+  clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
 };
 
 export type MemoryFlushPlanResolver = (params: {

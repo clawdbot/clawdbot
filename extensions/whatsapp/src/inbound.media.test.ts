@@ -285,7 +285,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -338,7 +337,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -390,7 +388,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -427,7 +424,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -456,7 +452,7 @@ describe("web inbound media saves with extension", () => {
       fileName: undefined,
       kind: "image",
     });
-    expect(inbound.payload.untrustedStructuredContext).toContainEqual({
+    expect(inbound.payload.channelStructuredContext).toContainEqual({
       label: "WhatsApp media",
       source: "whatsapp",
       type: "media",

@@ -3,6 +3,7 @@
  * leasing, plugin thread config, sandbox environment, and thread lifecycle binding.
  */
 import {
+  AgentHarnessPreflightError,
   embeddedAgentLog,
   formatErrorMessage,
   type AgentHarnessRuntimeArtifactBinding,
@@ -226,6 +227,7 @@ export async function startCodexAttemptThread(params: {
             const attemptParams = params.buildAttemptParams();
             startupClient = await params.attemptClientFactory({
               startOptions: params.appServer.start,
+              pluginConfig: params.pluginConfig,
               ...(params.startupPreparedAuth
                 ? { preparedAuth: params.startupPreparedAuth }
                 : { authProfileId: params.startupAuthProfileId }),
@@ -313,14 +315,24 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
-            await ensureCodexComputerUse({
-              client: activeStartupClient,
-              pluginConfig: params.pluginConfig,
-              config: params.config,
-              agentDir: params.agentDir,
-              timeoutMs: params.appServer.requestTimeoutMs,
-              signal: startupAbandonController.signal,
-            });
+            try {
+              await ensureCodexComputerUse({
+                client: activeStartupClient,
+                pluginConfig: params.pluginConfig,
+                config: params.config,
+                agentDir: params.agentDir,
+                timeoutMs: params.appServer.requestTimeoutMs,
+                signal: startupAbandonController.signal,
+              });
+            } catch (error) {
+              if (startupAbandonController.signal.aborted) {
+                throw error;
+              }
+              throw new AgentHarnessPreflightError(
+                `Codex Computer Use readiness failed: ${formatErrorMessage(error)}`,
+                { cause: error },
+              );
+            }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,

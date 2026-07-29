@@ -376,6 +376,23 @@ export async function runInstalledCli(params: {
   });
 }
 
+export async function resolveInstalledGatewayStopArgs(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
+  const help = await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "stop", "--help"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 15_000,
+  });
+  return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+}
+
 async function readInstalledUpdateStatus(params: {
   cliPath: string;
   cwd: string;
@@ -570,6 +587,13 @@ export function buildGatewayStatusArgsFromHelpText(
     ];
   }
   return ["gateway", "status"];
+}
+
+export function buildGatewayStopArgsFromHelpText(helpText: string) {
+  if (helpText.includes("--force")) {
+    return ["gateway", "stop", "--force"];
+  }
+  return ["gateway", "stop"];
 }
 
 export function appendGatewayStatusHelpProbeFallback(logPath: string, error: unknown) {

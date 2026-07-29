@@ -73,7 +73,7 @@ extension OnboardingView {
             memoryPhase: self.memoryImport.phase,
             remoteProbeState: self.remoteProbeState,
             allPermissionsGranted: Capability.importanceOrdered
-                .allSatisfy { self.permissionMonitor.status[$0] ?? false }))
+                .allSatisfy { self.permissionMonitor.status[$0]?.isGranted == true }))
     }
 
     var mascotAccessory: OpenClawMascotAccessory {

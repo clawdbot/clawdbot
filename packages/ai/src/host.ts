@@ -5,6 +5,7 @@
 // consumers get safe, dependency-free behavior without wiring anything.
 import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
+import { transformMessages } from "./transcript-transform.js";
 
 /** Provider capability facts needed by the package-owned transports. */
 export interface AiProviderRequestCapabilities {
@@ -106,6 +107,13 @@ export interface OpenAIStrictToolSettingOptions {
   supportsStrictMode?: boolean;
 }
 
+export type AiInlineTextBlock = { type: "text"; text: string };
+export type AiInlineImageBlock = { type: "image"; data: string; mimeType: string };
+export type AiInlineContentBlock = AiInlineTextBlock | AiInlineImageBlock;
+type AnthropicInlineContentNormalizer = (
+  content: readonly AiInlineContentBlock[],
+) => Promise<AiInlineContentBlock[]>;
+
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
   /**
@@ -123,6 +131,8 @@ export interface AiTransportHost {
   redactSecrets<T>(value: T): T;
   /** Redacts secret-bearing text in tool payload strings. */
   redactToolPayloadText(text: string): string;
+  /** Normalizes Anthropic inline image blocks before provider payload construction. */
+  normalizeAnthropicInlineContentBlocks?: AnthropicInlineContentNormalizer;
   /**
    * Resolves the host strict-tool default for OpenAI-compatible routes.
    * undefined lets the request omit the strict flag entirely.
@@ -201,11 +211,16 @@ function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: S
   return false;
 }
 
-const inertAiTransportHost: AiTransportHost = {
+type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineContentBlocks"> & {
+  normalizeAnthropicInlineContentBlocks: AnthropicInlineContentNormalizer;
+};
+
+const inertAiTransportHost: ActiveAiTransportHost = {
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
   redactSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
+  normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>
     options?.supportsStrictMode ? false : undefined,
   plugin: {
@@ -233,7 +248,8 @@ const inertAiTransportHost: AiTransportHost = {
   resolveModelRequestTimeoutMs: () => undefined,
   requiresManagedTransport: () => false,
   inheritManagedTransport: (_source, target) => target,
-  transformTransportMessages: (messages) => messages,
+  transformTransportMessages: (messages, model, normalizeToolCallId) =>
+    transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
   prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
@@ -241,13 +257,16 @@ const inertAiTransportHost: AiTransportHost = {
   logWarn: () => {},
 };
 
-let activeAiTransportHost = inertAiTransportHost;
+let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
 
 /** Installs host implementations for the transport policy ports. */
 export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
   activeAiTransportHost = {
     ...inertAiTransportHost,
     ...host,
+    normalizeAnthropicInlineContentBlocks:
+      host.normalizeAnthropicInlineContentBlocks ??
+      inertAiTransportHost.normalizeAnthropicInlineContentBlocks,
     plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
   };
   const transportHost = activeAiTransportHost;
@@ -276,7 +295,7 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
 }
 
 /** Returns the active transport host (inert defaults unless configured). */
-export function getAiTransportHost(): AiTransportHost {
+export function getAiTransportHost(): ActiveAiTransportHost {
   return activeAiTransportHost;
 }
 
