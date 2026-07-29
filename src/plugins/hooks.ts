@@ -110,6 +110,10 @@ import type {
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
 import {
+  type PluginSubagentRequesterContext,
+  withPluginSubagentRequesterContext,
+} from "./runtime/subagent-requester-context.js";
+import {
   createPluginToolMatcherScope,
   pluginToolMatcherCoversTool,
   type PluginToolMatcherScope,
@@ -775,6 +779,7 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, ctx);
     if (hooks.length === 0) {
@@ -783,7 +788,7 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    return await runClaimingHooksList(hooks, hookName, event, ctx);
+    return await runClaimingHooksList(hooks, hookName, event, ctx, runHandler);
   }
 
   async function runClaimingHookForPlugin<
@@ -815,14 +820,18 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     for (const hook of hooks) {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-        );
-        const timeoutMs = getClaimingHookTimeoutMs(hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const invokeHandler = async (): Promise<TResult | void> => {
+          const promise = Promise.resolve(
+            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
+          );
+          const timeoutMs = getClaimingHookTimeoutMs(hook);
+          return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        };
+        const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
         if (handlerResult?.handled) {
           return handlerResult;
         }
@@ -1152,11 +1161,17 @@ export function createHookRunner(
   async function runBeforeDispatch(
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
+    requester?: PluginSubagentRequesterContext,
   ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    const runHandler = requester
+      ? (run: () => Promise<PluginHookBeforeDispatchResult | void>) =>
+          withPluginSubagentRequesterContext(requester, run)
+      : undefined;
     return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
       "before_dispatch",
       event,
       ctx,
+      runHandler,
     );
   }
 

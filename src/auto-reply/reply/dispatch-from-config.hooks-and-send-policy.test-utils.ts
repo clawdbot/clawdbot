@@ -2,10 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import {
-  resolvePluginSubagentCompletionRequester,
-  type PluginSubagentRequesterContext,
-} from "../../plugins/runtime/subagent-requester-context.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -38,14 +35,6 @@ import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-reque
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
-
-function getActivePluginSubagentRequester(): PluginSubagentRequesterContext | undefined {
-  try {
-    return resolvePluginSubagentCompletionRequester("current-requester");
-  } catch {
-    return undefined;
-  }
-}
 
 beforeAll(globalBeforeAll0);
 
@@ -156,17 +145,15 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
-  it("captures canonical requester lineage only while before_dispatch runs", async () => {
+  it("passes canonical requester lineage to the before_dispatch runner", async () => {
     sessionStoreMocks.currentEntry = {
       sessionId: "canonical-session-id",
       sessionKey: "agent:main:telegram:direct:canonical",
       updatedAt: 0,
     };
-    let requesterDuringHook = getActivePluginSubagentRequester();
     hookMocks.runner.runBeforeDispatch.mockImplementation(async (event, context) => {
       (event as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
       (context as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
-      requesterDuringHook = getActivePluginSubagentRequester();
       return { handled: true };
     });
 
@@ -182,7 +169,11 @@ describe("before_dispatch hook", () => {
       dispatcher: createDispatcher(),
     });
 
-    expect(requesterDuringHook).toEqual({
+    const requester = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    )[2] as PluginSubagentRequesterContext | undefined;
+    expect(requester).toEqual({
       sessionKey: "agent:main:telegram:direct:fallback",
       origin: {
         channel: "telegram",
@@ -191,7 +182,6 @@ describe("before_dispatch hook", () => {
         threadId: 42,
       },
     });
-    expect(getActivePluginSubagentRequester()).toBeUndefined();
   });
 
   it("passes inbound reply metadata to before_dispatch event and context", async () => {

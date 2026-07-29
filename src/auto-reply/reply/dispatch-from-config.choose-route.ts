@@ -4,10 +4,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import {
-  createPluginSubagentRequesterContext,
-  withPluginSubagentRequesterContext,
-} from "../../plugins/runtime/subagent-requester-context.js";
+import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   copyReplyPayloadMetadata,
@@ -462,8 +459,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
 
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (hookRunner?.hasHooks("before_dispatch")) {
+    // This outer lookup key is resolved from the routed context; fields inside
+    // sessionStoreEntry.entry cannot redirect hook or requester lineage.
+    const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
     const pluginSubagentRequester = createPluginSubagentRequesterContext({
-      sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+      sessionKey: beforeDispatchSessionKey,
       origin: {
         channel: routeReplyChannel,
         to: routeReplyTo,
@@ -471,48 +471,43 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         threadId: routeReplyThreadId,
       },
     });
-    const runBeforeDispatch = () =>
-      hookRunner.runBeforeDispatch(
-        {
-          messageId: state.hookContext.messageId,
-          content: state.hookContext.content,
-          body: state.hookContext.bodyForAgent ?? state.hookContext.body,
-          channel: state.hookContext.channelId,
-          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-          senderId: state.hookContext.senderId,
-          replyToId: state.hookContext.replyToId,
-          replyToIdFull: state.hookContext.replyToIdFull,
-          replyToBody: state.hookContext.replyToBody,
-          replyToSender: state.hookContext.replyToSender,
-          replyToIsQuote: state.hookContext.replyToIsQuote,
-          isGroup: state.hookContext.isGroup,
-          timestamp: state.hookContext.timestamp,
-        },
-        {
-          messageId: state.hookContext.messageId,
-          channelId: state.hookContext.channelId,
-          accountId: state.hookContext.accountId,
-          conversationId: state.inboundClaimContext.conversationId,
-          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-          senderId: state.hookContext.senderId,
-          replyToId: state.hookContext.replyToId,
-          replyToIdFull: state.hookContext.replyToIdFull,
-          replyToBody: state.hookContext.replyToBody,
-          replyToSender: state.hookContext.replyToSender,
-          replyToIsQuote: state.hookContext.replyToIsQuote,
-        },
-      );
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(
         async () =>
           await runWithDispatchAbortSignal(
             getPreDispatchAbortSignal(),
-            () => {
-              if (!pluginSubagentRequester) {
-                return runBeforeDispatch();
-              }
-              return withPluginSubagentRequesterContext(pluginSubagentRequester, runBeforeDispatch);
-            },
+            () =>
+              hookRunner.runBeforeDispatch(
+                {
+                  messageId: state.hookContext.messageId,
+                  content: state.hookContext.content,
+                  body: state.hookContext.bodyForAgent ?? state.hookContext.body,
+                  channel: state.hookContext.channelId,
+                  sessionKey: beforeDispatchSessionKey,
+                  senderId: state.hookContext.senderId,
+                  replyToId: state.hookContext.replyToId,
+                  replyToIdFull: state.hookContext.replyToIdFull,
+                  replyToBody: state.hookContext.replyToBody,
+                  replyToSender: state.hookContext.replyToSender,
+                  replyToIsQuote: state.hookContext.replyToIsQuote,
+                  isGroup: state.hookContext.isGroup,
+                  timestamp: state.hookContext.timestamp,
+                },
+                {
+                  messageId: state.hookContext.messageId,
+                  channelId: state.hookContext.channelId,
+                  accountId: state.hookContext.accountId,
+                  conversationId: state.inboundClaimContext.conversationId,
+                  sessionKey: beforeDispatchSessionKey,
+                  senderId: state.hookContext.senderId,
+                  replyToId: state.hookContext.replyToId,
+                  replyToIdFull: state.hookContext.replyToIdFull,
+                  replyToBody: state.hookContext.replyToBody,
+                  replyToSender: state.hookContext.replyToSender,
+                  replyToIsQuote: state.hookContext.replyToIsQuote,
+                },
+                pluginSubagentRequester,
+              ),
             trackDispatchLifecycleWork,
           ),
       ),
