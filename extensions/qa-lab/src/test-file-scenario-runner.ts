@@ -3,7 +3,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
-import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+import { toRepoRelativePath } from "./cli-paths.js";
 import {
   buildPlaywrightEvidenceSummary,
   buildScriptEvidenceSummary,
@@ -29,6 +29,10 @@ import {
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
 import { isDockerE2eScenario, runDockerE2eBatch } from "./test-file-scenario-docker-batch.js";
+import {
+  readJsonFileIfExists,
+  readScriptProducerEvidence,
+} from "./test-file-scenario-script-evidence.js";
 export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -348,6 +352,19 @@ async function runQaTestFileScenario(params: {
   runCommand: QaScenarioCommandRunner;
   scenario: QaTestFileScenario;
 }) {
+  const requiresProducerEvidence =
+    params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
+  let producerEvidenceStartedAtMs: number | undefined;
+  if (requiresProducerEvidence) {
+    const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
+    // Both producer indexes belong to one command invocation. Clear them before
+    // launch so a successful no-op cannot authenticate an earlier scenario run.
+    await Promise.all([
+      fs.rm(path.join(scenarioOutputDir, "latest-run.json"), { force: true }),
+      fs.rm(path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME), { force: true }),
+    ]);
+    producerEvidenceStartedAtMs = Date.now();
+  }
   const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
   const result = await runScenarioCommandSteps({
     ...params,
@@ -356,12 +373,32 @@ async function runQaTestFileScenario(params: {
   if (params.scenario.execution.kind !== "script") {
     return result;
   }
-  const producerEvidenceResult = await readScriptProducerEvidence({
-    outputDir: params.outputDir,
-    repoRoot: params.repoRoot,
-    scenario: params.scenario,
-  });
+  let producerEvidenceResult: Pick<QaTestFileScenarioResult, "producerEvidence">;
+  try {
+    producerEvidenceResult = await readScriptProducerEvidence({
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      scenario: params.scenario,
+      producerEvidenceStartedAtMs,
+    });
+  } catch (error) {
+    if (result.status !== "pass") {
+      return result;
+    }
+    return {
+      ...result,
+      failureMessage: `Script producer evidence is invalid: ${formatErrorMessage(error)}`,
+      status: "fail" as const,
+    };
+  }
   if (!producerEvidenceResult.producerEvidence) {
+    if (requiresProducerEvidence && result.status === "pass") {
+      return {
+        ...result,
+        failureMessage: "Script exited successfully without writing fresh producer QA evidence.",
+        status: "fail" as const,
+      };
+    }
     return result;
   }
   if (result.status !== "pass") {
@@ -387,7 +424,10 @@ function statusFromProducerEvidence(params: {
 }): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
   const { allowBlockedEvidence, producerEvidence } = params;
   if (!producerEvidence || producerEvidence.entries.length === 0) {
-    return { status: "pass" };
+    return {
+      failureMessage: "Script exited successfully without reporting an executed producer check.",
+      status: "fail",
+    };
   }
   const blockingEntry = producerEvidence.entries.find(
     (entry) =>
@@ -509,107 +549,6 @@ function buildTestFileEvidence(params: {
     profile: evidence.profile,
     entries: evidence.entries,
   });
-}
-
-async function readJsonFileIfExists(filePath: string): Promise<unknown> {
-  let text: string;
-  try {
-    text = await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new Error(`invalid JSON in ${filePath}: ${formatErrorMessage(error)}`, { cause: error });
-  }
-}
-
-// Producer artifact paths follow one convention: relative paths resolve against the
-// qa-evidence.json directory, absolute paths are taken as-is. Paths under the repo root
-// become repo-relative; paths outside it stay absolute so downstream consumers never see
-// `../` segments that would read as path traversal.
-function resolveScriptProducerArtifactPath(params: {
-  evidenceDir: string;
-  repoRoot: string;
-  artifactPath: string;
-}) {
-  const absolutePath = path.isAbsolute(params.artifactPath)
-    ? params.artifactPath
-    : path.join(params.evidenceDir, params.artifactPath);
-  const repoRelativePath = toRepoRelativePath(params.repoRoot, absolutePath);
-  return isRepoRootRelativeRef(repoRelativePath) ? repoRelativePath : path.normalize(absolutePath);
-}
-
-function normalizeScriptProducerEvidence(params: {
-  evidence: QaEvidenceSummaryJson;
-  evidencePath: string;
-  repoRoot: string;
-}): QaEvidenceSummaryJson {
-  // Input is already validated by the caller; this only rewrites artifact path strings,
-  // so the transformed shape stays schema-valid without re-parsing.
-  const evidenceDir = path.dirname(params.evidencePath);
-  return {
-    ...params.evidence,
-    entries: params.evidence.entries.map((entry) => ({
-      ...entry,
-      execution: entry.execution
-        ? {
-            ...entry.execution,
-            artifacts: entry.execution.artifacts.map((artifact) => ({
-              ...artifact,
-              path: resolveScriptProducerArtifactPath({
-                artifactPath: artifact.path,
-                evidenceDir,
-                repoRoot: params.repoRoot,
-              }),
-            })),
-          }
-        : undefined,
-    })),
-  };
-}
-
-async function readScriptProducerEvidence(params: {
-  outputDir: string;
-  repoRoot: string;
-  scenario: QaTestFileScenario;
-}): Promise<Pick<QaTestFileScenarioResult, "producerEvidence">> {
-  const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
-  const latestRun = (await readJsonFileIfExists(
-    path.join(scenarioOutputDir, "latest-run.json"),
-  )) as { qaEvidence?: unknown } | undefined;
-  const candidates = [
-    typeof latestRun?.qaEvidence === "string" ? latestRun.qaEvidence : undefined,
-    path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const candidate of candidates) {
-    const evidencePath = path.isAbsolute(candidate)
-      ? candidate
-      : path.join(scenarioOutputDir, candidate);
-    const rawEvidence = await readJsonFileIfExists(evidencePath);
-    if (!rawEvidence) {
-      continue;
-    }
-    const evidence = validateQaEvidenceSummaryJson(rawEvidence);
-    return {
-      producerEvidence: normalizeScriptProducerEvidence({
-        evidence,
-        evidencePath,
-        repoRoot: params.repoRoot,
-      }),
-    };
-  }
-  return {};
 }
 
 function buildScenarioArtifactPaths(params: {

@@ -520,17 +520,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
       return;
     }
-    const p = params;
     try {
       const { mode, appliedSummaries } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         opts: {
-          agent: p.agent,
-          allAgents: p.allAgents,
-          enforce: p.enforce,
-          activeKey: p.activeKey,
-          fixMissing: p.fixMissing,
-          fixDmScope: p.fixDmScope,
+          agent: params.agent,
+          allAgents: params.allAgents,
+          enforce: params.enforce,
+          activeKey: params.activeKey,
+          fixMissing: params.fixMissing,
+          fixDmScope: params.fixDmScope,
         },
       });
       const result = serializeSessionCleanupResult({
@@ -628,8 +627,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
@@ -645,8 +643,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       store,
       key: target.canonicalKey,
       entry,
-      includeDerivedTitles: p.includeDerivedTitles,
-      includeLastMessage: p.includeLastMessage,
+      includeDerivedTitles: params.includeDerivedTitles,
+      includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
     });
     const placement = row.sessionId

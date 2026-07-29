@@ -533,6 +533,116 @@ describe("qa test file scenario runner", () => {
     },
   );
 
+  it.each([
+    { evidence: "missing", expectedFailure: /without writing fresh producer QA evidence/u },
+    { evidence: "stale", expectedFailure: /not written by the current scenario run/u },
+    { evidence: "empty", expectedFailure: /without reporting an executed producer check/u },
+    { evidence: "malformed", expectedFailure: /invalid JSON/u },
+    { evidence: "outside", expectedFailure: /inside its scenario output directory/u },
+  ] as const)(
+    "fails a successful script with $evidence producer evidence",
+    async ({ evidence, expectedFailure }) => {
+      const repoRoot = await makeTempRepo(`qa-script-${evidence}-producer-evidence-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script");
+      const scenarioOutputDir = path.join(outputDir, "scenario-script");
+      const latestRunPath = path.join(scenarioOutputDir, "latest-run.json");
+      const evidencePath = path.join(scenarioOutputDir, "qa-evidence.json");
+
+      if (evidence === "stale") {
+        await writeScriptProducerEvidence({ outputDir, status: "pass" });
+        const staleEvidencePath = path.join(scenarioOutputDir, "run-1", "qa-evidence.json");
+        await fs.copyFile(staleEvidencePath, evidencePath);
+        const staleTimestamp = new Date(Date.now() - 60_000);
+        await Promise.all([
+          fs.utimes(staleEvidencePath, staleTimestamp, staleTimestamp),
+          fs.utimes(evidencePath, staleTimestamp, staleTimestamp),
+        ]);
+      }
+
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+        runCommand: async () => {
+          await fs.mkdir(scenarioOutputDir, { recursive: true });
+          if (evidence === "stale") {
+            await expect(fs.access(latestRunPath)).rejects.toMatchObject({ code: "ENOENT" });
+            await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+            await fs.writeFile(
+              latestRunPath,
+              JSON.stringify({
+                qaEvidence: path.join(scenarioOutputDir, "run-1", "qa-evidence.json"),
+              }),
+              "utf8",
+            );
+          } else if (evidence === "empty") {
+            await fs.writeFile(
+              evidencePath,
+              JSON.stringify({
+                kind: "openclaw.qa.evidence-summary",
+                schemaVersion: 2,
+                generatedAt: new Date().toISOString(),
+                evidenceMode: "full",
+                entries: [],
+              }),
+              "utf8",
+            );
+          } else if (evidence === "malformed") {
+            await fs.writeFile(evidencePath, "{not valid JSON", "utf8");
+          } else if (evidence === "outside") {
+            await writeScriptProducerEvidence({
+              outputDir,
+              scenarioId: "different-script-scenario",
+              status: "pass",
+            });
+            await fs.writeFile(
+              latestRunPath,
+              JSON.stringify({
+                qaEvidence: path.join(
+                  outputDir,
+                  "different-script-scenario",
+                  "run-1",
+                  "qa-evidence.json",
+                ),
+              }),
+              "utf8",
+            );
+          }
+          return { exitCode: 0, stdout: "script exited successfully\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: "fail" });
+      expect(result.results[0]?.failureMessage).toMatch(expectedFailure);
+      expect(result.evidence.entries).toHaveLength(1);
+      expect(result.evidence.entries[0]).toMatchObject({
+        test: { id: "scenario-script" },
+        result: { status: "fail" },
+      });
+    },
+  );
+
+  it("preserves individual Docker lane success without generic producer evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-script-docker-individual-no-producer-evidence-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "docker-individual"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      failFast: true,
+      scenarios: [makeDockerE2eScenario("docker-gateway-network", "gateway-network")],
+      runCommand: async () => ({ exitCode: 0, stdout: "Docker lane passed\n", stderr: "" }),
+    });
+
+    expect(result.results[0]).toMatchObject({
+      scenario: { id: "docker-gateway-network" },
+      status: "pass",
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("pass");
+  });
+
   it("runs script scenarios and imports producer QA evidence artifacts", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
