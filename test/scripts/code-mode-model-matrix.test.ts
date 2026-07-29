@@ -22,7 +22,6 @@ describe("Code Mode model matrix options", () => {
       models: ["ollama/qwen3.5:9b"],
       modes: ["direct", "auto", "code"],
       tasks: ["read", "dependent-read-write"],
-      buildCli: true,
       repetitions: 3,
       timeoutSeconds: 180,
       thinking: "off",
@@ -33,6 +32,9 @@ describe("Code Mode model matrix options", () => {
   it("rejects ambiguous selectors and output paths", () => {
     expect(() => parseCodeModeMatrixOptions([])).toThrow("At least one --model");
     expect(() => parseCodeModeMatrixOptions(["--model", "qwen3.5:9b"])).toThrow("provider/model");
+    expect(() =>
+      parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b", "--skip-build"]),
+    ).toThrow("Unknown argument");
     expect(() =>
       parseCodeModeMatrixOptions([
         "--model",
@@ -368,7 +370,6 @@ describe("Code Mode model matrix artifacts", () => {
         runCodeModeModelMatrix(
           {
             allowFailures: false,
-            buildCli: false,
             dryRun: true,
             keepState: false,
             models: ["ollama/qwen3.5:9b"],
@@ -405,7 +406,6 @@ describe("Code Mode model matrix artifacts", () => {
         runCodeModeModelMatrix(
           {
             allowFailures: false,
-            buildCli: false,
             dryRun: true,
             keepState: false,
             models: ["ollama/qwen3.5:9b"],
@@ -446,7 +446,6 @@ describe("Code Mode model matrix artifacts", () => {
           runCodeModeModelMatrix(
             {
               allowFailures: false,
-              buildCli: true,
               dryRun: false,
               keepState: false,
               models: ["ollama/qwen3.5:9b"],
@@ -493,7 +492,6 @@ describe("Code Mode model matrix artifacts", () => {
       const result = await runCodeModeModelMatrix(
         {
           allowFailures: false,
-          buildCli: false,
           dryRun: false,
           keepState: false,
           models: ["ollama/qwen3.5:9b"],
@@ -506,6 +504,7 @@ describe("Code Mode model matrix artifacts", () => {
           timeoutSeconds: 10,
         },
         {
+          buildCliArtifacts: async () => {},
           now: () => new Date("2026-07-28T12:00:00Z"),
           readBuildSha256: async () => {
             const entries = await fs.readdir(path.join(repoRoot, "artifacts"));

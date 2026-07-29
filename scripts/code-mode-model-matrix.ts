@@ -31,7 +31,6 @@ export type CodeModeMatrixTask = "read" | "dependent-read-write";
 
 export type CodeModeMatrixOptions = {
   allowFailures: boolean;
-  buildCli: boolean;
   dryRun: boolean;
   keepState: boolean;
   models: string[];
@@ -156,7 +155,6 @@ Options:
   --output-dir <path>       Repo-relative artifact directory
   --keep-state              Retain per-cell state and workspace directories
   --allow-failures          Exit zero after writing evidence even when cells fail
-  --skip-build              Reuse an existing dist/entry.js instead of rebuilding
   --dry-run                 Write the manifest without calling models
   -h, --help                Show this help
 
@@ -213,7 +211,6 @@ export function parseCodeModeMatrixOptions(
   const modes: CodeModeMatrixMode[] = [];
   const tasks: CodeModeMatrixTask[] = [];
   let allowFailures = false;
-  let buildCli = true;
   let dryRun = false;
   let keepState = false;
   let outputDir: string | undefined;
@@ -280,11 +277,6 @@ export function parseCodeModeMatrixOptions(
       allowFailures = true;
       continue;
     }
-    if (arg === "--skip-build") {
-      recordOnce(arg);
-      buildCli = false;
-      continue;
-    }
     if (arg === "--keep-state") {
       recordOnce(arg);
       keepState = true;
@@ -306,7 +298,6 @@ export function parseCodeModeMatrixOptions(
   }
   return {
     allowFailures,
-    buildCli,
     dryRun,
     keepState,
     models,
@@ -1269,7 +1260,7 @@ export async function runCodeModeModelMatrix(
         }
       : await readSourceIdentity(options.repoRoot);
   const cells = buildCells(options);
-  if (!options.dryRun && options.buildCli) {
+  if (!options.dryRun) {
     await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
   }
   // Build first so its output set is complete, then reserve evidence storage
@@ -1292,7 +1283,6 @@ export async function runCodeModeModelMatrix(
     timeoutSeconds: options.timeoutSeconds,
     thinking: options.thinking,
     keepState: options.keepState,
-    buildCli: options.buildCli,
     cells: cells.map((cell) => cell.id),
   };
   await writeJson(path.join(outputDir, "manifest.json"), manifest);
