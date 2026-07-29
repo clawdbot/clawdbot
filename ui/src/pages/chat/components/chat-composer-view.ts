@@ -327,7 +327,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
                 skillsError: props.capabilityMenu?.skillsError ?? false,
                 mcpServers: props.capabilityMenu?.mcpServers ?? [],
-                webSearchConfigured: props.capabilityMenu?.webSearchConfigured ?? false,
                 webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
                 mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
                 canAdmin: props.capabilityMenu?.canAdmin ?? false,
