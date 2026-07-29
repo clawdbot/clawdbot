@@ -10,8 +10,9 @@
  * - Pure in-memory Map – no external dependencies; suitable for a single
  *   gateway process. The Map is periodically pruned and capped to avoid
  *   unbounded growth.
- * - Loopback addresses (127.0.0.1 / ::1) are exempt by default so that local
- *   CLI sessions are never locked out.
+ * - Loopback addresses (127.0.0.1 / ::1) are exempt from denial by default so
+ *   local CLI sessions are never locked out. Failed auth still incurs a
+ *   bounded, escalating delay.
  * - The module is side-effect-free: callers create an instance via
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
@@ -83,6 +84,8 @@ export interface AuthRateLimiter {
   check(ip: string | undefined, scope?: string): RateLimitCheckResult;
   /** Record a failed authentication attempt for `ip`. */
   recordFailure(ip: string | undefined, scope?: string): void;
+  /** Record a failed attempt and await any loopback penalty delay. */
+  recordFailureAndDelay(ip: string | undefined, scope?: string): Promise<void>;
   /** Reset the rate-limit state for `ip` (e.g. after a successful login). */
   reset(ip: string | undefined, scope?: string): void;
   /** Return the current number of tracked IPs (useful for diagnostics). */
@@ -102,6 +105,11 @@ const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
 const DEFAULT_MAX_ENTRIES = 10_000;
+const LOOPBACK_FAILURE_DELAY_BASE_MS = 250;
+const LOOPBACK_FAILURE_DELAY_MAX_MS = 5_000;
+const LOOPBACK_FAILURE_HISTORY_LIMIT =
+  Math.ceil(Math.log2(LOOPBACK_FAILURE_DELAY_MAX_MS / LOOPBACK_FAILURE_DELAY_BASE_MS)) + 1;
+const MAX_PENDING_LOOPBACK_FAILURE_DELAYS = 32;
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -146,6 +154,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
 
   const entries = new Map<string, RateLimitEntry>();
+  const pendingLoopbackFailureDelays = new Set<() => void>();
   let overflowLockedUntil: number | undefined;
 
   // Periodic cleanup to avoid unbounded map growth.
@@ -224,9 +233,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
   function recordFailure(rawIp: string | undefined, rawScope?: string): void {
     const { key, ip } = resolveKey(rawIp, rawScope);
-    if (isExempt(ip)) {
-      return;
-    }
+    const exempt = isExempt(ip);
 
     const now = Date.now();
     let entry = entries.get(key);
@@ -240,7 +247,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       entries.set(key, entry);
     }
 
-    // If currently locked, do nothing (already blocked).
+    // If currently locked, do nothing (already blocked). Loopback entries are
+    // never locked, so every failed local attempt continues to count.
     if (entry.lockedUntil && now < entry.lockedUntil) {
       return;
     }
@@ -248,9 +256,48 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     slideWindow(entry, now);
     entry.attempts.push(now);
 
-    if (entry.attempts.length >= maxAttempts) {
+    if (exempt && entry.attempts.length > LOOPBACK_FAILURE_HISTORY_LIMIT) {
+      // The delay is already capped at this history length. Discard older
+      // timestamps so timer-cap overflow cannot grow loopback state unbounded.
+      entry.attempts.splice(0, entry.attempts.length - LOOPBACK_FAILURE_HISTORY_LIMIT);
+    } else if (!exempt && entry.attempts.length >= maxAttempts) {
       entry.lockedUntil = now + lockoutMs;
     }
+  }
+
+  async function recordFailureAndDelay(
+    rawIp: string | undefined,
+    rawScope?: string,
+  ): Promise<void> {
+    const { key, ip } = resolveKey(rawIp, rawScope);
+    recordFailure(rawIp, rawScope);
+    if (!isExempt(ip) || pendingLoopbackFailureDelays.size >= MAX_PENDING_LOOPBACK_FAILURE_DELAYS) {
+      return;
+    }
+
+    const failureCount = entries.get(key)?.attempts.length ?? 1;
+    const delayMs = Math.min(
+      LOOPBACK_FAILURE_DELAY_BASE_MS * 2 ** Math.min(failureCount - 1, 30),
+      LOOPBACK_FAILURE_DELAY_MAX_MS,
+    );
+    await new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      const settle = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        pendingLoopbackFailureDelays.delete(settle);
+        resolve();
+      };
+      pendingLoopbackFailureDelays.add(settle);
+      timer = setTimeout(settle, delayMs);
+      timer.unref?.();
+    });
   }
 
   function reset(rawIp: string | undefined, rawScope?: string): void {
@@ -327,7 +374,10 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
     entries.clear();
     overflowLockedUntil = undefined;
+    for (const settle of [...pendingLoopbackFailureDelays]) {
+      settle();
+    }
   }
 
-  return { check, recordFailure, reset, size, prune, dispose };
+  return { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
 }

@@ -849,6 +849,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const rateLimiter: AuthRateLimiter = {
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs })),
       recordFailure: vi.fn(),
+      recordFailureAndDelay: vi.fn(async () => {}),
       reset: vi.fn(),
       size: vi.fn(() => 0),
       prune: vi.fn(),

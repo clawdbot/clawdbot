@@ -268,8 +268,107 @@ describe("auth rate limiter", () => {
 
   it.each(["127.0.0.1", "::1"])("exempts loopback address %s by default", (ip) => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
-    limiter.recordFailure(ip);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      limiter.recordFailure(ip);
+    }
     expect(limiter.check(ip).allowed).toBe(true);
+  });
+
+  it("escalates and caps the loopback failure delay", async () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      });
+      const ip = "127.0.0.1";
+
+      const first = limiter.recordFailureAndDelay(ip);
+      await vi.advanceTimersByTimeAsync(249);
+      let settled = false;
+      void first.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await first;
+
+      const second = limiter.recordFailureAndDelay(ip);
+      await vi.advanceTimersByTimeAsync(499);
+      settled = false;
+      void second.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await second;
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        limiter.recordFailure(ip);
+      }
+      const capped = limiter.recordFailureAndDelay(ip);
+      await vi.advanceTimersByTimeAsync(4_999);
+      settled = false;
+      void capped.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await capped;
+      expect(limiter.check(ip).allowed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reset clears the loopback penalty history", async () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      limiter.recordFailure("127.0.0.1");
+      limiter.recordFailure("127.0.0.1");
+      limiter.reset("127.0.0.1");
+
+      const delayed = limiter.recordFailureAndDelay("127.0.0.1");
+      await vi.advanceTimersByTimeAsync(249);
+      let settled = false;
+      void delayed.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await delayed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns loopback failures immediately beyond the pending-delay cap", async () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      const pending = Array.from({ length: 32 }, (_, index) =>
+        limiter.recordFailureAndDelay("127.0.0.1", `scope-${index}`),
+      );
+
+      let overflowSettled = false;
+      void limiter.recordFailureAndDelay("127.0.0.1", "scope-overflow").then(() => {
+        overflowSettled = true;
+      });
+      await Promise.resolve();
+      expect(overflowSettled).toBe(true);
+
+      limiter.dispose();
+      await Promise.all(pending);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rate-limits loopback when exemptLoopback is false", () => {
@@ -386,5 +485,20 @@ describe("auth rate limiter", () => {
     expect(limiter.size()).toBe(1);
     limiter.dispose();
     expect(limiter.size()).toBe(0);
+  });
+
+  it("dispose settles pending loopback failure delays immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      const pending = limiter.recordFailureAndDelay("127.0.0.1");
+
+      limiter.dispose();
+
+      await pending;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

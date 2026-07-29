@@ -132,7 +132,7 @@ gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gatewa
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist
 gateway.http.endpoints.responses.images.urlAllowlist gateway.mode gateway.nodes.allowSkills
-gateway.nodes.pairing.autoApproveCidrs gateway.nodes.pluginTools.enabled gateway.port
+gateway.nodes.pairing.autoApproveCidrs gateway.nodes.pairing.autoApproveLocal gateway.nodes.pluginTools.enabled gateway.port
 gateway.remote.password gateway.remote.sshTarget gateway.remote.tlsFingerprint
 gateway.remote.token gateway.remote.transport gateway.remote.url gateway.tailscale.mode
 gateway.trustedProxies hooks.allowedAgentIds hooks.enabled hooks.gmail.account hooks.gmail.label
