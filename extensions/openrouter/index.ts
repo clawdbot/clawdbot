@@ -14,6 +14,7 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -86,12 +87,6 @@ function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model:
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
     reasoning,
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function sanitizePromptModelId(value: unknown): string | undefined {

@@ -364,65 +364,72 @@ async function killSubagentRun(params: {
   };
 }
 
-async function cascadeKillChildren(params: {
+async function killSubagentRunTree(params: {
   cfg: OpenClawConfig;
-  parentChildSessionKey: string;
+  runs: Iterable<SubagentRunRecord>;
   cache: Map<string, Record<string, SessionEntry>>;
-  seenChildSessionKeys?: Set<string>;
+  seenChildSessionKeys: Set<string>;
+  controllerSessionKey?: string;
 }): Promise<{ killed: number; labels: string[] }> {
-  const childRunsBySessionKey = new Map<string, SubagentRunRecord>();
-  for (const run of listSubagentRunsForController(params.parentChildSessionKey)) {
-    const childKey = run.childSessionKey?.trim();
-    if (!childKey) {
-      continue;
-    }
-    const latest = getLatestSubagentRunByChildSessionKey(childKey);
-    const latestControllerSessionKey =
-      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (
-      !latest ||
-      latest.runId !== run.runId ||
-      latestControllerSessionKey !== params.parentChildSessionKey
-    ) {
-      continue;
-    }
-    childRunsBySessionKey.set(childKey, run);
-  }
-  const childRuns = Array.from(childRunsBySessionKey.values());
-  const seenChildSessionKeys = params.seenChildSessionKeys ?? new Set<string>();
   let killed = 0;
   const labels: string[] = [];
 
-  for (const run of childRuns) {
+  for (const run of params.runs) {
     const childKey = run.childSessionKey?.trim();
-    if (!childKey || seenChildSessionKeys.has(childKey)) {
+    if (!childKey || params.seenChildSessionKeys.has(childKey)) {
       continue;
     }
-    seenChildSessionKeys.add(childKey);
+    const latest = getLatestSubagentRunByChildSessionKey(childKey);
+    if (!latest || latest.runId !== run.runId) {
+      continue;
+    }
+    const latestControllerSessionKey =
+      latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+    if (params.controllerSessionKey && latestControllerSessionKey !== params.controllerSessionKey) {
+      continue;
+    }
+    params.seenChildSessionKeys.add(childKey);
+    const entry = params.controllerSessionKey ? run : latest;
 
-    if (!run.endedAt || run.pauseReason === "sessions_yield") {
+    if (!entry.endedAt || entry.pauseReason === "sessions_yield") {
       const stopResult = await killSubagentRun({
         cfg: params.cfg,
-        entry: run,
+        entry,
         cache: params.cache,
       });
       if (stopResult.killed) {
         killed += 1;
-        labels.push(resolveSubagentLabel(run));
+        labels.push(resolveSubagentLabel(entry));
       }
     }
 
-    const cascade = await cascadeKillChildren({
+    const cascade = await killSubagentRunTree({
       cfg: params.cfg,
-      parentChildSessionKey: childKey,
+      runs: listSubagentRunsForController(childKey),
       cache: params.cache,
-      seenChildSessionKeys,
+      seenChildSessionKeys: params.seenChildSessionKeys,
+      controllerSessionKey: childKey,
     });
     killed += cascade.killed;
     labels.push(...cascade.labels);
   }
 
   return { killed, labels };
+}
+
+async function cascadeKillChildren(params: {
+  cfg: OpenClawConfig;
+  parentChildSessionKey: string;
+  cache: Map<string, Record<string, SessionEntry>>;
+  seenChildSessionKeys?: Set<string>;
+}): Promise<{ killed: number; labels: string[] }> {
+  return killSubagentRunTree({
+    cfg: params.cfg,
+    runs: listSubagentRunsForController(params.parentChildSessionKey),
+    cache: params.cache,
+    seenChildSessionKeys: params.seenChildSessionKeys ?? new Set<string>(),
+    controllerSessionKey: params.parentChildSessionKey,
+  });
 }
 
 /** Kills every currently controlled child run and its descendants. */
@@ -439,39 +446,13 @@ export async function killAllControlledSubagentRuns(params: {
       labels: [],
     };
   }
-  const cache = new Map<string, Record<string, SessionEntry>>();
-  const seenChildSessionKeys = new Set<string>();
-  const killedLabels: string[] = [];
-  let killed = 0;
-  for (const entry of params.runs) {
-    const childKey = entry.childSessionKey?.trim();
-    if (!childKey || seenChildSessionKeys.has(childKey)) {
-      continue;
-    }
-    const currentEntry = getLatestSubagentRunByChildSessionKey(childKey);
-    if (!currentEntry || currentEntry.runId !== entry.runId) {
-      continue;
-    }
-    seenChildSessionKeys.add(childKey);
-
-    if (!currentEntry.endedAt || currentEntry.pauseReason === "sessions_yield") {
-      const stopResult = await killSubagentRun({ cfg: params.cfg, entry: currentEntry, cache });
-      if (stopResult.killed) {
-        killed += 1;
-        killedLabels.push(resolveSubagentLabel(currentEntry));
-      }
-    }
-
-    const cascade = await cascadeKillChildren({
-      cfg: params.cfg,
-      parentChildSessionKey: childKey,
-      cache,
-      seenChildSessionKeys,
-    });
-    killed += cascade.killed;
-    killedLabels.push(...cascade.labels);
-  }
-  return { status: "ok" as const, killed, labels: killedLabels };
+  const result = await killSubagentRunTree({
+    cfg: params.cfg,
+    runs: params.runs,
+    cache: new Map<string, Record<string, SessionEntry>>(),
+    seenChildSessionKeys: new Set<string>(),
+  });
+  return { status: "ok" as const, ...result };
 }
 
 /** Kills one controlled subagent run and any active descendants. */

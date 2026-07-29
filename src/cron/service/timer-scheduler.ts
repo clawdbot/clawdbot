@@ -109,11 +109,7 @@ export function armTimer(state: CronServiceState) {
   // Intentionally avoid an `async` timer callback:
   // Vitest's fake-timer helpers can await async callbacks, which would block
   // tests that simulate long-running jobs. Runtime behavior is unchanged.
-  state.timer = setTimeout(() => {
-    void onTimer(state).catch((err: unknown) => {
-      state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-    });
-  }, clampedDelay);
+  setCronTimer(state, clampedDelay);
   state.deps.log.debug(
     { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
     "cron: timer armed",
@@ -127,11 +123,15 @@ function armRunningRecheckTimer(state: CronServiceState) {
   if (state.timer) {
     clearTimeout(state.timer);
   }
+  setCronTimer(state, MAX_TIMER_DELAY_MS);
+}
+
+function setCronTimer(state: CronServiceState, delayMs: number): void {
   state.timer = setTimeout(() => {
     void onTimer(state).catch((err: unknown) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
     });
-  }, MAX_TIMER_DELAY_MS);
+  }, delayMs);
 }
 
 /** Handles one cron timer tick under the process-wide root work admission. */

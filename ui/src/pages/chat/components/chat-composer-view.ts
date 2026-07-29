@@ -327,6 +327,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
                 skillsError: props.capabilityMenu?.skillsError ?? false,
                 mcpServers: props.capabilityMenu?.mcpServers ?? [],
+                toolsEffectiveResult: props.capabilityMenu?.toolsEffectiveResult ?? null,
+                toolsEffectiveLoading: props.capabilityMenu?.toolsEffectiveLoading ?? false,
+                toolsEffectiveError: props.capabilityMenu?.toolsEffectiveError ?? false,
+                toolAccessMutationBlockedReason:
+                  props.capabilityMenu?.toolAccessMutationBlockedReason ?? null,
                 webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
                 mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
                 canAdmin: props.capabilityMenu?.canAdmin ?? false,
@@ -347,6 +352,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
                 onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
                 onAddServer: props.capabilityMenu?.onAddServer,
+                onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
                 onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
               <div class="agent-chat__composer-combobox">

@@ -5015,7 +5015,14 @@ export const en: TranslationMap = {
         scopeSessionHint:
           "The server is saved globally disabled and enabled only for this session.",
         scopeEverywhereHint: "The server is saved and enabled for every session.",
-        toolAccess: "Tool access",
+        toolAccess: {
+          label: "Tool access",
+          loading: "Loading tools…",
+          loadFailed: "Couldn’t load tools.",
+          noTools: "No tools available for this connector.",
+          summary: "{enabled} of {total} tools on",
+          summaryOne: "{enabled} of {total} tool on",
+        },
         enabledCount: "{count} on",
         loadingSkills: "Loading skills…",
         skillsLoadFailed: "Couldn’t load skills.",

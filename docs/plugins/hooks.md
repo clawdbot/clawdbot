@@ -49,27 +49,6 @@ export default definePluginEntry({
 });
 ```
 
-Installing a plugin or seeing it in manifest-only inspection does not mean the
-Gateway loaded its runtime. For a hook-only plugin, or any plugin whose Gateway
-startup purpose is to register hooks, declare hook activation in
-`openclaw.plugin.json`, enable the plugin, and include it in `plugins.allow`
-when that allowlist is configured:
-
-```json
-{
-  "id": "example-hook-plugin",
-  "activation": {
-    "onCapabilities": ["hook"]
-  }
-}
-```
-
-Configuring `plugins.entries.<id>.hooks` to enable conversation or prompt
-access, or to set hook timeouts, also signals hook-runtime startup.
-`activation.onChannels` describes channel ownership and does not load a plugin
-for hooks by itself. See the
-[manifest activation reference](/plugins/manifest#activation-reference).
-
 Handlers that can return decisions or modifications run sequentially in
 descending `priority`; same-priority handlers keep registration order.
 Observation-only handlers run in parallel, and fire-and-forget observation

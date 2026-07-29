@@ -259,4 +259,36 @@ describe("subagent registry read index", () => {
 
     expect(index.getDisplaySubagentRun(childSessionKey)?.runId).toBe("run-memory-older-ended");
   });
+
+  it.each([
+    { label: "active over active", olderEndedAt: undefined, newerEndedAt: undefined },
+    { label: "ended over active", olderEndedAt: undefined, newerEndedAt: 250 },
+    { label: "active over ended", olderEndedAt: 150, newerEndedAt: undefined },
+    { label: "ended over ended", olderEndedAt: 150, newerEndedAt: 250 },
+  ])("selects the latest in-memory generation: $label", ({ olderEndedAt, newerEndedAt }) => {
+    const childSessionKey = "agent:main:subagent:display-generation";
+    const persisted = makeRun({
+      runId: "run-persisted",
+      childSessionKey,
+      generation: 3,
+    });
+    const older = makeRun({
+      runId: "run-memory-older",
+      childSessionKey,
+      generation: 1,
+      endedAt: olderEndedAt,
+    });
+    const newer = makeRun({
+      runId: "run-memory-newer",
+      childSessionKey,
+      generation: 2,
+      endedAt: newerEndedAt,
+    });
+    const index = buildSubagentRunReadIndexFromRuns({
+      runs: toRunMap([persisted]),
+      inMemoryRuns: [newer, older],
+    });
+
+    expect(index.getDisplaySubagentRun(childSessionKey)).toBe(newer);
+  });
 });
