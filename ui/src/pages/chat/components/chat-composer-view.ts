@@ -331,6 +331,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
                 canAdmin: props.capabilityMenu?.canAdmin ?? false,
                 adminBlockedReason: props.capabilityMenu?.adminBlockedReason ?? null,
+                addServerDialog: props.capabilityMenu?.addServerDialog,
                 onOpenChange: (open) => {
                   state.capabilityMenuOpen = open;
                   if (!open) {

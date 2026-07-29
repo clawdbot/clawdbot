@@ -44,6 +44,7 @@ export type ChatComposerPlusMenuProps = {
   mutationBlockedReason: string | null;
   canAdmin: boolean;
   adminBlockedReason: string | null;
+  addServerDialog?: TemplateResult | typeof nothing;
   onOpenChange: (open: boolean) => void;
   onViewChange: (view: ChatComposerPlusMenuView) => void;
   onLoadSkills: () => void;
@@ -441,5 +442,6 @@ export function renderChatComposerPlusMenu(props: ChatComposerPlusMenuProps) {
       </button>
       ${content}
     </wa-dropdown>
+    ${props.addServerDialog ?? nothing}
   `;
 }

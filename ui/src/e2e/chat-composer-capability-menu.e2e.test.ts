@@ -61,7 +61,11 @@ function sessionsList(toolOverrides?: Record<string, unknown>) {
   };
 }
 
-function configResponse(servers: Record<string, unknown>, webSearch = true) {
+function configResponse(
+  servers: Record<string, unknown>,
+  webSearch = true,
+  hash = "capability-menu-config",
+) {
   const config = {
     mcp: { servers },
     plugins: webSearch
@@ -73,7 +77,7 @@ function configResponse(servers: Record<string, unknown>, webSearch = true) {
   };
   return {
     raw: JSON.stringify(config),
-    hash: "capability-menu-config",
+    hash,
     sourceConfig: config,
     runtimeConfig: config,
     config,
@@ -83,6 +87,14 @@ function configResponse(servers: Record<string, unknown>, webSearch = true) {
 async function latestToolOverrides(gateway: MockGatewayControls) {
   const requests = await gateway.getRequests("sessions.patch");
   return (requests.at(-1)?.params as { toolOverrides?: unknown } | undefined)?.toolOverrides;
+}
+
+function configPatchRaw(request: { params?: unknown }) {
+  const params = request.params as { raw?: unknown } | undefined;
+  if (typeof params?.raw !== "string") {
+    throw new Error("Expected config.patch raw JSON");
+  }
+  return JSON.parse(params.raw) as Record<string, unknown>;
 }
 
 async function openMenu(page: Page) {
@@ -234,8 +246,8 @@ describeControlUiE2e("Control UI composer capability menu", () => {
         .poll(() => menu.getByRole("menuitem", { name: "Browse connectors" }).isDisabled())
         .toBe(false);
       await expect
-        .poll(() => menu.getByRole("menuitem", { name: /Add MCP server/ }).count())
-        .toBe(0);
+        .poll(() => menu.getByRole("menuitem", { name: /Add MCP server/ }).isDisabled())
+        .toBe(false);
 
       await menu.getByRole("menuitem", { name: "Back" }).click();
       const webSearch = menu.getByRole("menuitemcheckbox", { name: "Web search" });
@@ -303,6 +315,9 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       const browse = menu.getByRole("menuitem", { name: "Browse connectors" });
       await expect.poll(() => browse.isDisabled()).toBe(true);
       await expect.poll(() => browse.getAttribute("title")).toContain("Admin access");
+      const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
+      await expect.poll(() => addServer.isDisabled()).toBe(true);
+      await expect.poll(() => addServer.getAttribute("title")).toContain("Admin access");
     } finally {
       await context.close();
     }
@@ -391,6 +406,144 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect.poll(() => menu.getByText("No MCP servers configured.").isVisible()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("validates and adds MCP servers for session and everywhere scopes", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": configResponse({}, false),
+        "sessions.list": sessionsList({ skills: { docs: false } }),
+        "skills.status": {
+          workspaceDir: "/tmp/openclaw-e2e/workspace",
+          managedSkillsDir: "/tmp/openclaw-e2e/skills",
+          skills: [],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      let composer = await openMenu(page);
+      let menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /Add MCP server/ }).click();
+
+      const dialog = page.getByRole("dialog", { name: "Add MCP server" });
+      const modal = page.locator("openclaw-modal-dialog").filter({ hasText: "Add MCP server" });
+      await expect.poll(() => dialog.isVisible()).toBe(true);
+      const sessionScope = modal.locator('wa-radio[value="session"]');
+      await expect
+        .poll(() =>
+          sessionScope.evaluate((radio) => (radio as HTMLElement & { checked: boolean }).checked),
+        )
+        .toBe(true);
+      await modal.getByLabel("Name").fill("bad name");
+      await modal.getByLabel("URL or command").fill("https://mcp.example.test");
+      await modal.getByRole("button", { name: "Add server" }).click();
+      await expect
+        .poll(() => modal.getByRole("alert").textContent())
+        .toContain("Server names use letters");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+
+      await modal.getByLabel("Name").fill("session-docs");
+      await modal.getByLabel("URL or command").fill("ftp://mcp.example.test");
+      await modal.getByRole("button", { name: "Add server" }).click();
+      await expect
+        .poll(() => modal.getByRole("alert").textContent())
+        .toContain("Enter a URL for HTTP transports");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+
+      await modal.getByLabel("URL or command").fill("https://session.example.test/mcp");
+      await gateway.deferNext("config.patch");
+      await modal.getByRole("button", { name: "Add server" }).click();
+      const sessionConfigPatch = await gateway.waitForRequest("config.patch");
+      expect(configPatchRaw(sessionConfigPatch)).toEqual({
+        mcp: {
+          servers: {
+            "session-docs": {
+              enabled: false,
+              transport: "streamable-http",
+              url: "https://session.example.test/mcp",
+            },
+          },
+        },
+      });
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          {
+            "session-docs": {
+              enabled: false,
+              transport: "streamable-http",
+              url: "https://session.example.test/mcp",
+            },
+          },
+          false,
+          "capability-menu-config-1",
+        ),
+      );
+      await gateway.resolveDeferred("config.patch", { ok: true });
+      await expect
+        .poll(() => latestToolOverrides(gateway))
+        .toEqual({ mcpServers: { "session-docs": true }, skills: { docs: false } });
+      await expect.poll(() => modal.count()).toBe(0);
+
+      composer = await openMenu(page);
+      menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await expect
+        .poll(() => menu.getByRole("menuitem", { name: /session-docs.*session/ }).isVisible())
+        .toBe(true);
+      await menu.getByRole("menuitem", { name: /Add MCP server/ }).click();
+
+      const everywhereDialog = page
+        .locator("openclaw-modal-dialog")
+        .filter({ hasText: "Add MCP server" });
+      await everywhereDialog.locator('wa-radio[value="everywhere"]').click();
+      await everywhereDialog.getByLabel("Name").fill("global-docs");
+      await everywhereDialog.getByLabel("URL or command").fill("docs-mcp --stdio");
+      await everywhereDialog.getByLabel("Transport").selectOption("stdio");
+      const sessionPatchCount = (await gateway.getRequests("sessions.patch")).length;
+      await gateway.deferNext("config.patch");
+      await everywhereDialog.getByRole("button", { name: "Add server" }).click();
+      const everywhereConfigPatch = await gateway.waitForRequest("config.patch");
+      expect(configPatchRaw(everywhereConfigPatch)).toEqual({
+        mcp: {
+          servers: {
+            "global-docs": { args: ["--stdio"], command: "docs-mcp" },
+          },
+        },
+      });
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          {
+            "global-docs": { args: ["--stdio"], command: "docs-mcp" },
+            "session-docs": {
+              enabled: false,
+              transport: "streamable-http",
+              url: "https://session.example.test/mcp",
+            },
+          },
+          false,
+          "capability-menu-config-2",
+        ),
+      );
+      await gateway.resolveDeferred("config.patch", { ok: true });
+      await expect.poll(() => everywhereDialog.count()).toBe(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(sessionPatchCount);
+
+      composer = await openMenu(page);
+      menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await expect
+        .poll(() => menu.getByRole("menuitem", { name: /^global-docs.*Enabled/ }).isVisible())
+        .toBe(true);
     } finally {
       await context.close();
     }
