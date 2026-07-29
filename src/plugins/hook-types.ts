@@ -288,6 +288,8 @@ const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AG
 export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
   typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
 
+export type PluginToolMatcher = readonly [string, ...string[]];
+
 export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   priority?: number;
   registrationId?: string;
@@ -297,7 +299,10 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
       /** Host-enforced turn triggers that may invoke this reply hook. */
       eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
     }
-  : { eligibleTriggers?: never });
+  : { eligibleTriggers?: never }) &
+  (K extends "before_tool_call" | "after_tool_call"
+    ? { matcher?: PluginToolMatcher }
+    : { matcher?: never });
 
 export type PluginHookAgentContext = {
   runId?: string;
@@ -1435,6 +1440,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   registrationId?: string;
   hookName: K;
   handler: PluginHookHandlerMap[K];
+  matcher?: PluginToolMatcher;
   priority?: number;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];

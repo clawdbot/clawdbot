@@ -29979,7 +29979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 765,
+      "line": 774,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host)",
       "surface": "apple",
@@ -29987,7 +29987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 765,
+      "line": 774,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host):\\(port)",
       "surface": "apple",
@@ -31818,8 +31818,32 @@
       "id": "native.apple.2be6d3dd1a0d2699"
     },
     {
+      "kind": "ui-call",
+      "line": 18,
+      "path": "apps/macos/Sources/OpenClaw/DashboardHandoffSettingsView.swift",
+      "source": "This configuration lives on your gateway and is managed in the Dashboard.",
+      "surface": "apple",
+      "id": "native.apple.179c8c2ce733969f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 24,
+      "path": "apps/macos/Sources/OpenClaw/DashboardHandoffSettingsView.swift",
+      "source": "Open in Dashboard",
+      "surface": "apple",
+      "id": "native.apple.d5271d97a623ac24"
+    },
+    {
+      "kind": "ui-call",
+      "line": 30,
+      "path": "apps/macos/Sources/OpenClaw/DashboardHandoffSettingsView.swift",
+      "source": "The legacy native pane can be re-enabled in Settings > Debug.",
+      "surface": "apple",
+      "id": "native.apple.40bf972bb1164409"
+    },
+    {
       "kind": "ui-named-argument",
-      "line": 222,
+      "line": 223,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard reconnecting",
       "surface": "apple",
@@ -31827,7 +31851,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 223,
+      "line": 224,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "The selected Gateway changed.",
       "surface": "apple",
@@ -31835,7 +31859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 224,
+      "line": 225,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Waiting for a fresh authenticated connection.",
       "surface": "apple",
@@ -31843,7 +31867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 362,
+      "line": 381,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard unavailable",
       "surface": "apple",
@@ -31851,7 +31875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 364,
+      "line": 383,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "surface": "apple",
@@ -31859,7 +31883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 566,
+      "line": 589,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Switch Gateway",
       "surface": "apple",
@@ -31867,7 +31891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 594,
+      "line": 617,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Open Gateway Window",
       "surface": "apple",
@@ -31875,7 +31899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 698,
+      "line": 721,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "\\(base)-\\(UUID().uuidString)",
       "surface": "apple",
@@ -31883,7 +31907,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 938,
+      "line": 961,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Set Primary Gateway",
       "surface": "apple",
@@ -31891,7 +31915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 907,
+      "line": 903,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
@@ -32021,13 +32045,37 @@
       "kind": "ui-call",
       "line": 170,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+      "source": "Settings",
+      "surface": "apple",
+      "id": "native.apple.b6368b2fc209fa07"
+    },
+    {
+      "kind": "ui-call",
+      "line": 172,
+      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+      "source": "Show native settings panes",
+      "surface": "apple",
+      "id": "native.apple.388a46bbd1d3df81"
+    },
+    {
+      "kind": "ui-call",
+      "line": 173,
+      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+      "source": "These panes are being retired in favor of the Dashboard.",
+      "surface": "apple",
+      "id": "native.apple.bac23cf85e38c7cc"
+    },
+    {
+      "kind": "ui-call",
+      "line": 179,
+      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Binary path",
       "surface": "apple",
       "id": "native.apple.6ae192c6a5942a53"
     },
     {
       "kind": "ui-call",
-      "line": 187,
+      "line": 196,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Status",
       "surface": "apple",
@@ -32035,7 +32083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 197,
+      "line": 206,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Key",
       "surface": "apple",
@@ -32043,7 +32091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 206,
+      "line": 215,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Copy",
       "surface": "apple",
@@ -32051,7 +32099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 211,
+      "line": 220,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Copy sample URL",
       "surface": "apple",
@@ -32059,7 +32107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 222,
+      "line": 231,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Deep links (openclaw://…) are always enabled; the key controls unattended runs.",
       "surface": "apple",
@@ -32067,7 +32115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 227,
+      "line": 236,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Stdout / stderr",
       "surface": "apple",
@@ -32075,7 +32123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 244,
+      "line": 253,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Restart Gateway",
       "surface": "apple",
@@ -32083,7 +32131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 246,
+      "line": 255,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Clear log",
       "surface": "apple",
@@ -32091,7 +32139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 259,
+      "line": 268,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Pino log",
       "surface": "apple",
@@ -32099,7 +32147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 262,
+      "line": 271,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Open",
       "surface": "apple",
@@ -32107,7 +32155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 275,
+      "line": 284,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "App logging",
       "surface": "apple",
@@ -32115,7 +32163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 277,
+      "line": 286,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Verbosity",
       "surface": "apple",
@@ -32123,7 +32171,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 284,
+      "line": 293,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Controls the macOS app log verbosity.",
       "surface": "apple",
@@ -32131,7 +32179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 286,
+      "line": 295,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Write rolling diagnostics log (JSONL)",
       "surface": "apple",
@@ -32139,7 +32187,7 @@
     },
     {
       "kind": "ui-modifier-concatenated",
-      "line": 289,
+      "line": 298,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
       "surface": "apple",
@@ -32147,7 +32195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 293,
+      "line": 302,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Open folder",
       "surface": "apple",
@@ -32155,7 +32203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 297,
+      "line": 306,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Clear",
       "surface": "apple",
@@ -32163,7 +32211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 318,
+      "line": 327,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Port diagnostics",
       "surface": "apple",
@@ -32171,7 +32219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 322,
+      "line": 331,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Check gateway ports",
       "surface": "apple",
@@ -32179,7 +32227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 327,
+      "line": 336,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Reset SSH tunnel",
       "surface": "apple",
@@ -32187,7 +32235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 348,
+      "line": 357,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Check which process owns \\(GatewayEnvironment.gatewayPort()) and suggest fixes.",
       "surface": "apple",
@@ -32195,7 +32243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 354,
+      "line": 363,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Port \\(report.port)",
       "surface": "apple",
@@ -32203,7 +32251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 363,
+      "line": 372,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "\\(listener.command) (\\(listener.pid))",
       "surface": "apple",
@@ -32211,7 +32259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 368,
+      "line": 377,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Kill",
       "surface": "apple",
@@ -32219,7 +32267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 397,
+      "line": 406,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "OpenClaw project root",
       "surface": "apple",
@@ -32227,7 +32275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 400,
+      "line": 409,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Path to openclaw repo",
       "surface": "apple",
@@ -32235,7 +32283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 406,
+      "line": 415,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Reset",
       "surface": "apple",
@@ -32243,7 +32291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 414,
+      "line": 423,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Used for pnpm/node fallback and PATH population when launching the gateway.",
       "surface": "apple",
@@ -32251,7 +32299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 423,
+      "line": 432,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Session store",
       "surface": "apple",
@@ -32259,7 +32307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 426,
+      "line": 435,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Path",
       "surface": "apple",
@@ -32267,7 +32315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 430,
+      "line": 439,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Save",
       "surface": "apple",
@@ -32275,7 +32323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 438,
+      "line": 447,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Used by the CLI session loader; stored in ~/.openclaw/openclaw.json.",
       "surface": "apple",
@@ -32283,7 +32331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 453,
+      "line": 462,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Send Test Notification",
       "surface": "apple",
@@ -32291,7 +32339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 458,
+      "line": 467,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Open Agent Events",
       "surface": "apple",
@@ -32299,7 +32347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 471,
+      "line": 480,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Send debug voice",
       "surface": "apple",
@@ -32307,7 +32355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 471,
+      "line": 480,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Sending debug voice…",
       "surface": "apple",
@@ -32315,7 +32363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 487,
+      "line": 496,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Uses the Voice Wake path: forwards over SSH when configured,\notherwise runs locally via rpc.",
       "surface": "apple",
@@ -32323,7 +32371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 499,
+      "line": 508,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Note: macOS may require restarting OpenClaw after enabling Accessibility or Screen Recording.",
       "surface": "apple",
@@ -32331,7 +32379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 508,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Restart OpenClaw",
       "surface": "apple",
@@ -32339,7 +32387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 515,
+      "line": 524,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Restart app",
       "surface": "apple",
@@ -32347,7 +32395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 516,
+      "line": 525,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Restart onboarding",
       "surface": "apple",
@@ -32355,7 +32403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 517,
+      "line": 526,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Reveal app in Finder",
       "surface": "apple",
@@ -32363,7 +32411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 528,
+      "line": 537,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Enable/disable Canvas in General settings.",
       "surface": "apple",
@@ -32371,7 +32419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 533,
+      "line": 542,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Session",
       "surface": "apple",
@@ -32379,7 +32427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 537,
+      "line": 546,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Show panel",
       "surface": "apple",
@@ -32387,7 +32435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 541,
+      "line": 550,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Hide panel",
       "surface": "apple",
@@ -32395,7 +32443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 547,
+      "line": 556,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Write sample page",
       "surface": "apple",
@@ -32403,7 +32451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 555,
+      "line": 564,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Eval JS",
       "surface": "apple",
@@ -32411,7 +32459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 559,
+      "line": 568,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Eval",
       "surface": "apple",
@@ -32419,7 +32467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 563,
+      "line": 572,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Snapshot",
       "surface": "apple",
@@ -32427,7 +32475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 577,
+      "line": 586,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "eval → \\(canvasEvalResult)",
       "surface": "apple",
@@ -32435,7 +32483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 586,
+      "line": 595,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "snapshot → \\(canvasSnapshotPath)",
       "surface": "apple",
@@ -32443,7 +32491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 592,
+      "line": 601,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Reveal",
       "surface": "apple",
@@ -32451,7 +32499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 605,
+      "line": 614,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Tip: the session directory is returned by “Show panel”.",
       "surface": "apple",
@@ -32459,7 +32507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 617,
+      "line": 626,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Icon override",
       "surface": "apple",
@@ -32467,7 +32515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 627,
+      "line": 636,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Chat",
       "surface": "apple",
@@ -32475,7 +32523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 628,
+      "line": 637,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Native SwiftUI",
       "surface": "apple",
@@ -32483,7 +32531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 941,
+      "line": 950,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Unknown",
       "surface": "apple",
@@ -32491,7 +32539,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 942,
+      "line": 951,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Healthy",
       "surface": "apple",
@@ -32499,7 +32547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 943,
+      "line": 952,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Needs Link",
       "surface": "apple",
@@ -32507,7 +32555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 944,
+      "line": 953,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Degraded",
       "surface": "apple",
@@ -32515,7 +32563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1011,
+      "line": 1020,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Test",
       "surface": "apple",
@@ -37867,7 +37915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 179,
+      "line": 180,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Managed by Nix",
       "surface": "apple",
@@ -37875,7 +37923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 185,
+      "line": 186,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Config: \\(configPath)",
       "surface": "apple",
@@ -37883,15 +37931,31 @@
     },
     {
       "kind": "ui-call",
-      "line": 186,
+      "line": 187,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "State:  \\(stateDir)",
       "surface": "apple",
       "id": "native.apple.96221e7b3b153764"
     },
     {
+      "kind": "ui-call",
+      "line": 276,
+      "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
+      "source": "Legacy pane — this now lives in the Dashboard",
+      "surface": "apple",
+      "id": "native.apple.82152767dcda7601"
+    },
+    {
+      "kind": "ui-call",
+      "line": 280,
+      "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
+      "source": "Open in Dashboard",
+      "surface": "apple",
+      "id": "native.apple.07f054b73f23bcb1"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 477,
+      "line": 510,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "General",
       "surface": "apple",
@@ -37899,7 +37963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 478,
+      "line": 511,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Connection",
       "surface": "apple",
@@ -37907,7 +37971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 479,
+      "line": 512,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Gateways",
       "surface": "apple",
@@ -37915,7 +37979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 480,
+      "line": 513,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -37923,7 +37987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 481,
+      "line": 514,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -37931,7 +37995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 515,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -37939,7 +38003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 483,
+      "line": 516,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Channels",
       "surface": "apple",
@@ -37947,7 +38011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Skills",
       "surface": "apple",
@@ -37955,7 +38019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 485,
+      "line": 518,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -37963,7 +38027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 486,
+      "line": 519,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Exec Approvals",
       "surface": "apple",
@@ -37971,7 +38035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 487,
+      "line": 520,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Threads",
       "surface": "apple",
@@ -37979,7 +38043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 488,
+      "line": 521,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Instances",
       "surface": "apple",
@@ -37987,7 +38051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 489,
+      "line": 522,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Config",
       "surface": "apple",
@@ -37995,7 +38059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 490,
+      "line": 523,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Debug",
       "surface": "apple",
@@ -38003,7 +38067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 491,
+      "line": 524,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "About",
       "surface": "apple",

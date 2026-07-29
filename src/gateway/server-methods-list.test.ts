@@ -119,6 +119,10 @@ describe("listGatewayMethods", () => {
     expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
   });
 
+  it("advertises explicit session viewer presence", () => {
+    expect(listGatewayMethods()).toContain("sessions.viewers.set");
+  });
+
   it("advertises session workspace reveal", () => {
     expect(listGatewayMethods()).toContain("sessions.files.reveal");
     expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");

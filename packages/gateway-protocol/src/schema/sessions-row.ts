@@ -18,6 +18,8 @@ export const SessionCreatedActorSchema = closedObject({
   type: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
   id: Type.Optional(NonEmptyString),
   label: Type.Optional(NonEmptyString),
+  /** Durable profile avatar route; absent for actors without a stored profile avatar. */
+  avatarUrl: Type.Optional(NonEmptyString),
 });
 
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
