@@ -798,7 +798,11 @@ export class SystemAgentChatEngine {
         undefined,
       );
     }
-    if (this.opts.operatorApprovalOnly && this.getPendingOperatorProposal()) {
+    if (
+      this.opts.operatorApprovalOnly &&
+      !this.opts.yes &&
+      this.getPendingOperatorProposal()
+    ) {
       return { text: "Approval pending. Human must decide in OpenClaw UI.", action: "none" };
     }
     // Secret hygiene: an exact `config set` on a sensitive path carries a raw
@@ -866,7 +870,7 @@ export class SystemAgentChatEngine {
 
     return await this.resolveAssistantTurn(
       text,
-      this.opts.operatorApprovalOnly ? false : intent === "approve",
+      this.opts.yes === true || (!this.opts.operatorApprovalOnly && intent === "approve"),
       options?.uiContext,
     );
   }
