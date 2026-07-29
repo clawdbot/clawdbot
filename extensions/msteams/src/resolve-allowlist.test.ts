@@ -520,12 +520,9 @@ describe("looksLikeMSTeamsTargetId", () => {
     "Product Team/Roadmap",
     "Engineering",
     "hello",
-  ])(
-    "rejects non-id inputs (%s)",
-    (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
-    },
-  );
+  ])("rejects non-id inputs (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
+  });
 
   it("normalizes leading/trailing whitespace before classifying", () => {
     expect(looksLikeMSTeamsTargetId("  19:abc@thread.tacv2  ")).toBe(true);
