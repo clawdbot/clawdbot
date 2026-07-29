@@ -37,7 +37,7 @@ export function normalizePluginToolName(toolName: string): string {
 
 /** Omitted and empty matchers preserve the existing match-all registration contract. */
 export function normalizePluginToolMatcher(matcher: PluginToolMatcher): string[] | undefined {
-  if (!matcher) {
+  if (matcher === undefined) {
     return undefined;
   }
   if (!Array.isArray(matcher)) {

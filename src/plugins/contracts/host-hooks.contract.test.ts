@@ -51,7 +51,10 @@ import {
 } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
-import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+import {
+  getTrustedToolPolicyMatcherScope,
+  runTrustedToolPolicies,
+} from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
@@ -776,6 +779,39 @@ describe("host-hook fixture plugin contract", () => {
       runTrustedToolPolicies({ toolName: "Bash", params: {} }, { toolName: "Bash" }, { registry }),
     ).resolves.toMatchObject({ block: true, blockReason: "covered" });
     expect(evaluate).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed before evaluating an unreadable trusted policy matcher", async () => {
+    const evaluate = vi.fn();
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          matcher: "exec" as never,
+          evaluate,
+        },
+      },
+    ];
+
+    expect(getTrustedToolPolicyMatcherScope(registry)).toEqual({
+      matchAll: true,
+      toolNames: [],
+    });
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "web_search", params: {} },
+        { toolName: "web_search" },
+        { registry },
+      ),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy matcher is unreadable",
+    });
+    expect(evaluate).not.toHaveBeenCalled();
   });
 
   it("fails closed when a trusted policy throws during evaluation", async () => {

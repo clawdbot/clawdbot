@@ -25,9 +25,11 @@ describe("plugin tool hook matchers", () => {
   });
 
   it("rejects non-array matchers with a registration-safe diagnostic", () => {
-    expect(() => normalizePluginToolMatcher("exec" as never)).toThrow(
-      "tool hook matcher must be an array of tool names",
-    );
+    for (const matcher of ["exec", null, false, 0, Number.NaN, ""] as const) {
+      expect(() => normalizePluginToolMatcher(matcher as never)).toThrow(
+        "tool hook matcher must be an array of tool names",
+      );
+    }
     expect(() => normalizePluginToolMatcher([42] as never)).toThrow(
       "tool hook matcher entries must be non-empty strings",
     );

@@ -114,13 +114,15 @@ function readTrustedPolicy(registration: TrustedPolicyRegistration):
   }
 }
 
-function readTrustedPolicyMatcher(
-  policy: PluginTrustedToolPolicyRegistration,
-): readonly string[] | undefined {
+function readTrustedPolicyMatcher(policy: PluginTrustedToolPolicyRegistration):
+  | { ok: true; matcher: readonly string[] | undefined }
+  | {
+      ok: false;
+    } {
   try {
-    return normalizePluginToolMatcher(policy.matcher);
+    return { ok: true, matcher: normalizePluginToolMatcher(policy.matcher) };
   } catch {
-    return undefined;
+    return { ok: false };
   }
 }
 
@@ -130,7 +132,12 @@ export function getTrustedToolPolicyMatcherScope(
   return createPluginToolMatcherScope(
     copyTrustedPolicyRegistrations(registry).map((registration) => {
       const policy = readTrustedPolicy(registration);
-      return policy.ok ? readTrustedPolicyMatcher(policy.policy) : undefined;
+      if (!policy.ok) {
+        return undefined;
+      }
+      const matcher = readTrustedPolicyMatcher(policy.policy);
+      // Relay every tool so malformed trusted policy state reaches the fail-closed runtime check.
+      return matcher.ok ? matcher.matcher : undefined;
     }),
   );
 }
@@ -292,7 +299,11 @@ export async function runTrustedToolPolicies(
     if (!policy.ok) {
       return trustedPolicyFailureResult(registration, "policy is unreadable");
     }
-    if (!pluginToolMatcherCoversTool(readTrustedPolicyMatcher(policy.policy), event.toolName)) {
+    const matcher = readTrustedPolicyMatcher(policy.policy);
+    if (!matcher.ok) {
+      return trustedPolicyFailureResult(registration, "policy matcher is unreadable");
+    }
+    if (!pluginToolMatcherCoversTool(matcher.matcher, event.toolName)) {
       continue;
     }
 
