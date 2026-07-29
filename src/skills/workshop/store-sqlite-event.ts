@@ -5,7 +5,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { parseSkillProposalEvaluation } from "./store-record.js";
+import {
+  assertSkillProposalEvaluationWithinLimit,
+  MAX_SKILL_PROPOSAL_EVALUATION_BYTES,
+  parseSkillProposalEvaluation,
+} from "./store-record.js";
 import { parseJson } from "./store-sqlite-record.js";
 import {
   openSkillWorkshopStore,
@@ -23,11 +27,25 @@ import type {
 
 export type NewSkillProposalEvent = Omit<SkillProposalEvent, "sequence">;
 const STORED_EVENT_DATA_VERSION = 1;
+const MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES = MAX_SKILL_PROPOSAL_EVALUATION_BYTES + 64 * 1024;
+const MAX_SKILL_PROPOSAL_EVENTS_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export function appendSkillProposalEvent(
   database: DatabaseSync,
   event: NewSkillProposalEvent,
 ): SkillProposalEvent {
+  if (event.evaluation) {
+    assertSkillProposalEvaluationWithinLimit(event.evaluation);
+  }
+  const storedData =
+    event.payload || event.evaluation
+      ? JSON.stringify([STORED_EVENT_DATA_VERSION, event.payload ?? null, event.evaluation ?? null])
+      : null;
+  if (storedData && Buffer.byteLength(storedData, "utf8") > MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES) {
+    throw new Error(
+      `Skill proposal event data exceeds ${MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES} bytes.`,
+    );
+  }
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const inserted = executeSqliteQueryTakeFirstSync(
     database,
@@ -42,14 +60,7 @@ export function appendSkillProposalEvent(
         occurred_at: event.occurredAt,
         actor_json: JSON.stringify(event.actor),
         correlation_id: event.correlationId ?? null,
-        payload_json:
-          event.payload || event.evaluation
-            ? JSON.stringify([
-                STORED_EVENT_DATA_VERSION,
-                event.payload ?? null,
-                event.evaluation ?? null,
-              ])
-            : null,
+        payload_json: storedData,
       })
       .returning("sequence"),
   );
@@ -113,29 +124,47 @@ export function listStoredSkillProposalEvents(
     database.db,
     query.orderBy("skill_workshop_proposal_events.sequence", "asc").limit(limit + 1),
   ).rows;
-  const hasMore = rows.length > limit;
-  const events = rows.slice(0, limit).flatMap((row) => {
+  let hasMore = rows.length > limit;
+  let responseBytes = 2;
+  const events: SkillProposalEvent[] = [];
+  for (const row of rows.slice(0, limit)) {
     const actor = parseSkillProposalEventActor(parseJson(row.actor_json));
-    const storedData = parseSkillProposalEventData(parseJson(row.payload_json));
     if (!actor || !isSkillProposalEventType(row.event_type)) {
-      return [];
+      continue;
     }
-    return [
-      {
-        sequence: row.sequence,
-        eventId: row.event_id,
-        proposalId: row.proposal_id,
-        proposedVersion: row.proposed_version,
-        revisionHash: row.revision_hash,
-        type: row.event_type,
-        occurredAt: row.occurred_at,
-        actor,
-        ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
-        ...(storedData.payload ? { payload: storedData.payload } : {}),
-        ...(storedData.evaluation ? { evaluation: storedData.evaluation } : {}),
-      },
-    ];
-  });
+    if (
+      row.payload_json &&
+      Buffer.byteLength(row.payload_json, "utf8") > MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES
+    ) {
+      throw new Error(
+        `Stored Skill Workshop event ${row.event_id} exceeds ${MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES} bytes and cannot be replayed safely.`,
+      );
+    }
+    const storedData = parseSkillProposalEventData(parseJson(row.payload_json));
+    const event: SkillProposalEvent = {
+      sequence: row.sequence,
+      eventId: row.event_id,
+      proposalId: row.proposal_id,
+      proposedVersion: row.proposed_version,
+      revisionHash: row.revision_hash,
+      type: row.event_type,
+      occurredAt: row.occurred_at,
+      actor,
+      ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
+      ...(storedData.payload ? { payload: storedData.payload } : {}),
+      ...(storedData.evaluation ? { evaluation: storedData.evaluation } : {}),
+    };
+    const eventBytes = Buffer.byteLength(JSON.stringify(event), "utf8") + 1;
+    if (
+      events.length > 0 &&
+      responseBytes + eventBytes > MAX_SKILL_PROPOSAL_EVENTS_RESPONSE_BYTES
+    ) {
+      hasMore = true;
+      break;
+    }
+    events.push(event);
+    responseBytes += eventBytes;
+  }
   return {
     events,
     ...(hasMore && events.length > 0 ? { nextSequence: events[events.length - 1]!.sequence } : {}),

@@ -18,6 +18,7 @@ import {
   readSkillProposalTargetTreeSha256,
 } from "./proposal-bundle.js";
 import { readRequiredProposal } from "./service-query.js";
+import { assertSkillProposalEvaluationWithinLimit } from "./store-record.js";
 import {
   hashSkillProposalContent,
   readProposalSupportFiles,
@@ -131,6 +132,7 @@ export async function evaluateSkillProposal(
     ...(bundles ? { targetTreeSha256: bundles.targetTreeSha256 } : {}),
     outcomes: normalizeEvaluationOutcomes(rawOutcomes),
   };
+  assertSkillProposalEvaluationWithinLimit(evaluation);
   const pendingRecord = { ...read.record, evaluation };
   const eventInput = createSkillProposalEvent({
     record: pendingRecord,

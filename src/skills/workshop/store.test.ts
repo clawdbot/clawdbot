@@ -115,4 +115,85 @@ describe("Skill Workshop SQLite store", () => {
       }),
     ).toBeNull();
   });
+
+  it("paginates durable evaluations before the response byte budget", async () => {
+    const proposal = await proposeCreateSkill({
+      workspaceDir: testState.stateDir,
+      agentId: "main",
+      name: "Event Page Budget",
+      description: "Bound replay response size",
+      content: "# Event Page Budget\n",
+    });
+    const findings = Array.from({ length: 80 }, (_, index) => ({
+      ruleId: `large-${index}`,
+      severity: "info" as const,
+      message: "x".repeat(4_000),
+    }));
+    for (let index = 0; index < 7; index += 1) {
+      const evaluation = {
+        id: `evaluation-page-${index}`,
+        proposedVersion: proposal.record.proposedVersion,
+        revisionHash: proposal.revisionHash,
+        trigger: "manual" as const,
+        startedAt: "2026-07-29T00:00:00.000Z",
+        completedAt: "2026-07-29T00:00:01.000Z",
+        outcomes: [
+          {
+            evaluatorId: "page-budget",
+            pluginId: "store-tests",
+            status: "completed" as const,
+            result: { findings },
+          },
+        ],
+      };
+      await updateSkillProposalRecord({
+        record: proposal.record,
+        event: createSkillProposalEvent({
+          record: proposal.record,
+          type: "evaluation_completed",
+          evaluation,
+        }),
+      });
+    }
+
+    const firstPage = listSkillProposalEvents({
+      workspaceDir: testState.stateDir,
+      proposalId: proposal.record.id,
+      limit: 200,
+    });
+    expect(firstPage.events.length).toBeLessThan(8);
+    expect(firstPage.nextSequence).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(firstPage), "utf8")).toBeLessThanOrEqual(
+      2 * 1024 * 1024 + 1_024,
+    );
+    const secondPage = listSkillProposalEvents({
+      workspaceDir: testState.stateDir,
+      proposalId: proposal.record.id,
+      afterSequence: firstPage.nextSequence,
+      limit: 200,
+    });
+    expect(secondPage.events.length).toBeGreaterThan(0);
+  });
+
+  it("fails replay explicitly for oversized stored event data", async () => {
+    const proposal = await proposeCreateSkill({
+      workspaceDir: testState.stateDir,
+      agentId: "main",
+      name: "Oversized Stored Event",
+      description: "Reject silent audit data loss",
+      content: "# Oversized Stored Event\n",
+    });
+    openOpenClawStateDatabase()
+      .db.prepare(
+        "UPDATE skill_workshop_proposal_events SET payload_json = ? WHERE proposal_id = ?",
+      )
+      .run("x".repeat(600 * 1024), proposal.record.id);
+
+    expect(() =>
+      listSkillProposalEvents({
+        workspaceDir: testState.stateDir,
+        proposalId: proposal.record.id,
+      }),
+    ).toThrow(/Stored Skill Workshop event .* cannot be replayed safely/);
+  });
 });

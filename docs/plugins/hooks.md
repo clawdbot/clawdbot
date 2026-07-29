@@ -225,6 +225,7 @@ attributed error outcomes; they do not fail the whole evaluation. Applying a
 proposal is blocked only when a completed evaluator returns
 `decision: "block"`. Apply revalidates the evaluated target tree under the
 Workshop mutation lock, so any live skill asset drift requires reevaluation.
+The combined persisted evaluator result is capped at 512 KiB.
 
 `skill_proposal_changed` fires after the matching proposal row and append-only
 lifecycle event commit. It carries the event id, sequence, exact proposal
@@ -237,6 +238,8 @@ These hooks are primitives, not an optimization scheduler. A plugin or external
 controller can observe a durable proposal event, evaluate its exact revision hash,
 revise with that hash and a correlation id, then repeat. OpenClaw does not
 automatically revise proposals or run an unbounded evaluation loop.
+Event replay is byte-bounded and returns `nextSequence` when another page is
+available.
 
 ### Channel pairing requests
 

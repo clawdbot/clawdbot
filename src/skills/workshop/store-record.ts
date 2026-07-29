@@ -19,7 +19,19 @@ import {
 
 export const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
+export const MAX_SKILL_PROPOSAL_EVALUATION_BYTES = 512 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
+
+export function assertSkillProposalEvaluationWithinLimit(
+  evaluation: SkillProposalEvaluation,
+): void {
+  const sizeBytes = Buffer.byteLength(JSON.stringify(evaluation), "utf8");
+  if (sizeBytes > MAX_SKILL_PROPOSAL_EVALUATION_BYTES) {
+    throw new Error(
+      `Skill proposal evaluation exceeds ${MAX_SKILL_PROPOSAL_EVALUATION_BYTES} bytes.`,
+    );
+  }
+}
 
 export function assertProposalId(proposalId: string): void {
   if (!PROPOSAL_ID_PATTERN.test(proposalId)) {

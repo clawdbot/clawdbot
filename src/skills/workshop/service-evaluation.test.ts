@@ -622,6 +622,48 @@ describe("Skill Workshop proposal evaluation", () => {
     });
   });
 
+  it("rejects evaluator results that exceed the aggregate persistence budget", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-size-budget-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Evaluation Size Budget",
+      description: "Bound durable evaluator output",
+      content: "# Evaluation Size Budget\n",
+    });
+    hookMocks.evaluate.mockResolvedValue([
+      {
+        evaluatorId: "oversized-results",
+        pluginId: "evaluation-tests",
+        status: "completed",
+        result: {
+          findings: Array.from({ length: 200 }, (_, index) => ({
+            ruleId: `large-${index}`,
+            severity: "warn" as const,
+            message: "x".repeat(4_000),
+          })),
+        },
+      },
+    ]);
+
+    await expect(
+      evaluateSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("evaluation exceeds 524288 bytes");
+    expect(
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+    ).toBeUndefined();
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
+        (event) => event.type,
+      ),
+    ).toEqual(["created"]);
+  });
+
   it("rejects oversized correlation ids before running evaluators", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-correlation-");
     const proposal = await proposeCreateSkill({
