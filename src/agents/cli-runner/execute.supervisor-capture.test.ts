@@ -690,6 +690,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
       expect(spawnInput.captureOutput).toBe(false);
       expect(result.text).toBe("Hello world");
+      expect(result.toolSummary).toEqual({ calls: 0, tools: [], failures: 0 });
       expect(agentEvents).toEqual([
         { text: "Hello", delta: "Hello" },
         { text: "Hello world", delta: " world" },
@@ -753,7 +754,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.params.agentId = "coder";
 
     try {
-      await executePreparedCliRun(context);
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 1,
+        tools: ["mcp__team__lookup"],
+        failures: 0,
+      });
     } finally {
       stop();
     }
@@ -859,7 +865,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.mcpDeliveryCapture = true;
 
     try {
-      await executePreparedCliRun(context);
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 1,
+        tools: ["mcp__openclaw__message"],
+        failures: 1,
+      });
     } finally {
       stop();
     }
@@ -938,7 +949,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.mcpDeliveryCapture = true;
 
     try {
-      await executePreparedCliRun(context);
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 1,
+        tools: ["mcp__openclaw__message"],
+        failures: 1,
+      });
     } finally {
       stop();
     }
@@ -1021,7 +1037,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.mcpDeliveryCapture = true;
 
     try {
-      await executePreparedCliRun(context);
+      const result = await executePreparedCliRun(context);
+      expect(result.toolSummary).toEqual({
+        calls: 2,
+        tools: ["mcp__openclaw__message"],
+        failures: 1,
+      });
     } finally {
       stop();
     }
