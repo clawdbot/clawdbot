@@ -20,8 +20,8 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
         },
       } as never),
     ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
+      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
+      { url: "https://example.test/b.jpg", contentType: "image/jpeg", kind: "image" },
     ]);
   });
 
@@ -33,7 +33,13 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
           media: [{ path: "media/inbound/a.png", contentType: "image/png", workspaceDir }],
         },
       } as never),
-    ).toEqual([{ path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" }]);
+    ).toEqual([
+      {
+        path: path.join(workspaceDir, "media/inbound/a.png"),
+        contentType: "image/png",
+        kind: "image",
+      },
+    ]);
   });
 
   it("does not consult legacy top-level fields after the versioned cutover", () => {

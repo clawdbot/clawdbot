@@ -132,6 +132,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     // Hub tabs and settings subpages route without their own nav entry.
     "worktrees",
     "memory-import",
+    "ai-agents",
     "model-setup",
     "lobsterdex",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -787,7 +788,6 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "talk",
       "nodes",
       "agents",
-      "ai-agents",
       "labs",
       "model-providers",
       "mcp",

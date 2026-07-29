@@ -13,6 +13,7 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
@@ -34,6 +35,8 @@ function installUpdateTranslations() {
     "updates.status": "Update {status}: {reason}. {guidance}",
     "updates.failureReasons.managedServiceHandoffAlreadyRunning":
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
+    "updates.verificationFailedWithVersions":
+      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
   };
   return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
     const template = translations[key] ?? key;
@@ -977,6 +980,71 @@ describe("application update overlays", () => {
     } finally {
       overlays.dispose();
       vi.useRealTimers();
+    }
+  });
+
+  it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
+    installUpdateTranslations();
+    let statusRequests = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      if (method === "update.run") {
+        return Promise.resolve({
+          ok: true,
+          handoff: { status: "started" },
+          result: {
+            status: "skipped",
+            reason: UPDATE_HANDOFF_STARTED_REASON,
+          },
+        });
+      }
+      if (method === "update.status") {
+        statusRequests += 1;
+        return Promise.resolve({
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "1.0.0" } },
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(gatewayClient);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      harness.update({
+        hello: {
+          server: { version: "1.0.0" },
+          snapshot: {
+            updateAvailable: {
+              currentVersion: "1.0.0",
+              latestVersion: "2.0.0",
+              channel: "stable",
+            },
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+
+      await overlays.runUpdate();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+      expect(statusRequests).toBe(1);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: expect.stringContaining("Expected v2.0.0, running v1.0.0"),
+      });
+    } finally {
+      overlays.dispose();
     }
   });
 });

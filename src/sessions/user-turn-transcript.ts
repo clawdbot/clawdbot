@@ -90,17 +90,23 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     if (url) {
       media.url = url;
     }
-    if (fact.durationMs) {
+    if (fact.kind) {
+      media.kind = fact.kind;
+    }
+    if (fact.fileName) {
+      media.fileName = fact.fileName;
+    }
+    if (fact.sizeBytes !== undefined) {
+      media.sizeBytes = fact.sizeBytes;
+    }
+    if (fact.durationMs !== undefined) {
       media.durationMs = fact.durationMs;
     }
-    if (fact.width) {
+    if (fact.width !== undefined) {
       media.width = fact.width;
     }
-    if (fact.height) {
+    if (fact.height !== undefined) {
       media.height = fact.height;
-    }
-    if (!contentType && fact.kind) {
-      media.kind = fact.kind;
     }
     return media;
   });

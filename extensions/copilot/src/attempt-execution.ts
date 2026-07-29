@@ -2,6 +2,7 @@ import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParams,
   AgentMessage,
+  AnyAgentTool,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -250,6 +251,10 @@ export async function runCopilotExecution(context: {
   } = { value: 0 };
   try {
     let sdkTools: SdkTool[] = [];
+    let resultContentSourceByToolName = new Map<
+      string,
+      NonNullable<AnyAgentTool["resultContentSource"]>
+    >();
     if (!settledToolFinalization) {
       try {
         const toolBridge = await createToolBridge({
@@ -288,6 +293,11 @@ export async function runCopilotExecution(context: {
         });
         cleanupToolBridge = toolBridge.cleanup;
         sdkTools = toolBridge.sdkTools;
+        resultContentSourceByToolName = new Map(
+          toolBridge.sourceTools.flatMap((tool) =>
+            tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
+          ),
+        );
       } catch (error: unknown) {
         const result = createResult(input, {
           messagesSnapshot: messages,
@@ -438,6 +448,7 @@ export async function runCopilotExecution(context: {
         })),
         modelRef,
         now,
+        resultContentSourceByToolName,
       },
     });
     activeRunHandleRef = registerCopilotActiveRun({

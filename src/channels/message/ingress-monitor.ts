@@ -120,6 +120,15 @@ type ChannelIngressMonitorRetention = {
   failedMaxEntries?: number;
 };
 
+/** Replay-guard retention defaults; changing a value requires a per-channel keyspace audit. */
+export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
+  pruneIntervalMs: 60 * 60 * 1_000,
+  completedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  completedMaxEntries: 20_000,
+  failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  failedMaxEntries: 20_000,
+} satisfies ChannelIngressMonitorRetention);
+
 type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
@@ -143,7 +152,7 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
     | ChannelIngressMonitorDeliveryResult
     | void;
   pollIntervalMs: number;
-  retention: ChannelIngressMonitorRetention;
+  retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];
   onDurableAdmission?: (
     raw: TRaw,
@@ -178,7 +187,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   const now = options.now ?? Date.now;
   const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
-  const { pruneIntervalMs, ...pruneOptions } = options.retention;
+  const retention =
+    options.retention === "standard"
+      ? CHANNEL_INGRESS_RETENTION_DEFAULTS
+      : { ...CHANNEL_INGRESS_RETENTION_DEFAULTS, ...options.retention };
+  const { pruneIntervalMs, ...pruneOptions } = retention;
   const shutdown = new AbortController();
   const drainAbortSignal = options.abortSignal
     ? AbortSignal.any([shutdown.signal, options.abortSignal])

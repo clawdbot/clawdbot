@@ -2022,8 +2022,9 @@ describe("createOpenClawCodingTools", () => {
 
   it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
+    const rollback = vi.fn(async () => {});
     const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => {},
+      async () => rollback,
     );
     registerMemoryCapability("memory-core", {
       flushPlanResolver: () => ({
@@ -2077,6 +2078,20 @@ describe("createOpenClawCodingTools", () => {
           contentBefore: "",
           contentAfter: "network project note\n",
         }),
+      );
+      await expect(
+        applyPatch("patch-existing-memory", {
+          input: [
+            "*** Begin Patch",
+            "*** Add File: memory/project.md",
+            "+replacement",
+            "*** End Patch",
+          ].join("\n"),
+        }),
+      ).rejects.toThrow(/file already exists/i);
+      expect(rollback).toHaveBeenCalledOnce();
+      await expect(fs.readFile(path.join(workspaceDir, "memory/project.md"), "utf8")).resolves.toBe(
+        "network project note\n",
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });

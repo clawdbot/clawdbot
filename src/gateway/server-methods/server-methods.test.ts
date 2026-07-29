@@ -2467,8 +2467,30 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   it.each([
     {
       name: "passes through string content",
-      attachments: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
-      expected: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+      attachments: [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "a.png",
+          content: "Zm9v",
+          sizeBytes: 3,
+          durationMs: 10,
+          width: 1,
+          height: 1,
+        },
+      ],
+      expected: [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "a.png",
+          content: "Zm9v",
+          sizeBytes: 3,
+          durationMs: 10,
+          width: 1,
+          height: 1,
+        },
+      ],
     },
     {
       name: "converts Uint8Array content to base64",

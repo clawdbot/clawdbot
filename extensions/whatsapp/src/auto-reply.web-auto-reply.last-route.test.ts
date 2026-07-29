@@ -9,6 +9,19 @@ import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
+const runChannelInboundEventMock = vi.hoisted(() =>
+  vi.fn(async () => ({ dispatched: false }) as never),
+);
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    runChannelInboundEvent: runChannelInboundEventMock,
+  };
+});
 
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
@@ -107,6 +120,7 @@ describe("web auto-reply last-route", () => {
 
   beforeEach(() => {
     updateLastRouteInBackgroundMock.mockClear();
+    runChannelInboundEventMock.mockClear();
   });
 
   it("updates last-route for direct chats without senderE164", async () => {

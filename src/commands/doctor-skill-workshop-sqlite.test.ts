@@ -141,6 +141,108 @@ describe("doctor Skill Workshop SQLite migration", () => {
     ).resolves.toBe(supportContent);
   });
 
+  it("restores a shipped partial apply after migration and allows retry", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workshop-partial-upgrade-");
+    const proposalId = "partial-workshop-20260729-1234567890";
+    const proposalDir = path.join(testState.stateDir, "skill-workshop", "proposals", proposalId);
+    const targetDir = path.join(workspaceDir, "skills", "partial-workshop");
+    const targetSupportFile = path.join(targetDir, "references", "proof.md");
+    const now = "2026-07-29T00:00:00.000Z";
+    const supportContent = "Shipped partial support.\n";
+    const content = renderProposalMarkdown({
+      name: "partial-workshop",
+      description: "Recover a shipped interrupted apply",
+      content: "# Partial Workshop\n\nOriginal shipped proposal.\n",
+      date: now,
+    });
+    const record: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: proposalId,
+      kind: "create",
+      status: "pending",
+      title: "Create Partial Workshop",
+      description: "Recover a shipped interrupted apply",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      origin: { agentId: "main", runId: "partial-upgrade-run" },
+      originRunIds: ["partial-upgrade-run"],
+      originRunMutationCounts: { "partial-upgrade-run": 1 },
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(content),
+      supportFiles: [
+        {
+          path: "references/proof.md",
+          sizeBytes: Buffer.byteLength(supportContent, "utf8"),
+          hash: hashSkillProposalContent(supportContent),
+        },
+      ],
+      target: {
+        skillName: "Partial Workshop",
+        skillKey: "partial-workshop",
+        skillDir: targetDir,
+        skillFile: path.join(targetDir, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+      scan: {
+        state: "clean",
+        scannedAt: now,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      },
+    };
+    const rollback: SkillProposalRollback = {
+      schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+      proposalId,
+      writtenAt: now,
+      targetSkillFile: record.target.skillFile,
+      action: "create",
+      supportFiles: [{ path: "references/proof.md", existed: false }],
+    };
+    await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
+    await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
+    await fs.writeFile(path.join(proposalDir, "proposal.json"), JSON.stringify(record), "utf8");
+    await fs.writeFile(path.join(proposalDir, "PROPOSAL.md"), content, "utf8");
+    await fs.writeFile(path.join(proposalDir, "references", "proof.md"), supportContent, "utf8");
+    await fs.writeFile(path.join(proposalDir, "rollback.json"), JSON.stringify(rollback), "utf8");
+    await fs.writeFile(targetSupportFile, supportContent, "utf8");
+
+    await expect(
+      migrateLegacySkillWorkshopProposals({
+        config: {
+          agents: {
+            entries: {
+              main: { default: true, workspace: workspaceDir },
+            },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+    await expect(readSkillProposalRollback(proposalId)).resolves.toMatchObject(rollback);
+
+    await expect(listSkillProposals({ agentId: "main", workspaceDir })).resolves.toMatchObject({
+      proposals: [expect.objectContaining({ id: proposalId, status: "pending" })],
+    });
+    await expect(fs.access(targetSupportFile)).rejects.toThrow();
+
+    await reviseSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId,
+      content: "# Partial Workshop\n\nRevised after recovery.\n",
+    });
+    await expect(
+      applySkillProposal({ workspaceDir, agentId: "main", proposalId }),
+    ).resolves.toMatchObject({ record: { id: proposalId, status: "applied" } });
+    await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toContain(
+      "Revised after recovery.",
+    );
+    await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
+  });
+
   it("imports verified sidecars, preserves review artifacts, and removes legacy JSON", async () => {
     const oldWorkspace = await tempDirs.make("openclaw-workshop-old-workspace-");
     const currentWorkspace = await tempDirs.make("openclaw-workshop-current-workspace-");

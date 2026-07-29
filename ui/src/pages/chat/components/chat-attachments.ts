@@ -24,7 +24,7 @@ const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
 const largePastedTextAttachments = new WeakSet<ChatAttachment>();
 const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
-type ChatAttachmentControlsProps = {
+export type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
   disabled?: boolean;
   getAttachments?: () => ChatAttachment[];
@@ -100,7 +100,7 @@ function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[
   return props.getAttachments?.() ?? props.attachments ?? [];
 }
 
-function clickComposerInput(target: HTMLElement, selector: string) {
+export function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target
     .closest(".agent-chat__composer-shell, .new-session-page__composer")

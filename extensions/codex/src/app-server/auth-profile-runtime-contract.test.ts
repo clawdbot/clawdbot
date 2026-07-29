@@ -22,6 +22,7 @@ import {
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
 
@@ -169,7 +170,7 @@ function threadStartResult(threadId = "thread-auth-contract") {
       status: { type: "idle" },
       path: null,
       cwd: "",
-      cliVersion: "0.125.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -205,7 +206,7 @@ function turnStartResult(turnId = "turn-auth-contract") {
 }
 
 function getMockServerVersion() {
-  return "0.132.0";
+  return CODEX_APP_SERVER_VERSION;
 }
 
 function getMockRuntimeIdentity() {
