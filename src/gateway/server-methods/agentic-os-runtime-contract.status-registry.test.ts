@@ -26,6 +26,7 @@ vi.mock("../../agents/subagent-spawn.js", () => ({ spawnSubagentDirect: spawnSub
 vi.mock("./agent-job.js", () => ({ waitForAgentJob: waitForAgentJobMock }));
 vi.mock("../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
+  findSubagentTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
 }));
 
 type RespondCall = [boolean, unknown?, { code?: string; message: string }?];
@@ -201,6 +202,84 @@ describe("Agentic OS sessions_status registry fallback", () => {
     });
   });
 
+  it("tracks the current successor generation by child session and logical task run id", async () => {
+    const accepted = await trackedSession();
+    const sessionKey = accepted.session_key as string;
+    const logicalRunId = accepted.runId as string;
+    registry.addSubagentRunForTests(terminalRun(logicalRunId, sessionKey, "error", 10));
+    registry.addSubagentRunForTests(
+      registryRun({
+        runId: "run-successor-current",
+        taskRunId: logicalRunId,
+        childSessionKey: sessionKey,
+        generation: 2,
+        createdAt: 40,
+        startedAt: 42,
+        execution: { status: "running", acceptedAt: 40, startedAt: 42 },
+      }),
+    );
+    registry.addSubagentRunForTests(
+      registryRun({
+        runId: "run-unrelated-newer",
+        taskRunId: "run-other-logical",
+        childSessionKey: sessionKey,
+        generation: 3,
+        createdAt: 50,
+        startedAt: 52,
+        execution: { status: "running", acceptedAt: 50, startedAt: 52 },
+      }),
+    );
+    waitForAgentJobMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 1,
+      endedAt: 2,
+    });
+
+    expect(
+      payload(await invoke("sessions_status", { session_key: sessionKey })).runtime_session,
+    ).toMatchObject({
+      key: sessionKey,
+      lifecycle_status: "running",
+      runtime_status: "running",
+      terminal: false,
+      started_at_ms: 42,
+    });
+    expect(findTaskByRunIdForStatusMock).toHaveBeenCalledWith({
+      childSessionKey: sessionKey,
+      runId: "run-successor-current",
+      taskRunId: logicalRunId,
+    });
+    expect(waitForAgentJobMock).not.toHaveBeenCalled();
+  });
+
+  it("uses scoped live task evidence before a stale terminal job cache", async () => {
+    const accepted = await trackedSession();
+    const sessionKey = accepted.session_key as string;
+    const runId = accepted.runId as string;
+    findTaskByRunIdForStatusMock.mockReturnValue({ status: "running", startedAt: 44 });
+    waitForAgentJobMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 1,
+      endedAt: 2,
+    });
+
+    expect(
+      payload(await invoke("sessions_status", { session_key: sessionKey })).runtime_session,
+    ).toMatchObject({
+      key: sessionKey,
+      lifecycle_status: "running",
+      runtime_status: "running",
+      terminal: false,
+      started_at_ms: 44,
+    });
+    expect(findTaskByRunIdForStatusMock).toHaveBeenCalledWith({
+      childSessionKey: sessionKey,
+      runId,
+      taskRunId: runId,
+    });
+    expect(waitForAgentJobMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["ok", "completed", "completed"],
     ["error", "failed", "failed"],
@@ -255,6 +334,11 @@ describe("Agentic OS sessions_status registry fallback", () => {
       ...terminalRun(runId, sessionKey, "ok"),
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
     });
+    waitForAgentJobMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 1,
+      endedAt: 2,
+    });
 
     expect(
       payload(await invoke("sessions_status", { session_key: sessionKey })).runtime_session,
@@ -266,6 +350,7 @@ describe("Agentic OS sessions_status registry fallback", () => {
       started_at_ms: 22,
       ended_at_ms: 25,
     });
+    expect(waitForAgentJobMock).not.toHaveBeenCalled();
   });
 
   it("does not treat a steer-restart killed record as cancellation", async () => {

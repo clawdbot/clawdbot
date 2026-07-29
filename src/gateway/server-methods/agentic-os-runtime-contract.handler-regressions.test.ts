@@ -71,6 +71,7 @@ vi.mock("./chat-history-handler.js", () => ({
 vi.mock("./agent-job.js", () => ({ waitForAgentJob: runtimeMocks.waitForAgentJob }));
 vi.mock("../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: runtimeMocks.findTask,
+  findSubagentTaskByRunIdForStatus: runtimeMocks.findTask,
 }));
 
 import { agenticOsRuntimeContractHandlers } from "./agentic-os-runtime-contract.js";

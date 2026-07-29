@@ -2,11 +2,11 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
-import { getSubagentRunByChildSessionKeyAndRunId } from "../../agents/subagent-registry-read.js";
+import { getCurrentSubagentRunByChildSessionKeyAndTaskRunId } from "../../agents/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import { stripToolMessages } from "../../agents/tools/chat-history-text.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
-import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
+import { findSubagentTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ContractInputError,
   acquireAgenticOsAllowLease,
@@ -132,6 +132,10 @@ function buildTaskTerminalOutcome(task: TaskRecord | undefined) {
     startedAt: task.startedAt,
     endedAt: task.endedAt,
   });
+}
+
+function isActiveTask(task: TaskRecord | undefined): boolean {
+  return task?.status === "queued" || task?.status === "running";
 }
 
 function buildRegistryTerminalOutcome(entry: SubagentRunRecord | null | undefined) {
@@ -288,15 +292,30 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
         canonical.totalMessages >= 0
           ? canonical.totalMessages
           : 0;
-      const runId = typeof tracked.runId === "string" ? tracked.runId : undefined;
-      const runtimeTask = runId ? findTaskByRunIdForStatus(runId) : undefined;
-      const runSnapshot = runId ? await waitForAgentJob({ runId, timeoutMs: 0 }) : null;
-      const registryRun = runId ? getSubagentRunByChildSessionKeyAndRunId(sessionKey, runId) : null;
+      const logicalRunId = typeof tracked.runId === "string" ? tracked.runId : undefined;
+      const registryRun = logicalRunId
+        ? getCurrentSubagentRunByChildSessionKeyAndTaskRunId(sessionKey, logicalRunId)
+        : null;
+      const effectiveRunId = registryRun?.runId ?? logicalRunId;
+      const taskRunId = registryRun?.taskRunId ?? logicalRunId;
+      const runtimeTask = effectiveRunId
+        ? findSubagentTaskByRunIdForStatus({
+            childSessionKey: sessionKey,
+            runId: effectiveRunId,
+            taskRunId,
+          })
+        : undefined;
+      const runtimeActive = isActiveTask(runtimeTask) || isActiveRegistryRun(registryRun);
+      const authoritativeTerminalOutcome = runtimeActive
+        ? undefined
+        : (buildTaskTerminalOutcome(runtimeTask) ?? buildRegistryTerminalOutcome(registryRun));
+      const runSnapshot =
+        !runtimeActive && !authoritativeTerminalOutcome && effectiveRunId
+          ? await waitForAgentJob({ runId: effectiveRunId, timeoutMs: 0 })
+          : null;
       const terminalOutcome =
-        buildAgentRunTerminalOutcomeFromWaitResult(runSnapshot ?? undefined) ??
-        buildTaskTerminalOutcome(runtimeTask) ??
-        buildRegistryTerminalOutcome(registryRun);
-      const runtimeActive = runtimeTask !== undefined || isActiveRegistryRun(registryRun);
+        authoritativeTerminalOutcome ??
+        buildAgentRunTerminalOutcomeFromWaitResult(runSnapshot ?? undefined);
       const lifecycleStatus = terminalOutcome
         ? terminalOutcome.reason === "completed"
           ? "completed"

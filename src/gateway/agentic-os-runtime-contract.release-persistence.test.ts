@@ -10,6 +10,7 @@ const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
+  findSubagentTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
 }));
 vi.mock("../agents/subagent-registry-read.js", () => ({
   getLatestSubagentRunByChildSessionKey: getLatestSubagentRunByChildSessionKeyMock,

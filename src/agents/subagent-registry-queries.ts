@@ -349,6 +349,33 @@ export function getSubagentRunByChildSessionKeyFromRuns(
   return latestActive ?? latestEnded;
 }
 
+/** Returns the latest generation for one child session and logical task run. */
+export function getCurrentSubagentRunByChildSessionKeyAndTaskRunIdFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+  taskRunId: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  const logicalRunId = taskRunId.trim();
+  if (!key || !logicalRunId) {
+    return null;
+  }
+
+  let latest: SubagentRunRecord | null = null;
+  for (const entry of runs.values()) {
+    if (
+      entry.childSessionKey !== key ||
+      (entry.runId !== logicalRunId && entry.taskRunId !== logicalRunId)
+    ) {
+      continue;
+    }
+    if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
+      latest = entry;
+    }
+  }
+  return latest;
+}
+
 /** Resolves the requester and delivery origin for the latest child-session run. */
 export function resolveRequesterForChildSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,

@@ -58,6 +58,69 @@ export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined 
   return findTaskByRunId(runId);
 }
 
+type SubagentTaskRunStatusLookup = {
+  childSessionKey: string;
+  runId?: string;
+  taskRunId?: string;
+};
+
+function isActiveTaskRecord(task: Pick<TaskRecord, "status">): boolean {
+  return task.status === "queued" || task.status === "running";
+}
+
+function taskStatusSortTime(task: TaskRecord): number {
+  return task.lastEventAt ?? task.startedAt ?? task.createdAt;
+}
+
+function preferTaskForStatus(
+  current: TaskRecord | undefined,
+  candidate: TaskRecord,
+  runId: string | undefined,
+): TaskRecord {
+  if (!current) {
+    return candidate;
+  }
+  const currentExact = runId !== undefined && current.runId === runId;
+  const candidateExact = runId !== undefined && candidate.runId === runId;
+  if (currentExact !== candidateExact) {
+    return candidateExact ? candidate : current;
+  }
+  const currentActive = isActiveTaskRecord(current);
+  const candidateActive = isActiveTaskRecord(candidate);
+  if (currentActive !== candidateActive) {
+    return candidateActive ? candidate : current;
+  }
+  return taskStatusSortTime(candidate) >= taskStatusSortTime(current) ? candidate : current;
+}
+
+/** Finds subagent task evidence scoped to the exact child session and run owner. */
+export function findSubagentTaskByRunIdForStatus(
+  params: SubagentTaskRunStatusLookup,
+): TaskRecord | undefined {
+  const childSessionKey = params.childSessionKey.trim();
+  const runId = params.runId?.trim() || undefined;
+  const taskRunId = params.taskRunId?.trim() || undefined;
+  const acceptedRunIds = new Set(
+    [runId, taskRunId].filter((value): value is string => Boolean(value)),
+  );
+  if (!childSessionKey || acceptedRunIds.size === 0) {
+    return undefined;
+  }
+  let selected: TaskRecord | undefined;
+  for (const task of listTaskRecordsUnsorted()) {
+    if (
+      task.runtime !== "subagent" ||
+      task.childSessionKey !== childSessionKey ||
+      !task.runId ||
+      !acceptedRunIds.has(task.runId)
+    ) {
+      continue;
+    }
+    selected = preferTaskForStatus(selected, task, runId);
+  }
+  return selected;
+}
+
 /** Snapshots generated-media task ids so replay guards stay attempt-local. */
 export function getGeneratedMediaTaskIdsForSessionKey(
   sessionKey: string | undefined,

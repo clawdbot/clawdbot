@@ -21,6 +21,7 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 vi.mock("./agent-job.js", () => ({ waitForAgentJob: vi.fn(async () => null) }));
 vi.mock("../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: vi.fn(() => ({ status: "running", startedAt: 5 })),
+  findSubagentTaskByRunIdForStatus: vi.fn(() => ({ status: "running", startedAt: 5 })),
 }));
 
 type RespondCall = [boolean, unknown?, { code?: string; message: string }?];

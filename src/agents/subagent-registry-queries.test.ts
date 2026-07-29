@@ -6,6 +6,7 @@ import {
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
+  getCurrentSubagentRunByChildSessionKeyAndTaskRunIdFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   isSubagentSessionRunActiveFromRuns,
   listRunsForRequesterFromRuns,
@@ -65,6 +66,52 @@ describe("subagent registry query regressions", () => {
     expect(getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey)?.runId).toBe(
       "run-live-successor",
     );
+  });
+
+  it("selects the current successor by child session and logical task run id", () => {
+    const childSessionKey = "agent:main:subagent:successor";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-logical",
+        taskRunId: "run-logical",
+        childSessionKey,
+        generation: 1,
+        createdAt: 100,
+        endedAt: 150,
+      }),
+      makeRun({
+        runId: "run-successor",
+        taskRunId: "run-logical",
+        childSessionKey,
+        generation: 2,
+        createdAt: 200,
+        startedAt: 200,
+      }),
+      makeRun({
+        runId: "run-unrelated-newer",
+        taskRunId: "run-other-logical",
+        childSessionKey,
+        generation: 3,
+        createdAt: 300,
+        startedAt: 300,
+      }),
+      makeRun({
+        runId: "run-adversarial-child",
+        taskRunId: "run-logical",
+        childSessionKey: "agent:attacker:subagent:successor",
+        generation: 4,
+        createdAt: 400,
+        startedAt: 400,
+      }),
+    ]);
+
+    expect(
+      getCurrentSubagentRunByChildSessionKeyAndTaskRunIdFromRuns(
+        runs,
+        childSessionKey,
+        "run-logical",
+      )?.runId,
+    ).toBe("run-successor");
   });
 
   it("does not treat stale unended rows as active child-session liveness", () => {
