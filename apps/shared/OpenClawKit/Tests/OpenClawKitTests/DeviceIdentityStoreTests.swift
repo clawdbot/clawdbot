@@ -404,10 +404,7 @@ struct DeviceIdentityStoreTests {
             "SELECT COUNT(*) FROM device_identities") == 3)
         #expect(try Self.scalarInt(
             stateDir.appendingPathComponent("state/openclaw.sqlite"),
-            "SELECT COUNT(*) FROM device_auth_tokens") == 1)
-        #expect(try Self.scalarInt(
-            stateDir.appendingPathComponent("state/openclaw.sqlite"),
-            "SELECT COUNT(*) FROM device_auth_profile_tokens") == 2)
+            "SELECT COUNT(*) FROM device_auth_tokens") == 3)
         #expect(!FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device-auth.json").path))
         #expect(!FileManager.default
             .fileExists(atPath: identityDir.appendingPathComponent("node-device-auth.json").path))

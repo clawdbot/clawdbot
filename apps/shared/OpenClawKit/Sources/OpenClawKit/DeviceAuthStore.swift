@@ -43,7 +43,7 @@ public enum DeviceAuthStore {
     {
         guard let key = self.tokenKey(role: role, gatewayID: gatewayID) else { return nil }
         return try? self.withStore(profile: profile) { database in
-            try self.readEntry(database, deviceId: deviceId, tokenKey: key, profile: profile)
+            try self.readEntry(database, deviceId: deviceId, storedRole: key)
         }
     }
 
@@ -104,7 +104,7 @@ public enum DeviceAuthStore {
         else { return (entry, false) }
         let persisted = (try? self.withStore(profile: profile) { database in
             // SQLite intentionally keeps tokens for multiple devices instead of replacing the old file owner.
-            try self.upsertEntry(database, deviceId: deviceId, tokenKey: key, profile: profile, entry: entry)
+            try self.upsertEntry(database, deviceId: deviceId, storedRole: key, entry: entry)
             return true
         }) ?? false
         return (entry, persisted)
@@ -119,15 +119,15 @@ public enum DeviceAuthStore {
         let normalizedRole = self.normalizeRole(role)
         if gatewayID == nil {
             try? self.withStore(profile: profile) { database in
-                for key in try self.storedTokenKeys(database, deviceId: deviceId, profile: profile)
+                for key in try self.storedRoles(database, deviceId: deviceId)
                     where self.normalizeRole(self.decodeTokenKey(key).role) == normalizedRole
                 {
-                    try self.deleteEntry(database, deviceId: deviceId, tokenKey: key, profile: profile)
+                    try self.deleteEntry(database, deviceId: deviceId, storedRole: key)
                 }
             }
         } else if let key = self.tokenKey(role: normalizedRole, gatewayID: gatewayID) {
             try? self.withStore(profile: profile) { database in
-                try self.deleteEntry(database, deviceId: deviceId, tokenKey: key, profile: profile)
+                try self.deleteEntry(database, deviceId: deviceId, storedRole: key)
             }
         }
     }
@@ -142,9 +142,9 @@ public enum DeviceAuthStore {
             profile: profile)
         else { return }
         try? self.withStore(profile: profile) { database in
-            for key in try self.storedTokenKeys(database, deviceId: identity.deviceId, profile: profile) {
-                try self.deleteEntry(database, deviceId: identity.deviceId, tokenKey: key, profile: profile)
-            }
+            let statement = try database.prepare("DELETE FROM device_auth_tokens WHERE device_id = ?")
+            try statement.bindText(identity.deviceId, at: 1)
+            _ = try statement.step()
         }
     }
 
@@ -163,19 +163,14 @@ public enum DeviceAuthStore {
               let scopedKey = self.tokenKey(role: normalizedRole, gatewayID: gatewayID)
         else { return false }
         return (try? self.withStore(profile: profile) { database in
-            guard let entry = try self.readEntry(
-                database,
-                deviceId: deviceId,
-                tokenKey: legacyKey,
-                profile: profile),
-                entry.gatewayID == nil
+            guard let entry = try self.readEntry(database, deviceId: deviceId, storedRole: legacyKey),
+                  entry.gatewayID == nil
             else { return false }
-            if try !self.storedTokenKeys(database, deviceId: deviceId, profile: profile).contains(scopedKey) {
+            if try !self.storedRoles(database, deviceId: deviceId).contains(scopedKey) {
                 try self.upsertEntry(
                     database,
                     deviceId: deviceId,
-                    tokenKey: scopedKey,
-                    profile: profile,
+                    storedRole: scopedKey,
                     entry: DeviceAuthEntry(
                         token: entry.token,
                         role: normalizedRole,
@@ -183,7 +178,7 @@ public enum DeviceAuthStore {
                         updatedAtMs: entry.updatedAtMs,
                         gatewayID: gatewayID))
             }
-            try self.deleteEntry(database, deviceId: deviceId, tokenKey: legacyKey, profile: profile)
+            try self.deleteEntry(database, deviceId: deviceId, storedRole: legacyKey)
             return true
         }) ?? false
     }
@@ -195,10 +190,10 @@ public enum DeviceAuthStore {
         profile: GatewayDeviceIdentityProfile = .primary) -> Int
     {
         (try? self.withStore(profile: profile) { database in
-            let keys = try self.storedTokenKeys(database, deviceId: deviceId, profile: profile)
+            let keys = try self.storedRoles(database, deviceId: deviceId)
                 .filter { self.decodeTokenKey($0).gatewayID == nil }
             for key in keys {
-                try self.deleteEntry(database, deviceId: deviceId, tokenKey: key, profile: profile)
+                try self.deleteEntry(database, deviceId: deviceId, storedRole: key)
             }
             return keys.count
         }) ?? 0
@@ -210,7 +205,7 @@ public enum DeviceAuthStore {
         profile: GatewayDeviceIdentityProfile) throws
     {
         try self.withStore(stateDirectoryURL: stateDirectoryURL, profile: profile) { database in
-            try self.importLegacyStore(store, into: database, profile: profile)
+            try self.importLegacyStore(store, into: database)
         }
     }
 
@@ -261,23 +256,16 @@ public enum DeviceAuthStore {
             try self.quarantineInvalidLegacyFile(legacyURL)
         }
         let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
-        let canonicalTable: OpenClawNativeStateCanonicalTable = profile == .primary
-            ? .deviceAuthTokens
-            : .deviceAuthProfileTokens
         if case let .valid(store) = legacy {
             try database.withImmediateTransaction {
-                try database.ensureCanonicalTable(
-                    canonicalTable,
-                    allowVersionedCreation: canonicalTable == .deviceAuthProfileTokens)
-                try self.importLegacyStore(store, into: database, profile: profile)
+                try database.ensureCanonicalTable(.deviceAuthTokens)
+                try self.importLegacyStore(store, into: database)
             }
             try self.removeLegacyFile(legacyURL)
         }
         // Retire legacy state before a clear can commit; otherwise a crash could reimport a revoked row.
         return try database.withImmediateTransaction {
-            try database.ensureCanonicalTable(
-                canonicalTable,
-                allowVersionedCreation: canonicalTable == .deviceAuthProfileTokens)
+            try database.ensureCanonicalTable(.deviceAuthTokens)
             return try body(database)
         }
     }
@@ -292,44 +280,28 @@ public enum DeviceAuthStore {
 
     private static func importLegacyStore(
         _ store: DeviceAuthStoreFile,
-        into database: Database,
-        profile: GatewayDeviceIdentityProfile) throws
+        into database: Database) throws
     {
         for (key, entry) in store.tokens.sorted(by: { $0.key < $1.key }) {
-            if try self.rowIsCanonical(database, deviceId: store.deviceId, tokenKey: key, profile: profile) {
+            if try self.rowIsCanonical(database, deviceId: store.deviceId, storedRole: key) {
                 continue
             }
-            try self.upsertEntry(
-                database,
-                deviceId: store.deviceId,
-                tokenKey: key,
-                profile: profile,
-                entry: entry)
+            try self.upsertEntry(database, deviceId: store.deviceId, storedRole: key, entry: entry)
         }
     }
 
     private static func readEntry(
         _ database: Database,
         deviceId: String,
-        tokenKey: String,
-        profile: GatewayDeviceIdentityProfile) throws -> DeviceAuthEntry?
+        storedRole: String) throws -> DeviceAuthEntry?
     {
-        let statement = try database.prepare(profile == .primary
-            ? """
-            SELECT token, scopes_json, updated_at_ms
-            FROM device_auth_tokens
-            WHERE device_id = ? AND role = ?
-            """
-            : """
-            SELECT token, scopes_json, updated_at_ms
-            FROM device_auth_profile_tokens
-            WHERE profile = ? AND device_id = ? AND role = ?
-            """)
-        _ = try self.bindProfileDeviceRole(
-            statement,
-            profile: profile,
-            deviceId: deviceId,
-            tokenKey: tokenKey)
+        let statement = try database.prepare("""
+        SELECT token, scopes_json, updated_at_ms
+        FROM device_auth_tokens
+        WHERE device_id = ? AND role = ?
+        """)
+        try statement.bindText(deviceId, at: 1)
+        try statement.bindText(storedRole, at: 2)
         guard try statement.step() == .row else { return nil }
         let token = try statement.requiredText(at: 0, field: "device auth token")
         let scopesJSON = try statement.requiredText(at: 1, field: "device auth scopes_json")
@@ -337,7 +309,7 @@ public enum DeviceAuthStore {
         guard statement.valueType(at: 2) == .integer,
               let scopes = self.decodeScopes(scopesJSON)
         else { return nil }
-        let decoded = self.decodeTokenKey(tokenKey)
+        let decoded = self.decodeTokenKey(storedRole)
         return DeviceAuthEntry(
             token: token,
             role: decoded.role,
@@ -349,58 +321,36 @@ public enum DeviceAuthStore {
     private static func upsertEntry(
         _ database: Database,
         deviceId: String,
-        tokenKey: String,
-        profile: GatewayDeviceIdentityProfile,
+        storedRole: String,
         entry: DeviceAuthEntry) throws
     {
         let scopesData = try JSONEncoder().encode(self.normalizeScopes(entry.scopes))
         guard let scopes = String(bytes: scopesData, encoding: .utf8) else {
             throw OpenClawNativeStateError("failed to encode device auth scopes as UTF-8")
         }
-        let statement = try database.prepare(profile == .primary
-            ? """
-            INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(device_id, role) DO UPDATE SET
-              token = excluded.token,
-              scopes_json = excluded.scopes_json,
-              updated_at_ms = excluded.updated_at_ms
-            """
-            : """
-            INSERT INTO device_auth_profile_tokens (profile, device_id, role, token, scopes_json, updated_at_ms)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(profile, device_id, role) DO UPDATE SET
-              token = excluded.token,
-              scopes_json = excluded.scopes_json,
-              updated_at_ms = excluded.updated_at_ms
-            """)
-        var index = try self.bindProfileDeviceRole(
-            statement,
-            profile: profile,
-            deviceId: deviceId,
-            tokenKey: tokenKey)
-        try statement.bindText(entry.token, at: index)
-        index += 1
-        try statement.bindText(scopes, at: index)
-        index += 1
-        try statement.bindInt64(entry.updatedAtMs, at: index)
+        let statement = try database.prepare("""
+        INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(device_id, role) DO UPDATE SET
+          token = excluded.token,
+          scopes_json = excluded.scopes_json,
+          updated_at_ms = excluded.updated_at_ms
+        """)
+        try statement.bindText(deviceId, at: 1)
+        try statement.bindText(storedRole, at: 2)
+        try statement.bindText(entry.token, at: 3)
+        try statement.bindText(scopes, at: 4)
+        try statement.bindInt64(entry.updatedAtMs, at: 5)
         _ = try statement.step()
     }
 
-    private static func storedTokenKeys(
+    private static func storedRoles(
         _ database: Database,
-        deviceId: String,
-        profile: GatewayDeviceIdentityProfile) throws -> [String]
+        deviceId: String) throws -> [String]
     {
-        let statement = try database.prepare(profile == .primary
-            ? "SELECT role FROM device_auth_tokens WHERE device_id = ? ORDER BY role"
-            : "SELECT role FROM device_auth_profile_tokens WHERE profile = ? AND device_id = ? ORDER BY role")
-        var index: Int32 = 1
-        if profile != .primary {
-            try statement.bindText(profile.rawValue, at: index)
-            index += 1
-        }
-        try statement.bindText(deviceId, at: index)
+        let statement = try database.prepare(
+            "SELECT role FROM device_auth_tokens WHERE device_id = ? ORDER BY role")
+        try statement.bindText(deviceId, at: 1)
         var keys: [String] = []
         while try statement.step() == .row {
             try keys.append(statement.requiredText(at: 0, field: "device auth role"))
@@ -411,17 +361,12 @@ public enum DeviceAuthStore {
     private static func rowIsCanonical(
         _ database: Database,
         deviceId: String,
-        tokenKey: String,
-        profile: GatewayDeviceIdentityProfile) throws -> Bool
+        storedRole: String) throws -> Bool
     {
-        let statement = try database.prepare(profile == .primary
-            ? "SELECT scopes_json FROM device_auth_tokens WHERE device_id = ? AND role = ?"
-            : "SELECT scopes_json FROM device_auth_profile_tokens WHERE profile = ? AND device_id = ? AND role = ?")
-        _ = try self.bindProfileDeviceRole(
-            statement,
-            profile: profile,
-            deviceId: deviceId,
-            tokenKey: tokenKey)
+        let statement = try database.prepare(
+            "SELECT scopes_json FROM device_auth_tokens WHERE device_id = ? AND role = ?")
+        try statement.bindText(deviceId, at: 1)
+        try statement.bindText(storedRole, at: 2)
         guard try statement.step() == .row else { return false }
         let scopesJSON = try statement.requiredText(at: 0, field: "device auth scopes_json")
         return self.jsonArray(scopesJSON) != nil
@@ -430,35 +375,13 @@ public enum DeviceAuthStore {
     private static func deleteEntry(
         _ database: Database,
         deviceId: String,
-        tokenKey: String,
-        profile: GatewayDeviceIdentityProfile) throws
+        storedRole: String) throws
     {
-        let statement = try database.prepare(profile == .primary
-            ? "DELETE FROM device_auth_tokens WHERE device_id = ? AND role = ?"
-            : "DELETE FROM device_auth_profile_tokens WHERE profile = ? AND device_id = ? AND role = ?")
-        _ = try self.bindProfileDeviceRole(
-            statement,
-            profile: profile,
-            deviceId: deviceId,
-            tokenKey: tokenKey)
+        let statement = try database.prepare(
+            "DELETE FROM device_auth_tokens WHERE device_id = ? AND role = ?")
+        try statement.bindText(deviceId, at: 1)
+        try statement.bindText(storedRole, at: 2)
         _ = try statement.step()
-    }
-
-    private static func bindProfileDeviceRole(
-        _ statement: OpenClawNativeStateSQLiteStatement,
-        profile: GatewayDeviceIdentityProfile,
-        deviceId: String,
-        tokenKey: String) throws -> Int32
-    {
-        var index: Int32 = 1
-        if profile != .primary {
-            try statement.bindText(profile.rawValue, at: index)
-            index += 1
-        }
-        try statement.bindText(deviceId, at: index)
-        index += 1
-        try statement.bindText(tokenKey, at: index)
-        return index + 1
     }
 
     private static func decodeScopes(_ rawJSON: String) -> [String]? {

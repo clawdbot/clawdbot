@@ -535,15 +535,6 @@ export interface DeliveryQueueEntries {
   updated_at: number;
 }
 
-export interface DeviceAuthProfileTokens {
-  device_id: string;
-  profile: string;
-  role: string;
-  scopes_json: string;
-  token: string;
-  updated_at_ms: number;
-}
-
 export interface DeviceAuthTokens {
   device_id: string;
   role: string;
@@ -1576,7 +1567,6 @@ export interface DB {
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
-  device_auth_profile_tokens: DeviceAuthProfileTokens;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
   device_identities: DeviceIdentities;

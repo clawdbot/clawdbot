@@ -522,19 +522,6 @@ CREATE TABLE IF NOT EXISTS device_auth_tokens (
 CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
   ON device_auth_tokens(updated_at_ms DESC, device_id, role);
 
-CREATE TABLE IF NOT EXISTS device_auth_profile_tokens (
-  profile TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (profile, device_id, role)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_auth_profile_tokens_updated
-  ON device_auth_profile_tokens(updated_at_ms DESC, profile, device_id, role);
-
 CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
   package_name TEXT NOT NULL PRIMARY KEY,
   sort_order INTEGER NOT NULL,

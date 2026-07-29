@@ -43,68 +43,46 @@ struct DeviceAuthStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `profiles isolate tokens even when device ids match`() throws {
+    func `same device id across profiles shares the token cache`() {
         let deviceID = "shared-device-id"
-        for (profile, token) in [
-            (GatewayDeviceIdentityProfile.primary, "primary-token"),
-            (.node, "node-token"),
-            (.shareExtension, "share-token"),
-        ] {
-            #expect(DeviceAuthStore.storeTokenPersisted(
-                deviceId: deviceID,
-                role: "node",
-                token: token,
-                profile: profile))
-            #expect(DeviceAuthStore.loadToken(
-                deviceId: deviceID,
-                role: "node",
-                profile: profile)?.token == token)
-        }
-
-        #expect(try Self.scalarInt(
-            Self.databaseURL(),
-            "SELECT COUNT(*) FROM device_auth_tokens WHERE device_id = '\(deviceID)'") == 1)
-        #expect(try Self.scalarInt(
-            Self.databaseURL(),
-            "SELECT COUNT(*) FROM device_auth_profile_tokens WHERE device_id = '\(deviceID)'") == 2)
-        DeviceAuthStore.clearToken(deviceId: deviceID, role: "node")
-        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+        // Matching device IDs imply matching key material and therefore one gateway device,
+        // so profiles share this cache. The Node runtime reads device_auth_tokens only.
+        #expect(DeviceAuthStore.storeTokenPersisted(
+            deviceId: deviceID,
+            role: "node",
+            token: "primary-token",
+            profile: .primary))
         #expect(DeviceAuthStore.loadToken(
             deviceId: deviceID,
             role: "node",
-            profile: .node)?.token == "node-token")
-        #expect(DeviceAuthStore.loadToken(
-            deviceId: deviceID,
-            role: "node",
-            profile: .shareExtension)?.token == "share-token")
+            profile: .node)?.token == "primary-token")
     }
 
     @Test(.stateDirectoryIsolated)
-    func `wrapper shaped primary roles cannot alias secondary tokens`() {
-        let deviceID = "collision-device-id"
-        let collidingPrimaryRole = "v3.\(Self.storageComponent("node")).\(Self.storageComponent("node"))"
+    func `distinct device ids remain disjoint across profiles`() {
         #expect(DeviceAuthStore.storeTokenPersisted(
-            deviceId: deviceID,
+            deviceId: "primary-device",
             role: "node",
-            token: "node-profile-token",
-            profile: .node))
+            token: "primary-token",
+            profile: .primary))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: "node-device",
+            role: "node",
+            profile: .node) == nil)
         #expect(DeviceAuthStore.storeTokenPersisted(
-            deviceId: deviceID,
-            role: collidingPrimaryRole,
-            token: "primary-token"))
+            deviceId: "node-device",
+            role: "node",
+            token: "node-token",
+            profile: .node))
 
         #expect(DeviceAuthStore.loadToken(
-            deviceId: deviceID,
+            deviceId: "primary-device",
             role: "node",
-            profile: .node)?.token == "node-profile-token")
+            profile: .primary)?.token == "primary-token")
         #expect(DeviceAuthStore.loadToken(
-            deviceId: deviceID,
-            role: collidingPrimaryRole)?.token == "primary-token")
-        DeviceAuthStore.clearToken(deviceId: deviceID, role: collidingPrimaryRole)
-        #expect(DeviceAuthStore.loadToken(
-            deviceId: deviceID,
+            deviceId: "node-device",
             role: "node",
-            profile: .node)?.token == "node-profile-token")
+            profile: .node)?.token == "node-token")
     }
 
     @Test(.stateDirectoryIsolated)
@@ -418,33 +396,6 @@ struct DeviceAuthStoreTests {
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'device_auth_tokens'") == 0)
     }
 
-    @Test(.stateDirectoryIsolated)
-    func `versioned database lazily creates the additive profile auth table`() throws {
-        let databaseURL = try Self.databaseURL()
-        try Self.execute(databaseURL, """
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY,
-          role TEXT NOT NULL,
-          schema_version INTEGER NOT NULL
-        ) STRICT;
-        INSERT INTO schema_meta (meta_key, role, schema_version) VALUES ('primary', 'global', 6);
-        PRAGMA user_version = 6;
-        """)
-
-        #expect(DeviceAuthStore.storeTokenPersisted(
-            deviceId: "versioned-profile-device",
-            role: "node",
-            token: "profile-token",
-            profile: .shareExtension))
-        #expect(DeviceAuthStore.loadToken(
-            deviceId: "versioned-profile-device",
-            role: "node",
-            profile: .shareExtension)?.token == "profile-token")
-        #expect(try Self.scalarInt(
-            databaseURL,
-            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'device_auth_profile_tokens'") == 1)
-        #expect(try Self.scalarInt(databaseURL, "PRAGMA user_version") == 6)
-    }
 }
 
 extension DeviceAuthStoreTests {
