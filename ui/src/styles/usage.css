@@ -947,6 +947,69 @@ details.usage-filter-select summary::-webkit-details-marker,
   grid-column: 1 / -1;
 }
 
+.usage-heatmap {
+  overflow: hidden;
+}
+
+.usage-heatmap__legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.usage-heatmap__swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2.5px;
+  display: inline-block;
+}
+
+/* Short ranges keep natural 11px cells; longer ranges shrink to the panel
+   instead of adding a second horizontal scroll surface. */
+.usage-heatmap__svg {
+  display: block;
+  width: min(100%, var(--usage-heatmap-width));
+  height: auto;
+}
+
+.usage-heatmap__month,
+.usage-heatmap__weekday {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.usage-heatmap__weekday {
+  text-anchor: end;
+}
+
+.usage-heatmap__cell--l0 {
+  fill: color-mix(in srgb, var(--text) 7%, var(--panel));
+  background: color-mix(in srgb, var(--text) 7%, var(--panel));
+}
+
+.usage-heatmap__cell--l1 {
+  fill: color-mix(in srgb, var(--accent) 25%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+.usage-heatmap__cell--l2 {
+  fill: color-mix(in srgb, var(--accent) 50%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 50%, var(--panel));
+}
+
+.usage-heatmap__cell--l3 {
+  fill: color-mix(in srgb, var(--accent) 75%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 75%, var(--panel));
+}
+
+.usage-heatmap__cell--l4 {
+  fill: var(--accent);
+  background: var(--accent);
+}
+
 .usage-list,
 .usage-error-list,
 .context-breakdown-list {

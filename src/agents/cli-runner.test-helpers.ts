@@ -9,8 +9,12 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import type { RunCliAgentParams } from "./cli-runner/types.js";
@@ -120,6 +124,7 @@ export type PreparedCliRunContextOverrides = {
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
+  toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
   mcpDeliveryCapture?: boolean;
@@ -221,6 +226,9 @@ export function buildPreparedCliRunContext(
             ? "google"
             : "openai",
       resolveExecutionArgs: overrides.resolveExecutionArgs,
+      toolAvailabilityEnforcement:
+        overrides.toolAvailabilityEnforcement ??
+        (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
     },
     preparedBackend: {
@@ -346,20 +354,21 @@ export async function expectPathMissing(targetPath: string) {
   throw new Error(`expected ${targetPath} to be missing`);
 }
 
-export async function withTempExecApprovalsFile(
+export async function withTempExecApprovalsState(
   file: Record<string, unknown>,
   run: () => Promise<void>,
 ) {
   const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
-  await fs.promises.mkdir(path.join(home, ".openclaw"), { recursive: true });
-  await fs.promises.writeFile(
-    path.join(home, ".openclaw", "exec-approvals.json"),
-    `${JSON.stringify(file)}\n`,
-    "utf-8",
-  );
+  const stateDir = path.join(home, ".openclaw");
   try {
-    await withEnvAsync({ HOME: home }, run);
+    await withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: stateDir }, async () => {
+      execApprovalsStoreTesting.reset();
+      saveExecApprovals(file as ExecApprovalsFile);
+      await run();
+    });
   } finally {
+    closeOpenClawStateDatabaseForTest();
+    execApprovalsStoreTesting.reset();
     await fs.promises.rm(home, { recursive: true, force: true });
   }
 }
@@ -593,6 +602,7 @@ export function buildClaudeControlRequestEvents(params: {
   toolUseId: string;
   input: Record<string, unknown>;
   sessionId?: string;
+  toolName?: string;
 }) {
   const sessionId = params.sessionId ?? "live-control";
   return [
@@ -601,7 +611,7 @@ export function buildClaudeControlRequestEvents(params: {
       request_id: params.requestId,
       request: {
         subtype: "can_use_tool",
-        tool_name: "Bash",
+        tool_name: params.toolName ?? "Bash",
         tool_use_id: params.toolUseId,
         input: params.input,
       },

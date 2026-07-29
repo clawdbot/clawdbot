@@ -3,8 +3,13 @@ import { property } from "lit/decorators.js";
 import type { PresenceEntry } from "../api/types.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
-import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import {
+  identityAvatarClass,
+  renderIdentityAvatarImage,
+  resolveIdentityAvatarView,
+  type IdentityAvatarView,
+} from "./identity-avatar-view.ts";
 import { renderSidebarServerDetails } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
 
@@ -91,64 +96,35 @@ function projectPresencePayload(value: unknown, selfInstanceId?: string) {
   return cachedPresenceProjection;
 }
 
+export function hasSessionPresenceViewers(
+  value: unknown,
+  selfInstanceId: string | undefined,
+  sessionKey: string,
+): boolean {
+  const projection = projectPresencePayload(value, selfInstanceId);
+  return projection.users.some(
+    (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
+  );
+}
+
+export function hasMultiplePresenceIdentities(value: unknown): boolean {
+  return projectPresencePayload(value).users.length >= 2;
+}
+
 export function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
 }
 
-function initialsFor(user: PresenceViewer): string {
-  const label = presenceViewerLabel(user);
-  const words = label
-    .replace(/@.*$/u, "")
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean);
-  if (words.length > 1) {
-    return `${words[0]?.[0] ?? ""}${words.at(-1)?.[0] ?? ""}`.toUpperCase();
+function renderViewerAvatar(view: IdentityAvatarView) {
+  const fallback = html`<span
+    class=${view.imageUrl ? "viewer-avatar__fallback" : nothing}
+    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    >${view.fallback.initials}</span
+  >`;
+  if (!view.imageUrl) {
+    return fallback;
   }
-  return (words[0] ?? label).slice(0, 2).toUpperCase();
-}
-
-function avatarColor(userId: string): string {
-  let hash = 2166136261;
-  for (const character of userId) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return `hsl(${(hash >>> 0) % 360} 48% 42%)`;
-}
-
-function renderAvatarInitials(user: PresenceViewer) {
-  return html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`;
-}
-
-function resolveViewerAvatar(user: PresenceViewer) {
-  const avatar = resolveAvatar({
-    id: user.email ?? user.id,
-    name: user.name,
-    profileAvatarUrl: user.avatarUrl,
-  });
-  if (avatar.kind === "initials") {
-    return renderAvatarInitials(user);
-  }
-  return html`<img
-      src=${avatar.url}
-      alt=""
-      referrerpolicy="no-referrer"
-      @error=${(event: Event) => {
-        const image = event.currentTarget;
-        if (image instanceof HTMLImageElement) {
-          image.closest<HTMLElement>(".viewer-avatar")?.classList.add("is-fallback");
-        }
-      }}
-      @load=${(event: Event) => {
-        const image = event.currentTarget;
-        if (image instanceof HTMLImageElement) {
-          image.closest<HTMLElement>(".viewer-avatar")?.classList.remove("is-fallback");
-        }
-      }}
-    />
-    <span class="viewer-avatar__fallback" style=${`background: ${avatarColor(user.id)}`}
-      >${initialsFor(user)}</span
-    >`;
+  return html`${renderIdentityAvatarImage({ view, fallbackSelector: ".viewer-avatar" })}${fallback}`;
 }
 
 export type ViewerAvatarVariant = "session" | "footer" | "profile";
@@ -163,12 +139,18 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const label = presenceViewerLabel(user);
+    const view = resolveIdentityAvatarView({
+      id: user.id,
+      name: user.name,
+      username: user.email,
+      profileAvatarUrl: user.avatarUrl,
+    });
     return html`<span
-      class="viewer-avatar viewer-avatar--${this.variant}"
+      class=${identityAvatarClass(`viewer-avatar viewer-avatar--${this.variant}`, view)}
       data-viewer-id=${user.id}
       aria-label=${label}
     >
-      ${resolveViewerAvatar(user)}
+      ${renderViewerAvatar(view)}
     </span>`;
   }
 }
@@ -226,7 +208,9 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
         this.variant === "footer"
           ? html`<openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>`
           : html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
-              <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+              <span class="viewer-facepile__tooltip-anchor">
+                <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+              </span>
             </openclaw-tooltip>`,
       )}
       ${overflow.length > 0

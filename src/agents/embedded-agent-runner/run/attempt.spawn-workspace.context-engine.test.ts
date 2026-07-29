@@ -16,6 +16,7 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -33,7 +34,6 @@ import {
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import { EmbeddedAttemptSessionTakeoverError } from "./attempt.session-lock.js";
 import {
   cleanupTempPaths,
   createDefaultEmbeddedSession,
@@ -151,28 +151,6 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key], key).toEqual(value);
   }
-}
-
-function trackSessionWriteLocks(): string[] {
-  // Context-engine finalization writes should release and reacquire transcript
-  // locks in a predictable order.
-  const events: string[] = [];
-  hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
-    const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
-    events.push(`acquire-${lockId}`);
-    return {
-      release: async () => {
-        events.push(`release-${lockId}`);
-      },
-    };
-  });
-  return events;
-}
-
-function expectInitialLockReleasedBeforePostTurnWrite(events: string[]) {
-  expect(events.indexOf("release-1")).toBeGreaterThan(events.indexOf("acquire-1"));
-  expect(events.indexOf("acquire-2")).toBeGreaterThan(events.indexOf("release-1"));
-  expect(events.indexOf("release-2")).toBeGreaterThan(events.indexOf("acquire-2"));
 }
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
@@ -1928,7 +1906,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         transcriptPrompt: "what does this mean?",
         currentInboundContext: {
           text: [
-            "Reply target of current user message (untrusted, for context):",
+            "Reply target of current user message:",
             "```json",
             JSON.stringify(
               {
@@ -1955,9 +1933,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     // The user prompt is kept BARE; current-turn inbound metadata is routed into
     // the runtime-context carrier instead of being prepended to the user text.
     expect(seenPrompt).toBe("what does this mean?");
-    expect(seenPrompt).not.toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(seenPrompt).not.toContain("Reply target of current user message:");
     expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     expect(seenPrompt).not.toContain("secret runtime context");
     expect(result.finalPromptText).toBe(seenPrompt);
@@ -1966,9 +1942,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       (message) => message.customType === "openclaw.runtime-context",
       "runtime context message",
     );
-    expect(runtimeContext.content).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(runtimeContext.content).toContain("Reply target of current user message:");
     expect(runtimeContext.content).toContain('"sender_label": "Mike"');
     expect(runtimeContext.content).toContain("WT daily plan - Sat May 2");
     expect(runtimeContext.content).toContain("./quoted-secret.png");
@@ -1986,8 +1960,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps hook prompt context visible while hiding inter-session provenance", async () => {
+    const recalledMemoryContext = [
+      "<relevant-memories>",
+      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
+      "</relevant-memories>",
+    ].join("\n");
     const runBeforePromptBuild = vi.fn(async () => ({
-      prependContext: "dynamic hook context",
+      prependContext: recalledMemoryContext,
       appendContext: "dynamic hook tail",
     }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
@@ -2043,7 +2022,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("visible ask");
     expect(seen.prompt).not.toContain("[Inter-session message]");
     expect(seen.prompt).not.toContain("secret runtime context");
-    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seen.modelMessages)).toContain("<relevant-memories>");
+    expect(JSON.stringify(seen.modelMessages)).toContain("/tmp/some.png");
+    expect(JSON.stringify(seen.modelMessages)).toContain("/tmp/other.png");
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.modelMessages)).not.toContain("[Inter-session message]");
     expect(JSON.stringify(seen.modelMessages)).not.toContain("secret runtime context");
@@ -2057,10 +2038,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runtimeContext.content).toContain("isUser=false");
     expect(runtimeContext.content).not.toContain("visible ask");
     expect(runtimeContext.content).toContain("secret runtime context");
-    expect(runtimeContext.content).not.toContain("dynamic hook context");
+    expect(runtimeContext.content).not.toContain(recalledMemoryContext);
     expect(runtimeContext.content).not.toContain("dynamic hook tail");
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(recalledMemoryContext);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
+    expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
+    expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
+      "visible ask",
+    );
   });
 
   it("submits runtime-only context through system prompt without visible prompt", async () => {
@@ -2180,7 +2165,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         transcriptPrompt: "",
         currentInboundContext: {
           text: [
-            "Reply target of current user message (untrusted, for context):",
+            "Reply target of current user message:",
             "```json",
             JSON.stringify(
               { sender_label: "Alice", body: "Hello from the replied message" },
@@ -2200,7 +2185,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
+    expect(seenPrompt).toContain("Reply target of current user message:");
     expect(seenPrompt).toContain("Hello from the replied message");
     expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe(seenPrompt);
@@ -2292,7 +2277,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {
-    const lockEvents = trackSessionWriteLocks();
     const sessionPrompt = vi.fn(async () => {
       throw new Error("blank prompt should not be submitted");
     });
@@ -2310,7 +2294,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(result.messagesSnapshot).toHaveLength(1);
     expectFields(requireRecord(result.messagesSnapshot[0], "messages snapshot seed"), {
       role: "user",
@@ -2324,11 +2308,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "prompt skipped event",
     );
     expect(requireRecord(skipped.data, "prompt skipped data").reason).toBe("blank_user_prompt");
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
   it("releases the initial session lock before before_agent_run block finalizers", async () => {
-    const lockEvents = trackSessionWriteLocks();
     const sessionPrompt = vi.fn(async () => {
       throw new Error("blocked prompt should not be submitted");
     });
@@ -2351,67 +2333,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runBeforeAgentRun).toHaveBeenCalledTimes(1);
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptErrorSource).toBe("hook:before_agent_run");
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
-  });
-
-  it("preserves provider prompt errors when cleanup reacquire detects session takeover", async () => {
-    const providerError = new Error("provider rejected request: HTTP 400");
-    let acquireCount = 0;
-    let cleanupReacquireSessionFile: string | undefined;
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => {
-      acquireCount += 1;
-      if (acquireCount === 3) {
-        cleanupReacquireSessionFile = params.sessionFile;
-        await fs.appendFile(params.sessionFile, '{"type":"message","id":"takeover"}\n', "utf8");
-      }
-      return { release: async () => {} };
-    });
-
-    const error = await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      sessionPrompt: async () => {
-        throw providerError;
-      },
-    }).catch((err: unknown) => err);
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).name).toBe("EmbeddedAttemptSessionTakeoverError");
-    expect((error as Error).message).toBe(providerError.message);
-    expect((error as Error).cause).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
-    if (!cleanupReacquireSessionFile) {
-      throw new Error("expected cleanup lock reacquire");
-    }
-    expect(((error as Error).cause as Error).message).toContain(cleanupReacquireSessionFile);
-    expect((error as { promptError?: unknown }).promptError).toBe(providerError);
-    expect(hoisted.flushPendingToolResultsAfterIdleMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps cleanup session takeover fatal when no provider prompt error exists", async () => {
-    let releasingCleanupLock = false;
-    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
-      releasingCleanupLock = true;
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => ({
-      release: async () => {
-        if (releasingCleanupLock) {
-          throw new EmbeddedAttemptSessionTakeoverError(params.sessionFile);
-        }
-      },
-    }));
-
-    await expect(
-      createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey,
-        tempPaths,
-        sessionPrompt: async (session) => {
-          session.messages = [...session.messages, doneMessage];
-        },
-      }),
-    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe(
+      "hook:before_agent_run",
+    );
   });
 
   it("uses assembled context as the default precheck authority", async () => {
@@ -2443,8 +2367,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
@@ -2483,8 +2407,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 
@@ -2520,8 +2444,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
@@ -2595,8 +2519,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
@@ -2638,8 +2562,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
@@ -2903,34 +2827,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(bootstrap).toHaveBeenCalled();
-    expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: created.sessionFile,
-        hadSessionFile: false,
-      }),
-    );
-  });
-
-  it("resolves bootstrap context before acquiring the session write lock", async () => {
-    const events: string[] = [];
-    hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
-      events.push("bootstrap");
-      return { bootstrapFiles: [], contextFiles: [] };
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
-      events.push("lock");
-      return { release: async () => {} };
-    });
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-    });
-
-    expect(events).toContain("bootstrap");
-    expect(events).toContain("lock");
-    expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
   });
 
   it("forwards modelId to assemble", async () => {
@@ -3452,7 +3348,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       },
     });
 
-    expect(result.promptErrorSource).toBe("precheck");
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery).toEqual({
       route: "compact_only",
       source: "mid-turn",
@@ -3562,7 +3458,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
     expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
       expect.objectContaining({
-        content: expect.stringContaining('"name": "Alice"'),
+        content: expect.stringContaining('"name":"Alice"'),
         role: "user",
       }),
     ]);
@@ -3630,19 +3526,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       sessionKey,
       tempPaths,
       sessionMessages,
-      attemptOverrides: {
-        contextTokenBudget: 128_000,
-        config: {
-          agents: {
-            defaults: {
-              contextLimits: {
-                toolResultMaxChars: 2_000,
-              },
-            },
-            list: [{ id: "main" }],
-          },
-        } as OpenClawConfig,
-      },
+      attemptOverrides: { contextTokenBudget: 128_000 },
       createSession: () => {
         const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
         session.agent.streamFn = async (_model, context) => {
@@ -3664,7 +3548,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
               toolCallId: `current_call_${index}`,
               toolName: "process",
               content: [
-                { type: "text", text: `current ${index}: ${"current output ".repeat(300)}` },
+                { type: "text", text: `current ${index}: ${"current output ".repeat(3_000)}` },
               ],
               isError: false,
               timestamp: 100 + index,
@@ -3685,7 +3569,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(
       submittedMessages
         .filter((message) => message.role === "toolResult")
-        .every((message) => sumToolResultTextChars([message]) <= 2_000),
+        .every((message) => sumToolResultTextChars([message]) <= 32_000),
     ).toBe(true);
     expect(JSON.stringify(submittedCurrentPromptMessages)).toContain("truncated");
     expect(afterTurn).toHaveBeenCalledTimes(1);
@@ -3734,8 +3618,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });
@@ -3780,8 +3664,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });

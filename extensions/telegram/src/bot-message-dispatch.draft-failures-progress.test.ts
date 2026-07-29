@@ -1,9 +1,10 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
   createDirectSessionPayload,
   createReasoningStreamContext,
+  createTelegramDraftStream,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
@@ -11,12 +12,48 @@ import {
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectWindowCollapsedTo,
+  mockCallArg,
   requireInvocationOrder,
   setupDraftStreams,
   telegramProgressPreview,
 } from "./bot-message-dispatch.test-harness.js";
 
+const draftWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "telegram/draft-stream" ? { ...logger, warn: draftWarn } : logger;
+    },
+  };
+});
+
 describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () => {
+  it("routes draft stream failures to the warn-level telegram logger with lane context", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const draftParams = mockCallArg(createTelegramDraftStream) as {
+      warn?: (message: string) => void;
+    };
+    expect(typeof draftParams.warn).toBe("function");
+    draftWarn.mockClear();
+    draftParams.warn?.("telegram stream preview failed: 400: Bad Request: chat not found");
+
+    expect(draftWarn).toHaveBeenCalledWith(
+      "telegram stream preview failed: 400: Bad Request: chat not found",
+      { lane: "answer", chatId: 123, threadId: 777 },
+    );
+  });
+
   it("sends an error fallback when dispatch fails after only partial output", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });

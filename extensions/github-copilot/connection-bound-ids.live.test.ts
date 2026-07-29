@@ -9,8 +9,8 @@ import {
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
+import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { wrapCopilotProviderStream } from "./stream.js";
-import { resolveCopilotApiToken } from "./token.js";
 
 const LIVE =
   process.env.OPENCLAW_LIVE_TEST === "1" ||
@@ -26,9 +26,8 @@ const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_GITHUB_COPILOT_MODEL?.trim() || 
 const describeLive = LIVE ? describe : describe.skip;
 const TOOL_ARGUMENT_MARKER = `copilot-stream-arguments-${"x".repeat(128)}`;
 
-type CopilotApiToken = {
-  token: string;
-  expiresAt: number;
+type CopilotRuntimeAuth = {
+  apiKey: string;
   source: string;
   baseUrl: string;
 };
@@ -145,31 +144,29 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
       return;
     }
 
-    let token: CopilotApiToken | undefined;
+    let token: CopilotRuntimeAuth | undefined;
     const failures: string[] = [];
     for (const candidate of candidates) {
       try {
-        logProgress(`exchanging ${candidate.source} GitHub token for Copilot token`);
+        logProgress(`validating ${candidate.source} GitHub token for Copilot`);
         token = await withTimeout(
-          "Copilot token exchange",
-          resolveCopilotApiToken({
+          "Copilot authentication",
+          resolveCopilotRuntimeAuth({
             githubToken: candidate.token,
             fetchImpl: fetchWithTimeout,
           }),
           15_000,
         );
-        logProgress(
-          `token ok via ${candidate.source} (${token.source.startsWith("cache:") ? "cache" : "fetched"})`,
-        );
+        logProgress(`token ok via ${candidate.source}`);
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         failures.push(`${candidate.source}: ${message}`);
-        logProgress(`token exchange failed via ${candidate.source} (${message})`);
+        logProgress(`token validation failed via ${candidate.source} (${message})`);
       }
     }
     if (!token) {
-      throw new Error(`Copilot token exchange failed for all candidates: ${failures.join("; ")}`);
+      throw new Error(`Copilot authentication failed for all candidates: ${failures.join("; ")}`);
     }
 
     const model = buildModel(token.baseUrl);
@@ -206,7 +203,7 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
       model as never,
       context as never,
       {
-        apiKey: token.token,
+        apiKey: token.apiKey,
         maxTokens: 256,
         onPayload: (payload: unknown) => {
           capturedPayload = {

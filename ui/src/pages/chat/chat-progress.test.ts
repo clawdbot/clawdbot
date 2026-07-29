@@ -131,10 +131,17 @@ describe("resolveTurnRecap", () => {
 
   it("hides the recap as soon as the next run's indicator appears", () => {
     resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT))).not.toBeNull();
-    // Next turn: indicator visible again — recap gone, new baseline captured.
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 51_000, 485))).toEqual({
+      runtimeMs: 51_000,
+      outputTokens: 485,
+    });
+    // Next turn: indicator visible again — recap gone before its terminal row changes.
     expect(resolveTurnRecap(SESSION, true, doneRow(RUN_ENDED_AT))).toBeNull();
     expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT))).toBeNull();
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT + 1_000, 2_000, 12))).toEqual({
+      runtimeMs: 2_000,
+      outputTokens: 12,
+    });
   });
 
   it("stays quiet for failed runs but ignores stale failed rows", () => {

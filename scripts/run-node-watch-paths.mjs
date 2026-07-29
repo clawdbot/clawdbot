@@ -20,7 +20,6 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/retry/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
-  "packages/web-content-core/src",
   "packages/net-policy/src",
 ];
 

@@ -4,6 +4,28 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `session observation requests encode global subscription and actual visibility`() {
+        let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
+        let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
+        let hidden = OpenClawChatGatewayRequests.setSessionObserverVisibility(false)
+        let longerSubscription = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
+        let longerVisibility = OpenClawChatGatewayRequests.setSessionObserverVisibility(
+            true,
+            timeoutMs: 12000)
+
+        #expect(subscribe.method == "sessions.subscribe")
+        #expect(subscribe.params.isEmpty)
+        #expect(subscribe.timeoutMs == 10000)
+        #expect(visible.method == "sessions.observer.visibility")
+        #expect(visible.params["visible"]?.value as? Bool == true)
+        #expect(visible.timeoutMs == 10000)
+        #expect(hidden.method == "sessions.observer.visibility")
+        #expect(hidden.params["visible"]?.value as? Bool == false)
+        #expect(hidden.timeoutMs == 10000)
+        #expect(longerSubscription.timeoutMs == 12000)
+        #expect(longerVisibility.timeoutMs == 12000)
+    }
+
     @Test func `session targets share normalization while preserving platform routing policy`() {
         #expect(OpenClawChatSessionTarget.resolve(
             " Matrix:Channel:Room ",
@@ -46,6 +68,22 @@ struct ChatGatewayRequestTests {
         #expect(request.params["limit"]?.value as? Int == 12)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
+    }
+
+    @Test func `child session request encodes focused pagination filters`() {
+        let request = OpenClawChatGatewayRequests.sessionsList(
+            limit: 10000,
+            search: nil,
+            archived: false,
+            includeGlobal: false,
+            spawnedBy: " agent:main:parent ",
+            offset: 10000,
+            configuredAgentsOnly: true)
+
+        #expect(request.params["includeGlobal"]?.value as? Bool == false)
+        #expect(request.params["spawnedBy"]?.value as? String == "agent:main:parent")
+        #expect(request.params["offset"]?.value as? Int == 10000)
+        #expect(request.params["configuredAgentsOnly"]?.value as? Bool == true)
     }
 
     @Test func `session patch request preserves explicit null clearing`() {
@@ -228,6 +266,19 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["fork"]?.value as? Bool == true)
     }
 
+    @Test func `chat metadata request selects session agent before fallback`() {
+        let scoped = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "agent:reviewer:main",
+            fallbackAgentID: "fallback")
+        #expect(scoped.method == "chat.metadata")
+        #expect(scoped.params["agentId"]?.value as? String == "reviewer")
+
+        let global = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "global",
+            fallbackAgentID: "reviewer")
+        #expect(global.params["agentId"]?.value as? String == "reviewer")
+    }
+
     @Test func `commands request selects session agent before fallback`() {
         let scoped = OpenClawChatGatewayRequests.commandsList(
             sessionKey: "agent:reviewer:main",
@@ -260,6 +311,18 @@ struct ChatGatewayRequestTests {
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+    }
+
+    @Test func `send request omits inherited thinking override`() {
+        let inherited = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "global",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "inherit",
+            thinking: nil,
+            idempotencyKey: "send-inherit",
+            attachments: [])
+        #expect(inherited.params["thinking"] == nil)
     }
 
     @Test func `question resolve request preserves answer arrays`() throws {
@@ -373,6 +436,57 @@ struct ChatGatewayPayloadCodecTests {
             agentId: "main",
             reason: "command-metadata"))
 
+        let swarmNote = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "reason": AnyCodable("swarm-note"),
+                "swarmGroupId": AnyCodable("swarm:agent:main:main:run-1"),
+                "kind": AnyCodable("phase"),
+                "text": AnyCodable("Research"),
+            ]))
+        guard case let .sessionsChanged(note) = OpenClawChatGatewayPayloadCodec.event(from: swarmNote)
+        else {
+            Issue.record("expected swarm sessionsChanged")
+            return
+        }
+        #expect(note.swarmGroupId == "swarm:agent:main:main:run-1")
+        #expect(note.kind == "phase")
+        #expect(note.text == "Research")
+
+        let lifecycleChanged = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "phase": AnyCodable("end"),
+                "runId": AnyCodable("run-1"),
+                "session": AnyCodable([
+                    "key": AnyCodable("agent:main:main"),
+                    "updatedAt": AnyCodable(30000),
+                    "status": AnyCodable("done"),
+                    "hasActiveRun": AnyCodable(false),
+                    "runtimeMs": AnyCodable(30000),
+                    "outputTokens": AnyCodable(42),
+                    "activeRunIds": AnyCodable([]),
+                ]),
+            ]))
+        guard case let .sessionsChanged(lifecycle) = OpenClawChatGatewayPayloadCodec.event(
+            from: lifecycleChanged)
+        else {
+            Issue.record("expected lifecycle sessionsChanged")
+            return
+        }
+        #expect(lifecycle.reason.isEmpty)
+        #expect(lifecycle.phase == "end")
+        #expect(lifecycle.runId == "run-1")
+        #expect(lifecycle.session?.key == "agent:main:main")
+        #expect(lifecycle.session?.status == "done")
+        #expect(lifecycle.session?.runtimeMs == 30000)
+        #expect(lifecycle.session?.outputTokens == 42)
+        #expect(lifecycle.session?.activeRunIds == [])
+
         let chat = EventFrame(
             type: "event",
             event: "chat",
@@ -449,6 +563,36 @@ struct ChatGatewayPayloadCodecTests {
         #expect(cleared?.observerDigestPresent == true)
         #expect(cleared?.statusPresent == true)
         #expect(cleared?.lastRunErrorPresent == true)
+    }
+
+    @Test func `session change decodes nested fallback with outer null precedence and no reason`() throws {
+        let data = Data("""
+        {
+          "sessionKey": null,
+          "status": null,
+          "session": {
+            "key": "agent:main:child",
+            "agentId": "main",
+            "parentSessionKey": "agent:main:parent",
+            "status": "running",
+            "lastRunError": null,
+            "hasActiveRun": true,
+            "swarmGroupId": "swarm:agent:main:parent:turn-1"
+          }
+        }
+        """.utf8)
+
+        let event = try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data)
+        #expect(event.reason.isEmpty)
+        #expect(event.sessionKey == nil)
+        #expect(event.agentId == "main")
+        #expect(event.parentSessionKey == "agent:main:parent")
+        #expect(event.status == nil)
+        #expect(event.statusPresent)
+        #expect(event.lastRunError == nil)
+        #expect(event.lastRunErrorPresent)
+        #expect(event.hasActiveRun == true)
+        #expect(event.swarmGroupId == "swarm:agent:main:parent:turn-1")
     }
 
     @Test func `session change remains codable without exposing presence flags`() throws {

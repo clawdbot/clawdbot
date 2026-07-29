@@ -70,9 +70,9 @@ the model ref canonical and select the CLI runtime per model:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -118,7 +118,13 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
-Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root; OpenClaw still answers Claude's stdio tool-control requests from the configured exec policy. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. The Anthropic plugin normalizes Claude's permission flags to match the effective policy and host restriction.
+Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. The Anthropic plugin normalizes Claude's permission flags to match the effective policy and host restriction.
+
+Under a restrictive policy, Claude asks OpenClaw over stdio before using one of its native or extension tools (its own Bash, WebFetch, or Claude in Chrome browser tools). When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays each request as an interactive approval to the session's channel: **Allow once** permits the single call, **Allow always** permits that tool name for the rest of the live Claude session (in memory only, never persisted), and **Deny**, a timeout, or an unreachable approval route all deny the call. Policies that never prompt keep their old behavior: `security: "deny"` rejects every request, and ask `off` with less than full security (exec mode `allowlist`) denies without asking.
+
+### Claude browser tools and 1Password sign-in
+
+Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it; register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. The Chrome window, the extension, and any 1Password approval prompts live on the gateway host, so someone must be at that machine to approve credential use.
 
 The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
 

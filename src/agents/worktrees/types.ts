@@ -25,6 +25,8 @@ export type ManagedWorktreeRecord = {
 export type CreateManagedWorktreeParams = {
   repoRoot: string;
   name?: string;
+  /** Derived default name; collisions receive a stable numeric suffix. */
+  suggestedName?: string;
   baseRef?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;

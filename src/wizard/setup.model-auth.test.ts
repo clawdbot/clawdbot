@@ -92,6 +92,7 @@ describe("runSetupModelAuthStep", () => {
 
     expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/ops-agent", {
       allowKeychainPrompt: false,
+      readOnly: true,
     });
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),

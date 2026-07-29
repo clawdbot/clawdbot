@@ -36,6 +36,12 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+When `openclaw_direct.sessions_yield` is available, those instructions also
+tell a native Codex parent to end the current turn when a child's result should
+arrive in a later turn. Native `wait_agent` remains for an intentional same-turn
+wait when the immediate next step is blocked on the child; completion polling
+loops are not a substitute.
+
 Most OpenClaw dynamic tools use the searchable `openclaw` namespace. Tools
 marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
@@ -124,8 +130,8 @@ Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat initiative guidance is sent as a Codex collaboration-mode
 developer instruction scoped to the heartbeat turn; ordinary chat turns stay
-in Codex Default mode. When `HEARTBEAT.md` is non-empty, the heartbeat
-instructions point Codex at the file instead of inlining its contents.
+in Codex Default mode. The heartbeat monitor's cron scratch is appended to the
+heartbeat prompt when present.
 
 ## Hook boundaries
 
@@ -149,10 +155,13 @@ hooks such as `SessionStart` and `UserPromptSubmit` remain Codex-level
 controls; they are not exposed as OpenClaw plugin hooks in the v1 contract.
 
 For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for
-the call, so plugin and middleware behavior runs in the harness adapter. For
-Codex-native tools, Codex owns the canonical tool record; OpenClaw can mirror
-selected events but cannot rewrite the native thread unless Codex exposes that
-through app-server or native hook callbacks.
+the call, so plugin and middleware behavior runs in the harness adapter. Codex
+Code Mode receives generic dynamic results as text and serializes nested
+dynamic calls; callers must parse JSON-looking results and cannot rely on
+`Promise.all` for concurrent submission. For Codex-native tools, Codex owns the
+canonical tool record; OpenClaw can mirror selected events but cannot rewrite
+the native thread unless Codex exposes that through app-server or native hook
+callbacks.
 
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns

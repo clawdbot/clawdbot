@@ -197,10 +197,8 @@ import {
   createOtelContext,
   createTestTrace,
   GRANDCHILD_SPAN_ID,
-  INPUT_ONLY_CAPTURE,
   MODEL_CALL_SPAN_ID,
   MODEL_CALL_FIXTURE,
-  MODEL_CONTENT_CAPTURE,
   MODEL_FIXTURE,
   MODEL_USAGE_SPAN_ID,
   type OtelContextFlags,
@@ -1970,18 +1968,6 @@ describe("diagnostics-otel service", () => {
       level: "INFO",
       message: "model replied OTEL-QA-OK",
     });
-
-    expect(emitCall?.body).toBe("log");
-  });
-
-  test("keeps granular content capture from enabling OTLP log bodies", async () => {
-    const emitCall = await emitAndCaptureLog(
-      {
-        level: "INFO",
-        message: "model replied OTEL-QA-OK",
-      },
-      { captureContent: { enabled: true, inputMessages: true } },
-    );
 
     expect(emitCall?.body).toBe("log");
   });
@@ -4142,18 +4128,11 @@ describe("diagnostics-otel service", () => {
     expect(toolOptions?.startTime).toBeTypeOf("number");
   });
 
-  test("exports bounded redacted content when capture fields are opted in", async () => {
+  test("exports bounded redacted content when capture is enabled", async () => {
     await startOtelService({
       traces: true,
       metrics: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: true,
-      },
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4188,7 +4167,7 @@ describe("diagnostics-otel service", () => {
     const toolAttrs = startedSpanOptions("openclaw.tool.execution")?.attributes;
 
     expect(modelAttrs?.["openclaw.content.output_messages"]).toBe("model reply");
-    expect(modelAttrs?.["openclaw.content.system_prompt"]).toBe("system prompt");
+    expect(Object.hasOwn(modelAttrs ?? {}, "openclaw.content.system_prompt")).toBe(false);
     expect(String(modelAttrs?.["openclaw.content.input_messages"])).not.toContain(
       "sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
     );
@@ -4208,10 +4187,10 @@ describe("diagnostics-otel service", () => {
     );
   });
 
-  test("omits absent model content fields when capture fields are opted in", async () => {
+  test("omits absent model content fields when capture is enabled", async () => {
     await startOtelService({
       traces: true,
-      captureContent: MODEL_CONTENT_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4239,7 +4218,7 @@ describe("diagnostics-otel service", () => {
   test("exports Phoenix-readable GenAI prompt, output, and tool definition attributes", async () => {
     await startOtelService({
       traces: true,
-      captureContent: MODEL_CONTENT_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4277,9 +4256,7 @@ describe("diagnostics-otel service", () => {
     await flushDiagnosticEvents();
 
     const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
-    expect(attrs?.["gen_ai.system_instructions"]).toBe(
-      JSON.stringify([{ type: "text", content: "be exact" }]),
-    );
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.system_instructions")).toBe(false);
     expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
       { role: "user", parts: [{ type: "text", content: "what changed?" }] },
       {
@@ -4320,7 +4297,7 @@ describe("diagnostics-otel service", () => {
   test("exports Claude CLI turn content through the existing Phoenix GenAI keys", async () => {
     await startOtelService({
       traces: true,
-      captureContent: MODEL_CONTENT_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4362,22 +4339,136 @@ describe("diagnostics-otel service", () => {
         role: "assistant",
         parts: [
           { type: "text", content: "trace complete" },
-          { type: "reasoning", content: "checked the span" },
           { type: "tool_call", id: "tool-1", name: "Read" },
         ],
         finish_reason: "end_turn",
       },
     ]);
-    expect(JSON.parse(stringAttribute(attrs, "gen_ai.system_instructions"))).toEqual([
-      { type: "text", content: "OpenClaw appended instructions" },
+    const compatibilityOutput = stringAttribute(attrs, "openclaw.content.output_messages");
+    expect(compatibilityOutput).not.toContain("checked the span");
+    expect(JSON.parse(compatibilityOutput)[0]?.content).toEqual([
+      { type: "text", text: "trace complete" },
+      { type: "reasoning", redacted: true },
+      { type: "tool_call", id: "tool-1", name: "Read" },
     ]);
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.system_instructions")).toBe(false);
     expect(Object.hasOwn(attrs ?? {}, "gen_ai.tool.definitions")).toBe(false);
+  });
+
+  test("never exports provider-internal thinking payloads in model message attributes", async () => {
+    await startOtelService({
+      traces: true,
+      captureContent: true,
+    });
+
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
+          {
+            role: "assistant",
+            reasoning_content: "input-message-internal-canary",
+            reasoning_details: [{ text: "input-details-internal-canary" }],
+            content: [
+              { type: "thinking", thinking: "input-internal-canary" },
+              { type: "reasoning", content: "input-part-internal-canary" },
+              {
+                type: "text",
+                text: "visible input",
+                textSignature: "input-text-signature-internal-canary",
+              },
+            ],
+          },
+        ],
+        outputMessages: [
+          {
+            role: "assistant",
+            reasoning: "output-message-internal-canary",
+            reasoning_text: "output-text-internal-canary",
+            content: [
+              { type: "redacted_thinking", data: "output-internal-canary" },
+              { type: "text", text: "visible output" },
+              {
+                type: "toolCall",
+                id: "tool-1",
+                name: "lookup",
+                arguments: { query: "visible" },
+                thoughtSignature: "output-thought-signature-internal-canary",
+              },
+            ],
+          },
+        ],
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
+    const internalCanaries = [
+      "input-internal-canary",
+      "input-message-internal-canary",
+      "input-details-internal-canary",
+      "input-part-internal-canary",
+      "output-internal-canary",
+      "output-message-internal-canary",
+      "output-text-internal-canary",
+      "input-text-signature-internal-canary",
+      "output-thought-signature-internal-canary",
+    ];
+    for (const key of [
+      "gen_ai.input.messages",
+      "gen_ai.output.messages",
+      "openclaw.content.input_messages",
+      "openclaw.content.output_messages",
+    ]) {
+      const value = stringAttribute(attrs, key);
+      for (const canary of internalCanaries) {
+        expect(value).not.toContain(canary);
+      }
+    }
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))[0]?.parts).toEqual([
+      { type: "text", content: "visible input" },
+    ]);
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))[0]?.parts).toEqual([
+      { type: "text", content: "visible output" },
+      {
+        type: "tool_call",
+        id: "tool-1",
+        name: "lookup",
+        arguments: { query: "visible" },
+      },
+    ]);
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[0],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[1],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[0],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[2],
+    ).toEqual({ type: "text", text: "visible input" });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[2],
+    ).toEqual({
+      type: "toolCall",
+      id: "tool-1",
+      name: "lookup",
+      arguments: { query: "visible" },
+    });
   });
 
   test("emits semconv response text for tool response parts", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4444,7 +4535,7 @@ describe("diagnostics-otel service", () => {
   test("flattens oversized pure-text tool results with a truncation marker", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     const textParts = Array.from({ length: 201 }, (_, index) => ({
@@ -4479,7 +4570,7 @@ describe("diagnostics-otel service", () => {
   test("normalizes snake_case tool_call parts the same as camelCase toolCall parts", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4523,7 +4614,7 @@ describe("diagnostics-otel service", () => {
   test("truncates oversized GenAI input messages instead of silently dropping them", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     // Build messages that exceed MAX_OTEL_CONTENT_ATTRIBUTE_CHARS (128KB) in total.
@@ -4561,12 +4652,7 @@ describe("diagnostics-otel service", () => {
   test("keeps single oversized GenAI messages and tool definitions parseable", async () => {
     await startOtelService({
       traces: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: false,
-        toolDefinitions: true,
-      },
+      captureContent: true,
     });
 
     // The 8,192-character candidate budget leaves an 8,178-character text prefix;
@@ -4632,54 +4718,6 @@ describe("diagnostics-otel service", () => {
         type: "object",
       },
     });
-  });
-
-  test("exports tool definitions without requiring input message capture", async () => {
-    await startOtelService({
-      traces: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: false,
-        toolDefinitions: true,
-      },
-    });
-
-    emitTrustedModelCallCompletedWithContent(
-      {
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        durationMs: 80,
-      },
-      {
-        inputMessages: [{ role: "user", content: "do not export this prompt" }],
-        toolDefinitions: [
-          { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
-        ],
-      },
-    );
-    await flushDiagnosticEvents();
-
-    const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
-    expect(Object.hasOwn(attrs ?? {}, "gen_ai.input.messages")).toBe(false);
-    expect(Object.hasOwn(attrs ?? {}, "input.value")).toBe(false);
-    expect(Object.hasOwn(attrs ?? {}, "openclaw.content.input_messages")).toBe(false);
-    expect(JSON.parse(stringAttribute(attrs, "gen_ai.tool.definitions"))).toEqual([
-      {
-        type: "function",
-        name: "lookup",
-        description: "Lookup data",
-        parameters: { type: "object" },
-      },
-    ]);
-    expect(JSON.parse(String(attrs?.["openclaw.content.tool_definitions"]))).toEqual([
-      {
-        name: "lookup",
-        description: "Lookup data",
-        parameters: { type: "object" },
-      },
-    ]);
   });
 
   test("ignores invalid diagnostic event trace parents", async () => {

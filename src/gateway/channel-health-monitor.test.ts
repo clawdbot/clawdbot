@@ -22,6 +22,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
     ...overrides,
   };
@@ -76,8 +77,7 @@ async function startAndRunCheck(
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
-  const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
+  await vi.advanceTimersByTimeAsync(startupGraceMs + 1);
   return monitor;
 }
 
@@ -192,13 +192,15 @@ describe("channel-health-monitor", () => {
     expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
   });
 
-  it("normalizes oversized check intervals before arming timers", () => {
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+  it("normalizes oversized check intervals before rearming timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const monitor = startDefaultMonitor(createMockChannelManager(), {
       checkIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     monitor.stop();
   });
 
@@ -212,9 +214,13 @@ describe("channel-health-monitor", () => {
 
   it("runs health check after grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = await startAndRunCheck(manager, {
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 60_000,
       timing: { monitorStartupGraceMs: 1_000 },
     });
+
+    await vi.advanceTimersByTimeAsync(1_001);
+
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
     monitor.stop();
   });
@@ -230,10 +236,27 @@ describe("channel-health-monitor", () => {
     });
     const monitor = startDefaultMonitor(manager);
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+
     await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
 
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("does not start a replacement when channel teardown fails", async () => {
+    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+      stopChannel: vi.fn(async () => {
+        throw new Error("stop failed");
+      }),
+    });
+
+    const monitor = await startAndRunCheck(manager, { cooldownCycles: 0 });
+
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
   });
@@ -340,6 +363,27 @@ describe("channel-health-monitor", () => {
       },
     });
     await expectNoRestart(manager);
+  });
+
+  it("restarts a running channel with a live socket but dead ingress", async () => {
+    // A restart is the only way to re-prove ingress, so recovery from a transient
+    // queue-open failure must stay automatic. Without the ingress dimension this
+    // account evaluated as healthy and was never touched at all.
+    const manager = createSnapshotManager({
+      slack: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          ingressUnavailable: true,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+    monitor.stop();
   });
 
   it("restarts a stopped channel without terminalDisconnect", async () => {
@@ -567,6 +611,38 @@ describe("channel-health-monitor", () => {
 
     expect(manager.stopChannel).toHaveBeenCalledTimes(1);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("defers to the channel supervisor while its own auto-restart is scheduled", async () => {
+    let autoRestartScheduled = true;
+    const manager = createSnapshotManager(
+      {
+        whatsapp: {
+          default: {
+            ...managedStoppedAccount("Another process owns this WhatsApp connection."),
+            linked: true,
+            restartPending: true,
+            reconnectAttempts: 5,
+          },
+        },
+      },
+      { isAutoRestartScheduled: vi.fn(() => autoRestartScheduled) },
+    );
+
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    // Deferring must not burn the attempt ladder the supervisor is still walking.
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+
+    await advanceHealthCheck();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+
+    // Once the supervisor gives up it no longer owns recovery, so the monitor
+    // becomes the account's last restart owner again.
+    autoRestartScheduled = false;
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
   });
 

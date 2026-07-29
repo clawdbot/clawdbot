@@ -11,12 +11,17 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  normalizeSessionDeliveryState,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import {
   closeClientVoiceSession,
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
   isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
+  resolveClientVoiceAgentSessionId,
   resolveClientVoiceRunBinding,
   resolveOpenClientVoiceSessionId,
 } from "./client-voice-session.js";
@@ -31,16 +36,13 @@ vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
 
-async function seedSession(
-  sessionKey: string,
-  route: { lastChannel?: string; lastTo?: string } = {},
-): Promise<void> {
+async function seedSession(sessionKey: string, context: DeliveryContext = {}): Promise<void> {
   await replaceSessionEntry(
     { agentId: "main", sessionKey },
     {
       sessionId: `session-${sessionKey.replaceAll(":", "-")}`,
       updatedAt: Date.now(),
-      ...route,
+      delivery: normalizeSessionDeliveryState({ context }),
     },
   );
 }
@@ -153,9 +155,10 @@ describe("client voice session", () => {
 
   it("stamps the agent session row when Talk creates it", async () => {
     const sessionKey = "agent:main:talk:new";
-    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
+    const sessionId = await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
 
     expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      sessionId,
       createdVia: "talk",
       createdActor: { type: "human" },
       createdAt: expect.any(Number),
@@ -163,6 +166,40 @@ describe("client voice session", () => {
 
     await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
     expect(loadSessionEntry({ agentId: "main", sessionKey })?.createdVia).toBe("talk");
+  });
+
+  it("reads an existing agent session without creating a missing row", async () => {
+    const existingKey = "agent:main:talk:existing";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: existingKey },
+      { sessionId: "session-existing", updatedAt: 1 },
+    );
+
+    expect(resolveClientVoiceAgentSessionId({ agentId: "main", sessionKey: existingKey })).toBe(
+      "session-existing",
+    );
+    expect(
+      resolveClientVoiceAgentSessionId({
+        agentId: "main",
+        sessionKey: "agent:main:talk:missing",
+      }),
+    ).toBeUndefined();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:talk:missing" }),
+    ).toBeUndefined();
+  });
+
+  it("does not create an agent session after a browser-session deadline", async () => {
+    const sessionKey = "agent:main:talk:expired";
+
+    await expect(
+      ensureClientVoiceAgentSessionEntry({
+        agentId: "main",
+        sessionKey,
+        deadlineAt: Date.now() - 1,
+      }),
+    ).rejects.toThrow("Realtime browser session expired during startup");
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
   });
 
   it("repairs an incomplete existing row without claiming its creation actor", async () => {
@@ -382,8 +419,8 @@ describe("client voice session", () => {
 
   it("records post-close effects and defers the digest until the last consult completes", async () => {
     await seedSession("agent:main:main", {
-      lastChannel: "discord",
-      lastTo: "channel:voice-updates",
+      channel: "discord",
+      to: "channel:voice-updates",
     });
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -452,8 +489,8 @@ describe("client voice session", () => {
 
   it("retries a deferred digest on the next voice session after a failed delivery", async () => {
     await seedSession("agent:main:main", {
-      lastChannel: "discord",
-      lastTo: "channel:voice-updates",
+      channel: "discord",
+      to: "channel:voice-updates",
     });
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -504,8 +541,8 @@ describe("client voice session", () => {
 
   it("retries the mutation digest after a transient send failure", async () => {
     await seedSession("agent:main:main", {
-      lastChannel: "discord",
-      lastTo: "channel:voice-updates",
+      channel: "discord",
+      to: "channel:voice-updates",
     });
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -540,8 +577,8 @@ describe("client voice session", () => {
 
   it("delivers one mutation digest and skips webchat or missing targets", async () => {
     await seedSession("agent:main:main", {
-      lastChannel: "discord",
-      lastTo: "channel:voice-updates",
+      channel: "discord",
+      to: "channel:voice-updates",
     });
     const delivered = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -572,7 +609,7 @@ describe("client voice session", () => {
     );
 
     for (const [voiceSessionId, route] of [
-      ["voice-webchat", { lastChannel: "webchat", lastTo: "browser" }],
+      ["voice-webchat", { channel: "webchat", to: "browser" }],
       ["voice-no-target", {}],
     ] as const) {
       const sessionKey = `agent:main:${voiceSessionId}`;

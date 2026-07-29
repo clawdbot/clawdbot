@@ -345,4 +345,37 @@ describe("reconcileSessionChanged", () => {
       expect.objectContaining({ key, archived: true, updatedAt: 2 }),
     ]);
   });
+
+  it("clears archive attribution when an unarchive event arrives", () => {
+    const key = "agent:main:thread";
+    const result = buildResult([
+      {
+        key,
+        kind: "direct",
+        updatedAt: 1,
+        sessionId: "s1",
+        archived: true,
+        archivedAt: 1,
+        archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+      },
+    ]);
+
+    const next = reconcileSessionChanged(
+      result,
+      {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        updatedAt: 2,
+        sessionId: "s1",
+        archived: false,
+        archivedAt: null,
+        archivedBy: null,
+      },
+      { archivedFilter: "all" },
+    );
+
+    expect(next.row?.archivedBy).toBeUndefined();
+    expect(next.result?.sessions[0]?.archivedBy).toBeUndefined();
+  });
 });

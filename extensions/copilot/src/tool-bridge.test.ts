@@ -266,8 +266,8 @@ describe("createCopilotToolBridge", () => {
         toolSearchCatalogExecutor: expect.any(Function),
       }),
     );
-    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
   });
 
   it("keeps tool_search controls visible when a narrow allowlist is active", async () => {
@@ -294,8 +294,8 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
 
-    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
   });
 
   it("filters the hidden tool_search catalog before compacting narrowed tools", async () => {
@@ -717,7 +717,7 @@ describe("createCopilotToolBridge", () => {
       expect(exec).toMatchObject({ security: "fast", elevated: { allowed: true } });
     });
 
-    it("forwards run-trace context (trigger, jobId, memoryFlushWritePath, toolsAllow) via buildEmbeddedAttemptToolRunContext", async () => {
+    it("forwards run-trace and scheduled policy context", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
 
       await createCopilotToolBridge({
@@ -727,6 +727,12 @@ describe("createCopilotToolBridge", () => {
           jobId: "job-1",
           memoryFlushWritePath: ".memory/append.md",
           toolsAllow: ["read", "edit"],
+          scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
+            ownerSessionKey: "agent:main:discord:group:ops",
+            ownerAccountId: "default",
+          },
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -742,6 +748,12 @@ describe("createCopilotToolBridge", () => {
       // runtimeToolAllowlist; consumers (PI plugin tools) read the
       // renamed key, so the bridge must surface the renamed shape too.
       expect(opts.runtimeToolAllowlist).toEqual(["read", "edit"]);
+      expect(opts.scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "default",
+      });
     });
 
     it("forwards the native conversation identity from attemptParams", async () => {

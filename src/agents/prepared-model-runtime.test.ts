@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
+type ResolveStaticCatalog =
+  typeof import("./embedded-agent-runner/model.static-catalog.js").resolveBundledStaticCatalogModel;
 
 const mocks = vi.hoisted(() => ({
   authStorage: { getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })) },
@@ -21,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   })),
   ensureRuntimePluginsLoaded: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
+  resolveBundledStaticCatalogModel: vi.fn<ResolveStaticCatalog>(() => undefined),
   configuredAgentIds: [] as string[],
   mutationListener: undefined as
     | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
@@ -77,6 +80,8 @@ vi.mock("./runtime-plugins.js", () => ({
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
     mocks.loadStaticCatalog(...args),
+  resolveBundledStaticCatalogModel: (...args: Parameters<ResolveStaticCatalog>) =>
+    mocks.resolveBundledStaticCatalogModel(...args),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -112,6 +117,7 @@ describe("prepared model runtime snapshots", () => {
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
     mocks.ensureRuntimePluginsLoaded.mockClear();
     mocks.loadStaticCatalog.mockClear();
+    mocks.resolveBundledStaticCatalogModel.mockClear();
     mocks.modelRegistry.fork.mockClear();
     mocks.configuredAgentIds = [];
   });
@@ -263,6 +269,74 @@ describe("prepared model runtime snapshots", () => {
         contextWindow: 128_000,
         reasoning: false,
         input: ["text"],
+      },
+    ]);
+  });
+
+  it("retains full configured static models with request-time catalog precedence", async () => {
+    const runtimeModel = {
+      provider: "nvidia",
+      id: "nemotron-static",
+      name: "Nemotron Static",
+      api: "openai-completions" as const,
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    };
+    mocks.loadStaticCatalog.mockResolvedValueOnce([
+      {
+        ...runtimeModel,
+        baseUrl: "https://provider-static.example.test/v1",
+      },
+    ]);
+    mocks.resolveBundledStaticCatalogModel.mockReturnValueOnce(runtimeModel);
+
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config: { agents: { defaults: { model: { primary: "nvidia/nemotron-static" } } } },
+      agentDir: "/tmp/prepared-model-runtime-configured-static",
+      workspaceDir: "/tmp/prepared-model-runtime-configured-static-workspace",
+    });
+
+    expect(snapshot.configuredRuntimeModels).toEqual([
+      { provider: "nvidia", modelId: "nemotron-static", model: runtimeModel },
+    ]);
+  });
+
+  it("prepares inline provider models once at the snapshot boundary", async () => {
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example.test/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "custom-model",
+                  name: "Custom Model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/prepared-model-runtime-inline",
+    });
+
+    expect(snapshot.inlineProviderModels).toMatchObject([
+      {
+        provider: "custom",
+        id: "custom-model",
+        baseUrl: "https://custom.example.test/v1",
+        api: "openai-responses",
       },
     ]);
   });

@@ -10,8 +10,8 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("persistUserTurnTranscript", () => {
@@ -100,11 +100,10 @@ describe("persistUserTurnTranscript", () => {
       role: "user",
       content: "What is in this image?",
       timestamp: 123,
-      MediaPath: "/tmp/image.png",
-      MediaPaths: ["/tmp/image.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
-      __openclaw: { senderIsOwner: true },
+      __openclaw: {
+        senderIsOwner: true,
+        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+      },
       provenance,
     };
     expect(appended?.message).toEqual(expected);
@@ -121,10 +120,12 @@ describe("persistUserTurnTranscript", () => {
       role: "user",
       content: "Inspect both",
       timestamp: 456,
-      MediaPath: "/tmp/image.png",
-      MediaPaths: ["/tmp/image.png", "https://example.test/report.pdf"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png", "application/pdf"],
+      __openclaw: {
+        media: [
+          { path: "/tmp/image.png", contentType: "image/png" },
+          { url: "https://example.test/report.pdf", contentType: "application/pdf" },
+        ],
+      },
     };
 
     const appended = await persistUserTurnTranscript({

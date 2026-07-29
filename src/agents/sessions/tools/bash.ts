@@ -81,7 +81,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           reject: false,
           stdio: [invocation.stdin, "pipe", "pipe"],
         });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child);
+        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);

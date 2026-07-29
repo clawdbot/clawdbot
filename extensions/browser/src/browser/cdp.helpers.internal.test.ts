@@ -1,6 +1,7 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { toErrorObject } from "../infra/errors.js";
 import { rawDataToString } from "../infra/ws.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -130,6 +131,36 @@ describe("cdp.helpers internal", () => {
       await guardedRelease();
       // The underlying release must be invoked exactly once.
       expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases the guarded fetch even when cancelling the unread response fails", async () => {
+      const cancel = vi.fn(async () => {
+        throw new Error("fixture response cancellation failed");
+      });
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          bodyUsed: false,
+          body: { cancel },
+        } as unknown as Response,
+        release,
+      });
+
+      const { release: guardedRelease } = await fetchCdpChecked(
+        "http://127.0.0.1:9222/json/version",
+        250,
+        undefined,
+        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      );
+
+      await expect(guardedRelease()).resolves.toBeUndefined();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(
+        release.mock.invocationCallOrder[0]!,
+      );
     });
 
     it("registers a managed-proxy bypass for the exact sanitized fetch URL", async () => {
@@ -418,7 +449,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket(server.url, async (send) => {
           await send("Test.ok");
           const rejectRawString = () =>
-            Promise.reject(toLintErrorObject("raw-string-from-callback", "Non-Error rejection"));
+            Promise.reject(toErrorObject("raw-string-from-callback", "Non-Error rejection"));
           return rejectRawString();
         }),
       ).rejects.toThrow(/raw-string-from-callback/);
@@ -574,17 +605,3 @@ describe("openCdpWebSocket option handling", () => {
     ws.close();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
+import { loggingState } from "../logging/state.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
@@ -76,6 +77,45 @@ const ACQUIRE_BACKOFF = {
 const MIN_LEASE_MS = 1_000;
 const LEASE_DB_BUSY_TIMEOUT_MS = 0;
 const RELEASE_RETRY_TIMEOUT_MS = 2_000;
+const processExitLeaseCleanups = new Set<() => void>();
+let processExitListenerInstalled = false;
+
+function runProcessExitLeaseCleanups(): void {
+  processExitListenerInstalled = false;
+  // Exit cleanup runs after CLI output routing is restored (for example after a
+  // --json envelope already reached stdout). Lease release reopens the state
+  // database and can emit diagnostics, so keep them on stderr to preserve
+  // machine-readable stdout for the whole process lifetime.
+  const previousForceConsoleToStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = true;
+  try {
+    for (const cleanup of processExitLeaseCleanups) {
+      try {
+        cleanup();
+      } catch {
+        // Expiry still recovers a lease when synchronous process-exit cleanup loses a DB race.
+      }
+    }
+    processExitLeaseCleanups.clear();
+  } finally {
+    loggingState.forceConsoleToStderr = previousForceConsoleToStderr;
+  }
+}
+
+function registerProcessExitLeaseCleanup(cleanup: () => void): () => void {
+  processExitLeaseCleanups.add(cleanup);
+  if (!processExitListenerInstalled) {
+    process.once("exit", runProcessExitLeaseCleanups);
+    processExitListenerInstalled = true;
+  }
+  return () => {
+    processExitLeaseCleanups.delete(cleanup);
+    if (processExitLeaseCleanups.size === 0 && processExitListenerInstalled) {
+      process.removeListener("exit", runProcessExitLeaseCleanups);
+      processExitListenerInstalled = false;
+    }
+  };
+}
 
 function leaseError(
   code: OpenClawStateLeaseErrorCode,
@@ -480,6 +520,15 @@ export async function withOpenClawStateLease<T>(
     owner,
     leaseLabel: validated.leaseLabel,
   };
+  // `process.exit()` skips async `finally` blocks. Release synchronously so a normal CLI error
+  // cannot strand the lease until its TTL and block the next lifecycle command.
+  const unregisterProcessExitCleanup = registerProcessExitLeaseCleanup(() => {
+    release({
+      ...identity,
+      database: validated.database,
+      operationLabel: validated.operationLabel,
+    });
+  });
   const leaseLost = new AbortController();
   const operationSignal = validated.signal
     ? AbortSignal.any([validated.signal, leaseLost.signal])
@@ -580,6 +629,7 @@ export async function withOpenClawStateLease<T>(
     verifyLeaseOwnership({ ...identity, database: validated.database });
     return result;
   } finally {
+    unregisterProcessExitCleanup();
     clearInterval(heartbeat);
     if (expiryTimer) {
       clearTimeout(expiryTimer);

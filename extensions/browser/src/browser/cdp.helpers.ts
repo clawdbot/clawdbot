@@ -13,7 +13,6 @@ import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   SsrFBlockedError,
-  isPrivateNetworkAllowedByPolicy,
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
@@ -28,7 +27,10 @@ import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-
 import type { BrowserTabOwnership } from "./client.types.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
-import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+import {
+  allowsDiscoveredCdpAuthorityChange,
+  withExactHostnamePolicy,
+} from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
@@ -108,13 +110,9 @@ function assertDiscoveredCdpEndpointMatchesConfigured(
   configuredUrl: string,
   ssrfPolicy?: SsrFPolicy,
 ): void {
-  const hasExplicitAllowedHostnames = (ssrfPolicy?.allowedHostnames ?? []).some(
-    (hostname) => hostname.trim().length > 0,
-  );
   if (
-    !ssrfPolicy ||
     cdpEndpointAuthority(discoveredUrl) === cdpEndpointAuthority(configuredUrl) ||
-    (!hasExplicitAllowedHostnames && isPrivateNetworkAllowedByPolicy(ssrfPolicy))
+    allowsDiscoveredCdpAuthorityChange(ssrfPolicy)
   ) {
     return;
   }
@@ -608,6 +606,7 @@ export async function fetchCdpChecked(
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
   const signal = init?.signal ? AbortSignal.any([ctrl.signal, init.signal]) : ctrl.signal;
+  let response: Response | undefined;
   let guardedRelease: (() => Promise<void>) | undefined;
   let released = false;
   const release = async () => {
@@ -616,7 +615,20 @@ export async function fetchCdpChecked(
     }
     released = true;
     clearTimeout(t);
-    await guardedRelease?.();
+    // Abort first: cloned bodies can keep cancellation pending, and a
+    // caller-owned reader can leave a partially consumed stream locked.
+    ctrl.abort();
+    try {
+      // Status-only and failed probes do not consume their response streams.
+      // Cancel them before releasing the guard so Undici frees the CDP socket.
+      if (response && !response.bodyUsed) {
+        await response.body?.cancel();
+      }
+    } catch {
+      // A broken response stream must not mask the result or skip guard cleanup.
+    } finally {
+      await guardedRelease?.();
+    }
   };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
@@ -637,7 +649,8 @@ export async function fetchCdpChecked(
           auditContext: "browser-cdp",
         });
         guardedRelease = guarded.release;
-        return guarded.response;
+        response = guarded.response;
+        return response;
       }),
     );
     if (!res.ok) {

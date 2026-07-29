@@ -1,5 +1,6 @@
 // Feishu plugin owns raw Lark event admission, replay, and turn adoption.
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
@@ -7,6 +8,7 @@ import {
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { getFeishuRuntime } from "./runtime.js";
@@ -75,10 +77,6 @@ export class FeishuIngressPermanentError extends Error {
     super(message, options);
     this.name = "FeishuIngressPermanentError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readString(value: unknown): string | null {
@@ -219,8 +217,8 @@ export function buildFeishuFlushIngressLifecycle(
   const replayClaims = durableSources
     .map((source) => source.replayClaim)
     .filter((claim) => claim !== undefined);
-  const [firstLifecycle] = lifecycles;
-  if (!firstLifecycle) {
+  const transportLifecycle = fanInChannelIngressLifecycles(lifecycles).lifecycle;
+  if (!transportLifecycle) {
     return { lifecycle: undefined, settle: async () => {} };
   }
   let handedOff = false;
@@ -237,7 +235,7 @@ export function buildFeishuFlushIngressLifecycle(
       return;
     }
     releaseReplayClaims();
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
+    await transportLifecycle.onAbandoned();
     terminal = "abandoned";
   };
   const ensureAbandoned = async () => {
@@ -280,9 +278,7 @@ export function buildFeishuFlushIngressLifecycle(
       adopting ??
       (async () => {
         try {
-          for (const lifecycle of lifecycles) {
-            await lifecycle.onAdopted();
-          }
+          await transportLifecycle.onAdopted();
           terminal = "adopted";
           // Queue adoption is authoritative. Logical twin guards commit only
           // afterward: partial best-effort guard writes may admit a duplicate,
@@ -315,24 +311,17 @@ export function buildFeishuFlushIngressLifecycle(
   };
   return {
     lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? firstLifecycle.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+      abortSignal: transportLifecycle.abortSignal,
       onAdopted: async () => {
         handedOff = true;
         await adoptAll();
       },
       onDeferred: () => {
         handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
+        transportLifecycle.onDeferred();
       },
       onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
+        transportLifecycle.onAdoptionFinalizing();
       },
       onAbandoned: async () => {
         handedOff = true;
@@ -348,12 +337,8 @@ export function buildFeishuFlushIngressLifecycle(
       handedOff = true;
       releaseReplayClaims();
       try {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-        for (const lifecycle of lifecycles) {
-          await lifecycle.onAdopted();
-        }
+        transportLifecycle.onAdoptionFinalizing();
+        await transportLifecycle.onAdopted();
         terminal = "adopted";
       } catch (error) {
         await ensureAbandoned().catch(() => undefined);

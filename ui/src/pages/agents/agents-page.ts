@@ -27,9 +27,9 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
   setDefaultAgent,
-  type AgentsPanel,
   type AgentsState,
 } from "../../lib/agents/index.ts";
+import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
 import {
   createInitialCronState,
@@ -51,17 +51,14 @@ import {
 } from "./identity-actions.ts";
 import { stageAgentModelFallbacks, stageAgentPrimaryModel } from "./model-config.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
+import {
+  navigateToAgent,
+  navigateToAgentPanel,
+  syncAgentsCanonicalLocation,
+} from "./route-navigation.ts";
+import type { AgentsRouteData } from "./route.ts";
 import { loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
-
-export type AgentsRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
-  error: string | null;
-};
 
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
@@ -79,7 +76,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() agentsError: string | null = null;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsSelectedId: string | null = null;
-  @state() agentsPanel: AgentsPanel = "files";
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogLoadingAgentId: string | null = null;
   @state() toolsCatalogError: string | null = null;
@@ -119,6 +115,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
+  private normalizedLocation = "";
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.agents,
@@ -247,6 +244,15 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     return this.context.gateway.snapshot.sessionKey;
   }
 
+  get agentsPanel(): AgentsPanel {
+    return this.routeData?.panel ?? DEFAULT_AGENT_PANEL;
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.syncCanonicalLocation();
+  }
+
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.requestGeneration += 1;
@@ -258,6 +264,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
+      this.syncCanonicalLocation();
       this.ensureInitialData();
     }
   }
@@ -267,7 +274,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     forceReset: boolean,
     initialBind = false,
   ) {
-    const connectionChanged = this.connected !== snapshot.connected;
+    const connectionChanged = this.connected !== (snapshot.phase === "connected");
     const clientChanged = this.client !== snapshot.client;
     this.syncGatewayState(snapshot);
     if (forceReset || (!initialBind && clientChanged)) {
@@ -280,11 +287,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 
   private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     this.cron = {
       ...this.cron,
       client: snapshot.client,
-      connected: snapshot.connected,
+      connected: snapshot.phase === "connected",
     };
   }
 
@@ -395,6 +402,14 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
         this.resetSelectionState();
       }
     }
+  }
+
+  private syncCanonicalLocation() {
+    this.normalizedLocation = syncAgentsCanonicalLocation(
+      this.context,
+      this.routeData,
+      this.normalizedLocation,
+    );
   }
 
   private resolveSelectedAgentId() {
@@ -657,21 +672,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     void loadToolsEffective(this, { agentId, sessionKey: this.sessionKey });
   }
 
-  private selectAgent(agentId: string) {
-    if (this.agentsSelectedId === agentId) {
-      return;
-    }
-    this.agentsSelectedId = agentId;
-    this.resetSelectionState();
-    void this.context.agentIdentity.ensure([agentId]);
-    this.loadActivePanelData();
-  }
-
-  private selectPanel(panel: AgentsPanel) {
-    this.agentsPanel = panel;
-    this.loadActivePanelData();
-  }
-
   private refreshAgents() {
     const client = this.client;
     const generation = this.requestGeneration;
@@ -814,9 +814,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
           onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
-          onSelectAgent: (agentId) => this.selectAgent(agentId),
+          onSelectAgent: (agentId) =>
+            navigateToAgent(this.context, agentId, selectedAgentId, this.agentsPanel),
           onCreateAgent: () => this.context.navigate("custodian", { search: "?intent=new-agent" }),
-          onSelectPanel: (panel) => this.selectPanel(panel),
+          onSelectPanel: (panel) =>
+            navigateToAgentPanel(this.context, selectedAgentId, this.agentsPanel, panel),
           onLoadFiles: (agentId) => void this.loadAgentFiles(agentId, true),
           onSelectFile: (name) => {
             this.agentFileActive = name;
@@ -879,6 +881,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
           onOpenMemoryImport: () => this.context.navigate("memory-import"),
+          onOpenMemorySettings: () => this.context.navigate("memory"),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),
           onSkillsFilterChange: (next) => (this.skillsFilter = next),

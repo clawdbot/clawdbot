@@ -4,6 +4,7 @@ import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js"
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
@@ -26,9 +27,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 type AttemptRuntime = {
   sessionId: string;
   sessionFile: string;
-  sessionTarget?: ContextEngineSessionTarget;
   sessionKey?: string;
-  trajectorySessionFile: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
@@ -68,6 +67,16 @@ type AttemptRuntime = {
   captureRuntimeArtifact: boolean;
 };
 
+type AttemptTranscriptOwnership =
+  | {
+      kind: "caller-owned";
+      sessionManager: NonNullable<RunEmbeddedAgentParams["sessionManager"]>;
+    }
+  | {
+      kind: "runtime-target";
+      sessionTarget?: ContextEngineSessionTarget;
+    };
+
 type AttemptControl = {
   lifecycleGeneration: string;
   pluginHarnessOwnsTransport: boolean;
@@ -92,6 +101,7 @@ type AttemptControl = {
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
   runtime: AttemptRuntime;
+  transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
   bootstrapPromptWarningSignaturesSeen: string[];
   suppressNextUserMessagePersistence: boolean;
@@ -206,8 +216,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sessionFile: runtime.sessionFile,
-    sessionTarget: runtime.sessionTarget,
-    trajectorySessionFile: runtime.trajectorySessionFile,
+    ...(input.transcriptOwnership.kind === "caller-owned"
+      ? { sessionManager: input.transcriptOwnership.sessionManager }
+      : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
@@ -331,11 +342,17 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPrompt: appendIncognitoSystemPrompt({
+      agentId: runtime.agentId,
+      extraSystemPrompt: params.extraSystemPrompt,
+      sessionKey: params.sessionKey,
+      storePath: params.sessionTarget?.storePath,
+    }),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,

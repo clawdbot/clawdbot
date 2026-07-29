@@ -116,6 +116,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
       "test/image-generation.infer-cli.live.test.ts",
       "test/image-generation.runtime.live.test.ts",
+      "test/openai-onboarding.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
       "extensions/minimax/minimax.live.test.ts",
@@ -128,6 +129,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual([
       "extensions/openai/openai-provider.live.test.ts",
       "extensions/openai/openai.live.test.ts",
+      "extensions/openai/realtime-quicksilver.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
       "extensions/memory-lancedb/memory-lancedb.live.test.ts",

@@ -53,6 +53,47 @@ openclaw-new-session-page {
   text-align: left;
 }
 
+.new-session-page__visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.new-session-page__visibility:hover:not(:disabled),
+.new-session-page__visibility--active {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__visibility--active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  font-weight: 650;
+}
+
+.new-session-page__visibility:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.new-session-page__visibility svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
 /* Quiet chip row directly above the composer: the agent and place pickers
    share one trigger treatment so the row reads as a single control
    strip. Web Awesome owns popup/listbox behavior. */
@@ -295,6 +336,19 @@ wa-popover.new-session-page__place-popover::part(body) {
   position: relative;
   margin-top: 0;
   border-radius: var(--radius-md);
+}
+
+/* Keep a long first prompt visible before scrolling. The shared auto-height
+   controller measures content; this surface owns its ten-line visual cap. */
+.new-session-page__composer .new-session-page__message {
+  max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  --scrollbar-size: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {

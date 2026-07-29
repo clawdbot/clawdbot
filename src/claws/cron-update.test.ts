@@ -146,7 +146,10 @@ describe("applyClawCronUpdate", () => {
         cronGateway: {
           add,
           get: async (id) =>
-            cronReadView("worker", refs.find((item) => item.schedulerJobId === id)!),
+            cronReadView(
+              "worker",
+              refs.find((item) => item.schedulerJobId === id)!,
+            ),
           remove,
         },
         readRefs: () => refs,

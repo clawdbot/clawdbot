@@ -63,7 +63,7 @@
   gap: var(--space-3);
 }
 
-/* Toolbar: mode toggle / section tabs left, inline autosave status right */
+/* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -72,55 +72,10 @@
   gap: var(--space-2) var(--space-3);
 }
 
-.config-toolbar__status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-  min-height: 28px;
-}
-
 .config-show-advanced.active {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--accent-subtle);
-}
-
-.config-advanced-fields {
-  margin-top: var(--space-3);
-  border-top: 1px solid var(--border);
-}
-
-.config-advanced-fields__summary {
-  padding: var(--space-3) 0;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 650;
-}
-
-.config-advanced-fields__content {
-  margin-top: 0;
-}
-
-/* Restart affordance shown after a successful save until apply */
-.config-apply-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--accent-subtle);
-  font-size: 12.5px;
-  color: var(--text);
-}
-
-.config-apply-banner__text {
-  min-width: 0;
-  line-height: 1.4;
 }
 
 /* Raw mode file operations (open / discard / save) */
@@ -258,6 +213,26 @@
 
 .config-content > .settings-page {
   padding-top: 0;
+}
+
+.config-content-callout {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-content-callout .callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.config-content-callout__text {
+  min-width: 0;
+  flex: 1 1 420px;
 }
 
 /* ===========================================
@@ -708,6 +683,24 @@
   display: grid;
   gap: 14px;
   margin-top: 12px;
+}
+
+/* Memory */
+.memory-page {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.memory-page__panel {
+  display: grid;
+  gap: 14px;
+}
+
+.memory-page__link {
+  color: var(--accent);
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
 .mcp-command-card__grid {

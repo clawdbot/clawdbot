@@ -91,8 +91,6 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
 
       const resolved = await resolveCronModelSelection({
         cfg,
-        catalogConfig: cfg,
-        cfgWithAgentDefaults: cfg,
         sessionEntry: {},
         payload: {
           kind: "agentTurn",
@@ -105,7 +103,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
         workspaceDir: `${home}/workspace`,
       });
 
-      expect(resolved).toEqual({
+      expect(resolved).toMatchObject({
         ok: true,
         provider: "openrouter",
         model: GMAIL_MODEL.replace("openrouter/", ""),

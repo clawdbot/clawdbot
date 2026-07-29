@@ -1,3 +1,5 @@
+import { applyConstructFallbacks } from "./construct-fallbacks.js";
+import type { FormatCapabilityProfile } from "./format-capabilities.js";
 import { isAutoLinkedMarkdownLink, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle } from "./ir.js";
 
@@ -24,14 +26,16 @@ export type AttributedRenderOptions<TStyle extends string> = {
 export function renderMarkdownWithAttributedRanges<TStyle extends string>(
   ir: MarkdownIR,
   options: AttributedRenderOptions<TStyle>,
+  profile?: FormatCapabilityProfile,
 ): { text: string; ranges: AttributedRange<TStyle>[] } {
-  const text = ir.text ?? "";
+  const projected = profile ? applyConstructFallbacks(ir, profile) : ir;
+  const text = projected.text ?? "";
   const insertions: Array<{ pos: number; length: number }> = [];
   let rendered = text;
   if (options.renderLink) {
     rendered = "";
     let cursor = 0;
-    for (const link of [...ir.links].toSorted((a, b) => a.start - b.start)) {
+    for (const link of [...projected.links].toSorted((a, b) => a.start - b.start)) {
       if (link.start < cursor) {
         continue;
       }
@@ -48,11 +52,11 @@ export function renderMarkdownWithAttributedRanges<TStyle extends string>(
   }
   rendered = options.trimEnd ? rendered.trimEnd() : rendered;
 
-  const spans = ir.styles.flatMap((span) => {
+  const spans = projected.styles.flatMap((span) => {
     const style = options.styleMap[span.style];
     return style === undefined ? [] : [{ start: span.start, end: span.end, style }];
   });
-  for (const annotation of ir.annotations ?? []) {
+  for (const annotation of projected.annotations ?? []) {
     const style = options.annotationStyleMap?.[annotation.type];
     if (style !== undefined) {
       spans.push({ start: annotation.start, end: annotation.end, style });

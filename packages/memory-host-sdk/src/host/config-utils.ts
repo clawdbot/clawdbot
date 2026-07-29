@@ -104,7 +104,6 @@ type MemorySearchConfig = {
 /** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
-  memoryGetDefaultLines?: number;
 };
 
 /** Secret reference accepted by provider header config. */
@@ -266,7 +265,7 @@ function resolveStateDir(
   if (isFastTestRuntimeEnv(env) || fs.existsSync(nextDir)) {
     return nextDir;
   }
-  // Existing legacy state remains authoritative until an explicit migration creates .openclaw.
+  // Remove after 2026-10-01: drop legacy state-dir precedence once an explicit migration creates .openclaw.
   const existingLegacy = legacyStateDirs(effectiveHome).find((dir) => {
     try {
       return fs.existsSync(dir);

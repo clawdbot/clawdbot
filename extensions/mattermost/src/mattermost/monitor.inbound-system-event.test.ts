@@ -1,5 +1,6 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
@@ -88,6 +89,7 @@ const mockState = vi.hoisted(() => ({
   dispatchInboundMessage: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
+  getGlobalHookRunner: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   recordMattermostThreadParticipation: vi.fn(),
@@ -97,6 +99,11 @@ const mockState = vi.hoisted(() => ({
   runtimeCore: undefined as unknown,
   sendMessageMattermost: vi.fn(),
   updateMattermostPost: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  getGlobalHookRunner: mockState.getGlobalHookRunner,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
@@ -376,10 +383,18 @@ function createRuntimeCore(
         resolveInboundDebounceMs: () => overrides.inboundDebounceMs ?? 0,
         createInboundDebouncer:
           overrides.createInboundDebouncer ??
-          (<T>(params: { onFlush: (entries: T[]) => Promise<void> | void }) => ({
+          (<T>(params: {
+            onFlush: (
+              entries: T[],
+              createFlush: typeof createTestInboundDebounceFlush,
+            ) => { completion: Promise<void> };
+          }) => ({
             enqueue: async (entry: T) => {
-              await params.onFlush([entry]);
+              await params.onFlush([entry], createTestInboundDebounceFlush).completion;
             },
+            flushKey: async () => {},
+            cancelKey: () => false,
+            drain: async () => {},
           })),
       },
       groups: {
@@ -487,6 +502,7 @@ describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.abortController = undefined;
+    mockState.getGlobalHookRunner.mockReturnValue(null);
     mockState.runtimeCore = createRuntimeCore(testConfig);
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostDraftStream.mockReturnValue({
@@ -1293,8 +1309,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: "off",
-          blockStreaming: true,
+          streaming: { mode: "off", block: { enabled: true } },
         },
       },
     };
@@ -1327,6 +1342,82 @@ describe("mattermost inbound user posts", () => {
     const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(false);
     expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
+  });
+
+  it("preserves provider previews for observer-only hooks", async () => {
+    mockState.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+    });
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-observer-hook-preview",
+      message: "show a preview",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.createMattermostDraftStream).toHaveBeenCalledTimes(1);
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBe(true);
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
+  });
+
+  it.each([
+    { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
+    { label: "message_sending", hooks: ["message_sending"] },
+    {
+      label: "both modifying hooks",
+      hooks: ["reply_payload_sending", "message_sending"],
+    },
+  ])("suppresses provider previews when $label is registered", async ({ hooks }) => {
+    const registeredHooks = new Set(hooks);
+    mockState.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => registeredHooks.has(hookName)),
+    });
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: `post-${hooks.join("-")}-preview`,
+      message: "do not expose this preview",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
+    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBeUndefined();
+    expect(replyOptions?.onObservedReplyDelivery).toBeUndefined();
   });
 
   it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {

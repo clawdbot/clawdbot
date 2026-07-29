@@ -20,6 +20,7 @@ function runSubmitAction(
 
 export function createEditorSubmitHandler(params: {
   editor: {
+    getText?: () => string;
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
@@ -33,28 +34,36 @@ export function createEditorSubmitHandler(params: {
     reason: Exclude<TuiChatSubmitAdmission, "allowed">,
   ) => void;
 }) {
+  const clearSubmittedEditor = () => {
+    // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
+    if (!params.editor.getText?.()) {
+      params.editor.setText("");
+    }
+  };
+
   return (text: string) => {
     const raw = text;
     const value = raw.trim();
+    const multiline = raw.includes("\n");
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
-      params.editor.setText("");
+      clearSubmittedEditor();
       return;
     }
 
     // Bash mode: only if the very first character is '!' and it's not just '!'.
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
-      params.editor.setText("");
+    if (!multiline && raw.startsWith("!") && raw !== "!") {
+      clearSubmittedEditor();
       params.editor.addToHistory(raw);
       runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
       return;
     }
 
-    if (value.startsWith("/")) {
-      params.editor.setText("");
+    if (!multiline && value.startsWith("/")) {
+      clearSubmittedEditor();
       // Enable built-in editor prompt history navigation (up/down).
       params.editor.addToHistory(value);
       runSubmitAction("command", () => params.handleCommand(value), params.onSubmitError);
@@ -68,7 +77,7 @@ export function createEditorSubmitHandler(params: {
       return;
     }
 
-    params.editor.setText("");
+    clearSubmittedEditor();
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
     runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);

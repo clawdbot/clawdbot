@@ -18,6 +18,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import {
   claimWorkerTurn,
   latestDurableWorkspaceConflict,
@@ -34,6 +35,7 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
@@ -70,6 +72,7 @@ type WorkerTurnLauncherOptions = {
   admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
+  resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
   workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
@@ -172,6 +175,7 @@ async function executeWorkerTurn(params: {
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
+  localWorkspaceDir: string;
 }) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
@@ -216,7 +220,10 @@ async function executeWorkerTurn(params: {
       }
       const pending = journal.load();
       if (pending) {
-        await recoverWorkerWorkspaceReconciliation({ root: turn.workspaceDir, journal: pending });
+        await recoverWorkerWorkspaceReconciliation({
+          root: params.localWorkspaceDir,
+          journal: pending,
+        });
         journal.abort();
       }
     });
@@ -230,7 +237,8 @@ async function executeWorkerTurn(params: {
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
-  const manager = SessionManager.open(turn.sessionFile);
+  const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
+  const manager = SessionManager.open(transcriptTarget);
   const userMessageAlreadyPersisted =
     turn.suppressNextUserMessagePersistence === true ||
     turn.userTurnTranscriptRecorder?.hasPersisted() === true;
@@ -244,14 +252,14 @@ async function executeWorkerTurn(params: {
   let baseLeafId = manager.getLeafId();
   if (!userMessageAlreadyPersisted) {
     const persisted = turn.userTurnTranscriptRecorder
-      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: turn.workspaceDir })
+      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: params.localWorkspaceDir })
       : undefined;
     if (persisted) {
       baseLeafId = persisted.messageId;
       turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message);
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
-      baseLeafId = SessionManager.open(turn.sessionFile).getLeafId();
+      baseLeafId = SessionManager.open(transcriptTarget).getLeafId();
     } else if (!turn.userTurnTranscriptRecorder) {
       const message = {
         role: "user" as const,
@@ -285,10 +293,11 @@ async function executeWorkerTurn(params: {
     timeoutMs: turn.timeoutMs,
   });
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
+  const toolAuthority = resolveWorkerToolAuthority({ modelRef, turn });
   const descriptor = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
-        version: 1,
+        version: 2,
         socketPath: tunnel.remoteSocketPath,
         admission: {
           environmentId: placement.environmentId,
@@ -316,6 +325,7 @@ async function executeWorkerTurn(params: {
             ackedSeq: placement.lastLiveEventAckCursor ?? 0,
             nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
           },
+          toolAuthority,
         },
       }),
     initialMessages,
@@ -367,13 +377,17 @@ async function executeWorkerTurn(params: {
     throw new WorkerTurnExecutionError("Cloud worker turn failed");
   }
 
-  const completed = SessionManager.open(turn.sessionFile);
+  const completed = SessionManager.open(transcriptTarget);
   const currentPlacement = params.placements.get(placement.sessionId);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
   ) {
-    throw new Error("Cloud worker result does not match its committed transcript acknowledgement");
+    throw new Error(
+      `Cloud worker result does not match its committed transcript acknowledgement ` +
+        `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
+        `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
+    );
   }
   if (
     (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
@@ -426,7 +440,7 @@ async function executeWorkerTurn(params: {
       try {
         const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
         const reconciliation = await tunnel.reconcileWorkspace({
-          localPath: turn.workspaceDir,
+          localPath: params.localWorkspaceDir,
           remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
           baseManifestRef: currentPlacement.workspaceBaseManifestRef,
           journal,
@@ -457,10 +471,10 @@ async function executeWorkerTurn(params: {
           conflictPaths: applied?.conflictPaths ?? [],
           priorConflict: priorWorkspaceConflict,
           stagedResultRef: recordedStagedResultRef,
-          root: turn.workspaceDir,
+          root: params.localWorkspaceDir,
           report: async (report) => {
             if ("cleared" in report) {
-              SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+              SessionManager.open(transcriptTarget).appendCustomMessageEntry(
                 WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
                 "A later cloud workspace result superseded the previous conflict.",
                 false,
@@ -475,7 +489,7 @@ async function executeWorkerTurn(params: {
                 report.totalCount,
               ),
             };
-            SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+            SessionManager.open(transcriptTarget).appendCustomMessageEntry(
               WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
               workspaceConflict.summary,
               true,
@@ -490,7 +504,7 @@ async function executeWorkerTurn(params: {
         await settleStagedWorkspaceResult({
           placements: params.placements,
           turnClaim: params.turnClaim,
-          root: turn.workspaceDir,
+          root: params.localWorkspaceDir,
           stagedResultRef: recordedStagedResultRef,
           conflictRetained: finalized.conflictRetained,
           reclaim: false,
@@ -585,6 +599,9 @@ export function createWorkerSessionTurnPlacementProvider(
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);
       let placement = requireActivePlacement(routablePlacement);
+      // The placement owns the managed worktree. Callers can carry a default or stale
+      // workspace path, but remote results must only reconcile into that canonical root.
+      const localWorkspaceDir = await options.resolveWorkspacePath(identity);
       const admitted = await claimWorkerTurn({
         placements: options.placements,
         identity,
@@ -603,6 +620,7 @@ export function createWorkerSessionTurnPlacementProvider(
           },
           placement,
           placements: options.placements,
+          localWorkspaceDir,
           workspaceOperations,
           turn,
           turnClaim,

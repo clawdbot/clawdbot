@@ -37,7 +37,8 @@ world converges:
   Activity queues up as compact notices — coalesced per conversation, never
   one wake-up per message — and the agent sees them the next time it runs: on
   your next message or on a scheduled heartbeat. The agent can also read the
-  sessions it watches, so "what did I miss in the family group?" works.
+  sessions it watches — its system prompt names them — so "what did I miss in
+  the family group?" works.
 - **Background work.** Sub-agents and spawned sessions announce their results
   back to the session that started them, so work the agent kicked off from
   Home reports back to Home.

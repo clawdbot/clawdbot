@@ -85,7 +85,7 @@ not overwrite the existing skill.
   options keep their current values.
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
-- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. When an interactive import supplies a default model, onboarding requires that route to pass a live completion before it skips provider setup; a failed imported route returns to provider configuration. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
 - `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
 - `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`: explicitly control whether Tailscale Serve or Funnel configuration is reset when the Gateway exits. Omitting both preserves the current setting during non-interactive reruns.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
@@ -291,7 +291,7 @@ openclaw onboard --non-interactive \
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
 - `--install-daemon` starts the managed gateway install path first. Without it, a local gateway must already be running (for example `openclaw gateway run`).
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
-- `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`.
+- `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
 
 ### Interactive ref mode

@@ -18,6 +18,7 @@ type NavigationItem = {
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
+  "dashboards",
   "usage",
   "cron",
   "tasks",
@@ -56,7 +57,7 @@ export type SidebarZoneEntry =
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["usage", "cron", "plugins"].map((route) =>
+export const DEFAULT_SIDEBAR_ENTRIES = ["cron", "plugins"].map((route) =>
   serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
 );
 
@@ -132,6 +133,7 @@ type SettingsNavigationGroup = {
 export type SettingsSearchBlock = {
   routeId: RouteId;
   label: string;
+  pathname?: string;
   search?: string;
   hash: string;
 };
@@ -160,8 +162,8 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value);
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
     return false;
   }
@@ -179,11 +181,11 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "config", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "nodes"],
+    routes: ["connection", "channels", "communications", "talk", "nodes"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "automation"],
+    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -198,7 +200,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 // Settings subpages render with settings chrome but stay out of the sidebar:
 // model setup is reached from the Models page ("Run setup"). The sidebar
 // highlights nothing for them; search still deep-links via their owning page.
-const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup", "lobsterdex"];
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -223,13 +225,18 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  dashboard: "layoutDashboard",
+  dashboards: "layoutDashboard",
   custodian: "lobster",
   config: "settings",
   profile: "circleUser",
   communications: "send",
   appearance: "palette",
+  lobsterdex: "bug",
   automation: "terminal",
   mcp: "wrench",
+  memory: "book",
+  talk: "mic",
   infrastructure: "globe",
   labs: "flaskConical",
   about: "fileText",
@@ -323,6 +330,8 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
@@ -331,8 +340,11 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.communications",
   },
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
+  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
+  memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
+  talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
@@ -357,6 +369,32 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
 
 export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
+}
+
+/** Window/tab title, markers leftmost because tabs truncate from the right.
+ * Offline replaces the approval count (a stale queue is not actionable) and
+ * carries the pending-outbox total; titles already ending in the brand
+ * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+export function formatDocumentTitle(options: {
+  context: string;
+  attentionCount?: number;
+  offline?: boolean;
+  queuedCount?: number;
+}): string {
+  const base = options.context.endsWith("OpenClaw")
+    ? options.context
+    : `${options.context} — OpenClaw`;
+  if (options.offline) {
+    const queued =
+      options.queuedCount && options.queuedCount > 0
+        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
+        : "";
+    return `(${t("common.offline")}${queued}) ${base}`;
+  }
+  if (options.attentionCount && options.attentionCount > 0) {
+    return `(${options.attentionCount}) ${base}`;
+  }
+  return base;
 }
 
 /**

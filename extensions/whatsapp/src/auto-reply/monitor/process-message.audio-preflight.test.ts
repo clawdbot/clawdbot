@@ -290,13 +290,14 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: "okay let's test this voice message",
-      MediaTranscribedIndexes: [0],
-    });
-    // mediaPath and mediaType must be preserved so inboundAudio detection (used by
-    // features like tts.auto: "inbound") still recognises this as audio.
-    expectContextFields(context, {
-      MediaPath: "/tmp/voice.ogg",
-      MediaType: "audio/ogg; codecs=opus",
+      media: [
+        expect.objectContaining({
+          path: "/tmp/voice.ogg",
+          contentType: "audio/ogg; codecs=opus",
+          kind: "audio",
+          transcribed: true,
+        }),
+      ],
     });
   });
 
@@ -370,7 +371,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: "/new start a new session",
-      MediaTranscribedIndexes: [0],
+      media: [expect.objectContaining({ kind: "audio", transcribed: true })],
     });
   });
 
@@ -390,7 +391,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "",
       RawBody: "",
       Transcript: "pre-computed transcript from fan-out caller",
-      MediaTranscribedIndexes: [0],
+      media: [expect.objectContaining({ kind: "audio", transcribed: true })],
     });
   });
 

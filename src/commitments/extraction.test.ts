@@ -161,9 +161,9 @@ describe("commitment extraction", () => {
       ],
     });
 
-    expect(prompt).toContain('"now": "2026-05-30T12:00:00.000Z"');
-    expect(prompt).toContain('"dedupeKey": "valid"');
-    expect(prompt).not.toContain('"dedupeKey": "invalid"');
+    expect(prompt).toContain('"now":"2026-05-30T12:00:00.000Z"');
+    expect(prompt).toContain('"dedupeKey":"valid"');
+    expect(prompt).not.toContain('"dedupeKey":"invalid"');
   });
 
   it("rejects disabled, low-confidence, and non-future candidates", () => {

@@ -13,8 +13,8 @@
     "fake-indexeddb": "6.2.5",
     "markdown-it": "14.3.0",
     "matrix-js-sdk": "41.9.0-rc.0",
-    "music-metadata": "11.13.0",
-    "typebox": "1.3.3",
+    "music-metadata": "11.14.0",
+    "typebox": "1.3.6",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -55,7 +55,9 @@
           ]
         }
       },
-      "approvalFlags": ["native"],
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Matrix",
       "selectionLabel": "Matrix (plugin)",
       "docsPath": "/channels/matrix",

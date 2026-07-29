@@ -740,6 +740,13 @@
   overflow: hidden;
 }
 
+/* MCP Apps are responsive documents, so give them the assistant column instead
+   of letting the content-sized reply bubble collapse their iframe to ~300px. */
+.chat-group.assistant .chat-bubble:has(> .chat-tool-card__preview[data-content-kind="mcp-app"]) {
+  align-self: stretch;
+  width: 100%;
+}
+
 .chat-tool-card__preview-header {
   display: flex;
   align-items: center;
@@ -1130,11 +1137,11 @@
    18px because the claw is denser than a star glyph. The row settles into
    stance once, then the solid claw carries the ongoing working signal. The
    default cycle is two jaw snips with a sympathetic body flex — no lateral
-   travel, that read as too busy. The old jab-jab-cross shadowbox combo
-   survives only as the rare --shadowbox stance. --claw-cycle drives every
-   animation so stance variants only retune the tempo. */
+   travel, that read as too busy. Rare surprise moves layer over this loop
+   once after a short delay, then the default loop resumes. */
 .chat-reading-indicator {
   --claw-cycle: 2.4s;
+  --claw-surprise-delay: 4.8s;
 
   position: relative;
   display: inline-flex;
@@ -1163,6 +1170,17 @@
   color: var(--muted);
 }
 
+.chat-working-indicator--continuation {
+  gap: 6px;
+  min-height: 0;
+  margin-top: 4px;
+}
+
+.chat-turn-recap--continuation {
+  margin-bottom: 0;
+  font-size: var(--control-ui-text-sm);
+}
+
 .chat-reading-indicator svg {
   width: 18px;
   height: 18px;
@@ -1185,8 +1203,7 @@
   will-change: transform;
 }
 
-/* Pow star: shadowbox-only, pops at the cross impact (46-58% of the combo
-   cycle). */
+/* Pow star: the one-shot shadowbox surprise pops at the cross impact. */
 .chat-reading-indicator--shadowbox::after {
   content: "✦";
   position: absolute;
@@ -1196,7 +1213,7 @@
   line-height: 1;
   color: var(--accent);
   opacity: 0;
-  animation: chatWorkingClawPow var(--claw-cycle) ease-out infinite;
+  animation: chatWorkingClawPow 1.2s ease-out var(--claw-surprise-delay) 1;
   pointer-events: none;
 }
 
@@ -1214,68 +1231,6 @@
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
-  }
-}
-
-/* Default stance: the body flexes in place in sympathy with the jaw — pure
-   rotation, no translate, so the claw works without pacing around. Snip 1 at
-   10-16%, snip 2 at 26-32%, then rest. */
-@keyframes chatWorkingClawFlex {
-  0%,
-  6% {
-    transform: rotate(0deg);
-  }
-
-  10% {
-    transform: rotate(-4deg);
-  }
-
-  16% {
-    transform: rotate(3deg);
-  }
-
-  22%,
-  26% {
-    transform: rotate(-4deg);
-  }
-
-  32% {
-    transform: rotate(3deg);
-  }
-
-  42%,
-  100% {
-    transform: rotate(0deg);
-  }
-}
-
-/* Jaw opens wide on each wind-up and snaps shut on the snip frames above. */
-@keyframes chatWorkingClawSnip {
-  0%,
-  6% {
-    transform: rotate(-10deg);
-  }
-
-  10% {
-    transform: rotate(-26deg);
-  }
-
-  16% {
-    transform: rotate(4deg);
-  }
-
-  22%,
-  26% {
-    transform: rotate(-24deg);
-  }
-
-  32% {
-    transform: rotate(4deg);
-  }
-
-  42%,
-  100% {
-    transform: rotate(-10deg);
   }
 }
 
@@ -1383,75 +1338,96 @@
   }
 }
 
-/* Seeded stance variants (see stanceClass in chat-working-indicator.ts): the
-   southpaw claws mirrored, the flurry snips double-time, the spin does a
-   fake-3D turntable revolve while snipping, the shadowbox brings back the
-   full jab-jab-cross combo with the pow star, the backflip throws a single
-   in-place somersault, the zen breathes through one long meditative snip,
-   the drummer rocks a two-beat rhythm, and the rarest peekaboo ducks away
-   and pops back wide open. */
+/* Seeded one-shot surprises (see selectWorkingClawSurprise): the default claw
+   keeps working until one move takes over briefly, then resumes afterward. */
 .chat-reading-indicator--southpaw {
-  transform: scaleX(-1);
+  animation: chatWorkingClawSouthpaw 1.2s ease-in-out var(--claw-surprise-delay) 1;
 }
 
-.chat-reading-indicator--flurry {
-  --claw-cycle: 1.3s;
+.chat-reading-indicator--flurry svg {
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawFlex 650ms ease-out var(--claw-surprise-delay) 2;
 }
 
-.chat-reading-indicator--spin {
-  --claw-cycle: 3.6s;
+.chat-reading-indicator--flurry svg .claw-icon__jaw {
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawSnip 650ms ease-out var(--claw-surprise-delay) 2;
 }
 
 /* Fake 3D: perspective() + rotateY reads as a spinning coin at 18px. Linear
-   timing keeps the revolve steady; the jaw keeps its snip cycle on top. */
+   timing keeps the single revolve steady; the jaw keeps its snip cycle. */
 .chat-reading-indicator--spin svg {
-  animation-name: chatWorkingClawSpin;
-  animation-timing-function: linear;
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawSpin 900ms linear var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--shadowbox svg {
-  animation-name: chatWorkingClawCombo;
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawCombo 1.2s ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--shadowbox svg .claw-icon__jaw {
-  animation-name: chatWorkingClawJaw;
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawJaw 1.2s ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--backflip svg {
-  animation-name: chatWorkingClawBackflip;
-}
-
-.chat-reading-indicator--zen {
-  --claw-cycle: 6s;
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawBackflip 900ms ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--zen svg {
-  animation-name: chatWorkingClawZenBreath;
-  animation-timing-function: ease-in-out;
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawZenBreath 2.4s ease-in-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--zen svg .claw-icon__jaw {
-  animation-name: chatWorkingClawZenSnip;
-}
-
-.chat-reading-indicator--drummer {
-  --claw-cycle: 1.2s;
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawZenSnip 2.4s ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--drummer svg {
-  animation-name: chatWorkingClawDrumRock;
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawDrumRock 1.2s ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--drummer svg .claw-icon__jaw {
-  animation-name: chatWorkingClawDrumHit;
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawDrumHit 1.2s ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--peekaboo svg {
-  animation-name: chatWorkingClawPeekaboo;
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawPeekaboo 1.2s ease-out var(--claw-surprise-delay) 1;
 }
 
 .chat-reading-indicator--peekaboo svg .claw-icon__jaw {
-  animation-name: chatWorkingClawPeekabooJaw;
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawPeekabooJaw 1.2s ease-out var(--claw-surprise-delay) 1;
+}
+
+@keyframes chatWorkingClawSouthpaw {
+  0%,
+  100% {
+    transform: scaleX(1);
+  }
+
+  20%,
+  80% {
+    transform: scaleX(-1);
+  }
 }
 
 @keyframes chatWorkingClawSpin {
@@ -1629,6 +1605,9 @@
     animation: none;
   }
 
+  /* Includes the bubble itself: the southpaw surprise animates the bubble,
+     not the svg, and must stay still under reduced motion too. */
+  .chat-reading-indicator,
   .chat-reading-indicator svg,
   .chat-reading-indicator svg .claw-icon__jaw {
     animation: none;

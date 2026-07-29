@@ -331,7 +331,11 @@ describe("session suspension", () => {
     vi.useFakeTimers();
     sessionAccessorMocks.patchSessionEntry.mockRejectedValueOnce(new Error("disk busy"));
 
-    await suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    await suspendLane(
+      100,
+      { agents: { defaults: { maxConcurrent: 4 } } } as OpenClawConfig,
+      CommandLane.Main,
+    );
 
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
     await vi.advanceTimersByTimeAsync(100);

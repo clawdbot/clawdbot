@@ -4,6 +4,7 @@ import {
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getMattermostRuntime } from "../runtime.js";
@@ -30,65 +31,6 @@ export type MattermostIngressLifecycle = {
   onAbandoned: () => void | Promise<void>;
 };
 
-/** Fan one merged Mattermost turn's adoption lifecycle across every source claim. */
-export function buildMattermostFlushIngressLifecycle(
-  entries: ReadonlyArray<{ turnAdoptionLifecycle?: MattermostIngressLifecycle }>,
-): {
-  lifecycle: MattermostIngressLifecycle | undefined;
-  settle: () => Promise<void>;
-} {
-  const lifecycles = entries
-    .map((entry) => entry.turnAdoptionLifecycle)
-    .filter((lifecycle) => lifecycle !== undefined);
-  const [firstLifecycle] = lifecycles;
-  if (!firstLifecycle) {
-    return { lifecycle: undefined, settle: async () => {} };
-  }
-  let handedOff = false;
-  const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
-    }
-  };
-  return {
-    lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? firstLifecycle.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-      onAdopted: async () => {
-        handedOff = true;
-        await adoptAll();
-      },
-      onDeferred: () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
-      },
-      onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-      },
-      onAbandoned: async () => {
-        handedOff = true;
-        await Promise.all(
-          lifecycles.map(async (lifecycle) => {
-            await lifecycle.onAbandoned();
-          }),
-        );
-      },
-    },
-    // Gated/no-dispatch turns are terminal and must not leave source claims deferred.
-    settle: async () => {
-      if (!handedOff) {
-        await adoptAll();
-      }
-    },
-  };
-}
-
 type MattermostIngressPayload = {
   version: 1;
   receivedAt: number;
@@ -112,10 +54,6 @@ class MattermostIngressPermanentError extends Error {
     super(message, options);
     this.name = "MattermostIngressPermanentError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseRawObject(raw: string, subject: string): Record<string, unknown> {

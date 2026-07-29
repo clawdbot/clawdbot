@@ -4,13 +4,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  persistTranscriptStateMutation,
-  readTranscriptFileState,
-} from "./transcript-file-state.js";
-import { rewriteTranscriptEntriesInState } from "./transcript-rewrite.js";
+import { parseSessionEntries, SessionManager } from "../sessions/index.js";
 
 const roots: string[] = [];
+
+async function readTranscriptState(sessionFile: string): Promise<SessionManager> {
+  return SessionManager.fromEntries(parseSessionEntries(await fs.readFile(sessionFile, "utf8")));
+}
+
+async function persistTranscriptStateMutation(params: {
+  sessionFile: string;
+  state: SessionManager;
+  appendedEntries: unknown[];
+}): Promise<void> {
+  const entries = params.state.migrated
+    ? params.state.getPersistedEntries()
+    : params.appendedEntries;
+  const content = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+  if (params.state.migrated) {
+    await fs.writeFile(params.sessionFile, content, "utf8");
+  } else {
+    await fs.appendFile(params.sessionFile, content, "utf8");
+  }
+}
 
 async function makeRoot(prefix: string): Promise<string> {
   // Each file-state case writes a full JSONL transcript under its own root so
@@ -24,7 +40,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
-describe("readTranscriptFileState", () => {
+describe("readTranscriptState", () => {
   it("normalizes appended session names to one line", async () => {
     const root = await makeRoot("openclaw-transcript-state-name-");
     const sessionFile = path.join(root, "session.jsonl");
@@ -39,11 +55,11 @@ describe("readTranscriptFileState", () => {
       })}\n`,
       "utf-8",
     );
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
-    const entry = state.appendSessionInfo("  first\nsecond\r\nthird  ");
+    const entry = state.getEntry(state.appendSessionInfo("  first\nsecond\r\nthird  "))!;
 
-    expect(entry.name).toBe("first second third");
+    expect(entry).toMatchObject({ name: "first second third" });
     expect(state.getEntries().at(-1)).toMatchObject({ name: "first second third" });
   });
 
@@ -160,7 +176,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual([
       "user-1",
@@ -209,7 +225,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1", "assistant-string"]);
     expect(state.buildSessionContext().messages).toMatchObject([
@@ -276,7 +292,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual([
       "user-1",
@@ -349,7 +365,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const messages = state.buildSessionContext().messages;
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual([
@@ -403,7 +419,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual([
       "user-1",
@@ -439,7 +455,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1"]);
     expect(state.getLeafId()).toBe("user-1");
@@ -475,7 +491,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.migrated).toBe(true);
     expect(state.getEntries()).toHaveLength(2);
@@ -514,13 +530,11 @@ describe("readTranscriptFileState", () => {
       "utf8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const activeLeafId = state.getLeafId();
-    const appended = state.appendMessage({
-      role: "user",
-      content: "continued",
-      timestamp: Date.now(),
-    });
+    const appended = state.getEntry(
+      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+    )!;
     await persistTranscriptStateMutation({
       sessionFile,
       state,
@@ -529,7 +543,7 @@ describe("readTranscriptFileState", () => {
 
     expect(state.migrated).toBe(true);
     expect(appended.parentId).toBe(activeLeafId);
-    const reopened = await readTranscriptFileState(sessionFile);
+    const reopened = await readTranscriptState(sessionFile);
     expect(reopened.getBranch().map((entry) => entry.id)).toEqual([activeLeafId, appended.id]);
   });
 
@@ -568,7 +582,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const kept = state
       .getEntries()
       .find(
@@ -625,7 +639,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual(["user-1", "user-2"]);
     expect(state.getLeafId()).toBe("user-2");
@@ -679,7 +693,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const compaction = state.getEntries().find((entry) => entry.type === "compaction");
 
     expect(compaction).toMatchObject({ firstKeptEntryId: "user-1" });
@@ -737,7 +751,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const compaction = state.getEntries().find((entry) => entry.type === "compaction");
 
     expect(compaction).toMatchObject({ firstKeptEntryId: "user-1" });
@@ -802,7 +816,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const compaction = state.getEntries().find((entry) => entry.type === "compaction");
 
     expect(compaction).toMatchObject({ firstKeptEntryId: "user-1" });
@@ -867,7 +881,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     const compaction = state.getEntries().find((entry) => entry.type === "compaction");
 
     expect(compaction).toMatchObject({ firstKeptEntryId: "branch-b-user" });
@@ -909,7 +923,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual(
       [{ id: "user-1", parentId: null }],
@@ -949,7 +963,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getBranch().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual([
       { id: "active-entry", parentId: null },
@@ -957,12 +971,10 @@ describe("readTranscriptFileState", () => {
     expect(state.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "kept through cycle" },
     ]);
-    const appended = state.appendMessage({
-      role: "user",
-      content: "continued",
-      timestamp: Date.now(),
-    });
-    expect(appended.parentId).toBe("opaque-cycle");
+    const appended = state.getEntry(
+      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+    )!;
+    expect(appended.parentId).toBe("active-entry");
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-entry", appended.id]);
   });
 
@@ -997,23 +1009,12 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual(
       [{ id: "user-1", parentId: null }],
     );
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
-    expect(() =>
-      rewriteTranscriptEntriesInState({
-        state,
-        replacements: [
-          {
-            entryId: "user-1",
-            message: { role: "user", content: "replacement prompt", timestamp: 1 },
-          },
-        ],
-      }),
-    ).not.toThrow();
   });
 
   it("drops labels targeting rejected entries before transcript rewrite replay", async () => {
@@ -1069,7 +1070,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual(
       [
@@ -1079,17 +1080,6 @@ describe("readTranscriptFileState", () => {
       ],
     );
     expect(state.getLabel("bad-message")).toBeUndefined();
-    expect(() =>
-      rewriteTranscriptEntriesInState({
-        state,
-        replacements: [
-          {
-            entryId: "user-1",
-            message: { role: "user", content: "replacement prompt", timestamp: 1 },
-          },
-        ],
-      }),
-    ).not.toThrow();
   });
 
   it("applies leaf controls to active state and marker-linked descendants", async () => {
@@ -1131,7 +1121,7 @@ describe("readTranscriptFileState", () => {
       "utf8",
     );
 
-    const selectedState = await readTranscriptFileState(sessionFile);
+    const selectedState = await readTranscriptState(sessionFile);
     expect(selectedState.getLeafId()).toBe(rootEntry.id);
     expect(selectedState.getBranch().map((entry) => entry.id)).toEqual([rootEntry.id]);
 
@@ -1144,7 +1134,7 @@ describe("readTranscriptFileState", () => {
     };
     await fs.appendFile(sessionFile, `${JSON.stringify(replacementEntry)}\n`, "utf8");
 
-    const reopened = await readTranscriptFileState(sessionFile);
+    const reopened = await readTranscriptState(sessionFile);
     expect(reopened.getEntries().find((entry) => entry.id === replacementEntry.id)).toEqual(
       expect.objectContaining({ parentId: rootEntry.id }),
     );
@@ -1192,23 +1182,8 @@ describe("readTranscriptFileState", () => {
       "utf8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1", "assistant-1"]);
-
-    rewriteTranscriptEntriesInState({
-      state,
-      replacements: [
-        {
-          entryId: "user-1",
-          message: { role: "user", content: "rewritten question", timestamp: 3 },
-        },
-      ],
-    });
-
-    expect(state.buildSessionContext().messages).toMatchObject([
-      { role: "user", content: "rewritten question" },
-      { role: "assistant", content: [{ type: "text", text: "answer" }] },
-    ]);
   });
 
   it("preserves marked side ancestry without capturing the next active append", async () => {
@@ -1261,7 +1236,7 @@ describe("readTranscriptFileState", () => {
       "utf8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getBranch("side-two").map((entry) => entry.id)).toEqual([
       "active-root",
@@ -1273,11 +1248,9 @@ describe("readTranscriptFileState", () => {
     expect(state.getAppendParentId()).toBe("side-two");
     expect(state.getAppendMode()).toBe("side");
 
-    const nextUser = state.appendMessage({
-      role: "user",
-      content: "next question",
-      timestamp: Date.now(),
-    });
+    const nextUser = state.getEntry(
+      state.appendMessage({ role: "user", content: "next question", timestamp: Date.now() }),
+    )!;
     expect(state.getBranch(nextUser.id).map((entry) => entry.id)).toEqual([
       "active-root",
       nextUser.id,
@@ -1331,12 +1304,10 @@ describe("readTranscriptFileState", () => {
       "utf8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
-    const appended = state.appendMessage({
-      role: "user",
-      content: "continued",
-      timestamp: Date.now(),
-    });
+    const state = await readTranscriptState(sessionFile);
+    const appended = state.getEntry(
+      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+    )!;
     await persistTranscriptStateMutation({
       sessionFile,
       state,
@@ -1348,9 +1319,9 @@ describe("readTranscriptFileState", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>);
 
     expect(state.getLeafId()).toBe(appended.id);
-    expect(appended.parentId).toBe("plugin-metadata");
+    expect(appended.parentId).toBe("active-root");
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
-    expect(persisted.at(-1)).toMatchObject({ id: appended.id, parentId: "plugin-metadata" });
+    expect(persisted.at(-1)).toMatchObject({ id: appended.id, parentId: "active-root" });
   });
 
   it("ignores leaf controls with dangling target or append references", async () => {
@@ -1400,21 +1371,19 @@ describe("readTranscriptFileState", () => {
       "utf8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
-    const appended = state.appendMessage({
-      role: "user",
-      content: "continued",
-      timestamp: Date.now(),
-    });
+    const state = await readTranscriptState(sessionFile);
+    const appended = state.getEntry(
+      state.appendMessage({ role: "user", content: "continued", timestamp: Date.now() }),
+    )!;
     await persistTranscriptStateMutation({
       sessionFile,
       state,
       appendedEntries: [appended],
     });
 
-    expect(appended.parentId).toBe("plugin-metadata");
+    expect(appended.parentId).toBe("active-root");
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
-    const reopened = await readTranscriptFileState(sessionFile);
+    const reopened = await readTranscriptState(sessionFile);
     expect(reopened.getLeafId()).toBe(appended.id);
     expect(reopened.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
   });
@@ -1448,7 +1417,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     expect(state.getEntries().map((entry) => entry.id)).toEqual(["legacy-root", "tree-child"]);
     expect(state.getLeafId()).toBe("tree-child");
@@ -1487,7 +1456,7 @@ describe("readTranscriptFileState", () => {
       "utf-8",
     );
 
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
 
     const branchText = state.getBranch().map((entry) => {
       const message = entry.type === "message" ? entry.message : null;

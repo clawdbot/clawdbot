@@ -298,13 +298,13 @@ complete until `main` carries the actual shipped release state.
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Set `main` to the shipped stable version, not a speculative next train. Run
    `pnpm release:prep` after the root version change, then
-   `pnpm deps:shrinkwrap:generate`.
+   `pnpm deps:npm-lock:check`.
 3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
    tagged release branch. Include the stable `appcast.xml` update when the mac
    release published one.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
-5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
    `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
    contains the shipped version and changelog before calling the stable release
    done.
@@ -1057,7 +1057,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
     `preflight_run_id` plus the successful `full_release_validation_run_id` and
-    its exact `full_release_validation_run_attempt`.
+    its exact `full_release_validation_run_attempt`. Preserve the immutable evidence pair as
+    `full_release_validation_run_id=<saved-run-id>` and
+    `full_release_validation_run_attempt=<saved-attempt>`.
     For stable publish, also pass the exact non-prerelease
     `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
     candidate-approved installer digest map as `windows_node_installer_digests`.

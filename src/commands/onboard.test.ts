@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { setupWizardCommand } from "./onboard.js";
 
@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
   runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
-  resolvePluginProviders: vi.fn(() => [
+  resolvePluginProviders: vi.fn((): ProviderPlugin[] => [
     {
       id: "anthropic",
       label: "Anthropic",
@@ -126,6 +126,47 @@ function expectResetCall(params: { scope: string; runtime: RuntimeEnv; workspace
     expect(typeof call[1]).toBe("string");
   }
   expect(call[2]).toBe(params.runtime);
+}
+
+const localResetProviderCases = [
+  { providerId: "ollama", methodId: "local" },
+  { providerId: "lmstudio", methodId: "custom" },
+] as const;
+
+function mockLocalResetPreflight(params: {
+  providerId: (typeof localResetProviderCases)[number]["providerId"];
+  methodId: (typeof localResetProviderCases)[number]["methodId"];
+  validationResult: boolean;
+}) {
+  const validateNonInteractive = vi.fn(
+    async (ctx: ProviderAuthMethodNonInteractiveValidationContext) => {
+      if (!params.validationResult) {
+        ctx.runtime.error("Local provider preflight failed");
+        ctx.runtime.exit(1);
+      }
+      return params.validationResult;
+    },
+  );
+  const runNonInteractive = vi.fn(async () => ({}));
+
+  mocks.resolvePluginProviders.mockReturnValueOnce([
+    {
+      id: params.providerId,
+      label: params.providerId === "ollama" ? "Ollama" : "LM Studio",
+      auth: [
+        {
+          id: params.methodId,
+          label: "Local provider",
+          kind: "custom",
+          run: vi.fn(async () => ({ profiles: [] })),
+          runNonInteractive,
+          validateNonInteractive,
+        },
+      ],
+    },
+  ]);
+
+  return { runNonInteractive, validateNonInteractive };
 }
 
 describe("setupWizardCommand", () => {
@@ -336,6 +377,26 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it("rejects --reset-scope without --reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        resetScope: "full",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--reset-scope requires --reset. Re-run with openclaw onboard --reset --reset-scope full.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
   it("fails fast for invalid non-interactive --mode before reset", async () => {
     const runtime = makeRuntime();
 
@@ -410,6 +471,16 @@ describe("setupWizardCommand", () => {
       label: "non-WebSocket remote URL",
       options: { mode: "remote" as const, remoteUrl: "https://example.invalid" },
       expectedError: "URL must start with ws:// or wss://",
+    },
+    {
+      label: "remote URL in local mode",
+      options: { mode: "local" as const, remoteUrl: "wss://gateway.example.invalid" },
+      expectedError: "--remote-url requires --mode remote in non-interactive setup.",
+    },
+    {
+      label: "remote token in default local mode",
+      options: { remoteToken: "fixture-token" },
+      expectedError: "--remote-token requires --mode remote in non-interactive setup.",
     },
     {
       label: "unsupported daemon runtime while daemon install is skipped",
@@ -590,6 +661,79 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it.each(localResetProviderCases)(
+    "validates $providerId exactly once before reset and non-interactive setup",
+    async ({ providerId, methodId }) => {
+      const runtime = makeRuntime();
+      const { runNonInteractive, validateNonInteractive } = mockLocalResetPreflight({
+        providerId,
+        methodId,
+        validationResult: true,
+      });
+
+      await setupWizardCommand(
+        {
+          reset: true,
+          nonInteractive: true,
+          acceptRisk: true,
+          authChoice: providerId,
+        },
+        runtime,
+      );
+
+      expect(validateNonInteractive).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          authChoice: providerId,
+          config: {},
+          baseConfig: {},
+          opts: expect.objectContaining({ reset: true, nonInteractive: true }),
+          runtime,
+        }),
+      );
+      expect(mocks.handleReset).toHaveBeenCalledOnce();
+      expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
+      expect(runNonInteractive).not.toHaveBeenCalled();
+
+      const validationCall = validateNonInteractive.mock.invocationCallOrder.at(0);
+      const resetCall = mocks.handleReset.mock.invocationCallOrder.at(0);
+      const setupCall = mocks.runNonInteractiveSetup.mock.invocationCallOrder.at(0);
+      if (validationCall === undefined || resetCall === undefined || setupCall === undefined) {
+        throw new Error("Expected local provider validation, reset, and onboarding setup");
+      }
+      expect(validationCall).toBeLessThan(resetCall);
+      expect(resetCall).toBeLessThan(setupCall);
+    },
+  );
+
+  it.each(localResetProviderCases)(
+    "never resets or starts setup when $providerId validation fails",
+    async ({ providerId, methodId }) => {
+      const runtime = makeRuntime();
+      const { runNonInteractive, validateNonInteractive } = mockLocalResetPreflight({
+        providerId,
+        methodId,
+        validationResult: false,
+      });
+
+      await setupWizardCommand(
+        {
+          reset: true,
+          nonInteractive: true,
+          acceptRisk: true,
+          authChoice: providerId,
+        },
+        runtime,
+      );
+
+      expect(validateNonInteractive).toHaveBeenCalledOnce();
+      expect(runtime.error).toHaveBeenCalledWith("Local provider preflight failed");
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+      expect(runNonInteractive).not.toHaveBeenCalled();
+    },
+  );
+
   it("validates a provider-specific API key before reset", async () => {
     const runtime = makeRuntime();
     vi.stubEnv("ANTHROPIC_API_KEY", "");
@@ -745,6 +889,20 @@ describe("setupWizardCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting TUI and non-interactive modes", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ tui: true, nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();

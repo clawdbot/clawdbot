@@ -43,6 +43,8 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
+import type { SessionManager } from "../../sessions/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -68,6 +70,8 @@ export type CurrentInboundPromptContext = {
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Caller-owned in-memory transcript for ephemeral helper runs. */
+  sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -151,6 +155,8 @@ export type RunEmbeddedAgentParams = {
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
   skillWorkshopProposalOnly?: boolean;
+  /** Mark proposals created by this internal review as autonomous captures. */
+  skillWorkshopAutonomousCapture?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */
@@ -236,6 +242,8 @@ export type RunEmbeddedAgentParams = {
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Trusted in-process subagent-completion handoff; never derived from public input. */
   trustedInternalHandoff?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */

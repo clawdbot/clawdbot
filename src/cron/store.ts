@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   openOpenClawStateDatabase,
@@ -64,6 +64,15 @@ export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.Process
   return resolveDefaultCronStorePath(env);
 }
 
+/** Resolves the active cron partition from runtime config and environment. */
+export function resolveCronJobsStorePathFromConfig(
+  cfg: { cron?: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const store = (cfg.cron as { store?: unknown } | undefined)?.store;
+  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
+}
+
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
 export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
   const resolvedStorePath = path.resolve(storePath);
@@ -103,15 +112,15 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
 /** Loads cron jobs from an existing SQLite store without creating or migrating state. */
 export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedCronStore> {
-  const statePath = resolveOpenClawStateSqlitePath(process.env);
+  const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
     return emptyLoadedCronStore();
   }
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(statePath, { readOnly: true });
+  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
   try {
     if (!tableExists(db, "cron_jobs")) {
       return emptyLoadedCronStore();

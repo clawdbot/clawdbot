@@ -59,6 +59,8 @@ const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
+    path.join(ROOT, "apps", "android", "app", "src", "play"),
+    path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
     path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),
   ],
   apple: [
@@ -173,6 +175,38 @@ const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
+// These files emit mobile.ui protocol evidence, not UI copy. Keep their text verbatim so
+// developer-screen diagnostics match the agent-facing action results and snapshot refs.
+const ANDROID_NATIVE_I18N_EXCLUDED_FILES = new Set([
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilityActionExecutor.kt",
+  ),
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilitySnapshotter.kt",
+  ),
+]);
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -1115,6 +1149,7 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
+        !ANDROID_NATIVE_I18N_EXCLUDED_FILES.has(fullPath) &&
         !EXCLUDED_FILE_RE.test(entry.name) &&
         !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]

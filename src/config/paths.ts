@@ -93,6 +93,33 @@ export function resolveStateDir(
   return newDir;
 }
 
+function normalizeStateDirForComparison(stateDir: string): string {
+  const resolved = path.resolve(stateDir);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    // Missing paths have no filesystem identity yet; exact resolution is the safe fallback.
+    return resolved;
+  }
+}
+
+/** Whether the process uses the default home-scoped state directory. */
+export function isDefaultStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): boolean {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    // Preserve the default install path, including automatic legacy-state discovery.
+    return true;
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  return (
+    normalizeStateDirForComparison(resolveStateDir(env, effectiveHomedir)) ===
+    normalizeStateDirForComparison(newStateDir(effectiveHomedir))
+  );
+}
+
 export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
   const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();
@@ -303,15 +330,7 @@ export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
   return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
 }
 
-const OAUTH_FILENAME = "oauth.json";
-
-/**
- * OAuth credentials storage directory.
- *
- * Precedence:
- * - `OPENCLAW_OAUTH_DIR` (explicit override)
- * - `$*_STATE_DIR/credentials` (canonical server/default)
- */
+/** Resolves the legacy credentials directory retained for Doctor and backup ownership. */
 export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
@@ -321,13 +340,6 @@ export function resolveOAuthDir(
     return resolveUserPath(override, env, envHomedir(env));
   }
   return path.join(stateDir, "credentials");
-}
-
-export function resolveOAuthPath(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
-): string {
-  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
 function parseGatewayPortEnvValue(raw: string | undefined): number | null {

@@ -5,6 +5,89 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TailscaleIntegrationSectionTests {
+    @Test func `cli installation requires an executable candidate`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let executable = tempDir.appendingPathComponent("tailscale")
+        let nonExecutable = tempDir.appendingPathComponent("tailscaled")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        try Data().write(to: executable)
+        try Data().write(to: nonExecutable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        #expect(TailscaleService.hasExecutableCLI(at: [executable.path]))
+        #expect(!TailscaleService.hasExecutableCLI(at: [nonExecutable.path]))
+    }
+
+    @Test func `cli-only tailscale status is detected as installed and running`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            cliInstalled: true,
+            apiResponse: TailscaleService.TailscaleAPIResponse(
+                status: "Running",
+                deviceName: "april",
+                tailnetName: "tail7a0b9.ts.net",
+                iPv4: "100.66.5.88"),
+            fallbackIP: "100.66.5.88")
+
+        #expect(service.isInstalled)
+        #expect(service.isRunning)
+        #expect(service.tailscaleHostname == "april.tail7a0b9.ts.net")
+        #expect(service.tailscaleIP == "100.66.5.88")
+        #expect(service.statusError == nil)
+    }
+
+    @Test func `installed cli-only tailscale without a running daemon is detected`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            cliInstalled: true,
+            apiResponse: nil,
+            fallbackIP: nil)
+
+        #expect(service.isInstalled)
+        #expect(!service.isAppInstalled)
+        #expect(!service.isRunning)
+        #expect(service.tailscaleHostname == nil)
+        #expect(service.tailscaleIP == nil)
+        #expect(service.statusError == "Please start the Tailscale daemon")
+    }
+
+    @Test func `shared cgnat address alone is not treated as a tailscale installation`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            cliInstalled: false,
+            apiResponse: nil,
+            fallbackIP: "100.66.5.88")
+
+        #expect(!service.isInstalled)
+        #expect(!service.isAppInstalled)
+        #expect(!service.isRunning)
+        #expect(service.tailscaleHostname == nil)
+        #expect(service.tailscaleIP == nil)
+        #expect(service.statusError == "Tailscale is not installed")
+    }
+
+    @Test func `known cli installation can use interface fallback`() {
+        let service = TailscaleService(isInstalled: false, isRunning: false)
+        service.applyStatusEvidence(
+            appInstalled: false,
+            cliInstalled: true,
+            apiResponse: nil,
+            fallbackIP: "100.66.5.88")
+
+        #expect(service.isInstalled)
+        #expect(!service.isAppInstalled)
+        #expect(service.isRunning)
+        #expect(service.tailscaleHostname == nil)
+        #expect(service.tailscaleIP == "100.66.5.88")
+        #expect(service.statusError == nil)
+    }
+
     @Test func `tailscale section builds body when not installed`() {
         let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
         var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
@@ -32,6 +115,7 @@ struct TailscaleIntegrationSectionTests {
     @Test func `tailscale section builds body for funnel mode`() {
         let service = TailscaleService(
             isInstalled: true,
+            isAppInstalled: true,
             isRunning: false,
             tailscaleHostname: nil,
             tailscaleIP: nil,

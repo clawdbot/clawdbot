@@ -1,4 +1,5 @@
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
+import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
 import type {
   AgentHarnessAttemptResult,
@@ -9,6 +10,7 @@ const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistant",
   "usage",
   "assistantTranscriptOwned",
+  "assistantTranscriptIdempotencyKey",
   "assistantMessageIndex",
   "diagnosticTrace",
 ]);
@@ -72,16 +74,11 @@ export function resolveSettledTurnFinalizationText(
 export function projectSettledTurnFinalizationAttemptResult(
   result: AgentHarnessAttemptResult,
 ): AgentHarnessSettledTurnFinalizationResult {
+  const terminal =
+    "terminal" in result ? result.terminal : normalizeAgentRunAttemptTerminal(result);
   if (
-    result.promptError != null ||
-    result.aborted ||
-    result.externalAbort ||
-    result.timedOut ||
-    result.idleTimedOut ||
-    result.timedOutDuringCompaction ||
+    terminal.kind !== "ok" ||
     (result.compactionCount ?? 0) > 0 ||
-    result.timedOutDuringToolExecution ||
-    result.timedOutByRunBudget ||
     result.promptTimeoutOutcome ||
     result.preflightRecovery ||
     result.beforeAgentFinalizeRevisionReason ||
@@ -128,7 +125,12 @@ export function projectSettledTurnFinalizationAttemptResult(
     assistant,
     ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
     ...(result.assistantTranscriptOwned
-      ? { assistantTranscriptOwned: true }
+      ? {
+          assistantTranscriptOwned: true,
+          ...(result.assistantTranscriptIdempotencyKey
+            ? { assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey }
+            : {}),
+        }
       : result.lastAssistantTextMessageIndex !== undefined
         ? { assistantMessageIndex: result.lastAssistantTextMessageIndex }
         : {}),
