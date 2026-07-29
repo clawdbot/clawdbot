@@ -475,10 +475,8 @@ export class CodexAppServerEventProjector {
     details?: unknown;
   }): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
-    this.toolTranscriptProjection.recordDynamicToolResult(
-      params,
-      this.options.resolveDynamicToolResultContentSource?.(params.tool),
-    );
+    const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
+    this.toolTranscriptProjection.recordDynamicToolResult(params, source);
   }
 
   markTimedOut(): void {
