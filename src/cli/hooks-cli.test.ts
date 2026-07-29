@@ -99,6 +99,28 @@ function createEventlessHookReport(): HookStatusReport {
   };
 }
 
+function createMissingRequirementHookReport(): HookStatusReport {
+  return {
+    ...report,
+    hooks: [
+      {
+        ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
+        requirementsSatisfied: false,
+        loadable: false,
+        blockedReason: "missing requirements",
+        requirements: {
+          ...expectDefined(report.hooks[0], "report.hooks[0] test invariant").requirements,
+          env: ["DEMO_HOOK_TOKEN"],
+        },
+        missing: {
+          ...expectDefined(report.hooks[0], "report.hooks[0] test invariant").missing,
+          env: ["DEMO_HOOK_TOKEN"],
+        },
+      },
+    ],
+  };
+}
+
 describe("hooks cli formatting", () => {
   it("labels hooks list output", () => {
     const output = formatHooksList(report, {});
@@ -117,6 +139,36 @@ describe("hooks cli formatting", () => {
     expect(output).toContain("Ready: 0");
     expect(output).toContain("Not ready: 1");
     expect(output).toContain("session-memory - no events defined");
+  });
+
+  it("shows eventless hooks as blocked by their event declaration in list output", () => {
+    const output = formatHooksList(createEventlessHookReport(), {});
+
+    expect(output).toContain("0/1 ready");
+    expect(output).toContain("no events defined");
+    expect(output).not.toContain("missing requirements");
+  });
+
+  it("shows eventless hooks as blocked by their event declaration in verbose list output", () => {
+    const output = formatHooksList(createEventlessHookReport(), { verbose: true });
+
+    expect(output).toContain("no events defined");
+    expect(output).not.toContain("missing requirements");
+  });
+
+  it("shows eventless hooks as blocked by their event declaration in info output", () => {
+    const output = formatHookInfo(createEventlessHookReport(), "session-memory", {});
+
+    expect(output).toContain("No events defined");
+    expect(output).toContain("Blocked reason: no events defined");
+    expect(output).not.toContain("Missing requirements");
+  });
+
+  it("keeps missing requirement hooks labeled as missing requirements in info output", () => {
+    const output = formatHookInfo(createMissingRequirementHookReport(), "session-memory", {});
+
+    expect(output).toContain("Missing requirements");
+    expect(output).toContain("DEMO_HOOK_TOKEN");
   });
 
   it("classifies eventless hooks as not eligible in JSON check output", () => {
