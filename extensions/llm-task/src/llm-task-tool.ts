@@ -282,14 +282,35 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           const embeddedAgentId = normalizeOptionalString(gatewayCaller?.agentId) ?? "main";
           const embeddedSessionKey =
             normalizeOptionalString(gatewayCaller?.sessionKey) ?? `agent:${embeddedAgentId}:main`;
+          const embeddedStorePath = api.runtime.agent.session?.resolveStorePath?.(
+            api.config?.session?.store,
+            { agentId: embeddedAgentId },
+          );
+          const embeddedSessionEntry = api.runtime.agent.session?.getSessionEntry?.({
+            agentId: embeddedAgentId,
+            sessionKey: embeddedSessionKey,
+            ...(embeddedStorePath ? { storePath: embeddedStorePath } : {}),
+            readConsistency: "latest",
+          });
+          const embeddedSessionId = normalizeOptionalString(embeddedSessionEntry?.sessionId);
           const sessionId = `llm-task-${Date.now()}`;
           const sessionFile = path.join(tmpDir, "session.json");
 
           const result = await api.runtime.agent.runEmbeddedAgent({
             agentId: embeddedAgentId,
             sessionKey: embeddedSessionKey,
-            sessionId,
-            sessionFile,
+            sessionId: embeddedSessionId ?? sessionId,
+            sessionFile: embeddedSessionId ? embeddedSessionKey : sessionFile,
+            ...(embeddedSessionId && embeddedStorePath
+              ? {
+                  sessionTarget: {
+                    agentId: embeddedAgentId,
+                    sessionId: embeddedSessionId,
+                    sessionKey: embeddedSessionKey,
+                    storePath: embeddedStorePath,
+                  },
+                }
+              : {}),
             workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
             config: api.config,
             prompt: fullPrompt,

@@ -82,6 +82,10 @@ function fakeApi(overrides: Record<string, unknown> = {}): LlmTaskApi {
       agent: {
         defaults: { provider: "openai", model: "gpt-5.5" },
         runEmbeddedAgent,
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-sessions.json",
+          getSessionEntry: () => undefined,
+        },
         resolveThinkingPolicy,
         normalizeThinkingLevel,
       },
@@ -452,6 +456,44 @@ describe("llm-task tool (json-only)", () => {
     const call = firstEmbeddedRunCall();
     expect(call.agentId).toBe("developer");
     expect(call.sessionKey).toBe("agent:developer:main");
+  });
+
+  it("uses exact SQLite session target identity for gateway-scoped embedded runs", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        runtime: {
+          version: "test",
+          agent: {
+            defaults: { provider: "openai", model: "gpt-5.5" },
+            runEmbeddedAgent,
+            session: {
+              resolveStorePath: () => "/tmp/openclaw-sessions.json",
+              getSessionEntry: () => ({ sessionId: "session-main", label: "main" }),
+            },
+            resolveThinkingPolicy,
+            normalizeThinkingLevel,
+          },
+        },
+      }),
+    );
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      async () => {
+        await tool.execute("id", { prompt: "x" });
+      },
+    );
+
+    const call = firstEmbeddedRunCall();
+    expect(call.sessionId).toBe("session-main");
+    expect(call.sessionFile).toBe("agent:main:main");
+    expect(call.sessionTarget).toEqual({
+      agentId: "main",
+      sessionId: "session-main",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+    });
   });
 
   it("normalizes numeric string run options before dispatch", async () => {

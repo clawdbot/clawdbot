@@ -54,6 +54,7 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
+  copyPluginToolMeta: () => {},
   getPluginToolMeta: noPluginToolMeta,
 }));
 
