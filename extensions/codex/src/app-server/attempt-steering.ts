@@ -189,15 +189,24 @@ export function createCodexSteeringQueue(params: {
       const pendingUserInput = params.claimPendingUserInput();
       if (pendingUserInput) {
         if (!options?.images?.length) {
-          pendingUserInput.answer(text);
+          // Codex may resolve or clear the request after it was claimed but
+          // before this answer wins. Preserve the user message by steering it
+          // into the still-active turn when that compare-and-resolve fails.
+          if (pendingUserInput.answer(text)) {
+            return;
+          }
+        }
+        if (options?.images?.length) {
+          // request_user_input cannot carry images. Submit the complete message
+          // before releasing the prompt so no partial text answer can win the race.
+          void flushBatch().catch(() => undefined);
+          const { item, delivery } = createPendingMessage(text, options.images);
+          await Promise.all([
+            enqueueSend([item]).finally(() => pendingUserInput.cancel()),
+            delivery,
+          ]);
           return;
         }
-        // request_user_input cannot carry images. Submit the complete message
-        // before releasing the prompt so no partial text answer can win the race.
-        void flushBatch().catch(() => undefined);
-        const { item, delivery } = createPendingMessage(text, options.images);
-        await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
-        return;
       }
       if (closedError) {
         throw closedError;

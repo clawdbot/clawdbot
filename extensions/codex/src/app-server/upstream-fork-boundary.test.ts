@@ -185,8 +185,18 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
 });
 
 describe("resolveCodexUpstreamForkBoundary", () => {
-  it("rejects paginated-history threads before reading turns", async () => {
+  it("maps paginated-history threads through full turn pages", async () => {
     const readThread = vi.fn(async () => ({ id: "thread-1", historyMode: "paginated" }));
+    const listTurnPage = vi.fn(async () => ({ data: [turn("turn-1", [user("one")])] }));
+    transcriptMocks.readVisibleEntries.mockResolvedValue([
+      {
+        entryId: "entry-1",
+        parentId: null,
+        seq: 0,
+        role: "user",
+        message: { role: "user", content: "one", timestamp: 0 },
+      },
+    ] satisfies SessionTranscriptMessageEntry[]);
     const result = await resolveCodexUpstreamForkBoundary({
       agentId: "main",
       sessionId: "session-1",
@@ -194,12 +204,26 @@ describe("resolveCodexUpstreamForkBoundary", () => {
       storePath: "/tmp/does-not-matter",
       entryId: "entry-1",
       threadId: "thread-1",
-      control: { readThread } as unknown as Parameters<
+      control: { readThread, listTurnPage } as unknown as Parameters<
         typeof resolveCodexUpstreamForkBoundary
       >[0]["control"],
     });
 
-    expect(result).toMatchObject({ ok: false, code: "upstream-unavailable" });
-    expect(readThread).toHaveBeenCalledWith("thread-1", false);
+    expect(result).toEqual({
+      ok: true,
+      boundary: {
+        beforeTurnId: "turn-1",
+        targetTurnId: "turn-1",
+        retainedMarker: { turnId: null, userMessageCount: 0 },
+      },
+      editorText: "one",
+    });
+    expect(readThread).not.toHaveBeenCalled();
+    expect(listTurnPage).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      limit: 100,
+      sortDirection: "asc",
+      itemsView: "full",
+    });
   });
 });

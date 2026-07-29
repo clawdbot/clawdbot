@@ -1853,6 +1853,63 @@ describe("Codex supervision catalog", () => {
 });
 
 describe("Codex supervision actions", () => {
+  it("continues a paginated thread through full turn pages", async () => {
+    const turns = [
+      { id: "turn-1", status: "completed", items: [] },
+      { id: "turn-2", status: "completed", items: [] },
+    ] as NonNullable<CodexThread["turns"]>;
+    const readThread = vi.fn(async (threadId: string, includeTurns: boolean) => {
+      if (includeTurns) {
+        throw new Error("paginated threads do not support thread/read(includeTurns=true)");
+      }
+      return idleThread({ id: threadId, historyMode: "paginated" });
+    });
+    const listTurnPage = vi.fn(async (params: { cursor?: string | null }) =>
+      params.cursor ? { data: [turns[1]!] } : { data: [turns[0]!], nextCursor: "turns-page-2" },
+    );
+    const control = createEligibleControl({ readThread, listTurnPage });
+    const { runtime } = createRuntime();
+    const { api } = createGatewayApi(runtime);
+    const bindingStore = createCodexTestBindingStore();
+
+    await expect(
+      continueLocalCodexSession({
+        api,
+        bindingStore,
+        config,
+        control,
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({ disposition: "forked" });
+
+    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
+    expect(readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
+    expect(listTurnPage).toHaveBeenNthCalledWith(1, {
+      threadId: "thread-1",
+      limit: 100,
+      sortDirection: "asc",
+      itemsView: "full",
+    });
+    expect(listTurnPage).toHaveBeenNthCalledWith(2, {
+      threadId: "thread-1",
+      limit: 100,
+      sortDirection: "asc",
+      itemsView: "full",
+      cursor: "turns-page-2",
+    });
+    expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread: expect.objectContaining({
+          id: "thread-1",
+          historyMode: "paginated",
+          turns,
+        }),
+        throughTurnId: "turn-2",
+      }),
+    );
+  });
+
   it("creates one pending locked branch and reuses its source mapping", async () => {
     const sourceThread = idleThread({
       modelProvider: "openai",

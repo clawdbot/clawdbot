@@ -225,6 +225,30 @@ describe("Codex app-server steering queue", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("steers when a claimed pending input was resolved before the answer", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const answerPendingUserInput = vi.fn(() => false);
+    const queue = createQueue(request, {
+      claimPendingUserInput: () => ({
+        answer: answerPendingUserInput,
+        cancel: vi.fn(() => false),
+      }),
+    });
+
+    const queued = queue.queue("do not drop this", { debounceMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(answerPendingUserInput).toHaveBeenCalledWith("do not drop this");
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "do not drop this", text_elements: [] }],
+      clientUserMessageId: "openclaw:turn-1:steer:1",
+    });
+    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+    await queued;
+  });
+
   it("steers a complete image reply before releasing pending input", async () => {
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
     const answerPendingUserInput = vi.fn(() => true);

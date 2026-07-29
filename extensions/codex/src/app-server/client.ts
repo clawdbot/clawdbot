@@ -237,6 +237,7 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private readonly serverRequestControllers = new Set<AbortController>();
   private nextId = 1;
   private initialized = false;
   private closed = false;
@@ -697,6 +698,10 @@ export class CodexAppServerClient {
 
   /** Registers a close handler and returns its disposer. */
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
+    if (this.closed) {
+      this.notifyCloseHandler(handler);
+      return () => undefined;
+    }
     this.closeHandlers.add(handler);
     return () => this.closeHandlers.delete(handler);
   }
@@ -884,32 +889,37 @@ export class CodexAppServerClient {
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<JsonValue | undefined> {
     const controller = new AbortController();
-    const timeoutResponse = timeoutServerRequestResponse(request);
-    if (!timeoutResponse) {
-      return await this.runServerRequestHandlersWithoutTimeout(request, controller.signal);
-    }
-
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    this.serverRequestControllers.add(controller);
     try {
-      return await Promise.race([
-        this.runServerRequestHandlersWithoutTimeout(request, controller.signal),
-        new Promise<JsonValue>((resolve) => {
-          timeout = setTimeout(() => {
-            embeddedAgentLog.warn("codex app-server server request timed out", {
-              id: request.id,
-              method: request.method,
-              timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
-            });
-            controller.abort(new Error("codex app-server server request timed out"));
-            resolve(timeoutResponse);
-          }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
+      const timeoutResponse = timeoutServerRequestResponse(request);
+      if (!timeoutResponse) {
+        return await this.runServerRequestHandlersWithoutTimeout(request, controller.signal);
       }
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          this.runServerRequestHandlersWithoutTimeout(request, controller.signal),
+          new Promise<JsonValue>((resolve) => {
+            timeout = setTimeout(() => {
+              embeddedAgentLog.warn("codex app-server server request timed out", {
+                id: request.id,
+                method: request.method,
+                timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+              });
+              controller.abort(new Error("codex app-server server request timed out"));
+              resolve(timeoutResponse);
+            }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+            timeout.unref?.();
+          }),
+        ]);
+      } finally {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+      }
+    } finally {
+      this.serverRequestControllers.delete(controller);
     }
   }
 
@@ -949,6 +959,10 @@ export class CodexAppServerClient {
     }
     this.closed = true;
     this.closeError = error;
+    for (const controller of this.serverRequestControllers) {
+      controller.abort(error);
+    }
+    this.serverRequestControllers.clear();
     this.lines.close();
     this.rejectPendingRequests(error);
     return true;
@@ -961,7 +975,15 @@ export class CodexAppServerClient {
     }
     this.pending.clear();
     for (const handler of this.closeHandlers) {
+      this.notifyCloseHandler(handler);
+    }
+  }
+
+  private notifyCloseHandler(handler: (client: CodexAppServerClient) => void): void {
+    try {
       handler(this);
+    } catch (error) {
+      embeddedAgentLog.warn("codex app-server close handler failed", { error });
     }
   }
 }
