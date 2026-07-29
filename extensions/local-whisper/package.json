@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/local-whisper-provider",
+  "version": "2026.7.2",
+  "private": true,
+  "description": "OpenClaw local faster-whisper realtime transcription provider (offline, no OpenAI calls)",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run ../../extensions/local-whisper/realtime-transcription-provider.test.ts"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

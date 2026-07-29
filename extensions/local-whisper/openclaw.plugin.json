@@ -1,0 +1,25 @@
+{
+  "id": "local-whisper",
+  "name": "Local Whisper Realtime Transcription",
+  "description": "Resident faster-whisper worker for offline Norwegian realtime transcription",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "setup": {
+    "providers": [
+      {
+        "id": "local-whisper",
+        "envVars": ["LOCAL_WHISPER_PYTHON"]
+      }
+    ]
+  },
+  "contracts": {
+    "realtimeTranscriptionProviders": ["local-whisper"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
