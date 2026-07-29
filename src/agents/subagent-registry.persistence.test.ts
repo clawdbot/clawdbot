@@ -17,6 +17,7 @@ import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
+  canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -196,26 +197,7 @@ describe("subagent registry persistence", () => {
     saveSubagentRegistryToSqlite(runs);
 
   function saveCanonicalRunFixtures(runs: Map<string, SubagentRunRecord>) {
-    saveSubagentRegistryToSqlite(
-      new Map(
-        [...runs].map(([runId, run]) => [
-          runId,
-          {
-            execution: {
-              status: typeof run.endedAt === "number" ? "terminal" : "running",
-              startedAt: run.startedAt,
-              endedAt: run.endedAt,
-              outcome: run.outcome,
-            },
-            completion: { required: run.expectsCompletionMessage === true },
-            delivery: {
-              status: typeof run.endedAt === "number" ? "pending" : "not_required",
-            },
-            ...run,
-          },
-        ]),
-      ),
-    );
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
   }
 
   beforeEach(() => {
