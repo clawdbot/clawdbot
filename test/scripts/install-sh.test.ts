@@ -352,7 +352,14 @@ NODE
       set -euo pipefail
       source "${SCRIPT_PATH}"
       tmp="$(mktemp -d)"
-      repo="$tmp/repo"
+      parent="$tmp/parent"
+      repo="$parent/repo"
+      git -C "$tmp" init -q parent
+      git -C "$parent" config user.email test@example.invalid
+      git -C "$parent" config user.name test
+      touch "$parent/seed"
+      git -C "$parent" add seed
+      git -C "$parent" commit -qm seed
       mkdir -p "$repo/.git"
       printf 'keep\\n' > "$repo/local.txt"
       ui_info() { :; }

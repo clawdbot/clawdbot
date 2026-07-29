@@ -2424,7 +2424,7 @@ validate_git_checkout_head() {
     if [[ ! -d "$repo_dir/.git" ]]; then
         return 0
     fi
-    if git -C "$repo_dir" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
         return 0
     fi
 

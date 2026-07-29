@@ -52,7 +52,9 @@ describe("install-cli.sh", () => {
       ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
       git() {
-        [[ "$1" == "-C" ]] && return 1
+        [[ "$1" == "--git-dir=$repo/.git" ]] &&
+          [[ "$2" == "--work-tree=$repo" ]] &&
+          return 1
         return 99
       }
 

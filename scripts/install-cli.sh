@@ -1187,7 +1187,7 @@ install_openclaw_from_git() {
   ensure_pnpm_binary_for_scripts
 
   if [[ -d "$repo_dir/.git" ]] &&
-    ! git -C "$repo_dir" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+    ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
     fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
   fi
 

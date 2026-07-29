@@ -661,6 +661,8 @@ describe("install.ps1 failure handling", () => {
     const guardBody = extractFunctionBody(source, "Assert-GitCheckoutHasCommit");
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
 
+    expect(guardBody).toContain('"--git-dir=$gitDir"');
+    expect(guardBody).toContain('"--work-tree=$RepoDir"');
     expect(guardBody).toContain("rev-parse --verify --quiet HEAD");
     expect(guardBody).toContain("Git checkout has no commit");
     expect(guardBody).not.toContain("Remove-Item");
