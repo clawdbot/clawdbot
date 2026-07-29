@@ -88,17 +88,19 @@ async function withRealTeamsSdkHttp<T>(
   run: (params: { api: TeamsApiClient; requests: CapturedRequest[] }) => Promise<T>,
 ): Promise<T> {
   const requests: CapturedRequest[] = [];
-  const server = createServer(async (request, response) => {
+  const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
-    for await (const chunk of request) {
+    request.on("data", (chunk: Buffer | string) => {
       chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    }
-    requests.push({
-      path: request.url ?? "",
-      body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
     });
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: "sdk-http-message-1" }));
+    request.once("end", () => {
+      requests.push({
+        path: request.url ?? "",
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "sdk-http-message-1" }));
+    });
   });
 
   server.listen(0, "127.0.0.1");
