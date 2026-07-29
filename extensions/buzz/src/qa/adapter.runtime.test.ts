@@ -1,3 +1,7 @@
+import type {
+  QaBusInboundMessageInput,
+  QaBusMessage,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseBuzzQaCredentialPayload } from "./credentials.js";
 
@@ -239,15 +243,21 @@ describe("Buzz QA transport adapter", () => {
   });
 
   it("waits for a racing inbound id mapping before recording reply relations", async () => {
-    let resolveInbound:
-      | ((value: { id: string; direction: "inbound"; timestamp: number }) => void)
-      | undefined;
-    const addInboundMessage = vi.fn(
-      async () =>
-        await new Promise<{ id: string; direction: "inbound"; timestamp: number }>((resolve) => {
-          resolveInbound = resolve;
-        }),
-    );
+    let releaseInbound = () => {};
+    const inboundGate = new Promise<void>((resolve) => {
+      releaseInbound = resolve;
+    });
+    const addInboundMessage = vi.fn(async (input: QaBusInboundMessageInput) => {
+      await inboundGate;
+      return {
+        ...input,
+        id: "bus-inbound",
+        accountId: input.accountId ?? "sut",
+        direction: "inbound",
+        timestamp: input.timestamp ?? 1_750_000_000_000,
+        reactions: [],
+      } satisfies QaBusMessage;
+    });
     const addOutboundMessage = vi.fn(async (input) => ({
       ...input,
       id: "bus-outbound",
@@ -286,11 +296,7 @@ describe("Buzz QA transport adapter", () => {
     });
     expect(addOutboundMessage).not.toHaveBeenCalled();
 
-    resolveInbound?.({
-      id: "bus-inbound",
-      direction: "inbound",
-      timestamp: 1_750_000_000_000,
-    });
+    releaseInbound();
     await inboundPromise;
     await outboundPromise;
 
