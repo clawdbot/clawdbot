@@ -192,13 +192,18 @@ function listReloadRules(): ReloadRule[] {
       return rule;
     });
     const accountIndexRules = (plugin.reload?.accountIndexReloadPaths ?? []).map(
-      (prefix): ReloadRule => ({
-        prefix,
-        match: "exact",
-        kind: "hot",
-        actions: [restartAction],
-        ...(plugin.reload?.accountScopedRestart ? { accountScopedPlugin: plugin } : {}),
-      }),
+      (prefix): ReloadRule => {
+        const rule: ReloadRule = {
+          prefix,
+          match: "exact",
+          kind: "hot",
+          actions: [restartAction],
+        };
+        if (plugin.reload?.accountScopedRestart) {
+          rule.accountScopedPlugin = plugin;
+        }
+        return rule;
+      },
     );
     return hotPrefixRules.concat(accountIndexRules).concat(
       (plugin.reload?.noopPrefixes ?? []).map(
