@@ -1447,27 +1447,30 @@ function sliceListMarker(
   return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
 }
 
-export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
+export function sliceMarkdownIR(
+  ir: MarkdownIR,
+  startOffset: number,
+  endOffset: number,
+): MarkdownIR {
   const textLength = ir.text.length;
-  let normalizedStart = start < 0 ? Math.max(textLength + start, 0) : Math.min(start, textLength);
-  let normalizedEnd = end < 0 ? Math.max(textLength + end, 0) : Math.min(end, textLength);
+  let start =
+    startOffset < 0 ? Math.max(textLength + startOffset, 0) : Math.min(startOffset, textLength);
+  let end = endOffset < 0 ? Math.max(textLength + endOffset, 0) : Math.min(endOffset, textLength);
 
-  if (normalizedStart < normalizedEnd) {
+  if (start < end) {
     // Normalize once so text, formatting, links, and structural metadata share
     // the same complete-code-point boundaries.
-    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedStart);
-    if (safeStart !== normalizedStart) {
-      normalizedStart = safeStart < normalizedStart ? safeStart : normalizedStart - 1;
+    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, start);
+    if (safeStart !== start) {
+      start = safeStart < start ? safeStart : start - 1;
     }
 
-    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedEnd);
-    if (safeEnd !== normalizedEnd) {
-      normalizedEnd = safeEnd > normalizedEnd ? safeEnd : normalizedEnd + 1;
+    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, end);
+    if (safeEnd !== end) {
+      end = safeEnd > end ? safeEnd : end + 1;
     }
   }
 
-  start = normalizedStart;
-  end = normalizedEnd;
   const metadataIR = ir as MarkdownIRWithMetadata;
   const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
   const listItems = ((ir.listItems ?? []) as MarkdownListItemWithMetadata[]).flatMap((item) => {
