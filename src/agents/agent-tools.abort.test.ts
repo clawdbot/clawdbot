@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./embedded-agent-runner/run/attempt.sessions-yield.js";
 
 type ExecuteMock = ReturnType<typeof vi.fn>;
 
@@ -190,6 +191,51 @@ describe("wrapToolWithAbortSignal", () => {
     );
 
     await expect(wrapped.execute("call-1", {})).rejects.toBe(toolRejection);
+  });
+
+  it("lets sessions_yield resolve its yielded result past its own handoff abort", async () => {
+    // sessions_yield aborts the run from inside execute; the handoff abort must
+    // not out-race the tool's own success result.
+    const runAbort = new AbortController();
+    const result = textResult(JSON.stringify({ status: "yielded" }));
+    const execute = vi.fn(async () => {
+      runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
+      return result;
+    });
+    const wrapped = wrapToolWithAbortSignal(
+      asAgentTool({ name: "sessions_yield", execute }),
+      runAbort.signal,
+    );
+
+    await expect(wrapped.execute("call-1", {})).resolves.toBe(result);
+  });
+
+  it("still rejects sessions_yield on a real abort without the handoff reason", async () => {
+    const runAbort = new AbortController();
+    const execute = vi.fn(() => new Promise(() => {}));
+    const wrapped = wrapToolWithAbortSignal(
+      asAgentTool({ name: "sessions_yield", execute }),
+      runAbort.signal,
+    );
+
+    const executePromise = wrapped.execute("call-1", {});
+    runAbort.abort();
+    await expect(executePromise).rejects.toMatchObject({ name: "AbortError", message: "Aborted" });
+  });
+
+  it("still rejects other tools when the run aborts with the sessions_yield reason", async () => {
+    // Only the yield tool itself gets the pass-through; a wedged sibling tool
+    // must not keep the yielding run alive.
+    const runAbort = new AbortController();
+    const execute = vi.fn(() => new Promise(() => {}));
+    const wrapped = wrapToolWithAbortSignal(
+      asAgentTool({ name: "wedged", execute }),
+      runAbort.signal,
+    );
+
+    const executePromise = wrapped.execute("call-1", {});
+    runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
+    await expect(executePromise).rejects.toMatchObject({ name: "AbortError", message: "Aborted" });
   });
 
   it("throws AbortError before invoking execute when the signal is already aborted", async () => {

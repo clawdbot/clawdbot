@@ -8,6 +8,7 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { isSessionsYieldAbortReason } from "./embedded-agent-runner/run/attempt.sessions-yield.js";
 
 function throwAbortError(): never {
   throw createAbortError("Aborted");
@@ -22,10 +23,17 @@ function throwAbortError(): never {
  * Tool settlements pass through untouched to preserve tool error semantics,
  * including non-Error rejections.
  */
-function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+function raceWithAbortSignal<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+  ignoreAbortReason?: (reason: unknown) => boolean,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
+      if (ignoreAbortReason?.(signal.reason)) {
+        return;
+      }
       reject(createAbortError("Aborted"));
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -59,6 +67,12 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
+  // sessions_yield ends the turn by aborting its own run from inside execute
+  // (attempt.ts onYield). That handoff abort must not out-race the tool's own
+  // {status:"yielded"} result, or every yield records as a failed tool call and
+  // channels surface a spurious "⚠️ Yield … failed" warning. Real aborts don't
+  // carry the sessions_yield reason and still reject.
+  const ignoreAbortReason = tool.name === "sessions_yield" ? isSessionsYieldAbortReason : undefined;
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -69,6 +83,7 @@ export function wrapToolWithAbortSignal(
       return await raceWithAbortSignal(
         execute(toolCallId, params, combinedSignal, onUpdate),
         combinedSignal,
+        ignoreAbortReason,
       );
     },
   };
