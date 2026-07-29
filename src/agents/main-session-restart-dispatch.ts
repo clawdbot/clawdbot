@@ -608,7 +608,9 @@ export async function resumeMainSession(params: {
           });
           if (admission.transition.kind !== "admitted_recovery" && !exactRunAlreadyAdmitted) {
             if (params.shouldContinue?.() !== false) {
-              log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
+              log.warn(
+                `restart recovery admission changed before settlement: ${params.sessionKey}`,
+              );
             }
           } else if (params.shouldContinue?.() !== false) {
             if (reservation) {

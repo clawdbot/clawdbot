@@ -2335,9 +2335,7 @@ describe("main-session-restart-recovery", () => {
     let recoveryRunId: string | undefined;
     vi.mocked(callGateway).mockImplementation(async (request) => {
       if (request.method === "agent") {
-        recoveryRunId = String(
-          (request.params as { idempotencyKey?: unknown }).idempotencyKey,
-        );
+        recoveryRunId = String((request.params as { idempotencyKey?: unknown }).idempotencyKey);
         throw new Error("ambiguous recovery dispatch transport failure");
       }
       if (request.method === "agent.wait") {
