@@ -187,6 +187,7 @@ const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
   "openai-bundled",
   "openai-curated",
+  "openai-api-curated",
   "openai-curated-remote",
   "local",
 ];
