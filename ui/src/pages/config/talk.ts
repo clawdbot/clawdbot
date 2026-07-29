@@ -4,6 +4,7 @@
 // same config draft, so both stay in sync without narrowing the schema.
 import { html, nothing, type TemplateResult } from "lit";
 import {
+  renderDocsLink,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -52,6 +53,8 @@ type TalkViewProps = {
 };
 
 const TALK_PICKER_UNSET = "";
+
+const TALK_DOCS_URL = "https://docs.openclaw.ai/nodes/talk";
 
 /** Config may name a provider by alias; pickers always speak canonical ids. */
 function findProviderOption(
@@ -301,6 +304,9 @@ export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
       <div class="settings-page">
+        <p class="settings-page__intro">
+          ${t("talkPage.intro")} ${renderDocsLink(TALK_DOCS_URL, t("common.learnMore"))}
+        </p>
         ${renderSettingsSection(
           {
             title: t("talkPage.voiceSection.title"),

@@ -70,6 +70,7 @@ export const en: TranslationMap = {
     settingsSections: "Settings sections",
     version: "Version",
     docs: "Docs",
+    learnMore: "Learn more",
     theme: "Theme",
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
@@ -982,6 +983,8 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
+    sectionHelp: "Help for {section}",
+    readGuide: "Read the guide",
     showAdvanced: "Show advanced",
     advancedHidden: "{count} advanced setting hidden",
     advancedHiddenPlural: "{count} advanced settings hidden",
@@ -1177,6 +1180,7 @@ export const en: TranslationMap = {
       lobsterdexOpen: "Open Lobsterdex",
     },
     security: {
+      intro: "Review gateway access, tool policy, device authentication, and approvals.",
       title: "Security",
       gatewayAuth: "Gateway auth",
       execPolicy: "Exec policy",
@@ -2135,12 +2139,14 @@ export const en: TranslationMap = {
     working: "Working…",
   },
   mcpPage: {
+    intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
     connectorsLink: "Discover one-click connectors on the Plugins page.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Filtered",
     configuredServers: "Configured servers",
     noServers: "No MCP servers configured.",
+    setUpFirstServer: "Set up your first MCP server",
     operatorCommands: "MCP operator commands",
     operatorCommandsHint: "Status, diagnostics, auth, probing, and runtime reload.",
     runtimeHint:
@@ -2151,6 +2157,7 @@ export const en: TranslationMap = {
     mtls: "mTLS",
   },
   talkPage: {
+    intro: "Configure realtime voice providers, models, and speaker voices.",
     voiceSection: {
       title: "Realtime voice",
       description:
@@ -2188,6 +2195,7 @@ export const en: TranslationMap = {
     },
   },
   memoryPage: {
+    intro: "Choose how OpenClaw stores, searches, and maintains agent memory.",
     tablistLabel: "Memory sections",
     tabs: {
       overview: "Overview",
