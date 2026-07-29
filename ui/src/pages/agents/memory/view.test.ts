@@ -433,9 +433,9 @@ describe("dreaming view", () => {
       { label: "Memory Wiki", active: false },
     ]);
     container
-      .querySelector("#dream-diary-tab-palace")
+      .querySelector("#dream-diary-tab-wiki")
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(viewState.activeDiarySubTab).toBe("palace");
+    expect(viewState.activeDiarySubTab).toBe("wiki");
     expect(onViewStateChange).toHaveBeenCalledOnce();
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Travel · 1 chats · 1 signals",
