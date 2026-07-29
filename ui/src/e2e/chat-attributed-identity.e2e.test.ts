@@ -178,7 +178,16 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
         markRetrySettled();
       }
     });
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
+      presenceUsers: [
+        {
+          self: true,
+          id: "viewer-profile",
+          name: "Viewer",
+          email: "viewer@example.test",
+          watchedSessions: ["agent:main:main"],
+        },
+      ],
       historyMessages: [
         {
           role: "user",
@@ -198,29 +207,33 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
       await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
-      const slot = page.locator(".chat-avatar-slot");
+      const userGroup = page.locator(".chat-group.user", {
+        hasText: "Please keep my fallback avatar readable.",
+      });
+      const slot = userGroup.locator(".chat-avatar-slot");
       const image = slot.locator("img.chat-avatar.user");
       const initials = slot.locator(".chat-avatar--sender-initials");
-      await expect.poll(() => avatarRequestCount).toBe(1);
+      await retryStarted;
+      expect(avatarRequestCount).toBe(2);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect.poll(() => image.getAttribute("src")).toBeNull();
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
       await captureProof(page, "missing-avatar-after-404.png");
 
-      await gateway.emitGatewayEvent("presence", {
-        presence: [
-          {
-            instanceId: "observer-instance",
-            mode: "webchat",
-            reason: "connect",
-            user: { id: "observer", name: "Observer", email: "observer@example.test" },
-            watchedSessions: ["agent:main:main"],
-          },
-        ],
-      });
-      await page.locator('[data-viewer-id="observer"]').waitFor();
-      await retryStarted;
+      await userGroup.hover();
+      await userGroup.getByRole("button", { name: "Reply to message" }).click();
+      const replyPreview = page.locator(".chat-reply-preview");
+      await replyPreview.waitFor({ state: "visible" });
+      await expect(replyPreview.locator(".chat-reply-preview__text")).toHaveText(
+        "Please keep my fallback avatar readable.",
+      );
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
 
       expect(avatarRequestCount).toBe(2);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
