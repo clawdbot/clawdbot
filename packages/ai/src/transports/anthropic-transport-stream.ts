@@ -111,7 +111,7 @@ import {
 
 type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
-const CLAUDE_CODE_VERSION = "2.1.75";
+const CLAUDE_CODE_VERSION = "2.1.219";
 const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
