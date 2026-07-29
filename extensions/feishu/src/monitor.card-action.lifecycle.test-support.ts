@@ -359,9 +359,16 @@ describe("Feishu card-action lifecycle", () => {
       token: "tok-card-sdk-flat",
       action: {
         tag: "button",
-        value: {
-          command: "/help",
-        },
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.help",
+          q: "/help",
+          c: {
+            u: "ou_user1",
+            t: "p2p",
+            e: Date.now() + 60_000,
+          },
+        }),
       },
     });
 
@@ -382,9 +389,16 @@ describe("Feishu card-action lifecycle", () => {
       token: "tok-card-no-reply-target",
       action: {
         tag: "button",
-        value: {
-          command: "/help",
-        },
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.help",
+          q: "/help",
+          c: {
+            u: "ou_user1",
+            t: "p2p",
+            e: Date.now() + 60_000,
+          },
+        }),
       },
     });
 
