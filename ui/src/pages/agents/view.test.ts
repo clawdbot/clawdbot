@@ -153,11 +153,27 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onIdentityAvatarSelect: () => undefined,
     onIdentitySave: () => undefined,
     onTogglePinnedAgent: () => undefined,
+    onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
 }
 
 describe("renderAgents", () => {
+  it("opens global Agent defaults before the per-agent tabs", () => {
+    const container = document.createElement("div");
+    const onOpenAgentDefaults = vi.fn();
+    render(renderAgents(createProps({ onOpenAgentDefaults })), container);
+
+    const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
+    const tabs = container.querySelector(".agent-tabs");
+    expect(defaultsRow?.textContent).toContain("Agent defaults");
+    expect(defaultsRow?.textContent).toContain("Defaults every agent inherits unless overridden.");
+    expect(defaultsRow?.compareDocumentPosition(tabs!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    defaultsRow?.click();
+    expect(onOpenAgentDefaults).toHaveBeenCalledOnce();
+  });
+
   it("prefills the identity editor from the fetched agent identity", () => {
     const container = document.createElement("div");
     render(

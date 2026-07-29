@@ -12,6 +12,13 @@ export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
 
+/** Targeted pushed PR snapshot event for subscribed Control UI connections. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
+  "controlUi.sessionPullRequests.changed";
+
+/** Maximum session keys retained by one Control UI PR subscription. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
+
 /** Reserved query key for the sandbox cookie capability probe. */
 export const CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY = "__openclaw_plugin_frame_auth_probe";
 
@@ -127,6 +134,16 @@ export type ControlUiSessionPullRequests = {
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
+};
+
+/** Per-session pushed state; unavailable snapshots preserve prior UI state. */
+export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
+  status: "ready" | "rate-limited" | "unavailable";
+};
+
+/** Targeted delta event for sessions watched by one Control UI connection. */
+export type ControlUiSessionPullRequestsChanged = {
+  sessions: Record<string, ControlUiSessionPullRequestSnapshot>;
 };
 
 /** Runtime config consumed by the browser Control UI during bootstrap. */

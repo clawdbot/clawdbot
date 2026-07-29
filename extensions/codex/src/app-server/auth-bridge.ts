@@ -622,7 +622,7 @@ async function resolveCodexAppServerAuthProfileLoginParams(params: {
   }
   if (profileId && profile && !isCodexAppServerAuthProfileCredential(profile)) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" must be OpenAI Codex auth or an OpenAI API-key backup.`,
+      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
   return await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -678,7 +678,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   }
   if (!isCodexAppServerAuthProfileCredential(credential)) {
     throw new Error(
-      `Codex app-server auth profile "${profileId}" must be OpenAI Codex auth or an OpenAI API-key backup.`,
+      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
   const loginParams = await resolveLoginParamsForCredential(profileId, credential, {
@@ -1001,17 +1001,8 @@ function isCodexAppServerAuthProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === CODEX_APP_SERVER_AUTH_PROVIDER;
 }
 
-function isOpenAIApiKeyBackupCredential(credential: AuthProfileCredential): boolean {
-  return (
-    credential.type === "api_key" &&
-    credential.provider.trim().toLowerCase() === CODEX_APP_SERVER_AUTH_PROVIDER
-  );
-}
-
 function isCodexAppServerAuthProfileCredential(credential: AuthProfileCredential): boolean {
-  return (
-    isCodexAppServerAuthProvider(credential.provider) || isOpenAIApiKeyBackupCredential(credential)
-  );
+  return isCodexAppServerAuthProvider(credential.provider);
 }
 
 function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {

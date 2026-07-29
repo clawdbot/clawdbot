@@ -84,6 +84,7 @@ type AttemptControl = {
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
   onToolOutcome: ToolOutcomeObserver;
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
@@ -288,6 +289,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
+    isTurnTainted: control.isTurnTainted,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
     onToolStreamBoundary: control.onToolStreamBoundary,
     onRunProgress: control.onRunProgress,

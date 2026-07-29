@@ -159,6 +159,16 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
                   },
                 },
               },
+              tools: {
+                type: "object",
+                title: "Tools",
+                properties: {
+                  profile: {
+                    type: "string",
+                    description: "Controls sandbox access",
+                  },
+                },
+              },
             },
           },
           uiHints: {},
@@ -245,6 +255,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await holdUiProof(page);
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
       const allSettingsLabels = await trimmedTextContents(settingsLinks);
+      expect(allSettingsLabels).not.toContain("Agent Defaults");
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
@@ -370,6 +381,28 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await settingsSidebar.getByRole("button", { name: "Clear settings search" }).click();
       await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(allSettingsLabels);
       await holdUiProof(page, 300);
+      await settingsSidebar.getByRole("link", { name: "Agents", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
+      const agentDefaultsRow = page.getByRole("button", {
+        name: "Agent defaults Defaults every agent inherits unless overridden.",
+      });
+      await expect.poll(() => agentDefaultsRow.isVisible()).toBe(true);
+      await agentDefaultsRow.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
+      await expect
+        .poll(() =>
+          settingsSidebar
+            .getByRole("link", { name: "Agents", exact: true })
+            .getAttribute("aria-current"),
+        )
+        .toBe("page");
+      await settingsSearch.fill("sandbox access");
+      const toolsResult = settingsSidebar.getByRole("link", { name: "Tools", exact: true });
+      await expect.poll(() => toolsResult.isVisible()).toBe(true);
+      await toolsResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=tools&advanced=1");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-tools");
       await settingsSearch.fill("channel");
       await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
       await holdUiProof(page);

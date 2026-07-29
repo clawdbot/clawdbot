@@ -14,13 +14,6 @@ import { normalizeTwitchChannel } from "./utils/twitch.js";
 
 const TWITCH_INGRESS_PAYLOAD_VERSION = 1;
 const TWITCH_INGRESS_DRAIN_INTERVAL_MS = 1_000;
-const TWITCH_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const TWITCH_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// Twitch IRC does not replay accepted PRIVMSG lines. These tombstones are near-inert;
-// the durable queue protects the local accept-to-dispatch crash window instead.
-const TWITCH_INGRESS_COMPLETED_MAX_ENTRIES = 1_000;
-const TWITCH_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const TWITCH_INGRESS_FAILED_MAX_ENTRIES = 1_000;
 
 type TwitchIngressPayload = {
   version: typeof TWITCH_INGRESS_PAYLOAD_VERSION;
@@ -163,12 +156,10 @@ export function createTwitchIngress(options: {
     },
     deferredClaims: "manual",
     pollIntervalMs: options.pollIntervalMs ?? TWITCH_INGRESS_DRAIN_INTERVAL_MS,
+    // Twitch IRC does not replay PRIVMSG lines; these 1k tombstones only guard local crashes.
     retention: {
-      pruneIntervalMs: TWITCH_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: TWITCH_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: TWITCH_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: TWITCH_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: TWITCH_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     drain: {
       resolveNonRetryableFailure: (error) => {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 describe("Codex app-server websocket transport", () => {
   const clients: CodexAppServerClient[] = [];
@@ -53,7 +54,7 @@ describe("Codex app-server websocket transport", () => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
           socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.143.0" } }),
+            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.146.0" } }),
           );
           return;
         }
@@ -169,7 +170,10 @@ describe("Codex app-server websocket transport", () => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
           socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.144.1" } }),
+            JSON.stringify({
+              id: message.id,
+              result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION}` },
+            }),
           );
           return;
         }

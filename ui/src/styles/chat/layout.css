@@ -2644,6 +2644,144 @@ openclaw-chat-page {
   stroke-linejoin: round;
 }
 
+.agent-chat__capability-menu::part(menu) {
+  width: 292px;
+  min-width: 292px;
+  max-width: min(292px, calc(100vw - 24px));
+}
+
+.agent-chat__capability-menu-item,
+.agent-chat__capability-menu-state {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-chat__capability-menu-item::part(base),
+.agent-chat__attach-menu-option::part(base) {
+  min-height: 34px;
+}
+
+.agent-chat__capability-menu-item svg,
+.agent-chat__capability-menu-state svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.agent-chat__capability-menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.agent-chat__capability-menu-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.agent-chat__capability-menu-badge,
+.agent-chat__capability-menu-session-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.agent-chat__capability-menu-badge {
+  min-height: 18px;
+  padding: 0 6px;
+}
+
+.agent-chat__capability-menu-session-tag {
+  margin-left: 5px;
+  padding: 3px 5px;
+}
+
+.agent-chat__capability-menu-chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.agent-chat__capability-menu-label {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-chat__capability-menu-note,
+.agent-chat__capability-menu-state {
+  color: var(--muted);
+}
+
+.agent-chat__capability-menu-state {
+  padding: 10px 12px;
+  line-height: 1.4;
+}
+
+.agent-chat__capability-menu-switch {
+  pointer-events: none;
+}
+
+.agent-chat__capability-menu-subrow::part(base) {
+  padding-left: 28px;
+}
+
+.agent-chat__capability-menu-link {
+  display: block;
+  width: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+
+.agent-chat__session-overrides-pill {
+  display: inline-flex;
+  order: 2;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-height: 28px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.agent-chat__session-overrides-pill button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-chat__session-overrides-open {
+  padding: 0 8px 0 10px;
+  font-size: 11px;
+}
+
+.agent-chat__session-overrides-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.agent-chat__session-overrides-pill button:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.agent-chat__session-overrides-clear svg {
+  width: 13px;
+  height: 13px;
+}
+
 /* Selected/open states stay a quiet neutral wash; only live recording gets a
    (soft) danger tint so "active" chrome never competes with the send button. */
 .agent-chat__input-btn--active,

@@ -18,11 +18,6 @@ import { ThreadType } from "./zca-constants.js";
 
 const ZALOUSER_INGRESS_PAYLOAD_VERSION = 1;
 const ZALOUSER_INGRESS_POLL_INTERVAL_MS = 1_000;
-const ZALOUSER_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const ZALOUSER_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const ZALOUSER_INGRESS_COMPLETED_MAX_ENTRIES = 1_000;
-const ZALOUSER_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const ZALOUSER_INGRESS_FAILED_MAX_ENTRIES = 1_000;
 const ZALOUSER_INGRESS_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
 type ZalouserIngressPayload = {
@@ -187,11 +182,8 @@ export function createZalouserIngressMonitor(options: {
     },
     pollIntervalMs: options.pollIntervalMs ?? ZALOUSER_INGRESS_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: ZALOUSER_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: ZALOUSER_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: ZALOUSER_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: ZALOUSER_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: ZALOUSER_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: ZALOUSER_INGRESS_APPEND_RETRY_DELAYS_MS,
     // Abort leaves the durable row replayable, so no reply bookkeeping remains owned here.

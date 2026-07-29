@@ -62,6 +62,12 @@ describe("sidebar entries", () => {
     expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
   });
 
+  it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
+    expect(settingsRoutes).not.toContain("ai-agents");
+    expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
+    expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
+  });
+
   it("keeps devices in connection settings and drops stale pinned entries", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
     expect(settingsRoutes).toContain("nodes");

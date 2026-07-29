@@ -16,10 +16,6 @@ import type { DiscordMessageEvent } from "./listeners.js";
 
 const DISCORD_INGRESS_PAYLOAD_VERSION = 1;
 const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
-const DISCORD_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60_000;
-const DISCORD_INGRESS_COMPLETED_MAX_ENTRIES = 5_000;
-const DISCORD_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60_000;
-const DISCORD_INGRESS_FAILED_MAX_ENTRIES = 5_000;
 
 type DiscordIngressPayload = {
   version: 1;
@@ -149,10 +145,8 @@ export function createDiscordIngressMonitor(params: {
     retention: {
       // Discord previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      completedTtlMs: DISCORD_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: DISCORD_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: DISCORD_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: DISCORD_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 5_000,
+      failedMaxEntries: 5_000,
     },
     appendRetryDelaysMs: [0],
     drain: {

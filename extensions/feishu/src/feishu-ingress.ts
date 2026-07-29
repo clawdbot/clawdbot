@@ -16,11 +16,6 @@ import { getFeishuRuntime } from "./runtime.js";
 
 const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
 const FEISHU_INGRESS_POLL_INTERVAL_MS = 500;
-const FEISHU_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const FEISHU_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const FEISHU_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const FEISHU_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const FEISHU_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 const FEISHU_DURABLE_EVENT_TYPES = new Set([
   "drive.notice.comment_add_v1",
   "im.message.receive_v1",
@@ -428,13 +423,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
     },
     deferredClaims: "wait-on-stop",
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: FEISHU_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: FEISHU_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: FEISHU_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: FEISHU_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: FEISHU_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     drain: {
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,

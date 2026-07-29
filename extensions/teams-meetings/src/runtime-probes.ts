@@ -3,11 +3,8 @@ import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } f
 import type {
   TeamsMeetingsChromeHealth,
   TeamsMeetingsJoinRequest,
-  TeamsMeetingsPluginTypes,
   TeamsMeetingsSession,
 } from "./transports/types.js";
-
-export type TeamsMeetingsProbeContext = TeamsMeetingsPluginTypes["ProbeContext"];
 
 const probes = MeetingPlatformAdapter.createRuntimeProbes<
   TeamsMeetingsConfig,

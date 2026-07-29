@@ -185,7 +185,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "memory", "automation"],
+    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -200,10 +200,16 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 // Settings subpages render with settings chrome but stay out of the sidebar.
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
-const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup", "lobsterdex"];
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  "ai-agents",
+  "model-setup",
+  "lobsterdex",
+];
+export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
 const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
   Readonly<Record<NavigationRouteId, NavigationRouteId>>
 > = {
+  "ai-agents": "agents",
   "model-setup": "model-providers",
 };
 

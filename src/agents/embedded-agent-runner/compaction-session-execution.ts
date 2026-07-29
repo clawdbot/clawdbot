@@ -172,6 +172,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         provider,
         modelId,
         model: effectiveModel,
+        agentId: sessionAgentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey ?? sandboxSessionKey,
+        runId,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,
