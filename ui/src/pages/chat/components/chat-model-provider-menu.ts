@@ -10,7 +10,6 @@ export function selectChatModelProvider(event: Event, provider: string): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-provider]").forEach((button) => {
     const active = button.dataset.chatModelProvider === provider;
     button.setAttribute("aria-pressed", active ? "true" : "false");
-    button.setAttribute("aria-selected", active ? "true" : "false");
     button.tabIndex = active ? 0 : -1;
   });
   menu.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]").forEach((group) => {

@@ -675,11 +675,7 @@ function renderChatModelReasoningSelect(params: {
                   selectChatModelProvider(event, selectedProvider);
                 }}
               >
-                <div
-                  class="chat-controls__provider-list"
-                  role="tablist"
-                  aria-label=${t("sessionsView.provider")}
-                >
+                <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
                   <div class="chat-controls__inline-select-section-label">
                     ${t("sessionsView.provider")}
                   </div>
@@ -693,9 +689,7 @@ function renderChatModelReasoningSelect(params: {
                           class="chat-controls__provider-option"
                           data-chat-model-provider=${provider}
                           type="button"
-                          role="tab"
                           aria-pressed=${active ? "true" : "false"}
-                          aria-selected=${active ? "true" : "false"}
                           tabindex=${active ? "0" : "-1"}
                           @click=${(event: MouseEvent) => selectChatModelProvider(event, provider)}
                           @mouseenter=${(event: MouseEvent) => {
@@ -731,7 +725,6 @@ function renderChatModelReasoningSelect(params: {
                       <div
                         class="chat-controls__provider-model-group"
                         data-chat-model-provider-group=${provider}
-                        role="tabpanel"
                         aria-label=${`${providerDisplayLabel(provider)} models`}
                         ?hidden=${provider !== selectedProvider}
                       >
