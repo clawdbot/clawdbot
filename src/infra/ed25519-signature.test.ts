@@ -8,7 +8,11 @@ import {
   deriveEd25519PublicKeyRaw,
   ed25519PrivateKeyPemFromRaw,
   ed25519PublicKeyPemFromRaw,
+  isPlausibleEd25519PublicKeyInput,
+  isPlausibleEd25519SignatureInput,
   normalizeEd25519PublicKeyBase64Url,
+  signEd25519Payload,
+  verifyEd25519Signature,
 } from "./ed25519-signature.js";
 
 describe("strict base64 decoding", () => {
@@ -83,5 +87,83 @@ describe("strict Ed25519 keys", () => {
       /canonical PEM/,
     );
     expect(deriveEd25519PrivateKeyRaw(privateKeyPem.trimEnd())).toHaveLength(32);
+  });
+});
+
+describe("pre-auth input bounds", () => {
+  // Verification runs before authentication, so every one of these inputs is
+  // attacker-chosen and unbudgeted: a handshake buys a key parse plus a verify.
+  function keyPair() {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+    return {
+      publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+      privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    };
+  }
+
+  it("still verifies a genuine signature", () => {
+    const { publicKeyPem, privateKeyPem } = keyPair();
+    const signatureBase64Url = signEd25519Payload(privateKeyPem, "payload");
+    expect(
+      verifyEd25519Signature({ publicKey: publicKeyPem, payload: "payload", signatureBase64Url }),
+    ).toBe(true);
+  });
+
+  it("rejects an oversized PEM public key without parsing it", () => {
+    // The PEM path never passes through base64UrlDecode, so the existing
+    // MAX_BASE64URL_DECODE_INPUT_LENGTH bound does not cover it.
+    const { privateKeyPem } = keyPair();
+    const signatureBase64Url = signEd25519Payload(privateKeyPem, "payload");
+    const oversizedPem = `-----BEGIN PUBLIC KEY-----\n${"A".repeat(512 * 1024)}\n-----END PUBLIC KEY-----\n`;
+
+    // Deterministic rather than timing-based: assert the shape check rejects it,
+    // so the key never reaches crypto.createPublicKey. (Measured on the
+    // unpatched path, parsing a 512KB junk PEM costs ~8.6ms against ~0.009ms
+    // for a real key — a wall-clock threshold would be flaky in CI, so the
+    // amplification numbers live in the PR body and the guard is asserted here.)
+    expect(isPlausibleEd25519PublicKeyInput(oversizedPem)).toBe(false);
+    expect(
+      verifyEd25519Signature({
+        publicKey: oversizedPem,
+        payload: "payload",
+        signatureBase64Url,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an oversized signature without parsing the key", () => {
+    const { publicKeyPem } = keyPair();
+    expect(
+      verifyEd25519Signature({
+        publicKey: publicKeyPem,
+        payload: "payload",
+        signatureBase64Url: "A".repeat(512 * 1024),
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a raw public key that is not 32 bytes", () => {
+    expect(isPlausibleEd25519PublicKeyInput("-_8B")).toBe(false);
+    expect(isPlausibleEd25519PublicKeyInput(Buffer.alloc(32).toString("base64url"))).toBe(true);
+  });
+
+  it("accepts every signature encoding the verify path tolerates", () => {
+    const raw = Buffer.alloc(64, 7);
+    expect(isPlausibleEd25519SignatureInput(raw.toString("base64url"))).toBe(true);
+    expect(isPlausibleEd25519SignatureInput(raw.toString("base64"))).toBe(true);
+    expect(isPlausibleEd25519SignatureInput(Buffer.alloc(63).toString("base64url"))).toBe(false);
+  });
+
+  it("rejects empty and non-string input", () => {
+    for (const bad of ["", null, undefined, 42, {}]) {
+      expect(isPlausibleEd25519PublicKeyInput(bad)).toBe(false);
+      expect(isPlausibleEd25519SignatureInput(bad)).toBe(false);
+    }
+  });
+
+  it("still normalises a short non-key value (contract unchanged)", () => {
+    // normalize deliberately accepts any non-empty decode; only length is bounded.
+    expect(normalizeEd25519PublicKeyBase64Url("-_8B")).toBe("-_8B");
+    expect(normalizeEd25519PublicKeyBase64Url("A".repeat(4096))).toBeNull();
   });
 });
