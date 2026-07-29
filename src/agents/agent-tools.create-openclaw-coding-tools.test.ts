@@ -2112,14 +2112,12 @@ describe("createOpenClawCodingTools", () => {
           "apply_patch",
         ),
       );
-
       await applyPatch("delete-memory", {
         input: "*** Begin Patch\n*** Delete File: memory/recreated.md\n*** End Patch",
       });
       await applyPatch("recreate-memory", {
         input: "*** Begin Patch\n*** Add File: memory/recreated.md\n+recreated\n*** End Patch",
       });
-
       expect(recordedOrigin).toBe("agent");
       await expect(
         fs.readFile(path.join(workspaceDir, "memory/recreated.md"), "utf8"),

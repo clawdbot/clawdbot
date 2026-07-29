@@ -12,7 +12,10 @@ import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-re
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
+import {
+  type MemoryWriteProvenanceObserver,
+  withMemoryWriteProvenance,
+} from "./memory-write-provenance.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -372,38 +375,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       },
     };
   }
-  const observer = options.memoryWriteProvenance;
-  if (!observer) {
-    return operations;
-  }
-  const isMissing = (error: unknown) =>
-    (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ||
-    (error instanceof Error && error.message.includes("(path not found)"));
-  return {
-    ...operations,
-    writeFile: async (filePath, content) => {
-      if (!observer.classifies(filePath)) {
-        await operations.writeFile(filePath, content);
-        return;
-      }
-      const contentBefore = await operations.readFile(filePath).catch((error: unknown) => {
-        if (isMissing(error)) {
-          return "";
-        }
-        throw error;
-      });
-      await observer.write({
-        absolutePath: filePath,
-        contentBefore,
-        contentAfter: content,
-        commit: () => operations.writeFile(filePath, content),
-      });
-    },
-    remove: async (filePath) => {
-      await operations.remove(filePath);
-      await observer.clearAfterDelete(filePath);
-    },
-  };
+  return withMemoryWriteProvenance(operations, options.memoryWriteProvenance);
 }
 
 async function ensureDir(filePath: string, ops: PatchFileOps) {

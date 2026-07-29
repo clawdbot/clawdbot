@@ -34,7 +34,10 @@ import {
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
+import {
+  type MemoryWriteProvenanceObserver,
+  withMemoryWriteProvenance,
+} from "./memory-write-provenance.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -1078,50 +1081,6 @@ function createSandboxEditOperations(params: SandboxToolParams) {
     } as const,
     params.memoryWriteProvenance,
   );
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (
-    (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ||
-    (error instanceof FsSafeError && error.code === "not-found")
-  );
-}
-
-function withMemoryWriteProvenance<
-  T extends {
-    readFile: (absolutePath: string) => Promise<Buffer | string>;
-    writeFile: (absolutePath: string, content: string) => Promise<void>;
-  },
->(operations: T, observer: MemoryWriteProvenanceObserver | undefined): T {
-  if (!observer) {
-    return operations;
-  }
-  return {
-    ...operations,
-    writeFile: async (absolutePath: string, content: string) => {
-      if (!observer.classifies(absolutePath)) {
-        await operations.writeFile(absolutePath, content);
-        return;
-      }
-      const contentBefore = await operations
-        .readFile(absolutePath)
-        .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
-        .catch((error: unknown) => {
-          if (isMissingFileError(error)) {
-            return "";
-          }
-          throw error;
-        });
-      // Persist the predicted post-write hash first. A provenance failure must
-      // prevent an otherwise untracked memory mutation from becoming trusted.
-      await observer.write({
-        absolutePath,
-        contentBefore,
-        contentAfter: content,
-        commit: () => operations.writeFile(absolutePath, content),
-      });
-    },
-  } as T;
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {

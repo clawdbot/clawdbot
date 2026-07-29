@@ -13,6 +13,59 @@ export type MemoryWriteProvenanceObserver = {
   clearAfterDelete: (absolutePath: string) => Promise<void>;
 };
 
+type ProvenanceWriteOperations = {
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  remove?: (absolutePath: string) => Promise<void>;
+};
+
+function isMissingFileError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "ENOENT" || code === "not-found" || String(error).includes("(path not found)");
+}
+
+export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
+  operations: T,
+  observer: MemoryWriteProvenanceObserver | undefined,
+): T {
+  if (!observer) {
+    return operations;
+  }
+  const remove = operations.remove;
+  return {
+    ...operations,
+    writeFile: async (absolutePath: string, content: string) => {
+      if (!observer.classifies(absolutePath)) {
+        await operations.writeFile(absolutePath, content);
+        return;
+      }
+      const contentBefore = await operations
+        .readFile(absolutePath)
+        .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
+        .catch((error: unknown) => {
+          if (!isMissingFileError(error)) {
+            throw error;
+          }
+          return "";
+        });
+      await observer.write({
+        absolutePath,
+        contentBefore,
+        contentAfter: content,
+        commit: () => operations.writeFile(absolutePath, content),
+      });
+    },
+    ...(remove
+      ? {
+          remove: async (absolutePath: string) => {
+            await remove(absolutePath);
+            await observer.clearAfterDelete(absolutePath);
+          },
+        }
+      : {}),
+  } as T;
+}
+
 function resolveMemoryRelativePath(root: string, absolutePath: string): string | undefined {
   const relativePath = path.relative(path.resolve(root), path.resolve(absolutePath));
   if (
