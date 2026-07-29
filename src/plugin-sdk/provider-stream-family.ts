@@ -12,6 +12,7 @@ export {
   buildProviderStreamFamilyHooks,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
+  // Legacy shortcuts must remain identity aliases across both shipped SDK subpaths.
   GOOGLE_THINKING_STREAM_HOOKS,
   KILOCODE_THINKING_STREAM_HOOKS,
   MINIMAX_FAST_MODE_STREAM_HOOKS,
