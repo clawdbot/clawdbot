@@ -1,12 +1,13 @@
 // Shared state database recovery tests cover eviction of a corruption-poisoned cached handle.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -23,14 +24,10 @@ const PROBE_SCOPE = "corruption-recovery-test";
 const CORRUPT_PAGE_HEADER = Uint8Array.from([0x0a, 0x04, 0xc7, 0x00, 0xcb, 0x01, 0xb9, 0x00]);
 const SQLITE_PAGE_SIZE = 4096;
 
-const tempStateDirs: string[] = [];
+const tempStateDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createTempStateDir(): string {
-  const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-corruption-")),
-  );
-  tempStateDirs.push(stateDir);
-  return stateDir;
+  return fs.realpathSync(tempStateDirs.make("openclaw-state-db-corruption-"));
 }
 
 function sqliteError(message: string, errcode: number): Error {
@@ -84,11 +81,49 @@ function readProbeEventKeys(database: { db: DatabaseSync }): string[] {
   return rows.map((row) => row.event_key);
 }
 
+function prepareCorruptedCachedDatabase(env: NodeJS.ProcessEnv): {
+  databasePath: string;
+  healthySnapshot: Buffer;
+  poisoned: ReturnType<typeof openOpenClawStateDatabase>;
+} {
+  const poisoned = openOpenClawStateDatabase({ env });
+  const databasePath = poisoned.path;
+  insertProbeEvent(env, "before-corruption");
+  expect(readProbeEventKeys(poisoned)).toEqual(["before-corruption"]);
+
+  // A second connection bumps SQLite's change counter and folds the WAL back
+  // into the main file, so the cached handle must reread page 1 and the
+  // healthy snapshot below is byte-complete.
+  const { DatabaseSync } = requireNodeSqlite();
+  const second = new DatabaseSync(databasePath);
+  try {
+    second.exec(
+      `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at)
+       VALUES ('${PROBE_SCOPE}', 'second-connection', '{}', 2)`,
+    );
+    second.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } finally {
+    second.close();
+  }
+  const healthySnapshot = fs.readFileSync(databasePath);
+  corruptPageOne(databasePath);
+  return { databasePath, healthySnapshot, poisoned };
+}
+
+function expectNotADatabaseError(operation: () => unknown): void {
+  let thrown: unknown;
+  try {
+    operation();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(Error);
+  expect((thrown as Error).message).toContain("file is not a database");
+  expect(thrown).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 26 });
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  for (const stateDir of tempStateDirs.splice(0)) {
-    fs.rmSync(stateDir, { force: true, recursive: true });
-  }
 });
 
 describe("isSqliteCorruptionError", () => {
@@ -134,38 +169,9 @@ describe("isSqliteCorruptionError", () => {
 describe("shared state write transaction corruption recovery", () => {
   it("evicts the cached handle so a repaired file recovers without a process restart", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-    const poisoned = openOpenClawStateDatabase({ env });
-    const databasePath = poisoned.path;
-    insertProbeEvent(env, "before-corruption");
-    expect(readProbeEventKeys(poisoned)).toEqual(["before-corruption"]);
+    const { databasePath, healthySnapshot, poisoned } = prepareCorruptedCachedDatabase(env);
 
-    // A second connection bumps SQLite's change counter and folds the WAL back
-    // into the main file, so the cached handle must reread page 1 and the
-    // healthy snapshot below is byte-complete.
-    const { DatabaseSync } = requireNodeSqlite();
-    const second = new DatabaseSync(databasePath);
-    try {
-      second.exec(
-        `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at)
-         VALUES ('${PROBE_SCOPE}', 'second-connection', '{}', 2)`,
-      );
-      second.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-    } finally {
-      second.close();
-    }
-    const healthySnapshot = fs.readFileSync(databasePath);
-
-    corruptPageOne(databasePath);
-
-    let thrown: unknown;
-    try {
-      insertProbeEvent(env, "during-corruption");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("file is not a database");
-    expect(thrown).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 26 });
+    expectNotADatabaseError(() => insertProbeEvent(env, "during-corruption"));
     expect(getOpenClawStateDatabaseIfOpen({ env })).toBeUndefined();
 
     fs.writeFileSync(databasePath, healthySnapshot);
@@ -174,6 +180,38 @@ describe("shared state write transaction corruption recovery", () => {
     expect(reopened).not.toBe(poisoned);
     expect(reopened.db.isOpen).toBe(true);
     expect(readProbeEventKeys(reopened)).toEqual(["before-corruption", "second-connection"]);
+  });
+
+  it("does not evict a different cached owner when an injected write handle fails", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const cached = openOpenClawStateDatabase({ env });
+    const { DatabaseSync } = requireNodeSqlite();
+    const injectedDb = new DatabaseSync(":memory:");
+    const injected = {
+      db: injectedDb,
+      path: cached.path,
+      walMaintenance: {
+        checkpoint: () => false,
+        close: () => false,
+      },
+    };
+
+    try {
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            throw sqliteError("file is not a database", 26);
+          },
+          { database: injected },
+        ),
+      ).toThrow(/file is not a database/u);
+
+      expect(getOpenClawStateDatabaseIfOpen({ env })).toBe(cached);
+      expect(cached.db.isOpen).toBe(true);
+      expect(injectedDb.isOpen).toBe(true);
+    } finally {
+      injectedDb.close();
+    }
   });
 
   it("keeps the cached handle when a write fails without proven corruption", () => {
@@ -190,5 +228,40 @@ describe("shared state write transaction corruption recovery", () => {
     ).toThrow(/database is locked/u);
 
     expect(getOpenClawStateDatabaseIfOpen({ env })).toBe(cached);
+  });
+});
+
+describe("shared state read corruption recovery", () => {
+  it("evicts a cached handle after a Kysely read reports corruption", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const { databasePath, healthySnapshot, poisoned } = prepareCorruptedCachedDatabase(env);
+
+    expectNotADatabaseError(() => readProbeEventKeys(poisoned));
+    expect(getOpenClawStateDatabaseIfOpen({ env })).toBeUndefined();
+
+    fs.writeFileSync(databasePath, healthySnapshot);
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(reopened).not.toBe(poisoned);
+    expect(readProbeEventKeys(reopened)).toEqual(["before-corruption", "second-connection"]);
+  });
+
+  it("evicts a cached handle after a raw read-only operation reports corruption", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const { databasePath, healthySnapshot, poisoned } = prepareCorruptedCachedDatabase(env);
+
+    expectNotADatabaseError(() =>
+      withOpenClawStateDatabaseReadOnly(
+        ({ db }) => db.prepare("SELECT count(*) AS total FROM diagnostic_events").get(),
+        { env },
+      ),
+    );
+    expect(getOpenClawStateDatabaseIfOpen({ env })).toBeUndefined();
+
+    fs.writeFileSync(databasePath, healthySnapshot);
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(reopened).not.toBe(poisoned);
+    expect(readProbeEventKeys(reopened)).toEqual(["before-corruption", "second-connection"]);
   });
 });
