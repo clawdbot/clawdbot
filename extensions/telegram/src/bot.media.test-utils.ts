@@ -1,6 +1,7 @@
 // Telegram helper module supports bot.media utils behavior.
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import * as harness from "./bot.media.e2e-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
@@ -62,6 +63,9 @@ export async function createBotHandlerWithOptions(options: {
   const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
   createTelegramBotRef({
     token: "tok",
+    // Production always constructs the bot from getMe(), so inbound handlers may
+    // resolve the bot user id from botInfo when a test ctx carries only a username.
+    botInfo: telegramBotInfoForTest,
     config: harness.telegramBotDepsForTest.getRuntimeConfig(),
     testTimings: TELEGRAM_TEST_TIMINGS,
     ...(effectiveProxyFetch ? { proxyFetch: effectiveProxyFetch } : {}),

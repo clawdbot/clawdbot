@@ -4,6 +4,7 @@ export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directo
 export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
+  installChannelDmPolicyContractSuite,
   installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,

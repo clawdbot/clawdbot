@@ -5,12 +5,13 @@ import {
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
+import { TelegramIngressPayloadError } from "./telegram-ingress-spool.payload.js";
 
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
 type TelegramIngressNonRetryableFailure = {
-  reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
+  reason: "invalid-event" | "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
   message: string;
 };
 
@@ -23,6 +24,9 @@ export function resolveTelegramIngressNonRetryableFailure(
     current.error,
   ])) {
     const message = formatErrorMessage(candidate);
+    if (candidate instanceof TelegramIngressPayloadError) {
+      return { reason: "invalid-event", message };
+    }
     if (isTelegramMessageDispatchReplayForgetError(candidate)) {
       // A committed dispatch key that cannot be rolled back makes retry unsafe:
       // the next replay can be duplicate-suppressed and then deleted.

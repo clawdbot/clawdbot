@@ -1,13 +1,15 @@
 // Googlechat tests cover actions plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
+const inspectGoogleChatAccount = vi.hoisted(() => vi.fn());
+const listGoogleChatAccountIds = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
-  listEnabledGoogleChatAccounts,
+  inspectGoogleChatAccount,
+  listGoogleChatAccountIds,
   resolveGoogleChatAccount,
 }));
 
@@ -49,7 +51,7 @@ describe("googlechat message actions", () => {
       ...overrides,
       config: {
         groupPolicy: "open",
-        dm: { policy: "open" },
+        dmPolicy: "open",
         ...overrideConfig,
       },
     };
@@ -68,16 +70,16 @@ describe("googlechat message actions", () => {
   }
 
   it("describes only send actions when enabled accounts exist", () => {
-    listEnabledGoogleChatAccounts.mockReturnValueOnce([]);
+    listGoogleChatAccountIds.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 
-    listEnabledGoogleChatAccounts.mockReturnValueOnce([
-      {
-        enabled: true,
-        credentialSource: "service-account",
-        config: { actions: { reactions: true } },
-      },
-    ]);
+    listGoogleChatAccountIds.mockReturnValueOnce(["default"]);
+    inspectGoogleChatAccount.mockReturnValueOnce({
+      enabled: true,
+      credentialSource: "inline",
+      tokenStatus: "available",
+      config: {},
+    });
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
       actions: ["send"],
@@ -87,26 +89,26 @@ describe("googlechat message actions", () => {
   });
 
   it("does not expose actions for configured-unavailable file credentials", () => {
-    listEnabledGoogleChatAccounts.mockReturnValueOnce([
-      {
-        enabled: true,
-        credentialSource: "file",
-        tokenStatus: "configured_unavailable",
-        config: {},
-      },
-    ]);
+    listGoogleChatAccountIds.mockReturnValueOnce(["default"]);
+    inspectGoogleChatAccount.mockReturnValueOnce({
+      enabled: true,
+      credentialSource: "file",
+      tokenStatus: "configured_unavailable",
+      config: {},
+    });
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
   });
 
-  it("keeps the legacy reaction gate from changing account-scoped discovery", () => {
-    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
-      enabled: true,
-      credentialSource: "service-account",
-      config: {
-        actions: { reactions: accountId === "work" },
-      },
-    }));
+  it("keeps account-scoped discovery send-only", () => {
+    inspectGoogleChatAccount.mockImplementation(
+      ({ accountId: _accountId }: { accountId?: string | null }) => ({
+        enabled: true,
+        credentialSource: "inline",
+        tokenStatus: "available",
+        config: {},
+      }),
+    );
 
     for (const accountId of ["default", "work"]) {
       expect(

@@ -1,12 +1,13 @@
 // Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { classifyMSTeamsSendError } from "./errors.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -26,18 +27,9 @@ type MSTeamsIngressPayload = {
   rawActivity: string;
 };
 
-export type MSTeamsIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
-};
+export type MSTeamsIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-export type MSTeamsIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type MSTeamsIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type MSTeamsIngressOptions = {
   accountId: string;
@@ -162,80 +154,70 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     getMSTeamsRuntime().state.openChannelIngressQueue<MSTeamsIngressPayload>({
       accountId: options.accountId,
     });
-  const shutdown = new AbortController();
   const liveContexts = new Map<string, MSTeamsTurnContext>();
-  const activeDeliveries = new Set<Promise<MSTeamsIngressDispatchResult | void>>();
-  const drain = createChannelIngressDrain<MSTeamsIngressPayload>({
+  const monitor = createChannelIngressMonitor<
+    MSTeamsIngressActivity,
+    Omit<MSTeamsIngressPayload, "version">,
+    MSTeamsIngressPayload
+  >({
     queue,
-    abortSignal: shutdown.signal,
-    orderBy: "received",
-    scanLimit: MSTEAMS_INGRESS_SCAN_LIMIT,
-    startLimit: MSTEAMS_INGRESS_MAX_CONCURRENT_DELIVERIES,
-    retryPolicy: {
-      maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+    inspect: (activity) => inspectMSTeamsIngressActivity(activity),
+    payload: {
+      version: MSTEAMS_INGRESS_VERSION,
+      serialize: (activity, { receivedAt }) => ({
+        receivedAt,
+        rawActivity: JSON.stringify(activity),
+      }),
+      deserialize: (_body, { claim }) => parseClaimedActivity(claim.payload, claim.id),
+      encode: ({ body }) => ({ version: MSTEAMS_INGRESS_VERSION, ...body }),
+      decode: (payload) => ({
+        version: payload.version,
+        body: { receivedAt: payload.receivedAt, rawActivity: payload.rawActivity },
+      }),
+      createClaimError: (kind, claim) =>
+        new MSTeamsIngressPayloadError(
+          "invalid-activity",
+          kind === "invalid-version"
+            ? "Microsoft Teams ingress payload is invalid."
+            : `Microsoft Teams ingress row ${claim.id} changed activity identity.`,
+        ),
     },
-    resolveNonRetryableFailure: (error) => {
-      if (error instanceof MSTeamsIngressPayloadError) {
-        return { reason: error.reason, message: error.message };
-      }
-      const classification = classifyMSTeamsSendError(error);
-      return classification.kind === "auth"
-        ? { reason: "authentication-failed", message: errorText(error) }
-        : null;
+    deliver: (activity, lifecycle, claim) => {
+      const liveContext = liveContexts.get(claim.id);
+      liveContexts.delete(claim.id);
+      return options.dispatch(activity, lifecycle, liveContext);
     },
-    onLog: (message) => options.runtime.error?.(`msteams: ${message}`),
-    dispatchClaimedEvent: async (claimed, lifecycle) => {
-      const activity = parseClaimedActivity(claimed.payload, claimed.id);
-      const liveContext = liveContexts.get(claimed.id);
-      liveContexts.delete(claimed.id);
-      const delivery = Promise.resolve(options.dispatch(activity, lifecycle, liveContext));
-      activeDeliveries.add(delivery);
-      try {
-        return await delivery;
-      } finally {
-        activeDeliveries.delete(delivery);
-      }
+    pollIntervalMs: MSTEAMS_INGRESS_DRAIN_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: 0,
+      completedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
+      completedMaxEntries: MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES,
+      failedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
+      failedMaxEntries: MSTEAMS_INGRESS_FAILED_MAX_ENTRIES,
     },
+    appendRetryDelaysMs: [0],
+    waitForDeliveryIdleBeforeRepump: false,
+    waitForDeliveryIdleOnStop: false,
+    drain: {
+      orderBy: "received",
+      scanLimit: MSTEAMS_INGRESS_SCAN_LIMIT,
+      startLimit: MSTEAMS_INGRESS_MAX_CONCURRENT_DELIVERIES,
+      resolveNonRetryableFailure: (error) => {
+        if (error instanceof MSTeamsIngressPayloadError) {
+          return { reason: error.reason, message: error.message };
+        }
+        const classification = classifyMSTeamsSendError(error);
+        return classification.kind === "auth"
+          ? { reason: "authentication-failed", message: errorText(error) }
+          : null;
+      },
+      onLog: (message) => options.runtime.error?.(`msteams: ${message}`),
+    },
+    createStoppedError: () => new Error("Microsoft Teams ingress stopped."),
+    onError: (error) =>
+      options.runtime.error?.(`msteams ingress drain failed: ${errorText(error)}`),
   });
-  let running = false;
-  let stopped = false;
-  let drainRequested = false;
-  let drainTask: Promise<void> | undefined;
-  let drainTimer: ReturnType<typeof setInterval> | undefined;
-
-  const requestDrain = (): void => {
-    if (!running || shutdown.signal.aborted) {
-      return;
-    }
-    drainRequested = true;
-    if (drainTask) {
-      return;
-    }
-    drainTask = (async () => {
-      while (drainRequested && !shutdown.signal.aborted) {
-        if (!running) {
-          break;
-        }
-        drainRequested = false;
-        await drain.drainOnce({
-          shouldStop: () =>
-            !running ||
-            shutdown.signal.aborted ||
-            activeDeliveries.size >= MSTEAMS_INGRESS_MAX_CONCURRENT_DELIVERIES,
-        });
-      }
-    })()
-      .catch((error: unknown) => {
-        options.runtime.error?.(`msteams ingress drain failed: ${errorText(error)}`);
-      })
-      .finally(() => {
-        drainTask = undefined;
-        if (running && drainRequested && !shutdown.signal.aborted) {
-          requestDrain();
-        }
-      });
-  };
+  let stopTask: Promise<void> | undefined;
 
   return {
     accept: async (activity, liveContext) => {
@@ -243,13 +225,6 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
       if (!facts) {
         return;
       }
-      await queue.prune({
-        completedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-        completedMaxEntries: MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES,
-        failedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-        failedMaxEntries: MSTEAMS_INGRESS_FAILED_MAX_ENTRIES,
-      });
-      const receivedAt = Date.now();
       // Install before the durable append: the drain can claim and consume the
       // entry the moment the insert commits; a set afterwards would leak. A
       // duplicate delivery must not clobber the first delivery's context.
@@ -266,51 +241,44 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
           liveContexts.delete(facts.eventId);
         }
       };
-      let result;
+      let result: Awaited<ReturnType<typeof monitor.admit>>;
       try {
-        result = await queue.enqueue(
-          facts.eventId,
-          {
-            version: MSTEAMS_INGRESS_VERSION,
-            receivedAt,
-            rawActivity: JSON.stringify(activity),
-          },
-          { receivedAt, laneKey: facts.laneKey },
-        );
+        result = await monitor.admit(activity, { facts });
       } catch (error) {
         uninstallLiveContext();
         throw error;
       }
-      if (!(result.kind === "accepted" || result.kind === "pending")) {
+      if (
+        result.kind === "ignored" ||
+        !(result.queueResult.kind === "accepted" || result.queueResult.kind === "pending")
+      ) {
         uninstallLiveContext();
       }
-      requestDrain();
     },
     start: () => {
-      if (running || stopped) {
-        return;
+      if (!stopTask) {
+        monitor.start();
       }
-      running = true;
-      requestDrain();
-      drainTimer = setInterval(requestDrain, MSTEAMS_INGRESS_DRAIN_INTERVAL_MS);
-      drainTimer.unref?.();
     },
-    stop: async () => {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      running = false;
-      if (drainTimer) {
-        clearInterval(drainTimer);
-        drainTimer = undefined;
-      }
-      await drainTask;
-      await Promise.allSettled(activeDeliveries);
-      await drain.waitForIdle();
-      shutdown.abort();
-      drain.dispose();
-      liveContexts.clear();
+    stop: () => {
+      stopTask ??= (async () => {
+        await monitor.pause();
+        let graceTimer: ReturnType<typeof setTimeout> | undefined;
+        const graceElapsed = new Promise<void>((resolve) => {
+          graceTimer = setTimeout(resolve, MSTEAMS_REQUEST_TIMEOUT_MS);
+          graceTimer.unref?.();
+        });
+        try {
+          // Preserve completed side effects when possible, but retain an abort path for
+          // deliveries that themselves wait on the lifecycle signal.
+          await Promise.race([monitor.waitForIdle(), graceElapsed]);
+        } finally {
+          clearTimeout(graceTimer);
+          await monitor.stop();
+          liveContexts.clear();
+        }
+      })();
+      return stopTask;
     },
   };
 }

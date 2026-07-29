@@ -33,6 +33,7 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import type { MemoryEntryProvenance } from "./types.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -53,10 +54,16 @@ export type MemoryFileEntry = {
 export type MemoryChunk = {
   startLine: number;
   endLine: number;
+  entryStartLine?: number;
+  entryEndLine?: number;
   text: string;
   hash: string;
   embeddingInput?: EmbeddingInput;
+  provenance?: MemoryEntryProvenance;
 };
+
+// Persisted with index metadata so boundary changes rebuild unchanged files.
+export const MEMORY_CHUNKING_VERSION = 1;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -108,7 +115,11 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === MEMORY_HOST_ROOT_FILENAME || normalized.toLowerCase() === "dreams.md") {
+  if (
+    normalized === MEMORY_HOST_ROOT_FILENAME ||
+    normalized === "USER.md" ||
+    normalized.toLowerCase() === "dreams.md"
+  ) {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -178,6 +189,7 @@ export async function listMemoryFiles(
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
+  await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
@@ -387,9 +399,105 @@ export async function buildMultimodalChunkForIndexing(
   };
 }
 
+export type CuratedMarkdownEntry = {
+  startLine: number;
+  endLine: number;
+  text: string;
+  kind: "entry" | "section";
+};
+
+export const INVALID_PROJECT_ANNOTATION_KEY = "!invalid-project-annotation";
+
+export type CuratedProjectAnnotations = {
+  annotated: boolean;
+  valid: boolean;
+  keys: string[];
+  rawCount: number;
+  validCount: number;
+};
+
+export function normalizeProjectAnnotationKey(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.startsWith("path:")) {
+    return trimmed;
+  }
+  const separator = trimmed.indexOf("/");
+  if (separator < 1) {
+    return trimmed;
+  }
+  // Preserve remote path case so case-sensitive hosts fail closed. Providers
+  // with case-insensitive slugs may miss boosts/digests across casing variants,
+  // but folding paths could cross-inject memory between distinct repositories.
+  return `${trimmed.slice(0, separator).toLowerCase()}${trimmed.slice(separator)}`;
+}
+
+export function extractProjectKeysFromCuratedEntry(text: string): CuratedProjectAnnotations {
+  const keys = new Set<string>();
+  const markerCount = [...text.matchAll(/<!--\s*project\s*:/giu)].length;
+  let parsedCount = 0;
+  let rawCount = 0;
+  let validCount = 0;
+  for (const match of text.matchAll(/<!--\s*project\s*:\s*([\s\S]*?)\s*-->/giu)) {
+    parsedCount += 1;
+    for (const rawKey of (match[1] ?? "").split(";")) {
+      rawCount += 1;
+      const key = normalizeProjectAnnotationKey(rawKey);
+      if (key) {
+        keys.add(key);
+        validCount += 1;
+      }
+    }
+  }
+  const annotated = markerCount > 0;
+  return {
+    annotated,
+    valid: !annotated || (parsedCount === markerCount && rawCount > 0 && rawCount === validCount),
+    keys: [...keys],
+    rawCount,
+    validCount,
+  };
+}
+
+export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEntry[] {
+  const lines = content.split("\n");
+  const entries: CuratedMarkdownEntry[] = [];
+  let startIndex = 0;
+  let kind: CuratedMarkdownEntry["kind"] = lines[0]?.startsWith("- ") ? "entry" : "section";
+  const flush = (endIndex: number) => {
+    if (endIndex < startIndex) {
+      return;
+    }
+    entries.push({
+      startLine: startIndex + 1,
+      endLine: endIndex + 1,
+      text: lines.slice(startIndex, endIndex + 1).join("\n"),
+      kind,
+    });
+  };
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const nextKind = line.startsWith("- ")
+      ? "entry"
+      : /^#{1,6}(?:\s|$)/u.test(line)
+        ? "section"
+        : undefined;
+    if (!nextKind) {
+      continue;
+    }
+    flush(index - 1);
+    startIndex = index;
+    kind = nextKind;
+  }
+  flush(lines.length - 1);
+  return entries;
+}
+
 export function chunkMarkdown(
   content: string,
-  chunking: { tokens: number; overlap: number },
+  chunking: { tokens: number; overlap: number; perEntry?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
   if (lines.length === 0) {
@@ -401,6 +509,11 @@ export function chunkMarkdown(
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
+  let entryStartLine: number | undefined;
+  let entryFirstChunk = 0;
+  const curatedEntryStarts = chunking.perEntry
+    ? new Map(splitCuratedMarkdownEntries(content).map((entry) => [entry.startLine, entry]))
+    : undefined;
 
   const flush = () => {
     if (current.length === 0) {
@@ -446,9 +559,32 @@ export function chunkMarkdown(
     currentChars = acc;
   };
 
+  const finishEntry = (entryEndLine: number) => {
+    if (entryStartLine === undefined) {
+      return;
+    }
+    // Every size fragment remains part of the same curated entry and inherits
+    // its full annotation span; dropping scope on later fragments can leak them.
+    for (const chunk of chunks.slice(entryFirstChunk)) {
+      chunk.entryStartLine = entryStartLine;
+      chunk.entryEndLine = entryEndLine;
+    }
+  };
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
+    const curatedEntry = curatedEntryStarts?.get(lineNo);
+    if (curatedEntry) {
+      if (current.length > 0) {
+        flush();
+      }
+      finishEntry(lineNo - 1);
+      current = [];
+      currentChars = 0;
+      entryStartLine = curatedEntry.kind === "entry" ? lineNo : undefined;
+      entryFirstChunk = chunks.length;
+    }
     const segments: string[] = [];
     if (line.length === 0) {
       segments.push("");
@@ -487,6 +623,7 @@ export function chunkMarkdown(
     }
   }
   flush();
+  finishEntry(lines.length);
   return chunks;
 }
 

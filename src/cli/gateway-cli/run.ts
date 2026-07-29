@@ -39,6 +39,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
+  formatGatewayCrashLoopManualChannelStartHint,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
@@ -458,15 +459,18 @@ function isGatewayAlreadyRunningLockError(err: unknown): boolean {
   );
 }
 
-function resolveGatewayLockErrorExitCode(
-  err: unknown,
-  supervisor: RespawnSupervisor | null,
-  healthyGatewayConfirmed: boolean,
-): number {
-  if (supervisor === "systemd" && isGatewayAlreadyRunningLockError(err)) {
-    return EXIT_CONFIG_ERROR;
+class SupervisedGatewayLockError extends GatewayLockError {
+  constructor(
+    message: string,
+    cause: unknown,
+    readonly exitCode: 1 | typeof EXIT_CONFIG_ERROR,
+  ) {
+    super(message, cause);
   }
-  return healthyGatewayConfirmed && isGatewayAlreadyRunningLockError(err) ? 0 : 1;
+}
+
+function resolveGatewayLockErrorExitCode(err: unknown): number {
+  return err instanceof SupervisedGatewayLockError ? err.exitCode : 1;
 }
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
@@ -566,6 +570,28 @@ async function probeGatewayHealthz(params: {
   });
 }
 
+function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
+  const tlsConfig = cfg.gateway?.tls;
+  let tlsFingerprint: string | undefined;
+  return async (params: { host: string; port: number }): Promise<boolean> => {
+    if (tlsConfig?.enabled !== true) {
+      return await probeGatewayHealthz(params);
+    }
+    if (!tlsFingerprint) {
+      const gatewayTls = await import("../../infra/tls/gateway.js")
+        .then(({ loadGatewayTlsRuntime }) =>
+          loadGatewayTlsRuntime({ ...tlsConfig, autoGenerate: false }),
+        )
+        .catch(() => undefined);
+      tlsFingerprint = gatewayTls?.fingerprintSha256;
+    }
+    if (!tlsFingerprint) {
+      return false;
+    }
+    return await probeGatewayHealthz({ ...params, tlsFingerprint });
+  };
+}
+
 async function runGatewayLoopWithSupervisedLockRecovery(params: {
   startLoop: () => Promise<void>;
   supervisor: RespawnSupervisor | null;
@@ -607,9 +633,10 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
       if (await probeHealth({ host: params.healthHost, port: params.port })) {
         if (supervisor === "systemd") {
-          throw new GatewayLockError(
+          throw new SupervisedGatewayLockError(
             "gateway already running under systemd; existing gateway is healthy, exiting with code 78 to prevent a systemd Restart=always loop",
             err,
+            EXIT_CONFIG_ERROR,
           );
         }
         params.log.info(
@@ -620,9 +647,10 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
       const elapsedMs = now() - startedAt;
       if (elapsedMs >= timeoutMs) {
-        throw new GatewayLockError(
+        throw new SupervisedGatewayLockError(
           `gateway already running under ${supervisor}; existing gateway did not become healthy after ${timeoutMs}ms`,
           err,
+          1,
         );
       }
 
@@ -659,8 +687,16 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
+  // Dev gateways inherit the operator shell. Suppress ambient channel credentials so a
+  // development instance cannot silently connect to real channel services.
+  const devAmbientEnvTriggers = opts.devAmbientChannels ? "allow" : "suppress";
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (opts.devAmbientChannels && !devMode) {
+    defaultRuntime.error("Use --dev-ambient-channels with --dev.");
     defaultRuntime.exit(1);
     return;
   }
@@ -1101,7 +1137,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
     const message =
       `gateway restart-loop breaker tripped: ${crashLoopDecision.uncleanBoots} unclean boot(s) within ${crashLoopDecision.windowMs}ms; ` +
-      "suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service.";
+      `suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service. ${formatGatewayCrashLoopManualChannelStartHint()}`;
     channelAutostartSuppression = { reason: "crash-loop-breaker", message };
     gatewayLog.error(message);
     if (crashLoopDecision.shouldWriteStabilityBundle) {
@@ -1136,6 +1172,11 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
             : {}),
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
+          ...(devMode
+            ? {
+                ambientEnvTriggers: devAmbientEnvTriggers,
+              }
+            : {}),
         });
       },
     });
@@ -1149,6 +1190,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       port,
       healthHost,
       log: gatewayLog,
+      probeHealth: createConfiguredGatewayHealthProbe(cfg),
     });
   } catch (err) {
     if (isGatewayLockError(err)) {
@@ -1169,29 +1211,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       }
       const { maybeExplainGatewayServiceStop } = await import("./shared.js");
       await maybeExplainGatewayServiceStop();
-      // An occupied port is only a healthy duplicate when the listener proves
-      // the OpenClaw liveness contract. Arbitrary HTTP listeners must fail.
-      const gatewayTls =
-        isGatewayAlreadyRunningLockError(err) && cfg.gateway?.tls?.enabled === true
-          ? await import("../../infra/tls/gateway.js")
-              .then(({ loadGatewayTlsRuntime }) => loadGatewayTlsRuntime(cfg.gateway?.tls))
-              .catch(() => undefined)
-          : undefined;
-      const canProbeGateway =
-        cfg.gateway?.tls?.enabled !== true || Boolean(gatewayTls?.fingerprintSha256);
-      const healthyGatewayConfirmed =
-        isGatewayAlreadyRunningLockError(err) &&
-        canProbeGateway &&
-        (await probeGatewayHealthz({
-          host: healthHost,
-          port,
-          ...(gatewayTls?.fingerprintSha256
-            ? { tlsFingerprint: gatewayTls.fingerprintSha256 }
-            : {}),
-        }));
-      defaultRuntime.exit(
-        resolveGatewayLockErrorExitCode(err, supervisor, healthyGatewayConfirmed),
-      );
+      defaultRuntime.exit(resolveGatewayLockErrorExitCode(err));
       return;
     }
     if (isInvalidConfigError(err)) {
@@ -1236,6 +1256,7 @@ export async function runGatewayCommand(
 }
 
 const testing = {
+  createConfiguredGatewayHealthProbe,
   isGatewayHealthzResponse,
   normalizeGatewayHealthProbeHost,
   probeGatewayHealthz,

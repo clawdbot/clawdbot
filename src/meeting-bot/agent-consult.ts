@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
@@ -14,23 +15,79 @@ import {
 import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
+import type {
+  MeetingAgentConsultSurface,
+  MeetingPlatformRuntimeMetadata,
+} from "./platform-adapter-contract.js";
+import type {
+  MeetingAgentConsultParams,
+  MeetingRealtimeToolCallParams,
+  MeetingRuntimePlatform,
+} from "./realtime-engine.js";
 
-export type MeetingAgentConsultSurface = {
-  id: string;
-  provider: string;
-  lane: string;
-  surface: string;
-  userLabel: string;
-  assistantLabel: string;
-  questionSourceLabel: string;
-  workingResponseLabel: string;
-  extraSystemPrompt: string;
-};
-
-export function resolveMeetingRealtimeTools(
+function resolveMeetingRealtimeTools(
   policy: RealtimeVoiceAgentConsultToolPolicy,
 ): RealtimeVoiceTool[] {
   return resolveRealtimeVoiceAgentConsultTools(policy);
+}
+
+function resolveMeetingAgentConsultSurface(
+  platform: MeetingPlatformRuntimeMetadata,
+): MeetingAgentConsultSurface {
+  return {
+    id: platform.id,
+    provider: platform.id,
+    lane: platform.id,
+    ...platform.agentConsult,
+  };
+}
+
+export function createMeetingRealtimeEngineBindings(params: {
+  platform: MeetingPlatformRuntimeMetadata;
+  config: {
+    realtime: {
+      agentId?: string;
+      toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+    };
+  };
+  fullConfig: OpenClawConfig;
+  runtime: PluginRuntime;
+  logger: RuntimeLogger;
+}): {
+  platform: MeetingRuntimePlatform;
+  consultAgent: (consult: MeetingAgentConsultParams) => Promise<{ text: string }>;
+  tools: RealtimeVoiceTool[];
+  handleToolCall: (call: MeetingRealtimeToolCallParams) => Promise<void>;
+} {
+  const surface = resolveMeetingAgentConsultSurface(params.platform);
+  return {
+    platform: {
+      displayName: params.platform.displayName,
+      logScope: params.platform.logScope,
+      sessionIdPrefix: params.platform.id,
+    },
+    consultAgent: async (consult) =>
+      await consultMeetingAgent({
+        surface,
+        config: params.fullConfig,
+        runtime: params.runtime,
+        logger: params.logger,
+        agentId: params.config.realtime.agentId,
+        toolPolicy: params.config.realtime.toolPolicy,
+        ...consult,
+      }),
+    tools: resolveMeetingRealtimeTools(params.config.realtime.toolPolicy),
+    handleToolCall: async (call) =>
+      await handleMeetingRealtimeConsultToolCall({
+        surface,
+        config: params.fullConfig,
+        runtime: params.runtime,
+        logger: params.logger,
+        agentId: params.config.realtime.agentId,
+        toolPolicy: params.config.realtime.toolPolicy,
+        ...call,
+      }),
+  };
 }
 
 async function submitMeetingConsultWorkingResponse(params: {
@@ -48,7 +105,7 @@ async function submitMeetingConsultWorkingResponse(params: {
   );
 }
 
-export async function consultMeetingAgent(params: {
+async function consultMeetingAgent(params: {
   surface: MeetingAgentConsultSurface;
   config: OpenClawConfig;
   runtime: PluginRuntime;
@@ -60,7 +117,9 @@ export async function consultMeetingAgent(params: {
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
 }): Promise<{ text: string }> {
-  const agentId = normalizeAgentId(params.agentId);
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveDefaultAgentId(params.config);
   const requesterSessionKey =
     normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
   const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;
@@ -86,7 +145,7 @@ export async function consultMeetingAgent(params: {
   });
 }
 
-export async function handleMeetingRealtimeConsultToolCall(params: {
+async function handleMeetingRealtimeConsultToolCall(params: {
   surface: MeetingAgentConsultSurface;
   strategy: string;
   session: RealtimeVoiceBridgeSession;

@@ -117,14 +117,20 @@ message-tool-only turn without reconstructable channel authority is failed
 closed and receives the one-time resend notice.
 
 Before resuming, the gateway checks that the transcript tail is safe to
-continue from. If it is not (for example, the turn ended on a stale pending
-approval), the session is not blindly re-run; the agent instead posts a short
-notice asking the user to resend the last request. For WebChat, that notice is
-written directly to the session history so it remains visible after reconnect.
+continue from. An aborted turn is the interruption itself, so it resumes on a
+best-effort basis whatever abort detail the provider or worker recorded with it:
+partial streamed text stays in the transcript and the continuation picks up from
+the message beneath it, while a tool call left dangling is dropped from the next
+provider payload and restricted to restart-safe tools unless it is audited
+replay-safe. If the tail is genuinely unsafe (for example a provider failure, or
+a turn that ended on a stale pending approval), the session is not blindly
+re-run; the agent instead posts a short notice asking the user to resend the
+last request. For WebChat, that notice is written directly to the session
+history so it remains visible after reconnect.
 
 OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
-catalog tools or plugin namespaces before they execute. If a restart lands on
+catalog or namespace tool calls before they execute. If a restart lands on
 the `wait` control, the new gateway reconstructs the turn from its transcript
 and forces the reconstructed execution to remain restart-safe even if the
 model omits or clears that flag. The host filters the entire reconstructed
@@ -171,7 +177,44 @@ restart handling continues.
 
 - **Crash-loop breaker:** 3 unclean boots within 5 minutes trip a breaker that
   suppresses auto-start side services on the next boot, so a crashing gateway
-  does not amplify itself. It recovers once the unclean-boot window drains.
+  does not amplify itself. A later boot recovers once the unclean-boot window
+  drains.
+
+  When the breaker is tripped, the **control plane still starts**, but channel
+  plugins (and other auto-started side services) stay down for the current boot
+  unless an operator manually overrides the suppression. Automatic startup
+  resumes on a later boot after the unclean-boot window drains. Gateway logs
+  look like:
+  `channel autostart suppressed by crash-loop breaker; refusing automatic
+start for <channel>… Start a channel manually with: openclaw gateway call
+channels.start --params '{"channel":"<id>"}'`
+
+  Operator recovery SOP:
+
+  1. Confirm the gateway process is up (`openclaw gateway status` / LaunchAgent
+     or systemd unit still running). A “channel disconnected” symptom often
+     means suppressed autostart, not a dead gateway.
+  2. Inspect channel state: `openclaw channels status` (add `--probe` when
+     useful). Look for stopped / not connected accounts while the gateway
+     itself is healthy.
+  3. Fix the root cause of the unclean boots (bad config, plugin crash on
+     start, missing secrets) before forcing channels back up.
+  4. Manually start a channel while suppression is active:
+
+     ```bash
+     openclaw gateway call channels.start --params '{"channel":"<id>"}'
+     # optional: {"channel":"<id>","accountId":"<account>"}
+     ```
+
+     `channels.start` is a **manual** override; it does not disable the
+     breaker for other channels.
+
+  5. Or wait for the unclean-boot window to drain, then restart the gateway.
+     The next boot logs whether channel auto-start is restored.
+
+  See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
+  vs channel-autostart split.
+
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle; exhaustion tombstones that session until it is
   inspected and replaced.

@@ -1,10 +1,12 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   isMainSessionRecoveryLifecycleEvent,
   projectMainSessionRecoveryLifecycle,
@@ -38,13 +40,14 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  "updatedAt" | "status" | "lastRunError" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
   | "updatedAt"
   | "status"
+  | "lastRunError"
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
@@ -54,6 +57,8 @@ type PersistedLifecycleSessionShape = Pick<
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+
+const SESSION_RUN_ERROR_MAX_CHARS = 160;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -85,9 +90,9 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
   }
 }
 
-function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
+function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutcome {
   const phase = resolveLifecyclePhase(event);
-  const terminal = buildAgentRunTerminalOutcome({
+  return buildAgentRunTerminalOutcome({
     status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
     error: event.data?.error,
     stopReason: event.data?.stopReason,
@@ -97,7 +102,19 @@ function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
     startedAt: event.data?.startedAt,
     endedAt: event.data?.endedAt ?? event.ts,
   });
-  return mapAgentRunTerminalOutcomeToSessionStatus(terminal);
+}
+
+function resolveSessionRunError(
+  outcome: AgentRunTerminalOutcome,
+  status: SessionRunStatus,
+): string | undefined {
+  if ((status !== "failed" && status !== "timeout") || !outcome.error) {
+    return undefined;
+  }
+  const sanitized = sanitizeUserFacingText(outcome.error, { errorContext: true })
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized ? truncateUtf16Safe(sanitized, SESSION_RUN_ERROR_MAX_CHARS) : undefined;
 }
 
 function resolveLifecycleStartedAt(
@@ -157,6 +174,7 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     return {
       updatedAt,
       status: "running",
+      lastRunError: undefined,
       startedAt,
       endedAt: undefined,
       runtimeMs: undefined,
@@ -167,7 +185,7 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
-  const status = isAgentLifecycleYieldedWaiting({
+  const yieldedWaiting = isAgentLifecycleYieldedWaiting({
     phase,
     yielded: params.event.data?.yielded,
     livenessState: params.event.data?.livenessState,
@@ -176,12 +194,13 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     status: params.event.data?.status,
     timeoutPhase: params.event.data?.timeoutPhase,
     error: params.event.data?.error,
-  })
-    ? "running"
-    : resolveTerminalStatus(params.event);
+  });
+  const terminal = yieldedWaiting ? undefined : resolveTerminalOutcome(params.event);
+  const status = terminal ? mapAgentRunTerminalOutcomeToSessionStatus(terminal) : "running";
   return {
     updatedAt,
     status,
+    lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({

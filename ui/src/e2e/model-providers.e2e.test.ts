@@ -1,4 +1,4 @@
-// Control UI tests cover the Model Providers settings page against a mocked Gateway.
+// Control UI tests cover the Models settings page against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
@@ -39,7 +39,7 @@ function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
 
-describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
+describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -148,7 +148,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-providers`);
       expect(response?.status()).toBe(200);
-      await page.locator(".page-title", { hasText: "Model Providers" }).first().waitFor();
+      await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
 
       const claudeCard = page.locator(".model-providers__row", { hasText: "Claude" });
       await claudeCard.waitFor();
@@ -178,6 +178,64 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
       await googleCard.waitFor();
       await expect.poll(async () => googleCard.textContent()).toContain("0 of 1 models available");
       await expect.poll(async () => page.locator(".model-providers__row").count()).toBe(4);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders one complete uppercased grapheme in custom provider fallback icons", async () => {
+    const bottomProviderId = "e\u0301-proxy";
+    const cases = [
+      { id: "ß-provider", expected: "S" },
+      { id: "🧭-proxy", expected: "🧭" },
+      { id: "🇺🇸-proxy", expected: "🇺🇸" },
+      { id: "👩‍💻-proxy", expected: "👩‍💻" },
+      { id: bottomProviderId, expected: "E\u0301" },
+    ];
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      models: cases.map(({ id }) => ({
+        id: "test-model",
+        name: "Test Model",
+        provider: id,
+        available: true,
+      })),
+      methodResponses: {
+        "models.authStatus": { ts: NOW, providers: [] },
+        "usage.status": { updatedAt: NOW, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
+
+      for (const { id, expected } of cases) {
+        const icon = page.locator(`[data-provider-id="${id}"] .provider-brand-icon--fallback`);
+        await icon.waitFor();
+        await expect.poll(async () => (await icon.textContent())?.trim()).toBe(expected);
+      }
+
+      if (recordVisuals) {
+        await page.screenshot({
+          path: path.join(artifactDir, "03-unicode-fallback-icons.png"),
+          fullPage: true,
+        });
+        await page.locator(`[data-provider-id="${bottomProviderId}"]`).scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(artifactDir, "04-unicode-fallback-icons-bottom.png"),
+          fullPage: true,
+        });
+      }
     } finally {
       await context.close();
     }
@@ -346,7 +404,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Test connection" }).click();
       const probe = await gateway.waitForRequest("models.probe");
-      expect(probe.params).toEqual({ provider: "openai" });
+      expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
       const primary = page.locator(".model-providers__defaults select").first();

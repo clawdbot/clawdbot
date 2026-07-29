@@ -1,10 +1,11 @@
 // Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
+import "../../components/agent-select-registration.ts";
+import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
   renderSettingsRow,
   renderSettingsSection,
-  renderSettingsSegmented,
   renderSettingsToggle,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
@@ -349,20 +350,31 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
 
 function renderExecApprovalsScope(state: ExecApprovalsState) {
   const options = [
-    { value: EXEC_APPROVALS_DEFAULT_SCOPE, label: t("nodes.execApprovals.defaults") },
+    {
+      value: EXEC_APPROVALS_DEFAULT_SCOPE,
+      label: t("nodes.execApprovals.defaults"),
+      icon: icons.settings,
+    },
     ...state.agents.map((agent) => ({
       value: agent.id,
       label: agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id,
+      agent: { id: agent.id, ...(agent.name ? { name: agent.name } : {}) },
+      badge: agent.isDefault ? t("agents.default") : undefined,
     })),
   ];
   return renderSettingsRow({
     title: t("nodes.execApprovals.scope"),
     stacked: true,
-    control: renderSettingsSegmented({
-      value: state.selectedScope,
-      options,
-      onChange: (value) => state.onSelectScope(value),
-    }),
+    control: html`
+      <openclaw-agent-select
+        class="agent-select--settings"
+        .options=${options}
+        .value=${state.selectedScope}
+        .accessibleLabel=${t("nodes.execApprovals.scope")}
+        .disabled=${state.disabled}
+        .onSelect=${state.onSelectScope}
+      ></openclaw-agent-select>
+    `,
   });
 }
 

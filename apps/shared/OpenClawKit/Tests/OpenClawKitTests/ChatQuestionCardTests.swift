@@ -10,13 +10,14 @@ private func questionRecord(
     createdAtMs: Int = 1_000_000,
     expiresAtMs: Int = 4_000_000_000_000,
     status: QuestionStatus = .pending,
-    answers: QuestionAnswers? = nil) -> QuestionRecord
+    answers: QuestionAnswers? = nil,
+    runId: String? = "run-question") -> QuestionRecord
 {
     QuestionRecord(
         id: "ask_123",
         questions: [
             Question(
-                id: "meal",
+                questionid: "meal",
                 header: "Meal",
                 question: "Choose dinner",
                 options: [
@@ -28,6 +29,7 @@ private func questionRecord(
         ],
         agentid: "main",
         sessionkey: "agent:main:main",
+        runid: runId,
         createdatms: createdAtMs,
         expiresatms: expiresAtMs,
         status: status,
@@ -127,6 +129,29 @@ private func questionRecord(
 }
 
 @MainActor
+@Test func `question card preserves run identity across local terminal records`() {
+    let answered = OpenClawQuestionCardModel(record: questionRecord())
+    answered.markAnsweredLocally(answers: ["meal": ["Pizza"]])
+    #expect(answered.record.runid == "run-question")
+
+    let skipped = OpenClawQuestionCardModel(record: questionRecord())
+    skipped.markSkippedLocally()
+    #expect(skipped.record.runid == "run-question")
+
+    let elsewhere = OpenClawQuestionCardModel(record: questionRecord())
+    elsewhere.markAnsweredElsewhere()
+    #expect(elsewhere.record.runid == "run-question")
+
+    let resolved = OpenClawQuestionCardModel(record: questionRecord())
+    resolved.apply(resolved: .init(id: resolved.id, status: .answered))
+    #expect(resolved.record.runid == "run-question")
+
+    let refreshed = OpenClawQuestionCardModel(record: questionRecord(answers: .init(answers: [:])))
+    #expect(refreshed.apply(record: questionRecord(status: .answered, runId: "run-refresh")))
+    #expect(refreshed.record.runid == "run-refresh")
+}
+
+@MainActor
 @Test func `question card locally expired state remains terminal`() {
     let expiresAt = Date(timeIntervalSince1970: 1500)
     let model = OpenClawQuestionCardModel(record: questionRecord(expiresAtMs: 1_500_000))
@@ -145,7 +170,7 @@ private func questionRecord(
 
     let data = try JSONEncoder().encode(model.record.answers)
     let json = try #require(String(data: data, encoding: .utf8))
-    #expect(json.contains("\"meal\":{\"answers\":[\"Pizza\"]}"))
+    #expect(json.contains("\"meal\":[\"Pizza\"]"))
     #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Pizza")
 }
 
@@ -173,7 +198,7 @@ private func questionRecord(
 @MainActor
 @Test func `question card terminal summaries prefer resolved answers`() {
     let answers = QuestionAnswers(answers: [
-        "meal": AnyCodable(["answers": ["Pizza", "extra hot"]]),
+        "meal": AnyCodable(["Pizza", "extra hot"]),
     ])
     let answered = OpenClawQuestionCardModel(record: questionRecord(status: .answered, answers: answers))
     let question = answered.record.questions[0]

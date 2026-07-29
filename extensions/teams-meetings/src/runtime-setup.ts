@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   addMeetingSetupCheck,
   createMeetingSetupStatus,
+  MeetingPlatformAdapter,
   resolveMeetingBrowserNodeInfo,
   type MeetingSetupStatus,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -39,7 +40,7 @@ export async function getTeamsMeetingsSetupStatus(params: {
   const mode = params.options?.mode ?? params.config.defaultMode;
   const transport =
     params.options?.transport ?? (params.config.chromeNode.node ? "chrome-node" : "chrome");
-  const talkBack = mode === "agent" || mode === "bidi";
+  const talkBack = MeetingPlatformAdapter.isTalkBackMode(mode);
   let status = createMeetingSetupStatus([
     {
       id: "chrome-profile",

@@ -10,7 +10,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatActiveNodeContextLabel,
-  getActiveNodeContext,
+  getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
@@ -55,20 +55,20 @@ export function buildSystemPromptParams(params: {
   runtime: Omit<RuntimeInfoInput, "agentId">;
   workspaceDir?: string;
   cwd?: string;
+  preparedRepoRoot?: string | null;
 }): SystemPromptRuntimeParams {
-  const repoRoot = resolveRepoRoot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-  });
+  const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
+    ? (params.preparedRepoRoot ?? undefined)
+    : resolveSystemPromptRepoRoot(params);
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+  const userTimeFormat = resolveUserTimeFormat(undefined);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   return {
     runtimeInfo: {
       agentId: params.agentId,
       ...params.runtime,
-      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()) ?? params.runtime.activeNode,
+      activeNode:
+        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
       repoRoot,
     },
     userTimezone,
@@ -77,7 +77,7 @@ export function buildSystemPromptParams(params: {
   };
 }
 
-function resolveRepoRoot(params: {
+export function resolveSystemPromptRepoRoot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   cwd?: string;

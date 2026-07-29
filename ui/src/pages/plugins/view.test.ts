@@ -203,7 +203,8 @@ describe("renderPlugins", () => {
     vi.resetModules();
 
     try {
-      const { pluginMonogram } = await import("./presentation.ts");
+      const freshModulePath = "./presentation.ts?without-intl-segmenter";
+      const { pluginMonogram } = await import(/* @vite-ignore */ freshModulePath);
       expect(pluginMonogram("😀 Tools")).toBe("😀T");
       expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
     } finally {
@@ -232,6 +233,44 @@ describe("renderPlugins", () => {
       group.dispatchEvent(new Event("change", { bubbles: true }));
     }
     expect(onFilterChange).toHaveBeenCalledWith("issues");
+  });
+
+  it.each(["@openclaw/workboard", "  @OPENCLAW/WORKBOARD  "])(
+    "finds an installed plugin by its scoped package name %s",
+    (query) => {
+      const plugin = createPlugin({ packageName: "@openclaw/workboard" });
+      const container = mount(createProps({ query, result: createResult([plugin]) }));
+
+      expect(container.querySelector('[data-plugin-id="workboard"]')).not.toBeNull();
+      expect(normalizedText(container)).toContain("@openclaw/workboard");
+    },
+  );
+
+  it.each([
+    { shelf: "featured", featured: true },
+    { shelf: "official", featured: false },
+  ])("finds an official $shelf plugin by its scoped package name", ({ featured }) => {
+    const plugin = createPlugin({
+      id: "calendar-runtime",
+      name: "Shared Calendar",
+      packageName: "@openclaw/calendar-runtime",
+      description: "Schedule team events.",
+      origin: "official",
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      featured,
+      install: { source: "official", pluginId: "calendar-runtime" },
+    });
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "@openclaw/calendar-runtime",
+        result: createResult([plugin]),
+      }),
+    );
+
+    expect(container.querySelector('[data-plugin-id="calendar-runtime"]')).not.toBeNull();
   });
 
   it("offers enable and remove through direct row actions", () => {
@@ -328,7 +367,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
             toolFilter: false,
@@ -357,6 +396,7 @@ describe("renderPlugins", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
@@ -455,7 +495,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://x",
             auth: "oauth",
             toolFilter: false,

@@ -120,7 +120,7 @@ export async function withOperatorApprovalsGatewayClient<T>(
 
   try {
     const readiness = await startGatewayClientWhenEventLoopReady(gatewayClient, {
-      clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
+      clientOptions: {},
     });
     if (!readiness.ready) {
       throw new Error(

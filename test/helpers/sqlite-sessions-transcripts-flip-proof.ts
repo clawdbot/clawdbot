@@ -13,12 +13,12 @@ import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
 } from "../../src/config/sessions/archive-compression.js";
+import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
-import { formatSqliteSessionFileMarker } from "../../src/config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
@@ -36,6 +36,7 @@ import {
   resolveSessionTranscriptIdentity,
 } from "../../src/plugin-sdk/session-transcript-runtime.js";
 import { sleep } from "../../src/utils.js";
+import { normalizeSessionDeliveryState } from "../../src/utils/delivery-context.shared.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
 type DoctorMode = "import" | "inspect" | "validate" | "restore";
@@ -115,7 +116,7 @@ type PluginSdkConsumerEvidence = {
   latestAssistantTextBeforeAppend: string;
   latestAssistantTextAfterAppend: string;
   listedSessionKeys: string[];
-  sessionFileMarker: string;
+  sessionIdentity: string;
   sessionId: string;
   sessionKey: string;
   storeTranscriptEvents: number;
@@ -128,7 +129,7 @@ type ManualCompactionEvidence = {
   compacted: boolean;
   rowCountAfter: number;
   rowCountBefore: number;
-  sessionFileMarker: string;
+  transcriptIdentity: string;
   sessionId: string;
   sessionKey: string;
 };
@@ -527,7 +528,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-final-doctor-inspect", finalInspectDoctor);
   } catch (error) {
-    failures.push(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    failures.push(`${message}\nGateway diagnostics:\n${tail(inst.logs(), 6_000)}`);
     await record("failure");
   } finally {
     await stopChildProcess(mockOpenAi);
@@ -635,6 +637,7 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
           },
         },
       },
+      entries: { main: { default: true } },
     },
     models: {
       mode: "merge",
@@ -1223,12 +1226,8 @@ async function runManualCompactionProof(
   if (checkpointCount < 1) {
     throw new Error(`manual compaction did not write checkpoint metadata: ${JSON.stringify(row)}`);
   }
-  const sessionFileMarker = typeof row.entry.sessionFile === "string" ? row.entry.sessionFile : "";
-  if (!sessionFileMarker.startsWith("sqlite:")) {
-    throw new Error(`manual compaction entry did not keep a SQLite marker: ${sessionFileMarker}`);
-  }
-  if (fsSync.existsSync(sessionFileMarker)) {
-    throw new Error(`manual compaction marker unexpectedly exists as a file: ${sessionFileMarker}`);
+  if (Object.hasOwn(row.entry, "sessionFile")) {
+    throw new Error(`manual compaction entry retained file-era identity: ${JSON.stringify(row)}`);
   }
 
   return {
@@ -1236,7 +1235,7 @@ async function runManualCompactionProof(
     compacted: compacted.compacted,
     rowCountAfter: countSqliteTranscriptEvents(context.agentDbPath, row.sessionId),
     rowCountBefore,
-    sessionFileMarker,
+    transcriptIdentity: context.manualCompactionSessionKey,
     sessionId: row.sessionId,
     sessionKey: context.manualCompactionSessionKey,
   };
@@ -1263,20 +1262,8 @@ async function runPluginSdkConsumerProbe(
       `SDK session store read returned ${JSON.stringify(sessionEntry)} for ${context.pluginSdkSessionKey}`,
     );
   }
-  const expectedMarker = formatSqliteSessionFileMarker({
-    agentId: context.agentId,
-    sessionId,
-    storePath: context.storePath,
-  });
-  if (sessionEntry.sessionFile !== expectedMarker) {
-    throw new Error(
-      `SDK session store exposed unexpected transcript marker for ${context.pluginSdkSessionKey}: ${String(
-        sessionEntry.sessionFile,
-      )}`,
-    );
-  }
-  if (fsSync.existsSync(sessionEntry.sessionFile)) {
-    throw new Error(`SDK session marker unexpectedly resolves to an active file path`);
+  if (Object.hasOwn(sessionEntry, "sessionFile")) {
+    throw new Error(`SDK session store exposed retired transcript locator`);
   }
 
   const listedSessionKeys = listSdkSessionEntries({
@@ -1371,7 +1358,7 @@ async function runPluginSdkConsumerProbe(
     latestAssistantTextBeforeAppend: latestBefore.text,
     latestAssistantTextAfterAppend: latestAfter.text,
     listedSessionKeys,
-    sessionFileMarker: sessionEntry.sessionFile,
+    sessionIdentity: context.pluginSdkSessionKey,
     sessionId,
     sessionKey: context.pluginSdkSessionKey,
     storeTranscriptEvents,
@@ -1388,7 +1375,7 @@ async function runGatewayCleanupPruningProof(
   await importSqliteSessionRows({
     agentId: context.agentId,
     entry: {
-      channel: "cli",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "cli" } }),
       chatType: "direct",
       sessionFile: formatSqliteSessionFileMarker({
         agentId: context.agentId,
@@ -2361,8 +2348,8 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
     return {
       exists: true,
       path: dbPath,
-      sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_entries"),
-      sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM sessions"),
+      sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_nodes"),
+      sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_windows"),
       trajectoryRuntimeEvents: scalarNumber(
         db,
         "SELECT COUNT(*) AS count FROM trajectory_runtime_events",
@@ -2381,8 +2368,8 @@ function readTrackedEntries(
 ): SqliteSessionEntryEvidence[] {
   const rows = db
     .prepare(
-      `SELECT session_key AS sessionKey, session_id AS sessionId, entry_json AS entryJson
-       FROM session_entries
+      `SELECT session_key AS sessionKey, current_session_id AS sessionId, entry_json AS entryJson
+       FROM session_nodes
        ORDER BY session_key ASC`,
     )
     .all() as Array<{ entryJson?: unknown; sessionId?: unknown; sessionKey?: unknown }>;
@@ -2492,12 +2479,14 @@ function validateCheckpointInvariants(
     });
   }
   if (checkpoint.label === "after-sessions-reset") {
-    requireArchiveText(checkpoint, failures, {
-      description: "reset transcript archive",
-      includes: ["legacy hello", "sqlite user-facing send before reset"],
-      reason: "reset",
-      sessionId: context.legacySessionId,
-    });
+    // Retained history: reset rotates the live session id but keeps the old
+    // generation's SQLite rows searchable; no reset archive is produced.
+    if (findArchiveArtifact(checkpoint, { reason: "reset", sessionId: context.legacySessionId })) {
+      failures.push(`${checkpoint.label}: unexpected reset transcript archive`);
+    }
+    if (checkpoint.sqlite.transcriptEvents === 0) {
+      failures.push(`${checkpoint.label}: retained transcript rows missing after reset`);
+    }
   }
   if (checkpoint.label === "after-sessions-delete") {
     requireArchiveText(checkpoint, failures, {
@@ -2540,12 +2529,22 @@ function validateCheckpointInvariants(
     }
   }
   if (checkpoint.label === "after-shared-final-delete") {
-    requireArchiveText(checkpoint, failures, {
-      description: "final shared transcript archive",
-      includes: ["shared"],
+    const deletedArchive = findArchiveArtifact(checkpoint, {
       reason: "deleted",
       sessionId: "sqlite-shared-session",
     });
+    if (!deletedArchive) {
+      // Both legacy files claim one session id, so the importer preserves the
+      // ambiguous sources as artifacts instead of materializing duplicate rows.
+      // Final deletion must not synthesize a second archive from empty SQLite state.
+      for (const sourceName of ["sqlite-shared-a.jsonl", "sqlite-shared-b.jsonl"]) {
+        requireArchiveText(checkpoint, failures, {
+          description: `retained shared import source ${sourceName}`,
+          includes: ["shared"],
+          pathIncludes: sourceName,
+        });
+      }
+    }
   }
 }
 

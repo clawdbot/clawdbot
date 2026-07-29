@@ -1,7 +1,8 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
+import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -36,6 +37,14 @@ export function failureNotificationDeliveryFromJobState(
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
   const channel = normalizeOptionalLowercaseString(input);
   return channel ? (channel as CronMessageChannel) : undefined;
+}
+
+function resolveFailureAlertChannel(channel: unknown, to?: string): CronMessageChannel | undefined {
+  const normalized = normalizeCronMessageChannel(channel);
+  if (normalized && normalized !== "last") {
+    return normalized;
+  }
+  return normalizeCronMessageChannel(resolveTargetPrefixedChannel(to)) ?? normalized;
 }
 
 function normalizeTo(input: unknown): string | undefined {
@@ -78,7 +87,30 @@ export function resolveFailureAlert(
   }
 
   const mode = jobConfig?.mode ?? globalConfig?.mode;
-  const explicitTo = normalizeTo(jobConfig?.to);
+  const inheritsGlobalMode =
+    !jobConfig?.mode || jobConfig.mode === (globalConfig?.mode ?? "announce");
+  const jobTo = normalizeTo(jobConfig?.to);
+  const jobChannel = resolveFailureAlertChannel(jobConfig?.channel, jobTo);
+  const configuredGlobalTo = inheritsGlobalMode ? normalizeTo(globalConfig?.to) : undefined;
+  const globalChannel = inheritsGlobalMode
+    ? resolveFailureAlertChannel(globalConfig?.channel, configuredGlobalTo)
+    : undefined;
+  // Webhook destinations have no chat-channel identity. Announce destinations
+  // must stay on their original channel when a job overrides its route.
+  const inheritsGlobalRoute =
+    inheritsGlobalMode && (mode === "webhook" || !jobChannel || jobChannel === globalChannel);
+  const globalTo = inheritsGlobalRoute ? configuredGlobalTo : undefined;
+  const deliveryTo = normalizeTo(job.delivery?.to);
+  const deliveryChannel = resolveFailureAlertChannel(job.delivery?.channel, deliveryTo);
+  const channel = jobChannel ?? globalChannel ?? deliveryChannel ?? "last";
+  const inheritsDeliveryChannel =
+    channel === deliveryChannel || (channel === "last" && !deliveryChannel);
+  const compatibleDeliveryTo = inheritsDeliveryChannel ? deliveryTo : undefined;
+  const explicitTo = jobTo ?? globalTo;
+  const inheritedDeliveryAccountId =
+    mode !== "webhook" && !explicitTo && inheritsDeliveryChannel
+      ? job.delivery?.accountId
+      : undefined;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
@@ -88,13 +120,13 @@ export function resolveFailureAlert(
       jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
       DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
     ),
-    channel:
-      normalizeCronMessageChannel(jobConfig?.channel) ??
-      normalizeCronMessageChannel(job.delivery?.channel) ??
-      "last",
-    to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    channel,
+    to: mode === "webhook" ? explicitTo : (explicitTo ?? compatibleDeliveryTo),
     mode,
-    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    accountId:
+      jobConfig?.accountId ??
+      (inheritsGlobalRoute ? globalConfig?.accountId : undefined) ??
+      inheritedDeliveryAccountId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }
@@ -104,21 +136,18 @@ function emitFailureAlert(
   params: {
     job: CronJob;
     error?: string;
+    errorReason?: FailoverReason;
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
-    provider?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = truncateUtf16Safe(params.error?.trim() || "unknown reason", 200);
-  const errorReason =
-    params.status === "error" && typeof params.error === "string"
-      ? (resolveFailoverReasonFromError(params.error, params.provider) ?? undefined)
-      : undefined;
+  const errorReason = params.status === "error" ? params.errorReason : undefined;
   // Keep alert bodies compact because they may route through chat channels
   // with notification previews and provider-specific message limits.
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
@@ -166,13 +195,22 @@ export function maybeEmitFailureAlert(
     alertConfig: ResolvedFailureAlert | null;
     status: "error" | "skipped";
     error?: string;
-    provider?: string;
+    errorReason?: FailoverReason;
     consecutiveCount: number;
     delivery?: "emit" | "record-only";
     occurredAtMs?: number;
   },
 ) {
   if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
+    return;
+  }
+  if (
+    params.status === "error" &&
+    !params.job.failureAlert &&
+    params.job.delivery?.failureDestination
+  ) {
+    // Completion delivery owns explicit failure routes and clear-only opt-outs.
+    // Suppress failed-run duplicates without disabling global skipped alerts.
     return;
   }
   const isBestEffort = params.job.delivery?.bestEffort === true;
@@ -192,13 +230,13 @@ export function maybeEmitFailureAlert(
     emitFailureAlert(state, {
       job: params.job,
       error: params.error,
+      errorReason: params.errorReason,
       consecutiveErrors: params.consecutiveCount,
       channel: params.alertConfig.channel,
       to: params.alertConfig.to,
       mode: params.alertConfig.mode,
       accountId: params.alertConfig.accountId,
       status: params.status,
-      provider: params.provider,
     });
   }
   params.job.state.lastFailureAlertAtMs = now;

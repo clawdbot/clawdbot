@@ -106,7 +106,7 @@ async function executeBoundAccountSpawn(params: {
   let spawnAccountId: string | undefined;
   setSessionsSpawnConfigOverride({
     session: { mainKey: "main", scope: "per-sender" },
-    messages: { queue: { debounceMs: 0 } },
+    messages: { queue: {} },
     agents: {
       defaults: { subagents: { allowAgents: ["bot-alpha"] } },
       list: [{ id: "main" }, { id: "bot-alpha" }],
@@ -173,9 +173,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         scope: "per-sender",
       },
       messages: {
-        queue: {
-          debounceMs: 0,
-        },
+        queue: {},
       },
       agents: {
         defaults: {
@@ -298,7 +296,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
-      messages: { queue: { debounceMs: 0 } },
+      messages: { queue: {} },
       agents: {
         defaults: {
           subagents: {

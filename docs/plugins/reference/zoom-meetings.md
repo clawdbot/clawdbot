@@ -16,7 +16,7 @@ Join Zoom meetings as a Chrome browser guest.
 
 ## Surface
 
-contracts: `tools`
+contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 

@@ -72,7 +72,13 @@ describe("Zalo polling image handling", () => {
       recordInboundSessionMock,
     });
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ Timestamp: 1774084566880 }),
+      expect.objectContaining({
+        Timestamp: 1774084566880,
+        RawBody: "",
+        CommandBody: "",
+        BodyForAgent: "",
+        media: [expect.objectContaining({ contentType: "image/jpeg" })],
+      }),
     );
 
     abort.abort();
@@ -189,7 +195,43 @@ describe("Zalo polling image handling", () => {
         RawBody: "/reset",
         CommandBody: "/reset",
         BodyForAgent: "/reset\n\n[zalo image attachment unavailable]",
-        MediaPath: undefined,
+        media: [expect.objectContaining({ kind: "image" })],
+      }),
+    );
+
+    abort.abort();
+    await run;
+  });
+
+  it("keeps failed media-only command text empty while preserving the native image fact", async () => {
+    saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
+    getUpdatesMock
+      .mockResolvedValueOnce({ ok: true, result: createImageUpdate() })
+      .mockImplementation(() => new Promise(() => {}));
+
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-image-media-only-failure",
+    );
+    const abort = new AbortController();
+    const { account, config } = createLifecycleMonitorSetup({
+      accountId: "default",
+      dmPolicy: "open",
+    });
+    const run = monitorZaloProvider({
+      token: "test-token",
+      account,
+      config,
+      runtime: createRuntimeEnv(),
+      abortSignal: abort.signal,
+    });
+
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        RawBody: "",
+        CommandBody: "",
+        BodyForAgent: "[zalo image attachment unavailable]",
+        media: [expect.objectContaining({ kind: "image" })],
       }),
     );
 
@@ -268,7 +310,7 @@ describe("Zalo polling image handling", () => {
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         BodyForAgent: "stalled photo\n\n[zalo image attachment unavailable]",
-        MediaPath: undefined,
+        media: [expect.objectContaining({ kind: "image" })],
       }),
     );
 

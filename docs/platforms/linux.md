@@ -19,7 +19,8 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
-- discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
+- discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
+  Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
 - opens the Control UI in onboarding mode after its first-run install, which
   offers to import detected Claude Code, Codex, or Hermes memories into the
@@ -27,6 +28,11 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
   Settings → Import Memory)
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
+
+Realtime voice Talk inside the companion's embedded WebView is not validated:
+the shell does not grant microphone capture to the WebKitGTK WebView, so
+`getUserMedia` is expected to fail there. Until that lands, open the Gateway's
+Control UI in a regular browser for [Talk mode](/nodes/talk).
 
 Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
@@ -98,7 +104,7 @@ Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI a
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
-1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
+1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -149,7 +155,7 @@ A node can be connected and device-paired while its effective `caps` and `comman
 
 Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
 
-`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

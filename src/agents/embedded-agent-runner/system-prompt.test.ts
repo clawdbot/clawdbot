@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
@@ -52,6 +52,39 @@ describe("buildEmbeddedSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
+  });
+
+  it("keeps post-compaction curated context scoped to the prepared project", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      activeProjectKeys: ["github.com/acme/Alpha"],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/MEMORY.md",
+          content: [
+            "- Alpha compaction fact. <!-- project: github.com/acme/Alpha -->",
+            "- Beta compaction fact. <!-- project: github.com/acme/Beta -->",
+            "- Global compaction fact.",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Alpha compaction fact");
+    expect(prompt).toContain("Global compaction fact");
+    expect(prompt).not.toContain("Beta compaction fact");
   });
 
   it("uses config-backed sub-agent delegation mode", () => {
@@ -241,7 +274,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {
-    registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",

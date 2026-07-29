@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 type AnthropicToolDescriptor = {
@@ -187,7 +188,9 @@ export function projectAnthropicTools(
   return {
     inputToolCount: tools.length,
     unavailableOriginalNames,
-    tools: projectedTools,
+    // Anthropic caches through the last wire tool, so discovery order must not
+    // move the cache breakpoint or change otherwise identical request bytes.
+    tools: sortPromptCacheToolsByName(projectedTools),
   };
 }
 

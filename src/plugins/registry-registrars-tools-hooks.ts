@@ -31,7 +31,6 @@ import {
   isDeprecatedPluginHookName,
   isPluginHookName,
   isPromptInjectionHookName,
-  stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
   OpenClawPluginApi,
@@ -80,20 +79,6 @@ function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string |
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
   return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
 }
-
-const constrainLegacyPromptInjectionHook = (
-  handler: PluginHookHandlerMap["before_agent_start"],
-): PluginHookHandlerMap["before_agent_start"] => {
-  return (event, ctx) => {
-    const result = handler(event, ctx);
-    if (result && typeof result === "object" && "then" in result) {
-      return Promise.resolve(result).then((resolved) =>
-        stripPromptMutationFieldsFromLegacyHookResult(resolved),
-      );
-    }
-    return stripPromptMutationFieldsFromLegacyHookResult(result);
-  };
-};
 
 export function createToolHookRegistrars(state: PluginRegistryState) {
   const {
@@ -437,26 +422,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
       }
     }
-    let effectiveHandler = handler;
+    const effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
-      if (effectiveHookName !== "before_agent_start") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        return;
-      }
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       });
-      effectiveHandler = constrainLegacyPromptInjectionHook(
-        handler as PluginHookHandlerMap["before_agent_start"],
-      ) as PluginHookHandlerMap[K];
+      return;
     }
     if (isConversationHookName(effectiveHookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;

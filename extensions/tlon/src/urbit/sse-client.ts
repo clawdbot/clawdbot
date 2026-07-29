@@ -547,7 +547,7 @@ export class UrbitSSEClient {
           auditContext: "tlon-urbit-unsubscribe",
         });
         try {
-          void response.body?.cancel();
+          void response.body?.cancel().catch(() => undefined);
         } finally {
           await release();
         }
@@ -570,7 +570,7 @@ export class UrbitSSEClient {
           auditContext: "tlon-urbit-channel-close",
         });
         try {
-          void response.body?.cancel();
+          void response.body?.cancel().catch(() => undefined);
         } finally {
           await release();
         }

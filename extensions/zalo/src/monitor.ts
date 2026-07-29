@@ -4,6 +4,7 @@ import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   formatInboundMediaUnavailableText,
   resolveChannelInboundRouteEnvelope,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -177,6 +178,7 @@ type ZaloMessagePipelineParams = ZaloProcessingContext & {
   message: ZaloMessage;
   text?: string;
   agentBody?: string;
+  mediaKind?: ChannelInboundMediaInput["kind"];
   mediaPath?: string;
   mediaType?: string;
   authorization?: ZaloMessageAuthorizationResult;
@@ -359,6 +361,7 @@ async function handleTextMessage(
   await processMessageWithPipeline({
     ...params,
     text,
+    mediaKind: undefined,
     mediaPath: undefined,
     mediaType: undefined,
   });
@@ -370,8 +373,8 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   const authorization = await authorizeZaloMessage({
     ...params,
     text: caption,
-    // Use a sentinel so auth sees this as an inbound image before the download happens.
-    mediaPath: "__pending_media__",
+    mediaKind: "image",
+    mediaPath: undefined,
     mediaType: undefined,
   });
   if (!authorization) {
@@ -402,8 +405,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   const agentBody = mediaPath
     ? authorization.rawBody
     : formatInboundMediaUnavailableText({
-        body: caption,
-        mediaPlaceholder: "<media:image>",
+        body: authorization.rawBody,
         notice: "[zalo image attachment unavailable]",
       });
 
@@ -411,6 +413,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
     ...params,
     authorization,
     agentBody,
+    mediaKind: "image",
     text: caption,
     mediaPath,
     mediaType,
@@ -420,8 +423,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
 async function authorizeZaloMessage(
   params: ZaloMessagePipelineParams,
 ): Promise<ZaloMessageAuthorizationResult | undefined> {
-  const { message, account, config, runtime, core, text, mediaPath, token, statusSink, fetcher } =
-    params;
+  const { message, account, config, runtime, core, text, token, statusSink, fetcher } = params;
   const pairing = createChannelPairingController({
     core,
     channel: "zalo",
@@ -436,7 +438,7 @@ async function authorizeZaloMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
+  const rawBody = text?.trim() ?? "";
   const { groupPolicy, providerMissingFallbackApplied } = resolveZaloRuntimeGroupPolicy({
     providerConfigPresent: config.channels?.zalo !== undefined,
     groupPolicy: account.config.groupPolicy,
@@ -552,6 +554,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     runtime,
     core,
     mediaPath,
+    mediaKind,
     mediaType,
     statusSink,
     fetcher,
@@ -631,12 +634,13 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       commandBody: rawBody,
     },
     media:
-      mediaPath || mediaType
+      mediaKind || mediaPath || mediaType
         ? [
             {
               path: mediaPath,
               url: mediaPath,
               contentType: mediaType,
+              kind: mediaKind ?? undefined,
             },
           ]
         : undefined,

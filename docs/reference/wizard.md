@@ -227,7 +227,7 @@ Onboarding detects whether `signal-cli` is on `PATH` and, if missing, offers to 
 - Linux x86-64: downloads the official native GraalVM build from the `signal-cli` GitHub releases and stores it under `~/.openclaw/tools/signal-cli/<version>/`.
 - macOS and other architectures: installs via Homebrew instead.
 - Native Windows: not supported yet; run onboarding inside WSL2 to get the Linux install path.
-- Writes `channels.signal.cliPath` to your config either way.
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` either way.
 
 ## What the wizard writes
 
@@ -251,7 +251,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Active sessions and transcripts are stored in

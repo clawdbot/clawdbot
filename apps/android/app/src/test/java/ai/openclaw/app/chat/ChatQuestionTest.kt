@@ -1,11 +1,10 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.gateway.QuestionAnswers
-import ai.openclaw.app.gateway.QuestionAnswersAnswersValue
 import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionOption
@@ -30,7 +29,7 @@ import org.junit.Test
 class ChatQuestionTest {
   private val question =
     Question(
-      id = "meal",
+      questionId = "meal",
       header = "Meal",
       question = "Choose dinner",
       options = listOf(QuestionOption("Pizza"), QuestionOption("Tacos")),
@@ -87,7 +86,7 @@ class ChatQuestionTest {
       ChatQuestionPrompt(
         record =
           record(status = "answered").copy(
-            answers = QuestionAnswers(mapOf("meal" to QuestionAnswersAnswersValue(listOf("Pizza", "Salad")))),
+            answers = QuestionAnswers(mapOf("meal" to listOf("Pizza", "Salad"))),
           ),
         answeredLocally = true,
       )
@@ -151,6 +150,43 @@ class ChatQuestionTest {
       advanceUntilIdle()
 
       assertEquals(listOf("ask_new"), controller.questions.value.map { it.record.id })
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun structuredMissingQuestionScopeClearsStaleCards() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "question.list") {
+              throw GatewayRequestRejected(
+                GatewaySession.ErrorShape(
+                  code = "FORBIDDEN",
+                  message = "permission denied",
+                  details =
+                    GatewayErrorDetails(
+                      code = "MISSING_SCOPE",
+                      missingScope = "operator.questions",
+                      requiredScopes = listOf("operator.questions"),
+                      canRetryWithDeviceToken = false,
+                      recommendedNextStep = null,
+                    ),
+                ),
+              )
+            }
+            "{}"
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(record(id = "ask_stale")))
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(controller.questions.value.isEmpty())
     }
 
   @Test
@@ -393,7 +429,7 @@ class ChatQuestionTest {
       val answered =
         pending.copy(
           status = "answered",
-          answers = QuestionAnswers(mapOf("meal" to QuestionAnswersAnswersValue(listOf("Tacos")))),
+          answers = QuestionAnswers(mapOf("meal" to listOf("Tacos"))),
         )
       var getParams: String? = null
       val controller =
@@ -429,8 +465,7 @@ class ChatQuestionTest {
           .single()
           .record.answers
           ?.answers
-          ?.get("meal")
-          ?.answers,
+          ?.get("meal"),
       )
       assertEquals(
         ChatQuestionStatus.AnsweredElsewhere,
@@ -452,7 +487,7 @@ class ChatQuestionTest {
       val listedAnswered =
         listedPending.copy(
           status = "answered",
-          answers = QuestionAnswers(mapOf("meal" to QuestionAnswersAnswersValue(listOf("Tacos")))),
+          answers = QuestionAnswers(mapOf("meal" to listOf("Tacos"))),
         )
       val recoveredAnswered = recoveredPending.copy(status = "answered")
       val failingAnswered = failingPending.copy(status = "answered")
@@ -521,8 +556,7 @@ class ChatQuestionTest {
           .record
           .answers
           ?.answers
-          ?.get("meal")
-          ?.answers,
+          ?.get("meal"),
       )
       assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_recovered").status())
       assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_failing").status())
@@ -672,7 +706,7 @@ class ChatQuestionTest {
       val answered =
         pending.copy(
           status = "answered",
-          answers = QuestionAnswers(mapOf("meal" to QuestionAnswersAnswersValue(listOf("Tacos")))),
+          answers = QuestionAnswers(mapOf("meal" to listOf("Tacos"))),
         )
       var getCalls = 0
       val controller =
@@ -701,8 +735,7 @@ class ChatQuestionTest {
           .single()
           .record.answers
           ?.answers
-          ?.get("meal")
-          ?.answers,
+          ?.get("meal"),
       )
       assertEquals(
         ChatQuestionStatus.AnsweredElsewhere,
@@ -775,7 +808,7 @@ class ChatQuestionTest {
                       code = "INVALID_REQUEST",
                       message = "question not found",
                       details =
-                        GatewayConnectErrorDetails(
+                        GatewayErrorDetails(
                           code = null,
                           reason = "QUESTION_NOT_FOUND",
                           canRetryWithDeviceToken = false,
@@ -963,7 +996,7 @@ class ChatQuestionTest {
                     code = "INVALID_REQUEST",
                     message = "question not found",
                     details =
-                      GatewayConnectErrorDetails(
+                      GatewayErrorDetails(
                         code = null,
                         reason = "QUESTION_NOT_FOUND",
                         canRetryWithDeviceToken = false,

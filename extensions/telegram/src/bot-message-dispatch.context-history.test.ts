@@ -147,7 +147,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
       SenderName: "Cara",
     });
     expect(dispatchParams.ctx.InboundHistory).toBeUndefined();
-    expect(dispatchParams.ctx.UntrustedStructuredContext).toBeUndefined();
+    expect(dispatchParams.ctx.ChannelStructuredContext).toBeUndefined();
   });
 
   it("moves recovered user-request history out of the original topic", async () => {
@@ -230,7 +230,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
       expect.objectContaining({ body: "after watermark" }),
     ]);
     expect(outboundCtxPayload.Body).toBe("current recovered request");
-    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+    expect(outboundCtxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         label: "Conversation context",
         source: "telegram",
@@ -246,13 +246,13 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
         }),
       }),
     ]);
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "before self marker",
     );
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "self marker",
     );
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "topic request",
     );
   });

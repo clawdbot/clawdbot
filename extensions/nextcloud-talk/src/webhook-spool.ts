@@ -1,12 +1,8 @@
 // Nextcloud Talk plugin module owns durable webhook admission and replay draining.
 import {
-  bindIngressLifecycleToReplyOptions,
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePersistentDedupePluginStateNamespace } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -59,9 +55,7 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
   }),
 });
 
-export type NextcloudTalkIngressLifecycle = Parameters<
-  typeof bindIngressLifecycleToReplyOptions
->[0];
+export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type NextcloudTalkIngressMonitor = {
   receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
@@ -136,13 +130,6 @@ export function createNextcloudTalkWebhookSpool(options: {
   legacyReplayStore?: NextcloudTalkLegacyReplayStore | null;
 }): NextcloudTalkIngressMonitor {
   let queue = options.queue;
-  let drain!: ChannelIngressDrain;
-  let drainInitialized = false;
-  let running = true;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let lastPrunedAt = 0;
-  const activeDeliveries = new Set<Promise<void>>();
 
   const getQueue = (): ChannelIngressQueue<NextcloudTalkIngressPayload> => {
     queue ??= getNextcloudTalkRuntime().state.openChannelIngressQueue<NextcloudTalkIngressPayload>({
@@ -167,199 +154,96 @@ export function createNextcloudTalkWebhookSpool(options: {
     ? migrateNextcloudTalkLegacyReplayState({ queue: getQueue(), store: legacyReplayStore })
     : Promise.resolve();
 
-  const getDrain = (): ChannelIngressDrain => {
-    if (!drainInitialized) {
-      drain = createChannelIngressDrain<NextcloudTalkIngressPayload>({
-        queue: getQueue(),
-        adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-        retryPolicy: {
-          maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-          deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-        },
-        resolveNonRetryableFailure,
-        ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-        onLog: (message) => options.runtime.log?.(`nextcloud-talk ${message}`),
-        dispatchClaimedEvent: async (record, lifecycle) => {
-          if (lifecycle.abortSignal.aborted) {
-            return {
-              kind: "failed-retryable",
-              error: new Error("Nextcloud Talk ingress stopped"),
-            };
-          }
-          const message = parseClaimedMessage(record.payload, record.id, record.laneKey);
-          let handedOff = false;
-          let deferredHandoff = false;
-          const delivery = options.deliver(message, {
-            ...lifecycle,
-            onAdopted: async () => {
-              handedOff = true;
-              await lifecycle.onAdopted();
-            },
-            onDeferred: () => {
-              handedOff = true;
-              deferredHandoff = true;
-              lifecycle.onDeferred();
-            },
-            onAdoptionFinalizing: () => {
-              handedOff = true;
-              deferredHandoff = true;
-              lifecycle.onAdoptionFinalizing();
-            },
-            onAbandoned: async () => {
-              handedOff = true;
-              await lifecycle.onAbandoned();
-            },
-          });
-          activeDeliveries.add(delivery);
-          try {
-            await delivery;
-            // Policy gates and empty messages are terminal, successful no-dispatch turns.
-            if (!handedOff) {
-              await lifecycle.onAdopted();
-            }
-          } finally {
-            activeDeliveries.delete(delivery);
-          }
-          return deferredHandoff ? { kind: "deferred" } : undefined;
-        },
-      });
-      drainInitialized = true;
-    }
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < NEXTCLOUD_TALK_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
+  const monitor = createChannelIngressMonitor<
+    string,
+    Omit<NextcloudTalkIngressPayload, "version">,
+    NextcloudTalkIngressPayload
+  >({
+    queue: getQueue,
+    inspect: (rawEvent) => inspectNextcloudTalkWebhookEnvelope(rawEvent),
+    payload: {
+      version: NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
+      serialize: (rawEvent, { receivedAt }) => ({ receivedAt, rawEvent }),
+      deserialize: (body) => body.rawEvent,
+      encode: ({ body }) => ({ version: NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload) => ({
+        version: payload.version,
+        body: { receivedAt: payload.receivedAt, rawEvent: payload.rawEvent },
+      }),
+      createClaimError: (kind, claim) =>
+        new NextcloudTalkWebhookPayloadError(
+          kind === "invalid-version"
+            ? `Nextcloud Talk ingress row ${claim.id} has an unsupported version.`
+            : `Nextcloud Talk ingress row ${claim.id} has invalid message identity.`,
+        ),
+    },
+    deliver: async (_rawEvent, lifecycle, claim) => {
+      const message = parseClaimedMessage(claim.payload, claim.id, claim.laneKey);
+      // The shared monitor translates these lifecycle callbacks into terminal or deferred
+      // drain outcomes, including successful no-dispatch policy gates.
+      await options.deliver(message, lifecycle);
+    },
+    pollIntervalMs: options.pollIntervalMs ?? NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS,
+    // Preserve Nextcloud Talk's existing one-drain-at-a-time delivery cycle.
+    waitForDeliveryIdleBeforeRepump: true,
+    retention: {
+      pruneIntervalMs: NEXTCLOUD_TALK_INGRESS_PRUNE_INTERVAL_MS,
       completedTtlMs: NEXTCLOUD_TALK_INGRESS_COMPLETED_TTL_MS,
       completedMaxEntries: NEXTCLOUD_TALK_INGRESS_COMPLETED_MAX_ENTRIES,
       failedTtlMs: NEXTCLOUD_TALK_INGRESS_FAILED_TTL_MS,
       failedMaxEntries: NEXTCLOUD_TALK_INGRESS_FAILED_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      await legacyMigration;
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`nextcloud-talk ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
+    },
+    drain: {
+      resolveNonRetryableFailure,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      onLog: (message) => options.runtime.log?.(`nextcloud-talk ${message}`),
+    },
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+    createStoppedError: () => new Error("Nextcloud Talk ingress stopped"),
+    onError: (error) =>
+      options.runtime.error?.(`nextcloud-talk ingress drain failed: ${formatErrorMessage(error)}`),
+  });
+  let stopping = false;
+  const inFlightReceives = new Set<Promise<"accepted" | "ignored">>();
+  const startAfterMigration = legacyMigration.then(() => {
+    if (!stopping) {
+      monitor.start();
     }
-  };
-
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  const timer = setInterval(
-    requestDrain,
-    options.pollIntervalMs ?? NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS,
-  );
-  timer.unref?.();
-  requestDrain();
-
-  // Webhook handlers can overlap. Preserve room arrival order across append backoff.
-  let admissionTail: Promise<void> = Promise.resolve();
-
-  const admitOnce = async (rawEvent: string): Promise<"accepted" | "ignored"> => {
-    await legacyMigration;
-    const facts = inspectNextcloudTalkWebhookEnvelope(rawEvent);
-    if (!facts) {
-      return "ignored";
-    }
-    const receivedAt = Date.now();
-    let lastError: unknown;
-    for (const delayMs of [0, 100, 300]) {
-      if (delayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        await getQueue().enqueue(
-          facts.eventId,
-          {
-            version: NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
-            receivedAt,
-            rawEvent,
-          },
-          { receivedAt, laneKey: facts.laneKey },
-        );
-        requestDrain();
-        return "accepted";
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
-  };
+  });
 
   return {
-    ready: async () => {
-      await legacyMigration;
-    },
+    ready: async () => await startAfterMigration,
     receive: (rawEvent) => {
-      const admission = admissionTail.then(() => admitOnce(rawEvent));
-      admissionTail = admission.then(
-        () => undefined,
-        () => undefined,
+      if (stopping) {
+        return Promise.reject(new Error("Nextcloud Talk ingress stopped"));
+      }
+      const receiveTask = (async () => {
+        await startAfterMigration;
+        const result = await monitor.admit(rawEvent);
+        return result.kind === "ignored" ? "ignored" : "accepted";
+      })();
+      inFlightReceives.add(receiveTask);
+      void receiveTask.then(
+        () => inFlightReceives.delete(receiveTask),
+        () => inFlightReceives.delete(receiveTask),
       );
-      return admission;
+      return receiveTask;
     },
     stop: async () => {
-      running = false;
-      clearInterval(timer);
-      await admissionTail;
-      await legacyMigration.catch(() => undefined);
-      if (drainInitialized) {
-        drain.dispose();
-      }
-      await pumping;
-      if (drainInitialized) {
-        drain.dispose();
-      }
-      await Promise.allSettled(activeDeliveries);
-      if (drainInitialized) {
-        await drain.waitForIdle();
-      }
+      stopping = true;
+      const pendingReceives = [...inFlightReceives];
+      // Quiesce synchronously, but let callbacks accepted before stop finish durable admission.
+      const pauseTask = monitor.pause();
+      await startAfterMigration.catch(() => undefined);
+      await Promise.allSettled(pendingReceives);
+      await monitor.stop();
+      await pauseTask;
     },
     waitForIdle: async () => {
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      if (drainInitialized) {
-        await drain.waitForIdle();
-      }
+      await startAfterMigration.catch(() => undefined);
+      await monitor.waitForIdle();
     },
   };
 }

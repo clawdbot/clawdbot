@@ -258,7 +258,7 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(reportOnlyLock)).resolves.toBeUndefined();
   });
 
-  it("uses configured stale threshold without removing live OpenClaw lock files", async () => {
+  it("uses the emergency stale-threshold environment override without removing live OpenClaw lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -271,7 +271,7 @@ describe("noteSessionLockHealth", () => {
 
     await noteSessionLockHealth({
       shouldRepair: true,
-      config: { session: { writeLock: { staleMs: 30_000 } } },
+      env: { OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "30000" },
       readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
     });
 

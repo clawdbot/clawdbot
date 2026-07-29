@@ -2,10 +2,23 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
-  DEFAULT_AGENT_ID,
   normalizeAgentId,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
+
+function requireCronAgentId(agentId: string | undefined): string {
+  if (!agentId?.trim()) {
+    throw new Error("Cron task run requires an agent id or prepared configured default.");
+  }
+  return normalizeAgentId(agentId);
+}
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+}
 import {
   createRunningTaskRun,
   finalizeTaskRunById,
@@ -23,12 +36,13 @@ import {
   cronRunStatusToTaskStatus,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
+  cronTaskRecordToScriptRunResult,
   cronTaskRecordToTriggerEval,
   resolveCronTaskRecordTimestamp,
 } from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
-import type { CronJob, CronRunStatus } from "../types.js";
-import { normalizeCronRunErrorText, timeoutErrorMessage } from "./execution-errors.js";
+import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../types.js";
+import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
@@ -42,9 +56,12 @@ export function normalizeCronLaneSegment(value: string | undefined, fallback: st
 }
 
 /** Builds the main-session child key used to isolate one cron run's task transcript. */
-export function resolveMainSessionCronRunSessionKey(job: CronJob, startedAt: number): string {
-  const explicitAgentId = job.agentId?.trim();
-  const agentId = normalizeAgentId(explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey));
+export function resolveMainSessionCronRunSessionKey(
+  job: CronJob,
+  startedAt: number,
+  configuredDefaultAgentId: string | undefined,
+): string {
+  const agentId = resolveCronJobEffectiveAgentId(job, configuredDefaultAgentId);
   const jobSegment = normalizeCronLaneSegment(job.id, "job");
   const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
   return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
@@ -55,13 +72,21 @@ function resolveCronTaskChildSessionKey(params: {
   job: CronJob;
   startedAt: number;
 }): string | undefined {
+  const explicitAgentId = params.job.agentId?.trim() || undefined;
   if (params.job.sessionTarget === "main") {
-    return resolveMainSessionCronRunSessionKey(params.job, params.startedAt);
+    return resolveMainSessionCronRunSessionKey(
+      params.job,
+      params.startedAt,
+      resolveCurrentDefaultAgentId(params.state),
+    );
   }
   if (params.job.sessionTarget === "current") {
+    const scopedAgentId = parseAgentSessionKey(params.job.sessionKey)?.agentId;
     return resolveCronAgentSessionKey({
       sessionKey: `cron:${params.job.id}`,
-      agentId: params.job.agentId ?? params.state.deps.defaultAgentId ?? DEFAULT_AGENT_ID,
+      agentId: requireCronAgentId(
+        explicitAgentId ?? scopedAgentId ?? resolveCurrentDefaultAgentId(params.state),
+      ),
     });
   }
   const explicitSessionKey = params.job.sessionKey?.trim();
@@ -75,23 +100,18 @@ function resolveCronTaskChildSessionKey(params: {
   }
   return resolveCronAgentSessionKey({
     sessionKey: `cron:${params.job.id}`,
-    agentId: params.job.agentId ?? params.state.deps.defaultAgentId ?? DEFAULT_AGENT_ID,
+    agentId: resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state)),
   });
 }
 
-/** Creates a best-effort detached task ledger row for a cron run. */
+/** Creates a best-effort detached task row keyed to the persisted execution start. */
 export function tryCreateCronTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
-  runIdStartedAt?: number;
   publicRunId?: string;
 }): string | undefined {
-  const runId = createCronTaskRunId(
-    params.job.id,
-    params.runIdStartedAt ?? params.startedAt,
-    params.publicRunId,
-  );
+  const runId = createCronTaskRunId(params.job.id, params.startedAt, params.publicRunId);
   return tryCreateCronTaskRunRecord({
     state: params.state,
     job: params.job,
@@ -101,18 +121,18 @@ export function tryCreateCronTaskRun(params: {
   });
 }
 
-function createCronTaskRunId(jobId: string, reservationAt: number, publicRunId?: string): string {
+function createCronTaskRunId(jobId: string, startedAt: number, publicRunId?: string): string {
   const discriminator = publicRunId?.trim() || randomUUID();
-  return `${createCronExecutionId(jobId, reservationAt)}:${discriminator}`;
+  return `${createCronExecutionId(jobId, startedAt)}:${discriminator}`;
 }
 
 function findLatestCronTaskRunForRecovery(
   jobId: string,
-  reservationAt: number,
+  startedAt: number,
   storeKey: string,
 ): TaskRecord | undefined {
-  const reservationRunId = createCronExecutionId(jobId, reservationAt);
-  const prefix = `${reservationRunId}:`;
+  const executionRunId = createCronExecutionId(jobId, startedAt);
+  const prefix = `${executionRunId}:`;
   return listTaskRecordsUnsorted()
     .filter((task) => {
       if (task.runtime !== "cron" || task.sourceId !== jobId) {
@@ -121,11 +141,14 @@ function findLatestCronTaskRunForRecovery(
       const taskStoreKey = cronTaskRecordStoreKey(task);
       if (taskStoreKey === undefined) {
         // Exact match covers detail-less pre-discriminator rows from older releases.
-        return task.runId === reservationRunId;
+        return task.runId === executionRunId;
       }
       return (
         taskStoreKey === storeKey &&
-        (task.runId === reservationRunId || task.runId?.startsWith(prefix))
+        (task.runId === executionRunId ||
+          task.runId?.startsWith(prefix) ||
+          // Released reservation-keyed rows still record the authoritative execution start.
+          task.startedAt === startedAt)
       );
     })
     .toSorted(
@@ -160,6 +183,7 @@ export function tryFindFinalizedCronTaskRun(
 ):
   | {
       entry: CronRunLogEntry & { status: CronRunStatus };
+      scriptResult?: { scriptStateChanged: true; scriptState?: JsonValue };
       triggerEval?: { fired: true; stateChanged: boolean; state?: JsonValue };
     }
   | undefined {
@@ -177,8 +201,10 @@ export function tryFindFinalizedCronTaskRun(
       return undefined;
     }
     const triggerEval = cronTaskRecordToTriggerEval(task);
+    const scriptResult = cronTaskRecordToScriptRunResult(task);
     return {
       entry: { ...entry, status: entry.status },
+      ...(scriptResult ? { scriptResult } : {}),
       ...(triggerEval ? { triggerEval } : {}),
     };
   } catch (error) {
@@ -196,25 +222,34 @@ function tryCreateCronTaskRunRecord(params: {
   childSessionKey?: string;
 }): string | undefined {
   try {
+    const explicitJobAgentId = params.job?.agentId?.trim();
+    const childSessionKey =
+      params.childSessionKey ??
+      (params.job
+        ? resolveCronTaskChildSessionKey({
+            state: params.state,
+            job: params.job,
+            startedAt: params.startedAt,
+          })
+        : undefined);
+    const effectiveJobAgentId = params.job
+      ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
+      : undefined;
     const task = createRunningTaskRun({
       runtime: "cron",
       sourceId: params.jobId,
       ownerKey: "",
       scopeKind: "system",
-      childSessionKey:
-        params.childSessionKey ??
-        (params.job
-          ? resolveCronTaskChildSessionKey({
-              state: params.state,
-              job: params.job,
-              startedAt: params.startedAt,
-            })
-          : undefined),
+      childSessionKey,
       agentId:
-        params.job?.agentId ??
-        resolveAgentIdFromSessionKey(params.childSessionKey) ??
-        params.state.deps.defaultAgentId ??
-        DEFAULT_AGENT_ID,
+        effectiveJobAgentId ??
+        (explicitJobAgentId ? normalizeAgentId(explicitJobAgentId) : undefined) ??
+        (childSessionKey
+          ? resolveAgentIdFromSessionKey(
+              childSessionKey,
+              resolveCurrentDefaultAgentId(params.state),
+            )
+          : requireCronAgentId(resolveCurrentDefaultAgentId(params.state))),
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,
@@ -265,7 +300,7 @@ export function tryFinishCronTaskRunWithoutHistory(
       status:
         result.status === "ok" || result.status === "skipped"
           ? "succeeded"
-          : error === timeoutErrorMessage()
+          : isCronTimeoutErrorText(error)
             ? "timed_out"
             : "failed",
       endedAt: result.endedAt,
@@ -289,10 +324,16 @@ export function tryFinishCronTaskRun(
     taskRunId?: string;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
+    errorClassification?: CronRunErrorClassification;
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
   },
 ): void {
-  const entry = cronRunLogEntryFromEvent(result.event, state.deps.nowMs());
+  const entry = cronRunLogEntryFromEvent(
+    result.event,
+    state.deps.nowMs(),
+    result.errorClassification,
+  );
   const startedAt = entry.runAtMs ?? entry.ts;
   const candidateRunId =
     result.taskRunId ?? createCronTaskRunId(entry.jobId, startedAt, entry.runId);
@@ -316,6 +357,7 @@ export function tryFinishCronTaskRun(
     const legacyRecoveryRunId = createCronExecutionId(entry.jobId, startedAt);
     const detail = cronRunLogEntryToTaskDetail(entry, {
       storeKey,
+      ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
       ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
     });
     const finalize = (

@@ -949,6 +949,57 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("preserves redirects when response body cancellation rejects", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("redirect cancellation failed");
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "https://cdn.example.com/asset" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse("redirected"));
+    process.on("unhandledRejection", onUnhandledRejection);
+    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+
+    try {
+      result = await fetchWithSsrFGuard({
+        url: "https://api.example.com/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      });
+
+      const reader = result.response.body?.getReader();
+      if (!reader) {
+        throw new Error("expected redirected response body");
+      }
+      try {
+        const firstChunk = await reader.read();
+        expect(firstChunk.done).toBe(false);
+        expect(new TextDecoder().decode(firstChunk.value)).toBe("redirected");
+        await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+      } finally {
+        reader.releaseLock();
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      await result?.release();
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
   it("strips sensitive headers when redirect crosses origins", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
