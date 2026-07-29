@@ -91,6 +91,12 @@ import type {
   PluginHookBeforeInstallResult,
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
+  PluginHookSkillChangedEvent,
+  PluginHookSkillContext,
+  PluginHookSkillProposalChangedEvent,
+  PluginHookSkillProposalEvaluateEvent,
+  PluginHookSkillProposalEvaluateResult,
+  PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -160,6 +166,7 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
+  skill_proposal_evaluate: 120_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -462,6 +469,9 @@ export function createHookRunner(
     const firstLine = raw.split("\n")[0]?.trim();
     return firstLine || "unknown error";
   };
+
+  const getPluginVersion = (pluginId: string): string | undefined =>
+    registry.plugins.find((plugin) => plugin.id === pluginId)?.version;
 
   const isPromiseLike = (value: unknown): value is PromiseLike<unknown> => {
     if ((typeof value !== "object" && typeof value !== "function") || value === null) {
@@ -1493,6 +1503,74 @@ export function createHookRunner(
   }
 
   // =========================================================================
+  // Skill Hooks
+  // =========================================================================
+
+  /**
+   * Run every registered proposal evaluator and retain its attribution.
+   *
+   * Evaluator failures are returned as data so Workshop can persist and show
+   * them. A broken optional evaluator must not make proposal state unreadable.
+   */
+  async function runSkillProposalEvaluate(
+    event: PluginHookSkillProposalEvaluateEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<PluginHookSkillProposalEvaluationOutcome[]> {
+    const hookName = "skill_proposal_evaluate";
+    const hooks = getHooksForName(registry, hookName);
+    if (hooks.length === 0) {
+      return [];
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
+    const outcomes: PluginHookSkillProposalEvaluationOutcome[] = [];
+
+    for (const hook of hooks) {
+      const pluginVersion = getPluginVersion(hook.pluginId);
+      const attribution = {
+        pluginId: hook.pluginId,
+        ...(pluginVersion ? { pluginVersion } : {}),
+      };
+      try {
+        const handler = hook.handler as (
+          event: PluginHookSkillProposalEvaluateEvent,
+          ctx: PluginHookSkillContext,
+        ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
+        const promise = Promise.resolve(handler(event, ctx));
+        const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+        const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        outcomes.push(
+          result
+            ? { ...attribution, status: "completed", result }
+            : { ...attribution, status: "skipped" },
+        );
+      } catch (error) {
+        const message = sanitizeHookError(error);
+        logger?.error(
+          `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
+        );
+        outcomes.push({ ...attribution, status: "error", error: message });
+      }
+    }
+
+    return outcomes;
+  }
+
+  async function runSkillProposalChanged(
+    event: PluginHookSkillProposalChangedEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<void> {
+    return runVoidHook("skill_proposal_changed", event, ctx);
+  }
+
+  async function runSkillChanged(
+    event: PluginHookSkillChangedEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<void> {
+    return runVoidHook("skill_changed", event, ctx);
+  }
+
+  // =========================================================================
   // Skill Install Hooks
   // =========================================================================
 
@@ -1605,6 +1683,10 @@ export function createHookRunner(
     runHeartbeatPromptContribution,
     runCronReconciled,
     runCronChanged,
+    // Skill hooks
+    runSkillProposalEvaluate,
+    runSkillProposalChanged,
+    runSkillChanged,
     // Install hooks
     runBeforeInstall,
     runResolveExecEnv,

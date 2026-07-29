@@ -21,6 +21,7 @@ export type HookRunnerRegistry = {
 export type GlobalHookRunnerRegistry = HookRunnerRegistry & {
   plugins: Array<{
     id: string;
+    version?: string;
     status: "loaded" | "disabled" | "error";
   }>;
 };

@@ -1,0 +1,175 @@
+import { describe, expect, it, vi } from "vitest";
+import type {
+  PluginHookSkillChangedEvent,
+  PluginHookSkillContext,
+  PluginHookSkillProposalEvaluateEvent,
+} from "./hook-types.js";
+import { createHookRunner } from "./hooks.js";
+import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+
+const ctx: PluginHookSkillContext = {
+  workspaceDir: "/tmp/openclaw-workspace",
+  agentId: "main",
+};
+
+const evaluationEvent: PluginHookSkillProposalEvaluateEvent = {
+  proposal: {
+    id: "proposal-1",
+    kind: "update",
+    revision: "v2",
+    draftSha256: "sha256:draft",
+    targetCurrentSha256: "sha256:current",
+  },
+  skill: {
+    name: "Demo Skill",
+    skillKey: "demo-skill",
+    description: "Demonstrates proposal evaluation.",
+    source: "openclaw-workspace",
+  },
+  candidate: {
+    skillMd: {
+      path: "SKILL.md",
+      content: "---\nname: demo-skill\n---\n",
+      sha256: "sha256:candidate",
+      sizeBytes: 30,
+    },
+    files: [],
+    treeSha256: "sha256:candidate-tree",
+  },
+  baseline: {
+    skillMd: {
+      path: "SKILL.md",
+      content: "---\nname: demo-skill\n---\nold\n",
+      sha256: "sha256:baseline",
+      sizeBytes: 34,
+    },
+    files: [],
+    treeSha256: "sha256:baseline-tree",
+  },
+  reason: "revised",
+};
+
+describe("skill lifecycle hooks", () => {
+  it("collects every proposal evaluator with stable priority and plugin attribution", async () => {
+    const high = vi.fn(() => ({
+      summary: "candidate regressed",
+      metrics: { score: 0.4 },
+      evaluatorVersion: "rules-3",
+      block: true,
+      blockReason: "score below baseline",
+    }));
+    const low = vi.fn(() => undefined);
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "low",
+        priority: 10,
+        handler: low,
+      },
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "high",
+        priority: 100,
+        handler: high,
+      },
+    ]);
+    registry.plugins.find((plugin) => plugin.id === "high")!.version = "2.1.0";
+
+    const outcomes = await createHookRunner(registry).runSkillProposalEvaluate(
+      evaluationEvent,
+      ctx,
+    );
+
+    expect(outcomes).toEqual([
+      {
+        pluginId: "high",
+        pluginVersion: "2.1.0",
+        status: "completed",
+        result: {
+          summary: "candidate regressed",
+          metrics: { score: 0.4 },
+          evaluatorVersion: "rules-3",
+          block: true,
+          blockReason: "score below baseline",
+        },
+      },
+      {
+        pluginId: "low",
+        status: "skipped",
+      },
+    ]);
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns evaluator failures and timeouts as attributed outcomes", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "throws",
+        priority: 100,
+        handler: () => {
+          throw new Error("scanner unavailable\nprivate detail");
+        },
+      },
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "hangs",
+        priority: 50,
+        timeoutMs: 1,
+        handler: () => new Promise(() => undefined),
+      },
+    ]);
+
+    const outcomes = await createHookRunner(registry, { logger }).runSkillProposalEvaluate(
+      evaluationEvent,
+      ctx,
+    );
+
+    expect(outcomes).toEqual([
+      {
+        pluginId: "throws",
+        status: "error",
+        error: "scanner unavailable",
+      },
+      {
+        pluginId: "hangs",
+        status: "error",
+        error: "timed out after 1ms",
+      },
+    ]);
+    expect(logger.error).toHaveBeenCalledTimes(2);
+  });
+
+  it("dispatches committed skill changes as observation hooks", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const registry = createMockPluginRegistry([
+      { hookName: "skill_changed", pluginId: "first", handler: first },
+      { hookName: "skill_changed", pluginId: "second", handler: second },
+    ]);
+    const event: PluginHookSkillChangedEvent = {
+      action: "removed",
+      source: "clawhub",
+      occurredAt: "2026-07-29T00:00:00.000Z",
+      before: {
+        name: "Demo Skill",
+        skillKey: "demo-skill",
+        skillFile: "/workspace/skills/demo-skill/SKILL.md",
+        skillDir: "/workspace/skills/demo-skill",
+        source: "clawhub",
+        revision: {
+          contentSha256: "sha256:content",
+          treeSha256: "sha256:tree",
+          sourceVersion: "1.2.3",
+        },
+      },
+    };
+
+    await createHookRunner(registry).runSkillChanged(event, ctx);
+
+    expect(first).toHaveBeenCalledWith(event, ctx);
+    expect(second).toHaveBeenCalledWith(event, ctx);
+  });
+});
