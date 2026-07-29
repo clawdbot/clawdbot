@@ -5,11 +5,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { validateQaEvidenceSummaryJson } from "../../extensions/qa-lab/api.ts";
 import {
-  assertFreshCodeModeMatrixOutputDir,
   buildCodeModeMatrixAgentEnv,
   classifyCodeModeMatrixCell,
   modelCellPrefix,
   parseCodeModeMatrixOptions,
+  reserveCodeModeMatrixOutputDir,
   resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
@@ -54,12 +54,12 @@ describe("Code Mode model matrix options", () => {
     ).toThrow("within the repository");
   });
 
-  it("requires a fresh output path without symlink traversal", async () => {
+  it("reserves a fresh output path without symlink traversal", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-output-test-"));
     try {
       const existing = path.join(repoRoot, "existing");
       await fs.mkdir(existing);
-      await expect(assertFreshCodeModeMatrixOutputDir(repoRoot, existing)).rejects.toThrow(
+      await expect(reserveCodeModeMatrixOutputDir(repoRoot, existing)).rejects.toThrow(
         "must not already exist",
       );
 
@@ -67,9 +67,31 @@ describe("Code Mode model matrix options", () => {
       const linked = path.join(repoRoot, "linked");
       await fs.symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
       await expect(
-        assertFreshCodeModeMatrixOutputDir(repoRoot, path.join(linked, "results")),
+        reserveCodeModeMatrixOutputDir(repoRoot, path.join(linked, "results")),
       ).rejects.toThrow("must not traverse symlinks");
       await fs.rm(outside, { force: true, recursive: true });
+    } finally {
+      await fs.rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("allows only one concurrent run to reserve an output path", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-reserve-test-"));
+    try {
+      const outputDir = path.join(repoRoot, "nested", "results");
+      const attempts = await Promise.allSettled([
+        reserveCodeModeMatrixOutputDir(repoRoot, outputDir),
+        reserveCodeModeMatrixOutputDir(repoRoot, outputDir),
+      ]);
+
+      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+      const rejected = attempts.find((attempt) => attempt.status === "rejected");
+      expect(rejected).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringContaining("must not already exist"),
+        }),
+      });
     } finally {
       await fs.rm(repoRoot, { force: true, recursive: true });
     }
@@ -321,6 +343,149 @@ describe("Code Mode model matrix classification", () => {
 });
 
 describe("Code Mode model matrix artifacts", () => {
+  it("rejects case aliases of missing runtime artifacts", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-case-test-"));
+    try {
+      const canonicalRoot = await fs.realpath(repoRoot);
+      const rootName = path.basename(canonicalRoot);
+      const letterIndex = rootName.search(/[a-z]/iu);
+      const letter = rootName[letterIndex] ?? "";
+      const alternateLetter =
+        letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase();
+      const alternateRoot = path.join(
+        path.dirname(canonicalRoot),
+        `${rootName.slice(0, letterIndex)}${alternateLetter}${rootName.slice(letterIndex + 1)}`,
+      );
+      const caseInsensitive = await fs.realpath(alternateRoot).then(
+        (resolved) => resolved === canonicalRoot,
+        () => false,
+      );
+      if (!caseInsensitive) {
+        return;
+      }
+
+      await expect(
+        runCodeModeModelMatrix(
+          {
+            allowFailures: false,
+            buildCli: false,
+            dryRun: true,
+            keepState: false,
+            models: ["ollama/qwen3.5:9b"],
+            modes: ["code"],
+            outputDir: path.join("DIST", "evidence"),
+            repetitions: 1,
+            repoRoot,
+            tasks: ["read"],
+            thinking: "off",
+            timeoutSeconds: 10,
+          },
+          {
+            readSourceIdentity: async () => ({
+              gitSha: "abc123",
+              sourceDirty: false,
+              sourcePatchSha256: null,
+            }),
+          },
+        ),
+      ).rejects.toThrow("must not overlap runtime artifacts");
+      await expect(fs.access(path.join(repoRoot, "DIST", "evidence"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await fs.rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects package artifact namespaces before reservation creates them", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-package-test-"));
+    try {
+      await fs.mkdir(path.join(repoRoot, "packages"));
+      await expect(
+        runCodeModeModelMatrix(
+          {
+            allowFailures: false,
+            buildCli: false,
+            dryRun: true,
+            keepState: false,
+            models: ["ollama/qwen3.5:9b"],
+            modes: ["code"],
+            outputDir: path.join("packages", "new-package", "dist", "evidence"),
+            repetitions: 1,
+            repoRoot,
+            tasks: ["read"],
+            thinking: "off",
+            timeoutSeconds: 10,
+          },
+          {
+            readSourceIdentity: async () => ({
+              gitSha: "abc123",
+              sourceDirty: false,
+              sourcePatchSha256: null,
+            }),
+          },
+        ),
+      ).rejects.toThrow("must not overlap runtime artifacts");
+      await expect(fs.access(path.join(repoRoot, "packages", "new-package"))).rejects.toMatchObject(
+        {
+          code: "ENOENT",
+        },
+      );
+    } finally {
+      await fs.rm(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it.each(["dist", path.join("packages", "agent-core", "dist")])(
+    "rejects output inside build-created runtime artifacts: %s",
+    async (artifactDir) => {
+      const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-build-test-"));
+      let hashed = false;
+      try {
+        await expect(
+          runCodeModeModelMatrix(
+            {
+              allowFailures: false,
+              buildCli: true,
+              dryRun: false,
+              keepState: false,
+              models: ["ollama/qwen3.5:9b"],
+              modes: ["code"],
+              outputDir: path.join(artifactDir, "evidence"),
+              repetitions: 1,
+              repoRoot,
+              tasks: ["read"],
+              thinking: "off",
+              timeoutSeconds: 10,
+            },
+            {
+              buildCliArtifacts: async () => {
+                await fs.mkdir(path.join(repoRoot, artifactDir), { recursive: true });
+              },
+              readBuildSha256: async () => {
+                hashed = true;
+                return "build123";
+              },
+              readSourceIdentity: async () => ({
+                gitSha: "abc123",
+                sourceDirty: false,
+                sourcePatchSha256: null,
+              }),
+            },
+          ),
+        ).rejects.toThrow("must not overlap runtime artifacts");
+        expect(hashed).toBe(false);
+        await expect(fs.access(path.join(repoRoot, artifactDir, "evidence"))).rejects.toMatchObject(
+          {
+            code: "ENOENT",
+          },
+        );
+      } finally {
+        await fs.rm(repoRoot, { force: true, recursive: true });
+      }
+    },
+  );
+
   it("continues after cell crashes and reports first-pass versus eventual success", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-test-"));
     try {
@@ -342,7 +507,11 @@ describe("Code Mode model matrix artifacts", () => {
         },
         {
           now: () => new Date("2026-07-28T12:00:00Z"),
-          readBuildSha256: async () => "build123",
+          readBuildSha256: async () => {
+            const entries = await fs.readdir(path.join(repoRoot, "artifacts"));
+            expect(entries).toEqual([]);
+            return "build123";
+          },
           readGitSha: async () => "abc123",
           runCell: async ({ cell, gitSha }) => {
             calls += 1;

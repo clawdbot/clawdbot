@@ -127,6 +127,7 @@ type RunCellParams = {
 };
 
 type MatrixRunDependencies = {
+  buildCliArtifacts?: (repoRoot: string) => Promise<void>;
   now?: () => Date;
   readBuildSha256?: (repoRoot: string) => Promise<string>;
   readGitSha?: (repoRoot: string) => Promise<string>;
@@ -353,28 +354,147 @@ export function resolveCodeModeMatrixOutputDir(
   return resolved;
 }
 
-export async function assertFreshCodeModeMatrixOutputDir(
+function pathsOverlap(left: string, right: string, caseInsensitive: boolean): boolean {
+  const normalize = (value: string) => {
+    const resolved = path.resolve(value);
+    return caseInsensitive ? resolved.toLowerCase() : resolved;
+  };
+  const resolvedLeft = normalize(left);
+  const resolvedRight = normalize(right);
+  return (
+    resolvedLeft === resolvedRight ||
+    resolvedLeft.startsWith(`${resolvedRight}${path.sep}`) ||
+    resolvedRight.startsWith(`${resolvedLeft}${path.sep}`)
+  );
+}
+
+async function filesystemUsesCaseInsensitivePaths(repoRoot: string): Promise<boolean> {
+  const canonicalRoot = await fs.realpath(repoRoot);
+  const rootName = path.basename(canonicalRoot);
+  const letterIndex = rootName.search(/[a-z]/iu);
+  if (letterIndex < 0) {
+    return process.platform === "win32";
+  }
+  const letter = rootName[letterIndex] ?? "";
+  const alternateLetter =
+    letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase();
+  const alternateRoot = path.join(
+    path.dirname(canonicalRoot),
+    `${rootName.slice(0, letterIndex)}${alternateLetter}${rootName.slice(letterIndex + 1)}`,
+  );
+  return await fs.realpath(alternateRoot).then(
+    (resolved) => resolved === canonicalRoot,
+    () => false,
+  );
+}
+
+async function canonicalizeExistingPathPrefix(value: string): Promise<string> {
+  let current = path.resolve(value);
+  const missingSegments: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...missingSegments.toReversed());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw error;
+      }
+      missingSegments.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+async function runtimeArtifactDirectories(repoRoot: string, outputDir: string): Promise<string[]> {
+  const packagesRoot = path.join(repoRoot, "packages");
+  const packageEntries = await fs.readdir(packagesRoot, { withFileTypes: true }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  });
+  const artifacts = [
+    path.join(repoRoot, "dist"),
+    ...packageEntries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(packagesRoot, entry.name, "dist")),
+  ];
+  const outputSegments = path
+    .relative(path.resolve(repoRoot), path.resolve(outputDir))
+    .split(path.sep);
+  const outputPackage = outputSegments[0]?.toLowerCase() === "packages" && outputSegments[1];
+  if (outputPackage) {
+    artifacts.push(path.join(packagesRoot, outputPackage, "dist"));
+  }
+  return artifacts;
+}
+
+async function assertOutputOutsideRuntimeArtifacts(
+  repoRoot: string,
+  outputDir: string,
+): Promise<void> {
+  const caseInsensitive = await filesystemUsesCaseInsensitivePaths(repoRoot);
+  const canonicalOutput = await canonicalizeExistingPathPrefix(outputDir);
+  for (const artifactDir of await runtimeArtifactDirectories(repoRoot, outputDir)) {
+    const canonicalArtifact = await canonicalizeExistingPathPrefix(artifactDir);
+    if (pathsOverlap(canonicalOutput, canonicalArtifact, caseInsensitive)) {
+      throw new Error(
+        `--output-dir must not overlap runtime artifacts: ${path.relative(repoRoot, artifactDir)}`,
+      );
+    }
+  }
+}
+
+export async function reserveCodeModeMatrixOutputDir(
   repoRoot: string,
   outputDir: string,
 ): Promise<void> {
   const resolvedRoot = path.resolve(repoRoot);
-  const relative = path.relative(resolvedRoot, outputDir);
+  const resolvedOutput = path.resolve(outputDir);
+  const relative = path.relative(resolvedRoot, resolvedOutput);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("--output-dir must stay within the repository");
+  }
   let current = resolvedRoot;
   for (const segment of relative.split(path.sep)) {
     current = path.join(current, segment);
-    try {
-      const stats = await fs.lstat(current);
-      if (stats.isSymbolicLink()) {
-        throw new Error(`--output-dir must not traverse symlinks: ${relative}`);
+    for (;;) {
+      try {
+        const stats = await fs.lstat(current);
+        if (stats.isSymbolicLink()) {
+          throw new Error(`--output-dir must not traverse symlinks: ${relative}`);
+        }
+        if (current === resolvedOutput) {
+          throw new Error(`--output-dir must not already exist: ${relative}`);
+        }
+        if (!stats.isDirectory()) {
+          throw new Error(
+            `--output-dir parent must be a directory: ${path.relative(repoRoot, current)}`,
+          );
+        }
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+        try {
+          await fs.mkdir(current);
+          break;
+        } catch (mkdirError) {
+          if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw mkdirError;
+          }
+          // A concurrent creator won the race. Inspect its path before proceeding.
+        }
       }
-      if (current === outputDir) {
-        throw new Error(`--output-dir must not already exist: ${relative}`);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      throw error;
     }
   }
 }
@@ -1139,7 +1259,6 @@ export async function runCodeModeModelMatrix(
 ): Promise<{ exitCode: number; outputDir: string; summary: unknown }> {
   const now = deps.now?.() ?? new Date();
   const outputDir = resolveCodeModeMatrixOutputDir(options.repoRoot, options.outputDir, now);
-  await assertFreshCodeModeMatrixOutputDir(options.repoRoot, outputDir);
   const sourceIdentity = deps.readSourceIdentity
     ? await deps.readSourceIdentity(options.repoRoot)
     : deps.readGitSha
@@ -1151,8 +1270,12 @@ export async function runCodeModeModelMatrix(
       : await readSourceIdentity(options.repoRoot);
   const cells = buildCells(options);
   if (!options.dryRun && options.buildCli) {
-    await buildMatrixCliArtifacts(options.repoRoot);
+    await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
   }
+  // Build first so its output set is complete, then reserve evidence storage
+  // before hashing. Dry runs also write evidence, so every run needs isolation.
+  await assertOutputOutsideRuntimeArtifacts(options.repoRoot, outputDir);
+  await reserveCodeModeMatrixOutputDir(options.repoRoot, outputDir);
   const buildSha256 = options.dryRun
     ? null
     : await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(options.repoRoot);
@@ -1196,7 +1319,6 @@ export async function runCodeModeModelMatrix(
       : undefined;
     const results: CodeModeMatrixCellResult[] = [];
     const resultsPath = path.join(outputDir, "results.jsonl");
-    await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(resultsPath, "", "utf8");
     const executeCell = deps.runCell ?? runMatrixCell;
     for (const cell of cells) {
