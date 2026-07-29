@@ -1650,6 +1650,7 @@ export const registerTelegramNativeCommands = ({
           delivered: false,
           intentionallySuppressed: false,
           skippedNonSilent: 0,
+          failedNonSilent: 0,
         };
 
         const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
@@ -1735,6 +1736,7 @@ export const registerTelegramNativeCommands = ({
               }
             },
             onError: (err, info) => {
+              deliveryState.failedNonSilent += 1;
               runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
             },
           },
@@ -1752,7 +1754,8 @@ export const registerTelegramNativeCommands = ({
           !deliveryState.intentionallySuppressed &&
           deliveryState.skippedNonSilent > 0 &&
           (!turnResult.dispatched ||
-            turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only")
+            turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" ||
+            deliveryState.failedNonSilent > 0)
         ) {
           await deliverReplies({
             replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
