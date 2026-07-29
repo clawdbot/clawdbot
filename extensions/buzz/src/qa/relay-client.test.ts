@@ -7,6 +7,7 @@ const relayMocks = vi.hoisted(() => ({
   close: vi.fn(),
   connect: vi.fn(async () => {}),
   publish: vi.fn(async () => "ok"),
+  replayedMessage: undefined as Event | undefined,
   subscriptions: [] as Array<{
     filter: Filter;
     handlers: {
@@ -54,6 +55,11 @@ vi.mock("nostr-tools", async (importOriginal) => {
             ],
           });
           handlers.oneose?.();
+        } else {
+          if (relayMocks.replayedMessage) {
+            handlers.onevent?.(relayMocks.replayedMessage);
+          }
+          handlers.oneose?.();
         }
         return { close: vi.fn() };
       }
@@ -74,6 +80,7 @@ describe("Buzz QA relay driver", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     relayMocks.subscriptions.length = 0;
+    relayMocks.replayedMessage = undefined;
   });
 
   it("authenticates, verifies membership, and publishes a native mentioned thread event", async () => {
@@ -105,5 +112,23 @@ describe("Buzz QA relay driver", () => {
     );
     await driver.close();
     expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("ignores retained SUT messages before the observer reaches live events", async () => {
+    const onMessage = vi.fn(async () => {});
+    relayMocks.replayedMessage = {
+      id: "retained-sut-message",
+      kind: 9,
+      pubkey: credentials.sutPublicKey,
+      created_at: 1_750_000_000,
+      content: "old response",
+      sig: "e".repeat(128),
+      tags: [["h", credentials.roomId]],
+    };
+
+    const driver = await createBuzzQaRelayDriver({ credentials, onMessage });
+
+    expect(onMessage).not.toHaveBeenCalled();
+    await driver.close();
   });
 });

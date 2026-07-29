@@ -16,6 +16,7 @@ import type { BuzzQaCredentials } from "./credentials.js";
 
 const BUZZ_MESSAGE_KIND = 9;
 const MEMBERSHIP_TIMEOUT_MS = 10_000;
+const OBSERVER_READY_TIMEOUT_MS = 10_000;
 
 type BuzzQaRelayDriver = {
   assertHealthy(): void;
@@ -126,6 +127,16 @@ export async function createBuzzQaRelayDriver(params: {
     throw error;
   }
 
+  let observerReady = false;
+  let resolveObserverReady: (() => void) | undefined;
+  let rejectObserverReady: ((error: Error) => void) | undefined;
+  const observerReadyPromise = new Promise<void>((resolve, reject) => {
+    resolveObserverReady = resolve;
+    rejectObserverReady = reject;
+  });
+  const observerReadyTimeout = setTimeout(() => {
+    rejectObserverReady?.(new Error("Timed out waiting for the Buzz QA message observer."));
+  }, OBSERVER_READY_TIMEOUT_MS);
   const subscription = relay.subscribe(
     [
       {
@@ -137,6 +148,9 @@ export async function createBuzzQaRelayDriver(params: {
     ],
     {
       onevent: (event: Event) => {
+        if (!observerReady) {
+          return;
+        }
         if (observedEventIds.has(event.id)) {
           return;
         }
@@ -155,13 +169,33 @@ export async function createBuzzQaRelayDriver(params: {
             transportError = error instanceof Error ? error : new Error(String(error));
           });
       },
+      oneose: () => {
+        observerReady = true;
+        clearTimeout(observerReadyTimeout);
+        resolveObserverReady?.();
+      },
       onclose: (reason) => {
+        if (!observerReady) {
+          clearTimeout(observerReadyTimeout);
+          rejectObserverReady?.(
+            new Error(`Buzz QA message observer closed before it was ready: ${reason}`),
+          );
+          return;
+        }
         if (reason !== "shutdown" && reason !== "relay connection closed by us") {
           transportError = new Error(`Buzz QA message subscription closed: ${reason}`);
         }
       },
     },
   );
+  try {
+    await observerReadyPromise;
+  } catch (error) {
+    lifecycleAbort.abort(error);
+    subscription.close("shutdown");
+    relay.close();
+    throw error;
+  }
 
   return {
     assertHealthy() {
