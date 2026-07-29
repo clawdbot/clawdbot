@@ -7,9 +7,10 @@ use std::{
     future::Future,
     net::SocketAddr,
     path::Path,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -22,9 +23,9 @@ use tokio::{
 };
 
 use crate::{
-    ClientError, CommandRuntime, ConnectAuth, NodeClient, NodeClientConfig, NodeConnectOptions,
-    NodeIdentity, ReconnectAction, ReconnectPause, ReconnectPolicy, RuntimeBuildError,
-    RuntimeError,
+    ClientError, ClientErrorClass, CommandRuntime, ConnectAuth, LifecycleDisconnectReason,
+    LifecycleError, LifecycleEvent, NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity,
+    NodeLifecycle, NodeSession, ReconnectPause, RuntimeBuildError, RuntimeErrorClass,
 };
 
 // Avoid OpenClaw's reserved Gateway-adjacent ports by asking the OS for a free
@@ -308,9 +309,11 @@ where
     }
 }
 
+type HostConnectFuture = Pin<Box<dyn Future<Output = Result<NodeSession, ClientError>> + Send>>;
+
 async fn run_connections<F>(
     config: HostConfig,
-    mut credentials: HostCredentials,
+    credentials: HostCredentials,
     runtime: CommandRuntime,
     state: Arc<HostState>,
     health_listen: SocketAddr,
@@ -319,8 +322,6 @@ async fn run_connections<F>(
 where
     F: Future<Output = ()> + Send,
 {
-    let mut shutdown = Box::pin(shutdown);
-    let mut reconnect = ReconnectPolicy::default();
     emit(
         "info",
         "host.starting",
@@ -329,71 +330,89 @@ where
             "statusCommand": config.status_command,
         }),
     );
-    loop {
-        let connect = connect_host(&config, &mut credentials, runtime.clone());
-        let session = tokio::select! {
-            () = &mut shutdown => {
-                emit("info", "host.stopped", json!({"reason": "shutdown"}));
-                return Ok(());
-            }
-            result = connect => match result {
-                Ok(session) => session,
-                Err(error) => {
-                    state.ready.store(false, Ordering::Release);
-                    let delay = reconnect_delay(&mut reconnect, &error)?;
-                    if wait_or_shutdown(delay, &mut shutdown).await {
-                        emit("info", "host.stopped", json!({"reason": "shutdown"}));
-                        return Ok(());
-                    }
-                    continue;
-                }
-            }
-        };
+    let issued_device_token = Arc::new(Mutex::new(None::<String>));
+    let identity = credentials.identity.clone();
+    let connect = host_connection_factory(
+        &config,
+        credentials,
+        runtime.clone(),
+        Arc::clone(&issued_device_token),
+    );
+    let on_event = host_event_handler(state, identity);
+    let on_issued_device_token = host_token_handler(issued_device_token);
 
-        reconnect.connected();
-        adopt_device_token(&session, &mut credentials);
-        state.ready.store(true, Ordering::Release);
-        emit_connected(&session, &credentials.identity);
-        let runtime_session = session.clone();
-        let running = runtime.run(runtime_session);
-        tokio::pin!(running);
-        let runtime_result = tokio::select! {
-            () = &mut shutdown => {
-                state.ready.store(false, Ordering::Release);
-                let graceful = async {
-                    session.close().await;
-                    let _ = (&mut running).await;
-                };
-                let drained = tokio::time::timeout(Duration::from_secs(5), graceful)
-                    .await
-                    .is_ok();
-                emit("info", "host.stopped", json!({"reason": "shutdown", "drained": drained}));
-                return Ok(());
+    NodeLifecycle::default()
+        .run(connect, runtime, on_event, on_issued_device_token, shutdown)
+        .await
+        .map_err(|LifecycleError::Paused(pause)| {
+            HostError::ReconnectPaused(pause_name(&pause).into())
+        })
+}
+
+fn host_connection_factory(
+    config: &HostConfig,
+    credentials: HostCredentials,
+    runtime: CommandRuntime,
+    issued_device_token: Arc<Mutex<Option<String>>>,
+) -> impl FnMut() -> HostConnectFuture + Send {
+    let gateway_url = config.gateway_url.clone();
+    let display_name = config.display_name.clone();
+    let instance_id = config.instance_id.clone();
+    move || {
+        let issued_device_token = Arc::clone(&issued_device_token);
+        let identity = credentials.identity.clone();
+        let auth = credentials.auth.clone();
+        let runtime = runtime.clone();
+        let gateway_url = gateway_url.clone();
+        let display_name = display_name.clone();
+        let instance_id = instance_id.clone();
+        Box::pin(async move {
+            let selected_auth = issued_device_token
+                .lock()
+                .map_err(|_| {
+                    ClientError::ConnectParams("issued device-token state is unavailable".into())
+                })?
+                .as_ref()
+                .map_or(auth, |token| ConnectAuth::device_token(token.clone()));
+            let mut options = NodeConnectOptions::new(env!("CARGO_PKG_VERSION"), env::consts::OS)
+                .display_name(display_name)
+                .identity(identity)
+                .auth(selected_auth);
+            if let Some(instance_id) = instance_id {
+                options = options.instance_id(instance_id);
             }
-            result = &mut running => result,
-        };
-        state.ready.store(false, Ordering::Release);
-        session.close().await;
-        match runtime_result {
-            Err(RuntimeError::Client(error)) => {
-                let delay = reconnect_delay(&mut reconnect, &error)?;
-                if wait_or_shutdown(delay, &mut shutdown).await {
-                    emit("info", "host.stopped", json!({"reason": "shutdown"}));
-                    return Ok(());
-                }
-            }
-            Err(error @ (RuntimeError::DeliverySaturated | RuntimeError::ResultTask(_))) => {
-                emit(
-                    "error",
-                    "runtime.restart",
-                    json!({"reason": runtime_error_class(&error)}),
-                );
-                if wait_or_shutdown(Duration::from_secs(1), &mut shutdown).await {
-                    emit("info", "host.stopped", json!({"reason": "shutdown"}));
-                    return Ok(());
-                }
-            }
-            Ok(()) => {
+            NodeClient::connect(
+                NodeClientConfig::new(gateway_url),
+                move |_nonce| async move { Ok::<_, Infallible>(runtime.activate(options)) },
+            )
+            .await
+        })
+    }
+}
+
+fn host_event_handler(
+    state: Arc<HostState>,
+    identity: NodeIdentity,
+) -> impl FnMut(LifecycleEvent) + Send {
+    move |event| match event {
+        LifecycleEvent::Connecting { .. } => state.ready.store(false, Ordering::Release),
+        LifecycleEvent::Connected {
+            protocol,
+            server_version,
+            ..
+        } => emit(
+            "info",
+            "gateway.connected",
+            json!({
+                "protocol": protocol,
+                "serverVersion": server_version,
+                "deviceId": identity.device_id(),
+            }),
+        ),
+        LifecycleEvent::Ready { .. } => state.ready.store(true, Ordering::Release),
+        LifecycleEvent::Disconnected { reason, .. } => {
+            state.ready.store(false, Ordering::Release);
+            if reason == LifecycleDisconnectReason::RuntimeEnded {
                 emit(
                     "warn",
                     "runtime.restart",
@@ -401,6 +420,64 @@ where
                 );
             }
         }
+        LifecycleEvent::BackingOff { delay, reason, .. } => emit_backoff(delay, reason),
+        LifecycleEvent::Paused { reason, .. } => {
+            state.ready.store(false, Ordering::Release);
+            emit(
+                "error",
+                "gateway.paused",
+                json!({
+                    "reason": pause_name(&reason),
+                    "diagnostic": pause_diagnostic(&reason),
+                }),
+            );
+        }
+        LifecycleEvent::Stopped { drained, .. } => {
+            state.ready.store(false, Ordering::Release);
+            emit(
+                "info",
+                "host.stopped",
+                json!({"reason": "shutdown", "drained": drained}),
+            );
+        }
+    }
+}
+
+fn emit_backoff(delay: Duration, reason: LifecycleDisconnectReason) {
+    match reason {
+        LifecycleDisconnectReason::Client(error_class) => emit(
+            "warn",
+            "gateway.retry",
+            json!({
+                "delayMs": duration_ms(delay),
+                "errorClass": client_error_class_name(error_class),
+            }),
+        ),
+        LifecycleDisconnectReason::Runtime(error_class) => emit(
+            "error",
+            "runtime.restart",
+            json!({"reason": runtime_error_class_name(error_class)}),
+        ),
+        LifecycleDisconnectReason::RuntimeEnded | LifecycleDisconnectReason::Shutdown => {}
+    }
+}
+
+fn host_token_handler(issued_device_token: Arc<Mutex<Option<String>>>) -> impl FnMut(&str) + Send {
+    move |device_token| {
+        let Ok(mut current) = issued_device_token.lock() else {
+            emit(
+                "error",
+                "gateway.device_token_adoption_failed",
+                json!({"reason": "local-state-unavailable"}),
+            );
+            return;
+        };
+        *current = Some(device_token.to_owned());
+        emit(
+            "info",
+            "gateway.device_token_adopted",
+            json!({"persistence": "process-memory"}),
+        );
     }
 }
 
@@ -493,39 +570,6 @@ fn build_runtime(
             }
         })
         .build()
-}
-
-fn emit_connected(session: &crate::NodeSession, identity: &NodeIdentity) {
-    emit(
-        "info",
-        "gateway.connected",
-        json!({
-            "protocol": session.hello()["protocol"],
-            "serverVersion": session.hello()["server"]["version"],
-            "deviceId": identity.device_id(),
-        }),
-    );
-}
-
-fn adopt_device_token(session: &crate::NodeSession, credentials: &mut HostCredentials) {
-    if let Some(device_token) = session.issued_device_token() {
-        credentials.issued_device_token = Some(device_token.to_owned());
-        emit(
-            "info",
-            "gateway.device_token_adopted",
-            json!({"persistence": "process-memory"}),
-        );
-    }
-}
-
-async fn wait_or_shutdown<F>(delay: Duration, shutdown: &mut std::pin::Pin<Box<F>>) -> bool
-where
-    F: Future<Output = ()> + Send,
-{
-    tokio::select! {
-        () = shutdown => true,
-        () = tokio::time::sleep(delay) => false,
-    }
 }
 
 async fn serve_health(
@@ -690,73 +734,23 @@ fn pause_diagnostic(pause: &ReconnectPause) -> Value {
     }
 }
 
-fn reconnect_delay(
-    policy: &mut ReconnectPolicy,
-    error: &ClientError,
-) -> Result<Duration, HostError> {
-    match policy.after_failure(error) {
-        ReconnectAction::RetryAfter(delay)
-        | ReconnectAction::RetryWithStoredDeviceTokenAfter(delay) => {
-            emit(
-                "warn",
-                "gateway.retry",
-                json!({
-                    "delayMs": duration_ms(delay),
-                    "errorClass": client_error_class(error),
-                }),
-            );
-            Ok(delay)
-        }
-        ReconnectAction::Pause(pause) => {
-            let reason = pause_name(&pause);
-            emit(
-                "error",
-                "gateway.paused",
-                json!({"reason": reason, "diagnostic": pause_diagnostic(&pause)}),
-            );
-            Err(HostError::ReconnectPaused(reason.into()))
-        }
-        // This host calls the policy only after connect failed or its runtime
-        // closed the session, so there is no healthy session left to retain.
-        ReconnectAction::KeepSession => {
-            let delay = Duration::from_secs(1);
-            emit(
-                "warn",
-                "gateway.retry",
-                json!({
-                    "delayMs": duration_ms(delay),
-                    "errorClass": client_error_class(error),
-                }),
-            );
-            Ok(delay)
-        }
+fn client_error_class_name(error: ClientErrorClass) -> &'static str {
+    match error {
+        ClientErrorClass::Configuration => "configuration",
+        ClientErrorClass::Transport => "transport",
+        ClientErrorClass::Protocol => "protocol",
+        ClientErrorClass::Identity => "identity",
+        ClientErrorClass::Gateway => "gateway",
+        ClientErrorClass::RequestTimeout => "request-timeout",
+        ClientErrorClass::EventLagged => "event-lagged",
+        ClientErrorClass::Activation => "activation",
     }
 }
 
-fn client_error_class(error: &ClientError) -> &'static str {
+fn runtime_error_class_name(error: RuntimeErrorClass) -> &'static str {
     match error {
-        ClientError::InvalidUrl(_) | ClientError::InsecureRemoteGateway | ClientError::Tls(_) => {
-            "configuration"
-        }
-        ClientError::Transport(_)
-        | ClientError::ConnectTimeout
-        | ClientError::ChallengeTimeout
-        | ClientError::Closed(_) => "transport",
-        ClientError::InvalidChallenge(_) | ClientError::InvalidFrame(_) => "protocol",
-        ClientError::ConnectParams(_) | ClientError::Identity(_) => "identity",
-        ClientError::Gateway { .. } => "gateway",
-        ClientError::RequestTimeout(_) => "request-timeout",
-        ClientError::WriteTimeout(_) => "write-timeout",
-        ClientError::EventLagged(_) => "event-lagged",
-        ClientError::NotActivated => "activation",
-    }
-}
-
-fn runtime_error_class(error: &RuntimeError) -> &'static str {
-    match error {
-        RuntimeError::DeliverySaturated => "delivery-saturated",
-        RuntimeError::ResultTask(_) => "result-task",
-        RuntimeError::Client(_) => "client",
+        RuntimeErrorClass::DeliverySaturated => "delivery-saturated",
+        RuntimeErrorClass::ResultTask => "result-task",
     }
 }
 
@@ -851,15 +845,6 @@ mod tests {
         assert_eq!(decode_identity(encoded.as_bytes()).unwrap(), [9; 32]);
         assert!(decode_identity(&[7; 32]).is_err());
         assert!(decode_identity(b"short").is_err());
-    }
-
-    #[test]
-    fn ended_session_retries_request_scoped_failures() {
-        let error = ClientError::RequestTimeout("node.invoke.result".into());
-        assert_eq!(
-            reconnect_delay(&mut ReconnectPolicy::default(), &error).unwrap(),
-            Duration::from_secs(1)
-        );
     }
 
     #[tokio::test]
