@@ -261,17 +261,10 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       if (state.realtimeTalkSession !== session) {
         return;
       }
-      state.realtimeTalkSession = null;
-      session.stop();
-      state.realtimeTalkActive = false;
+      const detail = error instanceof Error ? error.message : String(error);
+      stopChatRealtimeTalk(state);
       state.realtimeTalkStatus = "error";
-      state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      state.realtimeTalkInputLevel.set(0);
-      state.realtimeTalkVideoStream = null;
-      state.realtimeTalkCameraDevices = [];
-      state.realtimeTalkVideoCapable = false;
-      state.realtimeTalkVideoPending = false;
-      state.realtimeTalkCameraError = false;
+      state.realtimeTalkDetail = detail;
       state.requestUpdate();
     }
   };
