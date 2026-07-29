@@ -163,7 +163,7 @@ describe("captured plugin registration", () => {
       register(api) {
         api.registerAgentToolResultMiddleware(handler, {
           runtimes: ["codex"],
-          matcher: ["exec_command"],
+          matcher: ["exec"],
         });
       },
     });
@@ -179,8 +179,8 @@ describe("captured plugin registration", () => {
     };
 
     await registration.handler({ ...event, toolName: "web_search" }, { runtime: "codex" });
-    await registration.handler({ ...event, toolName: "Bash" }, { runtime: "openclaw" });
-    await registration.handler({ ...event, toolName: "Bash" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "codex" });
 
     expect(handler).toHaveBeenCalledOnce();
   });

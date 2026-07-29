@@ -506,7 +506,7 @@ describe("before_tool_call hook merger — requireApproval", () => {
 });
 
 describe("before_tool_call matcher scoping", () => {
-  it("skips uncovered tools and executes an alias-covered policy once", async () => {
+  it("skips uncovered tools and executes a canonical matcher once", async () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn(() => ({ block: true, blockReason: "covered" }));
     addStaticTestHooks(registry, {
@@ -514,7 +514,7 @@ describe("before_tool_call matcher scoping", () => {
       hooks: [
         {
           pluginId: "shell-policy",
-          matcher: ["exec_command"],
+          matcher: ["exec"],
           result: { block: true, blockReason: "covered" },
           handler,
         },
@@ -529,9 +529,26 @@ describe("before_tool_call matcher scoping", () => {
       ),
     ).resolves.toBeUndefined();
     await expect(
-      runner.runBeforeToolCall({ toolName: "Bash", params: {} }, { ...stubCtx, toolName: "Bash" }),
+      runner.runBeforeToolCall({ toolName: "exec", params: {} }, { ...stubCtx, toolName: "exec" }),
     ).resolves.toMatchObject({ block: true, blockReason: "covered" });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Codex matcher aliases instead of making them globally special", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [{ pluginId: "codex-spelling", matcher: ["Agent"], result: { block: true }, handler }],
+    });
+
+    await expect(
+      createHookRunner(registry).runBeforeToolCall(
+        { toolName: "spawn_agent", params: {} },
+        { ...stubCtx, toolName: "spawn_agent" },
+      ),
+    ).rejects.toThrow("tool hook matcher entries must use canonical OpenClaw tool ids");
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("keeps an omitted matcher as match-all", async () => {

@@ -250,8 +250,8 @@ Codex feeds tool output back into the model.
 
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
-different runtimes does not broaden either matcher. Omit `matcher` or pass an
-empty list to match all tools.
+different runtimes does not broaden either matcher. Matchers use non-empty
+canonical OpenClaw tool ids; omit `matcher` to match all tools.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only

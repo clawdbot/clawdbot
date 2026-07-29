@@ -494,13 +494,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: `typed hook "${effectiveHookName}" ignores tool matcher`,
       });
-    } else if (opts?.matcher && matcher === undefined && opts.matcher.length > 0) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${effectiveHookName}" matcher resolves to match-all`,
-      });
     }
     record.hookCount += 1;
     registry.typedHooks.push({

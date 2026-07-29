@@ -1,75 +1,75 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
-type PluginToolMatcher = readonly string[] | undefined;
+import type { PluginToolMatcher } from "./hook-types.js";
 
 export type PluginToolMatcherScope = {
   matchAll: boolean;
   toolNames: readonly string[];
 };
 
-const TOOL_ALIAS_GROUPS = [
-  {
-    canonical: "exec",
-    nativeNames: ["Bash", "exec", "exec_command"],
-  },
-  {
-    canonical: "apply_patch",
-    nativeNames: ["apply_patch", "Write", "Edit"],
-  },
-] as const;
+// Reject known non-canonical spellings here without translating them.
+// Provider adapters own alias projection in both directions.
+const NON_CANONICAL_TOOL_MATCHER_NAMES = new Set([
+  "bash",
+  "exec_command",
+  "apply-patch",
+  "write",
+  "edit",
+  "agent",
+]);
 
-const CANONICAL_TOOL_NAME_BY_ALIAS = new Map<string, string>();
-const NATIVE_TOOL_NAMES_BY_CANONICAL = new Map<string, readonly string[]>();
-
-for (const group of TOOL_ALIAS_GROUPS) {
-  NATIVE_TOOL_NAMES_BY_CANONICAL.set(group.canonical, group.nativeNames);
-  for (const alias of group.nativeNames) {
-    CANONICAL_TOOL_NAME_BY_ALIAS.set(normalizeLowercaseStringOrEmpty(alias), group.canonical);
-  }
-}
-CANONICAL_TOOL_NAME_BY_ALIAS.set("apply-patch", "apply_patch");
-
-/** Canonicalizes OpenClaw and Codex spellings through one shared alias model. */
-export function normalizePluginToolName(toolName: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
-  return CANONICAL_TOOL_NAME_BY_ALIAS.get(normalized) ?? normalized;
-}
-
-/** Omitted and empty matchers preserve the existing match-all registration contract. */
-export function normalizePluginToolMatcher(matcher: PluginToolMatcher): string[] | undefined {
+/** Omission is the only match-all form; explicit matcher values must stay bounded. */
+export function normalizePluginToolMatcher(matcher: unknown): PluginToolMatcher | undefined {
   if (matcher === undefined) {
     return undefined;
   }
   if (!Array.isArray(matcher)) {
     throw new TypeError("tool hook matcher must be an array of tool names");
   }
-  const entries = Array.from(matcher);
-  if (
-    entries.some(
-      (toolName) =>
-        typeof toolName !== "string" || normalizeLowercaseStringOrEmpty(toolName).length === 0,
-    )
-  ) {
+  if (matcher.length === 0) {
+    throw new TypeError("tool hook matcher must contain at least one tool name");
+  }
+  const normalized = new Set<string>();
+  for (let index = 0; index < matcher.length; index += 1) {
+    if (!Object.hasOwn(matcher, index)) {
+      throw new TypeError("tool hook matcher entries must be non-empty strings");
+    }
+    const toolName = matcher[index];
+    if (typeof toolName !== "string") {
+      throw new TypeError("tool hook matcher entries must be non-empty strings");
+    }
+    const canonicalToolName = normalizeLowercaseStringOrEmpty(toolName);
+    if (!canonicalToolName) {
+      throw new TypeError("tool hook matcher entries must be non-empty strings");
+    }
+    if (canonicalToolName === "*") {
+      throw new TypeError("tool hook matcher wildcard entries are not supported");
+    }
+    if (NON_CANONICAL_TOOL_MATCHER_NAMES.has(canonicalToolName)) {
+      throw new TypeError("tool hook matcher entries must use canonical OpenClaw tool ids");
+    }
+    normalized.add(canonicalToolName);
+  }
+  const toolNames = Array.from(normalized).toSorted();
+  if (toolNames.length === 0) {
     throw new TypeError("tool hook matcher entries must be non-empty strings");
   }
-  const normalized = Array.from(
-    new Set(entries.map((toolName) => normalizePluginToolName(toolName))),
-  ).toSorted();
-  if (normalized.includes("*")) {
-    return undefined;
+  const [firstToolName, ...remainingToolNames] = toolNames;
+  if (!firstToolName) {
+    throw new TypeError("tool hook matcher entries must be non-empty strings");
   }
-  return normalized.length > 0 ? normalized : undefined;
+  return [firstToolName, ...remainingToolNames];
 }
 
-export function pluginToolMatcherCoversTool(matcher: PluginToolMatcher, toolName: string): boolean {
+export function pluginToolMatcherCoversTool(matcher: unknown, toolName: string): boolean {
   const normalizedMatcher = normalizePluginToolMatcher(matcher);
   return (
-    normalizedMatcher === undefined || normalizedMatcher.includes(normalizePluginToolName(toolName))
+    normalizedMatcher === undefined ||
+    normalizedMatcher.includes(normalizeLowercaseStringOrEmpty(toolName))
   );
 }
 
 export function createPluginToolMatcherScope(
-  matchers: Iterable<PluginToolMatcher>,
+  matchers: Iterable<unknown>,
 ): PluginToolMatcherScope | undefined {
   let hasRegistration = false;
   const toolNames = new Set<string>();
@@ -106,35 +106,4 @@ export function mergePluginToolMatcherScopes(
     }
   }
   return hasScope ? { matchAll: false, toolNames: Array.from(toolNames).toSorted() } : undefined;
-}
-
-/** Converts a local scope to a bounded exact or anchored Codex matcher. */
-export function buildCodexNativeToolMatcher(
-  scope: PluginToolMatcherScope | undefined,
-): string | undefined {
-  if (!scope || scope.matchAll) {
-    return undefined;
-  }
-  const nativeNames = new Set<string>();
-  let hasCustomToolName = false;
-  for (const toolName of scope.toolNames) {
-    const aliases = NATIVE_TOOL_NAMES_BY_CANONICAL.get(toolName);
-    if (!aliases) {
-      hasCustomToolName = true;
-    }
-    for (const alias of aliases ?? [toolName]) {
-      nativeNames.add(alias);
-    }
-  }
-  if (nativeNames.size === 0) {
-    return undefined;
-  }
-  const sortedNames = Array.from(nativeNames).toSorted();
-  if (!hasCustomToolName && sortedNames.every((toolName) => /^[A-Za-z0-9_]+$/.test(toolName))) {
-    return sortedNames.join("|");
-  }
-  const escapedNames = sortedNames.map((toolName) =>
-    toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  );
-  return `(?i)^(?:${escapedNames.join("|")})$`;
 }

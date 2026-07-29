@@ -8,6 +8,7 @@ import type {
   PluginHookToolContext,
   PluginHookToolInputKind,
   PluginHookToolKind,
+  PluginToolMatcher,
 } from "./hook-types.js";
 import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue, PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
@@ -115,7 +116,7 @@ function readTrustedPolicy(registration: TrustedPolicyRegistration):
 }
 
 function readTrustedPolicyMatcher(policy: PluginTrustedToolPolicyRegistration):
-  | { ok: true; matcher: readonly string[] | undefined }
+  | { ok: true; matcher: PluginToolMatcher | undefined }
   | {
       ok: false;
     } {

@@ -40,14 +40,20 @@ describe("agent tool result middleware scopes", () => {
       matcher: ["apply_patch"],
     });
 
-    expect(agentToolResultMiddlewareRegistrationCoversTool(registration, "codex", "Bash")).toBe(
+    expect(agentToolResultMiddlewareRegistrationCoversTool(registration, "codex", "exec")).toBe(
       true,
+    );
+    expect(agentToolResultMiddlewareRegistrationCoversTool(registration, "codex", "Bash")).toBe(
+      false,
     );
     expect(
       agentToolResultMiddlewareRegistrationCoversTool(registration, "codex", "apply_patch"),
     ).toBe(false);
+    expect(
+      agentToolResultMiddlewareRegistrationCoversTool(registration, "openclaw", "apply_patch"),
+    ).toBe(true);
     expect(agentToolResultMiddlewareRegistrationCoversTool(registration, "openclaw", "Write")).toBe(
-      true,
+      false,
     );
     expect(agentToolResultMiddlewareRegistrationCoversTool(registration, "openclaw", "exec")).toBe(
       false,

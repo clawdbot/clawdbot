@@ -6,6 +6,7 @@ import type {
   PluginHookAgentContext,
   PluginHookAgentTrigger,
   PluginHookRegistration,
+  PluginToolMatcher,
 } from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
@@ -30,7 +31,7 @@ export function addStaticTestHooks<TResult>(
     hooks: ReadonlyArray<{
       pluginId: string;
       result: TResult;
-      matcher?: readonly string[];
+      matcher?: PluginToolMatcher;
       priority?: number;
       handler?: () => TResult | Promise<TResult>;
     }>;

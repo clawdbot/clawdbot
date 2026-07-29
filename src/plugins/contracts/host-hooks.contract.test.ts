@@ -357,11 +357,11 @@ describe("host-hook fixture plugin contract", () => {
       register(api) {
         api.registerAgentToolResultMiddleware(handler, {
           runtimes: ["codex"],
-          matcher: ["exec_command"],
+          matcher: ["exec"],
         });
         api.registerAgentToolResultMiddleware(handler, {
           runtimes: ["openclaw"],
-          matcher: ["Write"],
+          matcher: ["apply_patch"],
         });
       },
     });
@@ -375,16 +375,16 @@ describe("host-hook fixture plugin contract", () => {
       args: {},
       result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
     };
-    await registration.handler({ ...event, toolName: "Bash" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "codex" });
     await registration.handler({ ...event, toolName: "apply_patch" }, { runtime: "codex" });
-    await registration.handler({ ...event, toolName: "Write" }, { runtime: "openclaw" });
+    await registration.handler({ ...event, toolName: "apply_patch" }, { runtime: "openclaw" });
     await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
 
     expect(registry.registry.agentToolResultMiddlewares).toHaveLength(1);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler.mock.calls.map(([call, ctx]) => [call.toolName, ctx.runtime])).toEqual([
-      ["Bash", "codex"],
-      ["Write", "openclaw"],
+      ["exec", "codex"],
+      ["apply_patch", "openclaw"],
     ]);
   });
 
@@ -761,7 +761,7 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
-  it("scopes trusted policies through the shared alias model", async () => {
+  it("scopes trusted policies through canonical OpenClaw tool ids", async () => {
     const evaluate = vi.fn(() => ({ block: true, blockReason: "covered" }));
     const registry = createEmptyPluginRegistry();
     registry.trustedToolPolicies = [
@@ -771,7 +771,7 @@ describe("host-hook fixture plugin contract", () => {
         policy: {
           id: "shell-policy",
           description: "covers shell tools",
-          matcher: ["exec_command"],
+          matcher: ["exec"],
           evaluate,
         },
       },
@@ -785,43 +785,53 @@ describe("host-hook fixture plugin contract", () => {
       ),
     ).resolves.toBeUndefined();
     await expect(
-      runTrustedToolPolicies({ toolName: "Bash", params: {} }, { toolName: "Bash" }, { registry }),
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }, { registry }),
     ).resolves.toMatchObject({ block: true, blockReason: "covered" });
     expect(evaluate).toHaveBeenCalledOnce();
   });
 
-  it("fails closed before evaluating an unreadable trusted policy matcher", async () => {
-    const evaluate = vi.fn();
-    const registry = createEmptyPluginRegistry();
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "fuzzplugin",
-        source: "test",
-        policy: {
-          id: "fuzzpolicy",
-          description: "synthetic trusted policy",
-          matcher: "exec" as never,
-          evaluate,
+  it.each([
+    { label: "wrong type", matcher: "exec" },
+    { label: "empty array", matcher: [] },
+    { label: "wildcard", matcher: ["*"] },
+    { label: "blank", matcher: [" "] },
+    { label: "provider alias", matcher: ["Bash"] },
+    { label: "sparse array", matcher: Array(1) },
+  ])(
+    "fails closed before evaluating an unreadable trusted policy matcher: $label",
+    async ({ matcher }) => {
+      const evaluate = vi.fn();
+      const registry = createEmptyPluginRegistry();
+      registry.trustedToolPolicies = [
+        {
+          pluginId: "fuzzplugin",
+          source: "test",
+          policy: {
+            id: "fuzzpolicy",
+            description: "synthetic trusted policy",
+            matcher: matcher as never,
+            evaluate,
+          },
         },
-      },
-    ];
+      ];
 
-    expect(getTrustedToolPolicyMatcherScope(registry)).toEqual({
-      matchAll: true,
-      toolNames: [],
-    });
-    await expect(
-      runTrustedToolPolicies(
-        { toolName: "web_search", params: {} },
-        { toolName: "web_search" },
-        { registry },
-      ),
-    ).resolves.toEqual({
-      block: true,
-      blockReason: "blocked by fuzzpolicy: policy matcher is unreadable",
-    });
-    expect(evaluate).not.toHaveBeenCalled();
-  });
+      expect(getTrustedToolPolicyMatcherScope(registry)).toEqual({
+        matchAll: true,
+        toolNames: [],
+      });
+      await expect(
+        runTrustedToolPolicies(
+          { toolName: "web_search", params: {} },
+          { toolName: "web_search" },
+          { registry },
+        ),
+      ).resolves.toEqual({
+        block: true,
+        blockReason: "blocked by fuzzpolicy: policy matcher is unreadable",
+      });
+      expect(evaluate).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed when a trusted policy throws during evaluation", async () => {
     const registry = createEmptyPluginRegistry();

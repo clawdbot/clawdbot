@@ -1,23 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildCodexNativeToolMatcher,
   createPluginToolMatcherScope,
   normalizePluginToolMatcher,
   pluginToolMatcherCoversTool,
 } from "./tool-hook-matcher.js";
 
 describe("plugin tool hook matchers", () => {
-  it("uses one canonical alias model for shell and patch tools", () => {
-    expect(normalizePluginToolMatcher(["Bash", "exec", "exec_command"])).toEqual(["exec"]);
-    expect(normalizePluginToolMatcher(["apply_patch", "Write", "Edit"])).toEqual(["apply_patch"]);
-    expect(pluginToolMatcherCoversTool(["exec_command"], "Bash")).toBe(true);
-    expect(pluginToolMatcherCoversTool(["Write"], "apply_patch")).toBe(true);
+  it("normalizes canonical OpenClaw tool ids without provider alias expansion", () => {
+    expect(normalizePluginToolMatcher([" EXEC ", "apply_patch", "exec"])).toEqual([
+      "apply_patch",
+      "exec",
+    ]);
+    expect(pluginToolMatcherCoversTool(["exec"], "exec")).toBe(true);
+    expect(pluginToolMatcherCoversTool(["exec"], "Bash")).toBe(false);
+    expect(pluginToolMatcherCoversTool(["apply_patch"], "Write")).toBe(false);
+    expect(pluginToolMatcherCoversTool(["spawn_agent"], "Agent")).toBe(false);
   });
 
-  it("preserves omitted and empty matchers as match-all", () => {
+  it.each(["Bash", "exec_command", "apply-patch", "Write", "Edit", "Agent"])(
+    "rejects non-canonical provider spelling %s",
+    (toolName) => {
+      expect(() => normalizePluginToolMatcher([toolName])).toThrow(
+        "tool hook matcher entries must use canonical OpenClaw tool ids",
+      );
+    },
+  );
+
+  it("keeps only an omitted matcher as match-all", () => {
     expect(pluginToolMatcherCoversTool(undefined, "web_search")).toBe(true);
-    expect(pluginToolMatcherCoversTool([], "web_search")).toBe(true);
-    expect(pluginToolMatcherCoversTool(["*"], "web_search")).toBe(true);
     expect(createPluginToolMatcherScope([undefined])).toEqual({
       matchAll: true,
       toolNames: [],
@@ -30,41 +40,29 @@ describe("plugin tool hook matchers", () => {
         "tool hook matcher must be an array of tool names",
       );
     }
+    expect(() => normalizePluginToolMatcher([])).toThrow(
+      "tool hook matcher must contain at least one tool name",
+    );
     expect(() => normalizePluginToolMatcher([42] as never)).toThrow(
       "tool hook matcher entries must be non-empty strings",
     );
     expect(() => normalizePluginToolMatcher([" "])).toThrow(
       "tool hook matcher entries must be non-empty strings",
     );
+    expect(() => normalizePluginToolMatcher(["*"])).toThrow(
+      "tool hook matcher wildcard entries are not supported",
+    );
   });
 
-  it("rejects sparse matchers before native relay matcher construction", () => {
+  it("rejects sparse matchers instead of widening relay selection", () => {
     const sparseMatcher: string[] = [];
     sparseMatcher.length = 1;
 
     expect(() => normalizePluginToolMatcher(sparseMatcher)).toThrow(
       "tool hook matcher entries must be non-empty strings",
     );
-    expect(() =>
-      buildCodexNativeToolMatcher(createPluginToolMatcherScope([sparseMatcher])),
-    ).toThrow("tool hook matcher entries must be non-empty strings");
-  });
-
-  it("expands canonical tools to exact Codex matcher alternatives", () => {
-    expect(
-      buildCodexNativeToolMatcher(createPluginToolMatcherScope([["exec"], ["apply_patch"]])),
-    ).toBe("Bash|Edit|Write|apply_patch|exec|exec_command");
-  });
-
-  it("anchors names that require a Codex regex", () => {
-    expect(buildCodexNativeToolMatcher(createPluginToolMatcherScope([["mcp:tool"]]))).toBe(
-      "(?i)^(?:mcp:tool)$",
-    );
-  });
-
-  it("matches custom native tool names without case-sensitive policy gaps", () => {
-    expect(buildCodexNativeToolMatcher(createPluginToolMatcherScope([["Deploy"]]))).toBe(
-      "(?i)^(?:deploy)$",
+    expect(() => createPluginToolMatcherScope([sparseMatcher])).toThrow(
+      "tool hook matcher entries must be non-empty strings",
     );
   });
 });
