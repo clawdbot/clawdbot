@@ -31,6 +31,8 @@ export type TerminalSession = {
   detachedAtMs: number | null;
   /** Last PTY input/output timestamp; drives idle eviction under pool pressure. */
   lastActivityAtMs: number;
+  /** Claimed by an in-flight open; killed only after its replacement spawns. */
+  evictionClaimed?: boolean;
 };
 
 export type TerminalSessionManagerOptions = {

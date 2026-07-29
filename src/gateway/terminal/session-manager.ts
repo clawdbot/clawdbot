@@ -90,15 +90,15 @@ export class TerminalSessionManager {
         message: `terminal spawn limit reached (${this.maxSessions * 2})`,
       };
     }
+    // Agent-opened shells outlive their commands and have no automatic reaper,
+    // so a busy agent would otherwise exhaust the pool for the whole gateway
+    // until restart. Under pressure, claim the longest-idle viewer-free agent
+    // session as an eviction candidate; it is killed only after the replacement
+    // backend spawns, so a failed spawn never destroys a live session.
+    let evictionCandidate: TerminalSession | undefined;
     if (this.sessions.size + this.opening >= this.maxSessions) {
-      // Agent-opened shells outlive their commands and have no automatic
-      // reaper, so a busy agent would otherwise exhaust the pool for the whole
-      // gateway until restart. Under pressure, reclaim the longest-idle
-      // viewer-free agent session instead of failing every later open.
-      if (
-        !this.evictLongestIdleAgentSession() ||
-        this.sessions.size + this.opening >= this.maxSessions
-      ) {
+      evictionCandidate = this.claimLongestIdleAgentSession();
+      if (!evictionCandidate) {
         return {
           ok: false,
           code: "limit",
@@ -106,6 +106,12 @@ export class TerminalSessionManager {
         };
       }
     }
+    const releaseEvictionClaim = () => {
+      if (evictionCandidate) {
+        evictionCandidate.evictionClaimed = false;
+        evictionCandidate = undefined;
+      }
+    };
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
     this.spawning += 1;
@@ -150,6 +156,7 @@ export class TerminalSessionManager {
     } catch (err) {
       this.spawning -= 1;
       releaseReservation();
+      releaseEvictionClaim();
       request.signal?.removeEventListener("abort", abortPending);
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, code: "spawn_failed", message };
@@ -162,12 +169,22 @@ export class TerminalSessionManager {
     if (pending.abortMessage) {
       // The request was cancelled while the shell was spawning; kill it now
       // rather than register an unreachable orphan.
+      releaseEvictionClaim();
       try {
         backend.kill();
       } catch {
         // Best-effort; the process may already be gone.
       }
       return { ok: false, code: "closed", message: pending.abortMessage };
+    }
+    if (evictionCandidate) {
+      // The replacement backend exists; retire the claimed victim now, still
+      // inside the synchronous window, so registration stays within the cap.
+      log.info(
+        `evicted idle agent terminal session under pool pressure: id=${evictionCandidate.id} agent=${evictionCandidate.agentId} idleMs=${Date.now() - evictionCandidate.lastActivityAtMs}`,
+      );
+      this.finalize(evictionCandidate, "closed", {});
+      evictionCandidate = undefined;
     }
 
     const sessionId = randomUUID();
@@ -578,31 +595,31 @@ export class TerminalSessionManager {
   }
 
   /**
-   * Reclaims the longest-idle agent-owned session when the pool is exhausted.
-   * Agent shells outlive their commands with no automatic reaper, so without
-   * eviction one busy agent bricks terminal opens gateway-wide until restart.
-   * Viewer-attached and connection-owned sessions are never evicted; an idle
-   * viewer-free background job losing its PTY under pressure is the accepted
-   * tradeoff for keeping the pool available.
+   * Claims the longest-idle agent-owned session as an eviction candidate when
+   * the pool is exhausted. Viewer-attached and connection-owned sessions are
+   * never evicted; an idle viewer-free background job losing its PTY under
+   * pressure is the accepted tradeoff for keeping the pool available. Claimed
+   * sessions are skipped so concurrent opens select distinct victims.
    */
-  private evictLongestIdleAgentSession(): boolean {
+  private claimLongestIdleAgentSession(): TerminalSession | undefined {
     let candidate: TerminalSession | undefined;
     for (const session of this.sessions.values()) {
-      if (session.closed || session.owner?.kind !== "agent" || session.viewers.size > 0) {
+      if (
+        session.closed ||
+        session.evictionClaimed ||
+        session.owner?.kind !== "agent" ||
+        session.viewers.size > 0
+      ) {
         continue;
       }
       if (!candidate || session.lastActivityAtMs < candidate.lastActivityAtMs) {
         candidate = session;
       }
     }
-    if (!candidate) {
-      return false;
+    if (candidate) {
+      candidate.evictionClaimed = true;
     }
-    log.info(
-      `evicted idle agent terminal session under pool pressure: id=${candidate.id} agent=${candidate.agentId} idleMs=${Date.now() - candidate.lastActivityAtMs}`,
-    );
-    this.finalize(candidate, "closed", {});
-    return true;
+    return candidate;
   }
 
   private removeViewer(session: TerminalSession, connId: string): boolean {
