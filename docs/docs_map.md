@@ -85,7 +85,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Webhooks
   - H3: Authentication
   - H2: Gmail PubSub integration
-  - H3: Wizard setup (recommended)
+  - H3: Configure a restricted Gmail reader (recommended)
+  - H3: Authenticate the reader model
+  - H3: Connect Gmail transport
+  - H3: Verify the reader boundary
   - H3: Gateway auto-start
   - H3: Manual one-time setup
   - H3: Gmail model override
