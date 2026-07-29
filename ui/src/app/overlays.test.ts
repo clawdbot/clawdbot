@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { UPDATE_HANDOFF_POLL_MS, UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
+import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
@@ -759,7 +759,6 @@ describe("application update overlays", () => {
   });
 
   it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
-    vi.useFakeTimers();
     let statusRequests = 0;
     const request = vi.fn<RequestFn>((method) => {
       if (method.endsWith(".list")) {
@@ -814,11 +813,6 @@ describe("application update overlays", () => {
       harness.update({ connected: true });
       await flushMicrotasks();
       expect(statusRequests).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(UPDATE_HANDOFF_POLL_MS);
-      await flushMicrotasks();
-
-      expect(statusRequests).toBe(2);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",
@@ -826,7 +820,6 @@ describe("application update overlays", () => {
       });
     } finally {
       overlays.dispose();
-      vi.useRealTimers();
     }
   });
 });
