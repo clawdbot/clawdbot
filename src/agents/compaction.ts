@@ -47,9 +47,6 @@ type CompactionSummaryResult =
   | { kind: "generic-fallback"; text: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
-const MAX_CONSECUTIVE_GENERIC_FALLBACKS = 2;
-const CIRCUIT_OPEN_ERROR =
-  "Compaction staged summarization stopped after repeated generic fallbacks";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
   "Merge these partial summaries into a single cohesive summary.",
   "",
@@ -400,15 +397,14 @@ export async function summarizeInStages(params: {
   }
 
   const partialSummaries: string[] = [];
-  let oldestChunkDegraded = false;
   for (const [index, chunk] of plan.chunks.entries()) {
-    let result: CompactionSummaryResult;
     try {
-      result = await summarizeWithFallbackResult({
+      const result = await summarizeWithFallbackResult({
         ...params,
         messages: chunk,
         previousSummary: undefined,
       });
+      partialSummaries.push(result.text);
     } catch (err) {
       // A chunk summarization failed — fail the whole stages compaction.
       // This prevents silent infinite retry loops where compaction reports
@@ -423,13 +419,6 @@ export async function summarizeInStages(params: {
         err instanceof Error ? err : undefined,
       );
     }
-
-    // Track if the oldest chunk failed to produce a real summary
-    if (index === 0 && result.kind !== "summary") {
-      oldestChunkDegraded = true;
-    }
-
-    partialSummaries.push(result.text);
   }
 
   if (partialSummaries.length === 1) {
@@ -437,10 +426,7 @@ export async function summarizeInStages(params: {
     if (summary === undefined) {
       throw new Error("Compaction summary plan produced no summary");
     }
-    return {
-      kind: oldestChunkDegraded ? "generic-fallback" : "summary",
-      text: summary,
-    };
+    return { kind: "summary", text: summary };
   }
 
   // Capture once so timestamps are strictly monotonic across
