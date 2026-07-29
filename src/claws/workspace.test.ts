@@ -230,17 +230,19 @@ describe("createClawWorkspaceFiles", () => {
     );
   });
 
-  it("writes an adoptable file that disappeared between planning and apply", async () => {
+  it("fails closed when an adoptable file disappears between planning and apply", async () => {
     const { root, workspace, plan } = await makeAdoptionPlan();
     expect(plan.blockers).toEqual([]);
     await rm(join(workspace, "AGENTS.md"));
 
-    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
-
-    expect(records).toContainEqual(
-      expect.objectContaining({ path: "AGENTS.md", status: "complete" }),
-    );
-    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+    await expect(
+      createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 }),
+    ).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: "workspace_file_conflict" })],
+    });
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {

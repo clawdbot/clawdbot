@@ -261,6 +261,12 @@ changed after planning. Adoption is disclosed as a distinct capability change
 in the plan, and a workspace already configured for another agent still
 blocks.
 
+Adoption transfers lifecycle ownership of matching declared files to Claws.
+After adoption, `claws update` may replace an unchanged adopted file with the
+content from the reviewed target package, and `claws remove` may delete an
+unchanged adopted file. Locally modified adopted files are retained and must be
+reconciled explicitly. Preview update and removal plans before applying them.
+
 ## Inspect installed state
 
 ```bash

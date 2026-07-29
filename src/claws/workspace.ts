@@ -491,6 +491,18 @@ export async function createClawWorkspaceFiles(
         createdFiles.push(existingRecord);
         continue;
       }
+      if (action.action === "adopt") {
+        throw new ClawWorkspaceWriteError(
+          [
+            diagnostic(
+              action,
+              "workspace_file_conflict",
+              `Adoptable workspace destination ${JSON.stringify(targetRelative)} disappeared after planning; adoption never writes missing files.`,
+            ),
+          ],
+          createdFiles,
+        );
+      }
       const record = existingRecord ?? expectedRecord;
       if (existingRecord) {
         const previousStatus = record.status;
