@@ -2838,8 +2838,8 @@ export const en: TranslationMap = {
       metrics: "Metrics",
       fileLine: "{file}:{line}",
       errors: {
-        hashUnavailable: "The current proposal draft could not be identified.",
-        draftChanged: "The proposal draft changed during evaluation.",
+        revisionHashUnavailable: "The current proposal revision could not be identified.",
+        revisionChanged: "The proposal revision changed during evaluation.",
       },
     },
     empty: {

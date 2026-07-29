@@ -41,7 +41,7 @@ export type SkillWorkshopEvaluationOutcome = {
 export type SkillWorkshopEvaluation = {
   id: string;
   proposedVersion: string;
-  draftHash: string;
+  revisionHash: string;
   trigger: "manual" | "apply";
   startedAt: string;
   completedAt: string;
@@ -63,7 +63,7 @@ export type SkillWorkshopProposal = {
     messageId?: string;
   };
   version: number;
-  draftHash: string | null;
+  revisionHash: string | null;
   evaluation?: SkillWorkshopEvaluation;
   createdAt: number;
   updatedAt?: number;

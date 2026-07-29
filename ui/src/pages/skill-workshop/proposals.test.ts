@@ -18,6 +18,7 @@ type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 const ISO_NOW = "2026-06-16T12:00:00.000Z";
 const DRAFT_HASH = "a".repeat(64);
+const REVISION_HASH = "b".repeat(64);
 
 function createFixture(
   overrides: Partial<SkillWorkshopState> = {},
@@ -103,6 +104,7 @@ function inspectResult(status: SkillWorkshopProposal["status"] = "pending") {
         skillKey: "inbox-cleaner",
       },
     },
+    revisionHash: REVISION_HASH,
     content: "Review unread mail and archive low-priority threads.",
     supportFiles: [],
   };
@@ -117,7 +119,7 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
     body: "Review unread mail.",
     status: "pending",
     version: 1,
-    draftHash: DRAFT_HASH,
+    revisionHash: REVISION_HASH,
     createdAt: Date.parse(ISO_NOW),
     updatedAt: Date.parse(ISO_NOW),
     recencyGroup: "today",
@@ -232,11 +234,11 @@ describe("Skill Workshop proposal RPCs", () => {
     },
   );
 
-  it("evaluates the freshly inspected draft hash and merges the attributed result", async () => {
+  it("evaluates the freshly inspected revision and merges the attributed result", async () => {
     const evaluation = {
       id: "evaluation-1",
       proposedVersion: "v1",
-      draftHash: DRAFT_HASH,
+      revisionHash: REVISION_HASH,
       trigger: "manual",
       startedAt: ISO_NOW,
       completedAt: ISO_NOW,
@@ -266,7 +268,7 @@ describe("Skill Workshop proposal RPCs", () => {
     let inspectCalls = 0;
     const { state, context, request } = createFixture({
       skillWorkshopAgentId: "research",
-      skillWorkshopProposals: [proposal({ draftHash: "b".repeat(64) })],
+      skillWorkshopProposals: [proposal({ revisionHash: "c".repeat(64) })],
       skillWorkshopSelectedKey: "proposal-1",
     });
     request.mockImplementation(async (method: string) => {
@@ -293,7 +295,7 @@ describe("Skill Workshop proposal RPCs", () => {
     expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.evaluate", {
       agentId: "research",
       proposalId: "proposal-1",
-      expectedDraftHash: DRAFT_HASH,
+      expectedRevisionHash: REVISION_HASH,
     });
     expect(request).toHaveBeenNthCalledWith(3, "skills.proposals.inspect", {
       agentId: "research",
@@ -307,7 +309,7 @@ describe("Skill Workshop proposal RPCs", () => {
     });
   });
 
-  it("drops an inspected evaluation that belongs to a different draft", async () => {
+  it("drops an inspected evaluation that belongs to a different revision", async () => {
     const baseInspect = inspectResult();
     const { state, context, request } = createFixture({
       skillWorkshopProposals: [proposal({ body: "" })],
@@ -319,7 +321,7 @@ describe("Skill Workshop proposal RPCs", () => {
         evaluation: {
           id: "evaluation-stale",
           proposedVersion: "v0",
-          draftHash: "b".repeat(64),
+          revisionHash: "c".repeat(64),
           trigger: "manual",
           startedAt: ISO_NOW,
           completedAt: ISO_NOW,
@@ -330,16 +332,16 @@ describe("Skill Workshop proposal RPCs", () => {
 
     await selectSkillWorkshopProposal(state, context, "proposal-1");
 
-    expect(state.skillWorkshopProposals[0]?.draftHash).toBe(DRAFT_HASH);
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBe(REVISION_HASH);
     expect(state.skillWorkshopProposals[0]?.evaluation).toBeUndefined();
   });
 
-  it("rejects an evaluation response for a different draft", async () => {
+  it("rejects an evaluation response for a different revision", async () => {
     const baseInspect = inspectResult();
     const mismatchedEvaluation = {
       id: "evaluation-stale",
       proposedVersion: "v0",
-      draftHash: "b".repeat(64),
+      revisionHash: "c".repeat(64),
       trigger: "manual",
       startedAt: ISO_NOW,
       completedAt: ISO_NOW,
@@ -360,7 +362,7 @@ describe("Skill Workshop proposal RPCs", () => {
 
     await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
 
-    expect(state.skillWorkshopError).toBe("The proposal draft changed during evaluation.");
+    expect(state.skillWorkshopError).toBe("The proposal revision changed during evaluation.");
     expect(state.skillWorkshopProposals[0]?.evaluation).toBeUndefined();
   });
 

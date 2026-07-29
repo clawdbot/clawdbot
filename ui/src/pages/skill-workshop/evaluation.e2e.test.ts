@@ -11,6 +11,7 @@ import {
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const describeBrowser = canRunPlaywrightChromium(chromiumExecutablePath) ? describe : describe.skip;
 const DRAFT_HASH = "a".repeat(64);
+const REVISION_HASH = "b".repeat(64);
 const ISO_NOW = "2026-07-29T10:00:00.000Z";
 
 let browser: Browser | null = null;
@@ -19,7 +20,7 @@ let server: ControlUiE2eServer | null = null;
 const evaluation = {
   id: "evaluation-1",
   proposedVersion: "v1",
-  draftHash: DRAFT_HASH,
+  revisionHash: REVISION_HASH,
   trigger: "manual",
   startedAt: ISO_NOW,
   completedAt: "2026-07-29T10:00:01.000Z",
@@ -63,6 +64,7 @@ const record = {
 function inspectResult(withEvaluation: boolean) {
   return {
     record: withEvaluation ? { ...record, evaluation } : record,
+    revisionHash: REVISION_HASH,
     content: "## Workflow\n- Review unread mail.",
     supportFiles: [],
   };
@@ -134,7 +136,7 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
         expect(request.params).toEqual({
           agentId: "research",
           proposalId: "proposal-1",
-          expectedDraftHash: DRAFT_HASH,
+          expectedRevisionHash: REVISION_HASH,
         });
         await expect.poll(() => page.getByText("quality-plugin 1.2.3").isVisible()).toBe(true);
         await expect.poll(() => page.getByText("Block", { exact: true }).isVisible()).toBe(true);

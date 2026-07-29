@@ -14,7 +14,7 @@ const DRAFT_HASH = "a".repeat(64);
 const evaluation: SkillWorkshopEvaluation = {
   id: "evaluation-1",
   proposedVersion: "v3",
-  draftHash: DRAFT_HASH,
+  revisionHash: DRAFT_HASH,
   trigger: "manual",
   startedAt: "2026-07-29T10:00:00.000Z",
   completedAt: "2026-07-29T10:00:01.000Z",
@@ -76,7 +76,7 @@ const proposal: SkillWorkshopProposal = {
   body: "## Workflow\n- Review unread mail.",
   status: "pending",
   version: 3,
-  draftHash: DRAFT_HASH,
+  revisionHash: DRAFT_HASH,
   evaluation,
   createdAt: Date.parse("2026-07-29T09:00:00.000Z"),
   updatedAt: Date.parse("2026-07-29T10:00:00.000Z"),

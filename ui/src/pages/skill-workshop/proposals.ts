@@ -85,6 +85,7 @@ type SkillProposalSupportFile = {
 
 type SkillProposalInspectResult = {
   record: SkillProposalRecord;
+  revisionHash: string;
   content: string;
   supportFiles?: SkillProposalSupportFile[];
 };
@@ -238,7 +239,7 @@ function proposalFromManifest(
     status: entry.status,
     ...(previousIsCurrent && previous.origin ? { origin: previous.origin } : {}),
     version: previousIsCurrent ? previous.version : 1,
-    draftHash: previousIsCurrent ? previous.draftHash : null,
+    revisionHash: previousIsCurrent ? previous.revisionHash : null,
     ...(previousIsCurrent && previous.evaluation ? { evaluation: previous.evaluation } : {}),
     createdAt,
     updatedAt,
@@ -256,11 +257,11 @@ function proposalFromInspect(
   const record = result.record;
   const updatedAt = parseDateMs(record.updatedAt);
   const createdAt = parseDateMs(record.createdAt);
-  const draftHash = record.draftHash?.trim() || null;
+  const revisionHash = result.revisionHash?.trim() || null;
   const evaluation =
-    record.evaluation?.draftHash === draftHash
+    record.evaluation?.revisionHash === revisionHash
       ? record.evaluation
-      : previous?.evaluation?.draftHash === draftHash
+      : previous?.evaluation?.revisionHash === revisionHash
         ? previous.evaluation
         : undefined;
   return {
@@ -272,7 +273,7 @@ function proposalFromInspect(
     status: record.status,
     ...(record.origin ? { origin: record.origin } : {}),
     version: proposedVersionNumber(record.proposedVersion),
-    draftHash,
+    revisionHash,
     ...(evaluation ? { evaluation } : {}),
     createdAt,
     updatedAt,
@@ -303,7 +304,7 @@ function proposalFromEvaluation(
         ? { origin: previous.origin }
         : {}),
     version: proposedVersionNumber(record.proposedVersion),
-    draftHash: record.draftHash?.trim() || result.evaluation.draftHash,
+    revisionHash: result.evaluation.revisionHash,
     evaluation: result.evaluation,
     createdAt,
     updatedAt,
@@ -565,22 +566,19 @@ export async function runSkillWorkshopEvaluation(
       return false;
     }
     const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
-    if (!current || current.status !== "pending" || !current.draftHash) {
-      throw new Error(t("skillWorkshop.evaluation.errors.hashUnavailable"));
+    if (!current || current.status !== "pending" || !current.revisionHash) {
+      throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
     }
     const result = await client.request<SkillProposalEvaluateResult>("skills.proposals.evaluate", {
       agentId: requestAgentId,
       proposalId,
-      expectedDraftHash: current.draftHash,
+      expectedRevisionHash: current.revisionHash,
     });
     if (state.skillWorkshopAgentId !== requestAgentId) {
       return false;
     }
-    if (
-      result.record.draftHash !== current.draftHash ||
-      result.evaluation.draftHash !== current.draftHash
-    ) {
-      throw new Error(t("skillWorkshop.evaluation.errors.draftChanged"));
+    if (result.evaluation.revisionHash !== current.revisionHash) {
+      throw new Error(t("skillWorkshop.evaluation.errors.revisionChanged"));
     }
     mergeProposal(state, proposalFromEvaluation(result, current));
     await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
