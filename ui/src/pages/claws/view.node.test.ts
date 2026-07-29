@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
@@ -10,9 +12,17 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "claws-responsive-layout",
+);
 
 function fixtureHtml(): string {
   return `
+    <div class="claws-scroll-fixture" style="height: 100dvh; overflow-y: auto">
     <main style="max-width: 1180px; margin: 0 auto; padding: 20px">
       <div class="claws-page stack">
         <div class="settings-segmented claws-mode">
@@ -101,6 +111,7 @@ function fixtureHtml(): string {
         </div>
       </div>
     </main>
+    </div>
   `;
 }
 
@@ -131,24 +142,51 @@ describeBrowserLayout("Claws responsive layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${css}</style></head><body>${fixtureHtml()}</body></html>`,
       );
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, `claws-${width}x${height}-preview.png`),
+        });
+      }
+      const overflow = await page.evaluate(() => {
+        const scroll = document.querySelector(".claws-scroll-fixture");
+        if (!(scroll instanceof HTMLElement)) {
+          throw new Error("Missing Claws scroll fixture");
+        }
+        return scroll.scrollWidth - scroll.clientWidth;
+      });
       expect(overflow).toBeLessThanOrEqual(0);
 
       const inventory = await page.locator(".claws-inventory").boundingBox();
       const detail = await page.locator(".claws-detail").boundingBox();
       const plan = await page.locator(".claws-plan").boundingBox();
+      const finalResource = page.locator(".claws-resource").last();
+      await finalResource.scrollIntoViewIfNeeded();
+      const resource = await finalResource.boundingBox();
       expect(inventory).not.toBeNull();
       expect(detail).not.toBeNull();
       expect(plan).not.toBeNull();
+      expect(resource).not.toBeNull();
       expect(plan!.x).toBeGreaterThanOrEqual(0);
       expect(plan!.x + plan!.width).toBeLessThanOrEqual(width);
+      expect(resource!.x).toBeGreaterThanOrEqual(0);
+      expect(resource!.x + resource!.width).toBeLessThanOrEqual(width);
+      expect(resource!.y).toBeGreaterThanOrEqual(0);
+      expect(resource!.y + resource!.height).toBeLessThanOrEqual(height);
       if (width <= 760) {
         expect(detail!.y).toBeGreaterThanOrEqual(inventory!.y + inventory!.height - 1);
       } else {
         expect(Math.abs(detail!.y - inventory!.y)).toBeLessThanOrEqual(1);
         expect(detail!.x).toBeGreaterThan(inventory!.x);
+      }
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, `claws-${width}x${height}-resources.png`),
+        });
       }
 
       await page.close();
