@@ -329,7 +329,11 @@ export async function sendMessageMSTeams(
         app,
         ref,
         activity,
-        threadActivityId: resolveThreadActivityId(ref, replyStyle, conversationType),
+        // Only channel replies carry a thread root; top-level and group sends must stay unchanged.
+        threadActivityId:
+          replyStyle === "thread" && conversationType === "channel"
+            ? (ref.threadId ?? ref.activityId)
+            : undefined,
         serviceUrlBoundary: sdkCloudOptions,
       });
 
@@ -429,21 +433,11 @@ type ProactiveActivityParams = {
   activity: Record<string, unknown>;
   errorPrefix: string;
   serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
-  threadActivityId?: string;
 };
 
-type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
-
-function resolveThreadActivityId(
-  ref: MSTeamsProactiveContext["ref"],
-  replyStyle: MSTeamsProactiveContext["replyStyle"],
-  conversationType: MSTeamsProactiveContext["conversationType"],
-): string | undefined {
-  if (replyStyle !== "thread" || conversationType !== "channel") {
-    return undefined;
-  }
-  return ref.threadId ?? ref.activityId;
-}
+type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix"> & {
+  threadActivityId?: string;
+};
 
 async function sendProactiveActivityRaw({
   app,
@@ -466,16 +460,9 @@ async function sendProactiveActivity({
   activity,
   errorPrefix,
   serviceUrlBoundary,
-  threadActivityId,
 }: ProactiveActivityParams): Promise<string> {
   try {
-    return await sendProactiveActivityRaw({
-      app,
-      ref,
-      activity,
-      threadActivityId,
-      serviceUrlBoundary,
-    });
+    return await sendProactiveActivityRaw({ app, ref, activity, serviceUrlBoundary });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
