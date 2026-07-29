@@ -11,7 +11,9 @@ import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lif
 import {
   clearSessionWorkAdmissionHandoffs,
   createSessionWorkAdmissionHandoff,
+  createSessionWorkAdmissionHandoffForEntries,
   type HandoffSessionWorkAdmission,
+  type SessionWorkAdmissionHandoffEntry,
   type SessionWorkAdmissionLease,
 } from "./session-work-admission-handoff.js";
 
@@ -395,15 +397,16 @@ export function getSessionWorkAdmissionRelease(
 }
 
 /**
- * Creates a single-use handoff token for an admission in the CURRENT async
+ * Creates a single-use handoff token for the admissions in the CURRENT async
  * context whose identities cover the requested ones. A chat-initiated /close
- * runs under its own retained reply-run admission; when it deletes its own
- * session through a nested cross-context gateway RPC, that RPC leaves the async
- * context, so the server would treat the initiator's still-held admission as
- * competing work and block on it. Handing the lease to the server lets it adopt
- * (and thus exempt) the initiating admission instead of deadlocking. Returns
- * undefined when no covering admission is active, in which case callers fall
- * back to the drain-and-retry path.
+ * runs under retained admissions — the gateway chat.send admission plus its
+ * inner reply-run admission; when it deletes its own session through a nested
+ * cross-context gateway RPC, that RPC leaves the async context, so the server
+ * would treat the initiator's still-held admissions as competing work and
+ * block on them. Handing the leases to the server lets it adopt (and thus
+ * exempt) every initiating admission instead of deadlocking on whichever one
+ * the token left behind. Returns undefined when no covering admission is
+ * active, in which case callers fall back to the drain-and-retry path.
  */
 export function createSessionWorkAdmissionHandoffForCurrent(
   params: SessionWorkAdmissionReleaseParams,
@@ -416,15 +419,19 @@ export function createSessionWorkAdmissionHandoffForCurrent(
   if (identities.length === 0) {
     return undefined;
   }
+  const entries: SessionWorkAdmissionHandoffEntry[] = [];
   for (const admission of current) {
     if (!admission.lease) {
       continue;
     }
     if (identities.every((identity) => admission.identities.has(identity))) {
-      return admission.lease.createHandoff();
+      entries.push({ admission, lease: admission.lease });
     }
   }
-  return undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return createSessionWorkAdmissionHandoffForEntries(entries);
 }
 
 /** Active session identities for one store/lifecycle scope. */
