@@ -34,6 +34,7 @@ import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-drea
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 import {
   canonicalMemoryRouteLocation,
+  DEFAULT_MEMORY_ENGINE_ID,
   memoryTabForRoute,
   memorySchemaKeysForTab,
   resolveMemoryBackend,
@@ -410,7 +411,14 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     return this.catalog.plugins
       .filter(isMemoryEngine)
       .map((plugin) => ({ id: plugin.id, label: plugin.name }))
-      .toSorted((left, right) => left.label.localeCompare(right.label));
+      .toSorted((left, right) => {
+        const leftIsDefault = left.id === DEFAULT_MEMORY_ENGINE_ID;
+        const rightIsDefault = right.id === DEFAULT_MEMORY_ENGINE_ID;
+        if (leftIsDefault !== rightIsDefault) {
+          return leftIsDefault ? -1 : 1;
+        }
+        return left.label.localeCompare(right.label);
+      });
   }
 
   private engineState(selection: MemoryEngineSelection): MemoryPluginState {
@@ -529,6 +537,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.engineBusy = true;
     this.engineError = null;
     try {
+      // `Off` is an autosaved form edit. Let it adopt its ack hash before the
+      // plugin RPC performs its own CAS write, or rapid Off -> engine changes
+      // can race each other and reject the second write as stale.
+      await this.context.runtimeConfig.waitForPendingWrites();
       await setPluginEnabled(client, engineId, true);
       await this.context.runtimeConfig.refresh();
       await this.loadCatalog(client, connection);
