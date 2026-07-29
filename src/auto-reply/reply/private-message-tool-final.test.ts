@@ -78,7 +78,7 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
       shouldWarnAboutPrivateMessageToolFinal({
         ...base,
         finalText:
-          "これは非常に重要な問題です。ユーザーは毎日この機能を使用しています。しかし、現在の実装では正しく動作していません。",
+          "これは非常に重要な問題です。ユーザーは毎日この機能を使用しています。しかし、現在の実装では正しく動作していません。この問題を解決するためには、まず根本原因を特定する必要があります。その上で適切な修正を適用し、テストを実行して確認する必要があります。この修正は重要です。",
       }),
     ).toBe(true);
   });
@@ -87,7 +87,8 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
     expect(
       shouldWarnAboutPrivateMessageToolFinal({
         ...base,
-        finalText: "私は元気です！あなたは？",
+        finalText:
+          "これは非常に重要な問題です！ユーザーは毎日この機能を使用しています。しかし、現在の実装では正しく動作していません？さらに他の問題も発生しています。この問題は早急に対応する必要があります。正しい修正を適用してください。テストを実行して動作確認を行います。",
       }),
     ).toBe(true);
   });
