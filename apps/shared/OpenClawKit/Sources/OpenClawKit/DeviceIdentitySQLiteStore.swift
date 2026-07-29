@@ -533,14 +533,10 @@ enum DeviceIdentitySQLiteStore {
             guard source.stateDirURL.standardizedFileURL != destinationStateDirURL.standardizedFileURL else {
                 return nil
             }
-            do {
-                return try self.readDeviceAuth(
-                    source.authURL,
-                    beneath: source.stateDirURL,
-                    deviceId: deviceId)
-            } catch where DeviceAuthStore.isMissingFileError(error) {
-                return nil
-            }
+            return try self.readDeviceAuth(
+                source.authURL,
+                beneath: source.stateDirURL,
+                deviceId: deviceId)
         }
         if let firstSourceAuth = sourceAuth.first,
            !sourceAuth.dropFirst().allSatisfy({ $0.store == firstSourceAuth.store })
@@ -559,30 +555,42 @@ enum DeviceIdentitySQLiteStore {
     private static func readDeviceAuth(
         _ url: URL,
         beneath stateDirURL: URL,
-        deviceId: String) throws -> LegacyAuthCandidate
+        deviceId: String) throws -> LegacyAuthCandidate?
     {
-        let before = try self.legacyFileSnapshot(
-            url,
-            beneath: stateDirURL,
-            maximumBytes: DeviceAuthStore.maximumLegacyAuthBytes)
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let data = try handle.read(upToCount: DeviceAuthStore.maximumLegacyAuthBytes + 1) ?? Data()
-        let after = try self.legacyFileSnapshot(
-            url,
-            beneath: stateDirURL,
-            maximumBytes: DeviceAuthStore.maximumLegacyAuthBytes)
-        guard before == after, UInt64(data.count) == before.size else {
+        let before: LegacyFileSnapshot
+        do {
+            before = try self.legacyFileSnapshot(
+                url,
+                beneath: stateDirURL,
+                maximumBytes: DeviceAuthStore.maximumLegacyAuthBytes)
+        } catch where DeviceAuthStore.isMissingFileError(error) {
+            // Absent at first observation means nothing to migrate. A disappearance after
+            // this point must fail the migration instead, so the claimed identity survives
+            // for retry rather than committing without its credentials.
+            return nil
+        }
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: DeviceAuthStore.maximumLegacyAuthBytes + 1) ?? Data()
+            let after = try self.legacyFileSnapshot(
+                url,
+                beneath: stateDirURL,
+                maximumBytes: DeviceAuthStore.maximumLegacyAuthBytes)
+            guard before == after, UInt64(data.count) == before.size else {
+                throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
+            }
+            guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data),
+                  let normalized = DeviceAuthStore.normalizedStore(decoded),
+                  normalized.deviceId == deviceId
+            else {
+                throw DeviceIdentityStore.storageError(
+                    "Device auth does not belong to the migrated device identity; source preserved")
+            }
+            return LegacyAuthCandidate(store: normalized)
+        } catch where DeviceAuthStore.isMissingFileError(error) {
             throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
         }
-        guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data),
-              let normalized = DeviceAuthStore.normalizedStore(decoded),
-              normalized.deviceId == deviceId
-        else {
-            throw DeviceIdentityStore.storageError(
-                "Device auth does not belong to the migrated device identity; source preserved")
-        }
-        return LegacyAuthCandidate(store: normalized)
     }
 
     private static func removeClaimedLegacyIdentities(_ claims: [LegacyClaim]) throws {
