@@ -839,8 +839,10 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
       }
 
       while (true) {
-        // A trailing CR may be the first half of a CRLF in the next chunk.
-        const searchable = !done && buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer;
+        // Defer a possible CRLF only when CR does not already complete a blank line.
+        const deferTrailingCr =
+          !done && buffer.endsWith("\r") && !buffer.endsWith("\r\r") && !buffer.endsWith("\n\r");
+        const searchable = deferTrailingCr ? buffer.slice(0, -1) : buffer;
         // A CRLF is one line ending: never backtrack its CR into a false blank line.
         const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/.exec(searchable);
         if (!boundary) {

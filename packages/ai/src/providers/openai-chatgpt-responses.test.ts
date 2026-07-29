@@ -1378,6 +1378,72 @@ describe("parseSSEForTest", () => {
     expect(events).toEqual([completedEvent]);
   });
 
+  it.each([
+    {
+      label: "lone CR",
+      chunks: [`data: ${serializedCompletedEvent}\r\r`],
+    },
+    {
+      label: "mixed LF and lone CR",
+      chunks: [`data: ${serializedCompletedEvent}\n\r`],
+    },
+    {
+      label: "mixed CRLF and lone CR",
+      chunks: [`data: ${serializedCompletedEvent}\r\n\r`],
+    },
+    {
+      label: "chunk-split lone CR",
+      chunks: [`data: ${serializedCompletedEvent}\r`, "\r"],
+    },
+    {
+      label: "chunk-split mixed LF and lone CR",
+      chunks: [`data: ${serializedCompletedEvent}\n`, "\r"],
+    },
+  ])("dispatches a $label SSE frame before an open response closes", async ({ chunks }) => {
+    const cleanup = new AbortController();
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        cleanup.signal.addEventListener("abort", () => controller.close(), { once: true });
+        for (const chunk of chunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const iterator = parseSSEForTest(new Response(body))[Symbol.asyncIterator]();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let receivedEvent = false;
+
+    try {
+      const result = await Promise.race([
+        iterator.next(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error("SSE frame was not dispatched while the response remained open"));
+          }, 1_000);
+        }),
+      ]);
+      receivedEvent = true;
+
+      expect(result).toEqual({ done: false, value: completedEvent });
+      expect(cleanup.signal.aborted).toBe(false);
+      expect(canceled).toBe(false);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (!receivedEvent) {
+        cleanup.abort();
+      }
+      await iterator.return(undefined);
+    }
+
+    expect(canceled).toBe(true);
+  });
+
   it("bounds streamed OpenAI ChatGPT Responses success bodies without content-length", async () => {
     // 1 MiB chunks; cap is 16 MiB so the bounded reader cancels well before
     // draining the full 32 MiB advertised body.
