@@ -29,7 +29,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { agentModel: null });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -55,7 +55,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { agentModel: null });
 
     try {
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
@@ -79,6 +79,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      agentModel: null,
       featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
     });
 
