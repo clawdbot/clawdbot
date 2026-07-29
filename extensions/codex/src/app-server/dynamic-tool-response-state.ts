@@ -8,8 +8,29 @@ import type {
 export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
+  transcriptDetails?: { mcpAppPreview: unknown };
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };
+
+/** Retains the host-owned app preview without adding it to Codex's response payload. */
+export function withDynamicToolTranscriptDetails<T extends CodexDynamicToolRuntimeResponse>(
+  response: T,
+  details: unknown,
+): T {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return response;
+  }
+  const mcpAppPreview = (details as Record<string, unknown>).mcpAppPreview;
+  if (!mcpAppPreview || typeof mcpAppPreview !== "object" || Array.isArray(mcpAppPreview)) {
+    return response;
+  }
+  Object.defineProperty(response, "transcriptDetails", {
+    configurable: true,
+    enumerable: false,
+    value: { mcpAppPreview },
+  });
+  return response;
+}
 
 export function withDynamicToolTerminalResolution<T extends CodexDynamicToolRuntimeResponse>(
   response: T,

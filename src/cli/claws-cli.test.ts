@@ -37,6 +37,8 @@ const mocks = vi.hoisted(() => {
     applyClawUpdatePlan: vi.fn(),
     buildClawUpdatePlan: vi.fn(),
     exportClawAgent: vi.fn(),
+    callGatewayFromCli: vi.fn(),
+    sleep: vi.fn(),
   };
 });
 
@@ -56,6 +58,14 @@ vi.mock("../config/config.js", async () => ({
 vi.mock("../config/mcp-config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/mcp-config.js")>("../config/mcp-config.js")),
   listConfiguredMcpServers: mocks.listConfiguredMcpServers,
+}));
+
+vi.mock("./gateway-rpc.js", () => ({
+  callGatewayFromCli: mocks.callGatewayFromCli,
+}));
+
+vi.mock("../utils/sleep.js", () => ({
+  sleep: mocks.sleep,
 }));
 
 vi.mock("../state/openclaw-state-db.js", async () => ({
@@ -95,6 +105,7 @@ vi.mock("../claws/update-apply.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
+const { waitUntilGatewayConfigApplied } = await import("./claws-cli.gateway-readiness.js");
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const { ClawUpdateMutationError } = await import("../claws/update-apply.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -178,6 +189,9 @@ describe("claws cli", () => {
       config: {},
       mcpServers: {},
     });
+    mocks.callGatewayFromCli.mockReset();
+    mocks.sleep.mockReset();
+    mocks.sleep.mockResolvedValue(undefined);
     mocks.closeReadOnlyDatabase.mockReset();
     mocks.stateTableGet.mockReset();
     mocks.stateTableGet.mockReturnValue({ 1: 1 });
@@ -312,6 +326,7 @@ describe("claws cli", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -337,6 +352,49 @@ describe("claws cli", () => {
       "remove",
       "export",
     ]);
+  });
+
+  it("accepts an already-applied Gateway config revision", async () => {
+    mocks.callGatewayFromCli.mockResolvedValue({
+      configRevisionHash: "revision-new",
+      appliedConfigHash: "revision-new",
+    });
+
+    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("config.get", { timeout: "5000" }, {});
+    expect(mocks.sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries until the Gateway applies the persisted config revision", async () => {
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-old",
+      })
+      .mockResolvedValueOnce({
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+      });
+
+    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
+    expect(mocks.sleep).toHaveBeenCalledOnce();
+    expect(mocks.sleep).toHaveBeenCalledWith(100);
+  });
+
+  it("reports the last Gateway error after the reload deadline", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15_000);
+    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
+
+    await expect(waitUntilGatewayConfigApplied()).rejects.toThrow(
+      "Gateway did not apply the Claw agent configuration in time: gateway unavailable",
+    );
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.sleep).toHaveBeenCalledOnce();
   });
 
   it("prints versioned experimental JSON for a development manifest", async () => {
@@ -428,17 +486,30 @@ describe("claws cli", () => {
   });
 
   it("discloses capability escalations in the human dry-run", async () => {
-    const path = await writeManifest({
-      schemaVersion: 1,
-      agent: { id: "demo-agent", tools: { allow: ["read"] } },
-      mcpServers: {
-        docs: {
-          command: "node",
-          env: { API_TOKEN: "${GITHUB_TOKEN}" },
-          toolFilter: { include: ["search_*"] },
+    const root = tempDirs.make("openclaw-claws-cli-profile-");
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    allow: [read]\n",
+      "utf8",
+    );
+    const path = join(root, "openclaw.claw.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "demo-agent" },
+        metadata: { "openclaw.config": "profiles/openclaw.yml" },
+        mcpServers: {
+          docs: {
+            command: "node",
+            env: { API_TOKEN: "${GITHUB_TOKEN}" },
+            toolFilter: { include: ["search_*"] },
+          },
         },
-      },
-    });
+      }),
+      "utf8",
+    );
 
     await runCli(["claws", "add", path, "--dry-run"]);
 

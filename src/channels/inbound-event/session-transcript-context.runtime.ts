@@ -2,6 +2,7 @@ import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
 type PromptMessage = Record<string, unknown>;
@@ -86,7 +87,7 @@ function mergeMessages(params: {
 }
 
 function chatWindowEntries(ctx: FinalizedMsgContext) {
-  return (ctx.UntrustedStructuredContext ?? []).filter(
+  return (ctx.ChannelStructuredContext ?? []).filter(
     (entry): entry is typeof entry & { payload: Record<string, unknown> } =>
       entry.type === "chat_window" &&
       Boolean(entry.payload) &&
@@ -112,8 +113,14 @@ export async function mergeSessionTranscriptContext(params: {
   ) {
     return;
   }
+  // Routed channel turns provide agentId; direct callers may derive only an
+  // explicitly scoped owner. Unscoped keys without routing context fail closed.
+  const agentId = params.agentId?.trim() || parseAgentSessionKey(params.sessionKey)?.agentId;
+  if (!agentId) {
+    throw new Error("Session transcript context requires an agent owner.");
+  }
   const turns = await readRecentUserAssistantTextForSession({
-    agentId: params.agentId,
+    agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
@@ -149,8 +156,8 @@ export async function mergeSessionTranscriptContext(params: {
   }
   const windows = chatWindowEntries(params.ctx);
   if (windows.length === 0 && options?.chatWindow) {
-    params.ctx.UntrustedStructuredContext = [
-      ...(params.ctx.UntrustedStructuredContext ?? []),
+    params.ctx.ChannelStructuredContext = [
+      ...(params.ctx.ChannelStructuredContext ?? []),
       {
         label: "Conversation context",
         source: "session",

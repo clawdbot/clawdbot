@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -107,8 +107,9 @@ describe("user turn transcript persistence", () => {
         content: "display prompt",
         provenance: { sourceChannel: "telegram" },
         timestamp: 123,
-        MediaPath: "/tmp/image.png",
-        MediaType: "image/png",
+        __openclaw: {
+          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
+        },
       });
     });
 
@@ -240,7 +241,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      expect(persisted?.sessionFile).toBe(target.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(target.sessionKey);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -262,8 +263,14 @@ describe("user turn transcript persistence", () => {
       });
 
       expect(recorder.message).toMatchObject({
-        MediaPath: "/tmp/provider-media.bin",
-        MediaType: "provider/custom-media",
+        __openclaw: {
+          media: [
+            expect.objectContaining({
+              path: "/tmp/provider-media.bin",
+              contentType: "provider/custom-media",
+            }),
+          ],
+        },
       });
     });
 
@@ -377,15 +384,22 @@ describe("user turn transcript persistence", () => {
       expect(persisted?.message).toMatchObject({
         role: "user",
         content: "describe this",
-        MediaPath: path.join(dir, "image.png"),
-        MediaType: "image/png",
+        __openclaw: {
+          media: [
+            expect.objectContaining({
+              path: path.join(dir, "image.png"),
+              contentType: "image/png",
+            }),
+          ],
+        },
       });
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
           content: "describe this",
-          MediaPath: path.join(dir, "image.png"),
-          MediaType: "image/png",
+          __openclaw: {
+            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+          },
         }),
       ]);
     });
@@ -445,11 +459,11 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           content: "",
           idempotencyKey: "chat-run-late:user:late-media",
-          MediaPath: path.join(dir, "image.png"),
-          MediaPaths: [path.join(dir, "image.png")],
-          MediaType: "image/png",
-          MediaTypes: ["image/png"],
-          __openclaw: { hookOwned: true, lateMedia: true },
+          __openclaw: {
+            hookOwned: true,
+            lateMedia: true,
+            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+          },
         }),
       ]);
       const lateProjection = buildLateMediaAttachedProjection(castAgentMessage(messages[1]));
@@ -503,8 +517,10 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({ content: "describe this" }),
         expect.objectContaining({
           content: "resolved subtitle",
-          MediaPath: path.join(dir, "image.png"),
-          __openclaw: { lateMedia: true },
+          __openclaw: {
+            lateMedia: true,
+            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+          },
         }),
       ]);
     });
@@ -536,7 +552,9 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           content: "describe this",
           idempotencyKey: "chat-run-early:user",
-          MediaPath: path.join(dir, "image.png"),
+          __openclaw: {
+            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+          },
         }),
       ]);
     });
@@ -704,7 +722,7 @@ describe("user turn transcript persistence", () => {
         },
       });
 
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(staleTarget)).resolves.toEqual([]);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
@@ -734,7 +752,7 @@ describe("user turn transcript persistence", () => {
       const persisted = await recorder.persistApproved({ retryIfUnpersisted: true });
 
       expect(targetResolutionCount).toBe(2);
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -766,8 +784,8 @@ describe("user turn transcript persistence", () => {
       ]);
 
       expect(targetResolutionCount).toBe(2);
-      expect(first?.sessionFile).toBe(admittedTarget.sqliteMarker);
-      expect(second?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(first?.sessionFile).toBe(admittedTarget.sessionKey);
+      expect(second?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",

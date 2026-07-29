@@ -1,5 +1,6 @@
 // Telegram plugin module implements outbound message context behavior.
 import type { Message } from "grammy/types";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -151,7 +152,11 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(messageThreadId !== undefined ? { messageThreadId } : {}),
     });
     const cache = createTelegramMessageCache({
-      scope: resolveTelegramMessageCacheScope(resolveStorePath(params.cfg.session?.store)),
+      scope: resolveTelegramMessageCacheScope(
+        resolveStorePath(params.cfg.session?.store, {
+          agentId: params.cfg.agents ? resolveDefaultAgentId(params.cfg) : "main",
+        }),
+      ),
     });
     await cache.record({
       accountId: params.account.accountId,

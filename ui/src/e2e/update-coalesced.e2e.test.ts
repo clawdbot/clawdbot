@@ -33,6 +33,40 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
     await server?.close();
   });
 
+  it("identifies a beta release in the visible Gateway update card", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-beta-channel");
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "beta",
+          currentVersion: "2026.7.1-2",
+          latestVersion: "2026.7.2-beta.5",
+        },
+      });
+
+      await page
+        .getByRole("button", {
+          name: /Update Gateway · v2026\.7\.2-beta\.5 \(beta\)/u,
+        })
+        .waitFor({ timeout: 10_000 });
+      await page.screenshot({ path: path.join(artifactDir, "beta-update-card.png") });
+      expect(await gateway.getRequests("update.run")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows coalesced restart feedback after the Update click", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-coalesced");
     const context = await browser.newContext({
@@ -56,6 +90,7 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
 
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
       await gateway.emitGatewayEvent("update.available", {
         updateAvailable: {
           channel: "stable",
@@ -119,6 +154,7 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
 
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
       await gateway.emitGatewayEvent("update.available", {
         updateAvailable: {
           channel: "stable",

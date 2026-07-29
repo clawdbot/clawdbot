@@ -6,7 +6,6 @@ scenario:
     primary:
       - channels.reply-message-actions
   execution:
-    profiles: { "whatsapp:default": 5, "whatsapp:mock-default": 29 }
     kind: flow
     channel: whatsapp
     timeoutMs: 60000

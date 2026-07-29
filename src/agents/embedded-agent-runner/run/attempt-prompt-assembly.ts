@@ -28,6 +28,7 @@ import { log } from "../logger.js";
 import {
   beginPromptCacheObservation,
   type PromptCacheChange,
+  type PromptCacheToolSnapshot,
 } from "../prompt-cache-observability.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
@@ -88,7 +89,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     retention: CacheRetention;
     streamStrategy: string;
     transport: AgentSession["agent"]["transport"];
-    toolNames: string[];
+    tools: readonly PromptCacheToolSnapshot[];
     trace: CacheTrace;
   };
 }): Promise<EmbeddedAttemptPromptAssembly> {
@@ -107,6 +108,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     sessionKey: attempt.sessionKey,
     sessionId: attempt.sessionId,
     workspaceDir: attempt.workspaceDir,
+    activeProjectKeys: attempt.preparedModelRuntime?.projectKey
+      ? [attempt.preparedModelRuntime.projectKey]
+      : [],
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
     trigger: attempt.trigger,
@@ -205,7 +209,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       streamStrategy: input.cache.streamStrategy,
       transport: input.cache.transport,
       systemPrompt: systemPromptText,
-      toolNames: input.cache.toolNames,
+      tools: input.cache.tools,
     });
     promptCacheChangesForTurn = cacheObservation.changes;
     input.cache.trace?.recordStage("cache:state", {

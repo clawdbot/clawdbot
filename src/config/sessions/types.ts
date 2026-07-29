@@ -9,8 +9,9 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -21,7 +22,6 @@ import type {
   SessionCreatedVia,
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
-import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -41,6 +41,38 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+/** Canonical persisted delivery ownership for one session. */
+export type SessionDeliveryState =
+  | { kind: "none" }
+  | { kind: "internal" }
+  | {
+      kind: "external";
+      route: ChannelRouteRef;
+      context: DeliveryContext;
+      origin: SessionOrigin;
+    };
+
+type PendingFinalDeliveryState = {
+  createdAt: number;
+  context?: DeliveryContext;
+  intentId?: string;
+} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
+
+type FallbackNoticeState = {
+  kind: "active";
+  selectedModel: string;
+  activeModel: string;
+  reason?: string;
+};
+
+type MemoryFlushState =
+  | { kind: "succeeded"; compactionCount: number }
+  | {
+      kind: "failed";
+      compactionCount?: number;
+      failureCount: number;
+    };
+
 export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
 export type CliSessionReseedReceipt = {
@@ -52,6 +84,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Last successful assistant boundary accepted by the backend's resume contract. */
+  resumeCheckpointId?: string;
   /** Resume with the backend's fork argument once, then clear before process start. */
   forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -67,6 +101,12 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+};
+
+type AcpSessionBinding = {
+  acpBackendId: string;
+  acpAgentId: string;
+  agentSessionId: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -230,7 +270,7 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = SessionRestartRecoveryState &
+type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
@@ -286,7 +326,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
     lastActivityAt?: number;
-    sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
     /** Immutable session key authorized to receive this child's completion handoff. */
@@ -386,6 +425,8 @@ export type SessionEntry = SessionRestartRecoveryState &
       cliExecutionProvider?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
+      /** Exact server-stamped authority provenance copied from the owning cron job. */
+      scheduledToolPolicy?: CronScheduledToolPolicy;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -425,6 +466,8 @@ export type SessionEntry = SessionRestartRecoveryState &
      * Resets only preserve user-driven overrides.
      */
     modelOverrideSource?: "auto" | "user";
+    /** Present only when providerOverride/modelOverride are a canonical route pair. */
+    modelOverrideRouteResolution?: "resolved";
     /** Selected model that produced the current auto fallback override. */
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
@@ -451,18 +494,7 @@ export type SessionEntry = SessionRestartRecoveryState &
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
-    /** Durable marker that final user reply delivery still needs a retry/resume pass. */
-    pendingFinalDelivery?: boolean;
-    pendingFinalDeliveryCreatedAt?: number;
-    pendingFinalDeliveryLastAttemptAt?: number;
-    pendingFinalDeliveryAttemptCount?: number;
-    pendingFinalDeliveryLastError?: string | null;
-    /** Frozen reply text that needs delivery. */
-    pendingFinalDeliveryText?: string | null;
-    /** Original delivery context (channel, recipient, etc). */
-    pendingFinalDeliveryContext?: DeliveryContext;
-    /** Durable send intent backing pending final delivery, when already created. */
-    pendingFinalDeliveryIntentId?: string | null;
+    pendingFinalDelivery?: PendingFinalDeliveryState;
     /**
      * Whether totalTokens reflects a fresh context snapshot for the latest run.
      * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -485,47 +517,31 @@ export type SessionEntry = SessionRestartRecoveryState &
      * incompatible runtime harnesses.
      */
     agentHarnessId?: string;
-    /**
-     * Last selected/runtime model pair for which a fallback notice was emitted.
-     * Used to avoid repeating the same fallback notice every turn.
-     */
-    fallbackNoticeSelectedModel?: string;
-    fallbackNoticeActiveModel?: string;
-    fallbackNoticeReason?: string;
+    fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
-    memoryFlushAt?: number;
-    memoryFlushCompactionCount?: number;
-    memoryFlushContextHash?: string;
-    /** Consecutive memory flush failures since the last successful flush. */
-    memoryFlushFailureCount?: number;
-    /** Timestamp (ms) of the last failed memory flush attempt. */
-    memoryFlushLastFailedAt?: number;
-    /** Last memory flush failure error message, truncated for durable metadata. */
-    memoryFlushLastFailureError?: string;
+    memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
+    /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
+    acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
+    /** Preferred Control UI face when a caller opens this session without explicit face intent. */
+    boardFace?: SessionBoardFace;
     displayName?: string;
-    channel?: string;
+    /** Canonical delivery state. Legacy delivery fields are migrated by `openclaw doctor --fix`. */
+    delivery?: SessionDeliveryState;
     groupId?: string;
     subject?: string;
     groupChannel?: string;
     space?: string;
-    origin?: SessionOrigin;
-    route?: ChannelRouteRef;
-    deliveryContext?: DeliveryContext;
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
-    lastChannel?: ChannelId;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
     skillsSnapshot?: SessionSkillSnapshot;
     systemPromptReport?: SessionSystemPromptReport;
     /**
@@ -536,10 +552,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     acp?: SessionAcpMeta;
   };
 
+export interface SessionEntry extends SessionEntryCore {}
+
 /** Internal durable fields excluded from public/plugin session projections. */
-export type InternalSessionEntry = SessionEntry & {
+export type InternalSessionEntryCore = SessionEntryCore & {
   mainRestartRecovery?: MainRestartRecoveryState;
 };
+
+export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -672,12 +692,14 @@ function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({
-      ...patch,
-      sessionId,
-      updatedAt,
-      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
-    });
+    return stripRetiredSessionEntryLocators(
+      normalizeSessionRuntimeModelFields({
+        ...patch,
+        sessionId,
+        updatedAt,
+        sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+      }),
+    );
   }
   const next = {
     ...existing,
@@ -703,20 +725,6 @@ function mergeSessionEntryWithPolicy(
     next.forkSource = existing.forkSource;
   }
 
-  if (existing.sessionId !== sessionId) {
-    // Session id rotations should move transcript paths when they match known reset/fork shapes.
-    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
-    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
-    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-      sessionFile: candidateSessionFile,
-      previousSessionId: existing.sessionId,
-      nextSessionId: sessionId,
-    });
-    if (rewrittenSessionFile) {
-      next.sessionFile = rewrittenSessionFile;
-    }
-  }
-
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
@@ -726,7 +734,14 @@ function mergeSessionEntryWithPolicy(
       delete next.modelProvider;
     }
   }
-  return normalizeSessionRuntimeModelFields(next);
+  return stripRetiredSessionEntryLocators(normalizeSessionRuntimeModelFields(next));
+}
+
+function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
+  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+  delete mutable.sessionFile;
+  delete mutable.transcriptPath;
+  return entry;
 }
 
 export function mergeSessionEntry(

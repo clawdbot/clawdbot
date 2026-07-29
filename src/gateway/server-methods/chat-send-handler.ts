@@ -8,7 +8,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -331,16 +331,14 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           warn: (message) => context.logGateway.warn(message),
         })
       : undefined;
-
     let agentRunStarted = false;
-    const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
-      createChatSendReplyDispatch({
-        accountId,
-        isAgentRunStarted: () => agentRunStarted,
-        logGateway: context.logGateway,
-        session: preparedSession.value,
-        userTurnRecorder,
-      });
+    const replyDispatch = createChatSendReplyDispatch({
+      accountId,
+      isAgentRunStarted: () => agentRunStarted,
+      logGateway: context.logGateway,
+      session: preparedSession.value,
+      userTurnRecorder,
+    });
     let queuedFollowupEnqueued = false;
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
@@ -388,8 +386,8 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
     // Reserve the detached dispatch before this request releases its root. Otherwise
     // its inherited ALS context becomes retired and rejects queued/session work.
     setReleaseGatewayRootContinuation(retainGatewayRootWorkAdmissionContinuation() ?? undefined);
-    void gatewayWorkAdmission
-      .run(() =>
+    void replyDispatch
+      .runAgentMediaTranscript(gatewayWorkAdmission, () =>
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
@@ -397,10 +395,10 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
             if (replyContextFieldsPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
             }
-            const dispatchResult = await dispatchInboundMessage({
+            const dispatchResult = await dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
-              dispatcher,
+              dispatcherOptions: replyDispatch.dispatcherOptions,
               onSessionMetadataChanges: (changes) => {
                 for (const change of changes) {
                   emitSessionsChanged(context, change);
@@ -482,7 +480,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {
-                  agentRunStarted = true;
+                  agentRunStarted = replyDispatch.captureAgentTranscriptStart();
                   emitServerTiming(
                     "agent-run-started",
                     runId !== clientRunId ? { agentRunId: runId } : undefined,
@@ -529,7 +527,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                       config: cfg,
                     }),
                   });
-                  onModelSelected(modelSelection);
+                  replyDispatch.onModelSelected(modelSelection);
                   emitServerTiming(
                     "model-selected",
                     {
@@ -560,7 +558,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           "gateway.chat_send.post_dispatch",
           async () => {
             const returnedAgentErrorPayloads = agentRunStarted
-              ? deliveredReplies
+              ? replyDispatch.deliveredReplies
                   .map((entryInner) => entryInner.payload)
                   .filter((payload) => payload.isError)
               : [];
@@ -597,18 +595,18 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
               await finalizeChatSendNonAgentReplies({
                 accountId,
                 context,
-                deliveredReplies,
+                deliveredReplies: replyDispatch.deliveredReplies,
                 emitFirstAssistantServerTiming,
                 foldCommandBlocks: isInternalTextSlashCommandTurn,
                 persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
                 session: preparedSession.value,
-                suppressReplies: hasAppendedWebchatAgentMedia(),
+                suppressReplies: replyDispatch.hasAppendedWebchatAgentMedia(),
               });
             } else {
               broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
                 accountId,
                 context,
-                deliveredReplies,
+                deliveredReplies: replyDispatch.deliveredReplies,
                 emitFirstAssistantServerTiming,
                 hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
                 session: preparedSession.value,

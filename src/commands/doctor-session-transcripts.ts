@@ -21,6 +21,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 import {
+  repairCanonicalSessionDeliveryStates,
+  type SessionDeliveryStateRepairReport,
+} from "./doctor-session-delivery-state.js";
+import {
   repairReservedIncognitoSessionKeys,
   type ReservedIncognitoKeyRepairReport,
 } from "./doctor-session-incognito-key-repair.js";
@@ -510,6 +514,11 @@ async function noteSessionSqliteMigrationHealth(params: {
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
   let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
+  let deliveryReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
   const runSessionSqlite = async () => {
     const report = await runDoctorSessionSqlite({
       allAgents: true,
@@ -519,6 +528,11 @@ async function noteSessionSqliteMigrationHealth(params: {
     });
     // Import may create the first durable SQLite row for a colliding legacy key.
     reservedKeyReport = repairReservedIncognitoSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    deliveryReport = repairCanonicalSessionDeliveryStates({
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
       env: params.env,
@@ -549,6 +563,14 @@ async function noteSessionSqliteMigrationHealth(params: {
       params.shouldRepair
         ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
         : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+      "Session SQLite",
+    );
+  }
+  if (deliveryReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
+        : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
       "Session SQLite",
     );
   }

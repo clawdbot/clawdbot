@@ -25,6 +25,10 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import {
+  buildProjectMemoryWriteInstruction,
+  prepareProjectMemoryBootstrap,
+} from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -34,6 +38,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
+import { prepareWatchedSessionsPrompt } from "../../watched-sessions-prompt.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
@@ -54,7 +59,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   defaultAgentId: string;
-  deferredDirectoryToolsCallable: boolean;
   effectiveCwd: string;
   effectiveTools: PromptTools;
   effectiveWorkspace: string;
@@ -66,7 +70,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   sandboxSessionKey: string;
   sessionAgentId: string;
   skillsPrompt: string;
+  codeModeActive?: boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  toolSearchDirectoryEnabled: boolean;
+  toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
   if (attempt.operation === "settled-tool-finalization") {
@@ -140,10 +147,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         accountId: attempt.agentAccountId,
       })
     : undefined;
-  const toolSchemaDirectoryPrompt = params.deferredDirectoryToolsCallable
+  const toolSchemaDirectoryPrompt = params.toolSearchDirectoryEnabled
     ? buildToolSchemaDirectoryPrompt({
         config: attempt.config,
-        runtimeConfig: attempt.config,
+        runtimeConfig: params.toolSearchRuntimeConfig,
         agentId: params.sessionAgentId,
         sessionKey: params.sandboxSessionKey,
         sessionId: attempt.sessionId,
@@ -246,6 +253,28 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentSessionKey: runtimeInfo.sessionKey,
     sandboxed: sandboxInfo?.enabled === true,
   });
+  const preparedWatchedSessions = prepareWatchedSessionsPrompt({
+    enabled: effectivePromptMode === "full",
+    config: attempt.config,
+    sessionKey: attempt.sessionKey,
+    sandboxed: sandboxInfo?.enabled === true,
+    toolNames: params.effectiveTools.map((tool) => tool.name),
+    capabilityToolNames: params.capabilityToolNames,
+  });
+  const activeProjectKeys = attempt.preparedModelRuntime?.projectKey
+    ? [attempt.preparedModelRuntime.projectKey]
+    : [];
+  const projectMemoryBootstrap =
+    effectivePromptMode === "full" && activeProjectKeys.length > 0
+      ? await prepareProjectMemoryBootstrap({
+          cfg: attempt.config ?? {},
+          agentId: params.sessionAgentId,
+          activeProjectKeys,
+        })
+      : [];
+  const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
+    attempt.preparedModelRuntime?.projectKey,
+  );
 
   const attemptSystemPrompt = buildAttemptSystemPrompt({
     isRawModelRun: params.isRawModelRun,
@@ -260,11 +289,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       workspaceDir: params.effectiveWorkspace,
       defaultThinkLevel: attempt.thinkLevel,
       reasoningLevel: attempt.reasoningLevel ?? "off",
-      extraSystemPrompt: attempt.extraSystemPrompt,
+      extraSystemPrompt: projectMemoryWriteInstruction
+        ? [attempt.extraSystemPrompt, projectMemoryWriteInstruction].filter(Boolean).join("\n\n")
+        : attempt.extraSystemPrompt,
       ownerNumbers: attempt.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt,
       skillsPrompt: effectiveSkillsPrompt,
+      codeModeActive: params.codeModeActive,
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       workspaceNotes: params.bootstrap.workspaceNotes.length
@@ -299,6 +331,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       ),
       includeMemorySection,
       preparedMemoryPrompt,
+      preparedWatchedSessions,
+      projectMemoryBootstrap,
+      activeProjectKeys,
       promptContribution,
     },
     providerTransform: {

@@ -10,7 +10,12 @@ import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resizeToJpeg } from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
@@ -343,6 +348,32 @@ describe("loadWebMedia", () => {
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("loads hosted plugin media from the pinned HTTP-route registry", async () => {
+    const httpRegistry = createEmptyPluginRegistry();
+    httpRegistry.hostedMediaResolvers = [
+      {
+        pluginId: "hosted-media",
+        resolver: (mediaUrl) =>
+          mediaUrl === "/__test__/hosted/pinned-tiny.png" ? canvasPngFile : null,
+        source: "test",
+      },
+    ];
+
+    try {
+      pinActivePluginHttpRouteRegistry(httpRegistry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+
+      const result = await loadWebMedia("/__test__/hosted/pinned-tiny.png", {
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      releasePinnedPluginHttpRouteRegistry(httpRegistry);
+    }
   });
 
   it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {

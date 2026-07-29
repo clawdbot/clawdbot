@@ -277,6 +277,22 @@ describe("resolveScopeToolsPolicy", () => {
       }),
     ).toEqual({ deny: ["channel"] });
   });
+
+  it("skips sender overlays while preserving the base scope policy", () => {
+    const tree: ScopeTree = {
+      scopes: {
+        room: {
+          tools: { allow: ["write"] },
+          toolsBySender: { "*": { deny: ["write"] } },
+        },
+      },
+    };
+
+    expect(resolveScopeToolsPolicy({ tree, path: ["room"] })).toEqual({ deny: ["write"] });
+    expect(resolveScopeToolsPolicy({ tree, path: ["room"], senderPolicyMode: "never" })).toEqual({
+      allow: ["write"],
+    });
+  });
 });
 
 describe("resolveScopeIntroHint", () => {

@@ -54,17 +54,11 @@ export function getRealtimeVoiceProvider(
   if (!normalized) {
     return undefined;
   }
-  // Prefer the capability runtime's direct provider lookup; alias maps are a secondary
-  // Talk-level convenience for user config and gateway requests.
-  const directProvider = resolvePluginCapabilityProvider({
+  return resolvePluginCapabilityProvider({
     key: "realtimeVoiceProviders",
     providerId: normalized,
     cfg,
   });
-  if (directProvider) {
-    return directProvider;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
 }
 
 /**

@@ -10,7 +10,7 @@ export {
 /** Quote-aware HTML tag tokens for exact post-render projections. */
 export { tokenizeHtmlTags } from "../../packages/markdown-core/src/html-tags.js";
 /** Static outbound formatting capabilities declared by a channel plugin. */
-export type { FormatCapabilityProfile } from "../../packages/markdown-core/src/format-capabilities.js";
+export { FormatCapabilityProfile } from "../../packages/markdown-core/src/format-capabilities.js";
 
 /**
  * Splits outbound channel text into chunks no longer than the requested limit.

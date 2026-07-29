@@ -1276,10 +1276,12 @@ describe("dispatchReplyFromConfig", () => {
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let resolveNotice: ((result: { ok: true; messageId: string }) => void) | undefined;
+    let resolveNotice:
+      | ((result: { ok: true; delivered: true; messageId: string }) => void)
+      | undefined;
     mocks.routeReply.mockImplementationOnce(
       async () =>
-        await new Promise<{ ok: true; messageId: string }>((resolve) => {
+        await new Promise<{ ok: true; delivered: true; messageId: string }>((resolve) => {
           resolveNotice = resolve;
         }),
     );
@@ -1329,7 +1331,7 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(mutationRan).toBe(false);
 
-    resolveNotice?.({ ok: true, messageId: "fallback-notice" });
+    resolveNotice?.({ ok: true, delivered: true, messageId: "fallback-notice" });
     const result = await dispatch;
     await mutation;
 
@@ -1532,8 +1534,20 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const [event] = firstMockCall(hookMocks.runner.runMessageReceived, "message received hook") as
-      | [{ metadata?: Record<string, unknown> }]
+      | [
+          {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
+            metadata?: Record<string, unknown>;
+          },
+        ]
       | [];
+    expect(event?.media).toBeUndefined();
+    expect(event?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(event?.mediaStagingPending).toBe(true);
     expect(event?.metadata?.mediaPath).toBeUndefined();
     expect(event?.metadata?.mediaPaths).toBeUndefined();
     expect(event?.metadata?.mediaUrl).toBeUndefined();
@@ -1555,6 +1569,9 @@ describe("dispatchReplyFromConfig", () => {
           unknown,
           unknown,
           {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
             metadata?: Record<string, unknown>;
           },
         ]
@@ -1563,6 +1580,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookCall?.[3]?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
     expect(internalHookCall?.[3]?.metadata?.originalMediaPath).toBe(rawPath);
     expect(internalHookCall?.[3]?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(internalHookCall?.[3]?.media).toBeUndefined();
+    expect(internalHookCall?.[3]?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(internalHookCall?.[3]?.mediaStagingPending).toBe(true);
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
     expect(ctx.media).toEqual([

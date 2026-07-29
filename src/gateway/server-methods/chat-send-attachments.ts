@@ -11,18 +11,19 @@ import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
 import {
   MediaOffloadError,
   type OffloadedRef,
+  logAttachmentFailure,
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
+  stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
-import { formatForLog } from "../ws-log.js";
 import {
   explicitOriginTargetsAcpSession,
   explicitOriginTargetsPluginBinding,
@@ -32,30 +33,6 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  if (!causeText || causeText === primary) {
-    return primary;
-  }
-  return `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestHandlerOptions["context"]["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
 
 function isPdfOffloadedRef(ref: OffloadedRef): boolean {
   const mime = ref.mimeType.trim().toLowerCase();
@@ -239,16 +216,15 @@ export async function prepareChatSendAttachments(params: {
             supportsSessionModelImages ||
             explicitOriginTargetsAcpSession(explicitOrigin) ||
             explicitOriginTargetsPlugin;
-          const routeImageOffloadsAsMediaPaths = !supportsImages;
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
             supportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = routeImageOffloadsAsMediaPaths
-            ? parsed.messageWithoutOffloadedImageRefs
-            : parsed.message;
+          parsedMessage = supportsImages
+            ? parsed.message
+            : stripImageMediaMarkers(parsed.message, parsed.offloadedRefs);
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
@@ -258,7 +234,7 @@ export async function prepareChatSendAttachments(params: {
             workspaceDir: mediaPathOffloadWorkspaceDir,
           } = await prestageMediaPathOffloads({
             offloadedRefs,
-            includeImageRefs: routeImageOffloadsAsMediaPaths,
+            includeImageRefs: !supportsImages,
             cfg,
             sessionKey,
             agentId,

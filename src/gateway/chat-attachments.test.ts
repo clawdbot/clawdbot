@@ -32,6 +32,7 @@ import {
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
+  stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
 
@@ -233,7 +234,7 @@ describe("parseMessageWithAttachments", () => {
     expect(ref.label).toBe("report.pdf");
     expect(ref.mediaRef).toMatch(/^media:\/\/inbound\//);
     expect(parsed.message).toBe(`read this\n[media attached: ${ref.mediaRef}]`);
-    expect(parsed.messageWithoutOffloadedImageRefs).toBe(parsed.message);
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
     expect(savedMime()).toBe("application/pdf");
     expect(logs).toHaveLength(0);
@@ -252,7 +253,7 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.message).toBe(
       `take a look\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
     );
-    expect(parsed.messageWithoutOffloadedImageRefs).toBe(parsed.message);
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
     expect(logs).toHaveLength(0);
   });
 
@@ -298,7 +299,9 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.message).toBe(
       `x\n[media attached: ${pdfRef.mediaRef}]\n[media attached: ${imageRef.mediaRef}]`,
     );
-    expect(parsed.messageWithoutOffloadedImageRefs).toBe(`x\n[media attached: ${pdfRef.mediaRef}]`);
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
+      `x\n[media attached: ${pdfRef.mediaRef}]`,
+    );
     const trailingMediaLines = parsed.message
       .split("\n")
       .filter((line) => line.trim().startsWith("[media attached: media://inbound/"));
@@ -445,7 +448,7 @@ describe("parseMessageWithAttachments validation errors", () => {
   it("passes through unchanged on text-only session with no attachments", async () => {
     const { parsed } = await parseWithWarnings("hello", [], { supportsInlineImages: false });
     expect(parsed.message).toBe("hello");
-    expect(parsed.messageWithoutOffloadedImageRefs).toBe("hello");
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("hello");
     expect(parsed.images).toHaveLength(0);
     expect(parsed.offloadedRefs).toHaveLength(0);
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
@@ -474,7 +477,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.message).toBe(
         `read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
       );
-      expect(parsed.messageWithoutOffloadedImageRefs).toBe(parsed.message);
+      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }
@@ -501,7 +504,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       const offloaded = expectDefined(parsed.offloadedRefs[0], "offloaded image ref");
       expect(offloaded.mimeType).toBe("image/png");
       expect(parsed.message).toBe(`see this\n[media attached: ${offloaded.mediaRef}]`);
-      expect(parsed.messageWithoutOffloadedImageRefs).toBe("see this");
+      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("see this");
       expect(parsed.media).toEqual([
         {
           path: offloaded.path,
@@ -537,7 +540,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.message).toContain(
         "[image attachment omitted: text-only attachment limit reached]",
       );
-      expect(parsed.messageWithoutOffloadedImageRefs).toBe(
+      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
         "see these\n[image attachment omitted: text-only attachment limit reached]",
       );
       expect(logs).toEqual([

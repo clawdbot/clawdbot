@@ -12,6 +12,7 @@
       "cohere": {
         "baseUrl": "https://api.cohere.ai/compatibility/v1",
         "api": "openai-completions",
+        "defaultModel": "command-a-plus-05-2026",
         "models": [
           {
             "id": "command-a-plus-05-2026",
@@ -48,6 +49,8 @@
           {
             "id": "command-a-03-2025",
             "name": "Command A",
+            "status": "deprecated",
+            "replacedBy": "command-a-plus-05-2026",
             "input": ["text"],
             "contextWindow": 256000,
             "maxTokens": 8000,
@@ -66,6 +69,8 @@
           {
             "id": "command-a-reasoning-08-2025",
             "name": "Command A Reasoning",
+            "status": "deprecated",
+            "replacedBy": "command-a-plus-05-2026",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
@@ -98,6 +103,8 @@
           {
             "id": "command-a-vision-07-2025",
             "name": "Command A Vision",
+            "status": "deprecated",
+            "replacedBy": "command-a-plus-05-2026",
             "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 128000,

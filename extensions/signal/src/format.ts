@@ -1,7 +1,7 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   markdownToIR,
   type MarkdownIR,
   renderMarkdownWithAttributedRanges,
@@ -34,16 +34,10 @@ const SIGNAL_STYLE_MAP = {
   spoiler: "SPOILER",
 } as const;
 
-const SIGNAL_FORMAT_PROFILE = {
+const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "ranges",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "strip",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
     linkLabel: "fallback",
     heading: "fallback",
@@ -57,7 +51,7 @@ const SIGNAL_FORMAT_PROFILE = {
   },
   // Signal clients switch beyond 2 KiB bytes; byte-aware chunking remains an open question.
   chunk: { limit: 4_000, unit: "chars" },
-} satisfies FormatCapabilityProfile;
+});
 
 function stripEquivalentSignalLinks(ir: MarkdownIR): MarkdownIR {
   const normalize = (value: string) =>

@@ -23,6 +23,31 @@ function createSelection(setScope: (agentId: string | null) => void) {
 }
 
 describe("renderAgentScopeControl", () => {
+  it("does not wrap dropdown options in a label that reactivates the trigger", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", name: "Main agent" },
+          { id: "writer", name: "Writer" },
+        ],
+        selection: createSelection(vi.fn()),
+      }),
+      container,
+    );
+
+    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await select?.updateComplete;
+
+    expect(select?.closest("label")).toBeNull();
+    expect(select?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Agent",
+    );
+    container.remove();
+  });
+
   it("includes historical agent ids and maps All agents back to null", async () => {
     const container = document.createElement("div");
     document.body.append(container);

@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
+  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  interruptCodexTurnAndWaitBestEffort,
+} from "./attempt-client-cleanup.js";
+import {
   isRetryableErrorNotification,
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
@@ -154,6 +158,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         agentDir,
         config: params.config,
         timeoutMs,
+        ...(params.signal ? { abandonSignal: params.signal } : {}),
       })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
@@ -163,10 +168,30 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           agentDir,
           authProfileStore: params.authProfileStore,
           config: params.config,
+          ...(params.signal ? { abandonSignal: params.signal } : {}),
         }),
       );
   const abortController = new AbortController();
-  const abortFromCaller = () => abortController.abort(params.signal?.reason ?? "aborted");
+  let activeThreadId: string | undefined;
+  let activeTurnId = "";
+  let interruptPromise: Promise<void> | undefined;
+  const requestInterrupt = () => {
+    if (!activeThreadId || interruptPromise) {
+      return;
+    }
+    // Codex serializes start/interrupt per thread; an empty turn id is its
+    // explicit startup-interrupt contract while turn/start is still resolving.
+    interruptPromise = interruptCodexTurnAndWaitBestEffort(client, {
+      threadId: activeThreadId,
+      turnId: activeTurnId,
+      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    });
+  };
+  const abortRun = (reason: unknown) => {
+    abortController.abort(reason);
+    requestInterrupt();
+  };
+  const abortFromCaller = () => abortRun(params.signal?.reason ?? "aborted");
   if (params.signal?.aborted) {
     abortFromCaller();
   } else {
@@ -174,9 +199,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const remainingRunMs = deadline - Date.now();
   if (remainingRunMs <= 0) {
-    abortController.abort("timeout");
+    abortRun("timeout");
   }
-  const timeout = setTimeout(() => abortController.abort("timeout"), Math.max(1, remainingRunMs));
+  const timeout = setTimeout(() => abortRun("timeout"), Math.max(1, remainingRunMs));
   timeout.unref?.();
 
   let retrySelection = false;
@@ -218,6 +243,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         { timeoutMs, signal: abortController.signal },
       ),
     );
+    activeThreadId = thread.thread.id;
+    if (abortController.signal.aborted) {
+      requestInterrupt();
+    }
     if (params.requireNoExternalCapabilities) {
       // Attest the started thread before injecting historical tool evidence.
       // Otherwise inherited MCP state could act on a finalization-only turn.
@@ -254,6 +283,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           { timeoutMs, signal: abortController.signal },
         ),
       );
+      activeTurnId = turn.turn.id;
+      if (abortController.signal.aborted) {
+        requestInterrupt();
+      }
       return {
         ...(await collector.collect(turn.turn, {
           timeoutMs,
@@ -274,6 +307,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
+    await interruptPromise;
     if (ownsClient) {
       client.close();
     }

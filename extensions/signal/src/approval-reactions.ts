@@ -369,9 +369,10 @@ export function addSignalApprovalReactionHintToText(params: {
 }
 
 function resolveStandaloneApprovalPromptKind(text: string): ApprovalKind | null {
+  // Strip bold markers (**Exec approval required**) before matching the header.
   const firstLine = text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.replace(/\*\*/g, "").trim())
     .find(Boolean);
   if (/^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "")) {
     return "exec";
@@ -406,7 +407,8 @@ function extractSignalApprovalPromptBinding(text: string): {
   approvalKind: ApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
-  const lines = text.split(/\r?\n/);
+  // Strip bold markers (**ID:** …) before matching the canonical ID header.
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
   const idHeaderMatch = lines
     .map((line) => line.match(APPROVAL_ID_LINE_RE))
     .find((match): match is RegExpMatchArray => Boolean(match));

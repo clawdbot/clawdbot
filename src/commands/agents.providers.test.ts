@@ -132,6 +132,48 @@ describe("buildProviderStatusIndex", () => {
     );
   });
 
+  it("does not inspect linkage for an unconfigured account", async () => {
+    const isLinked = vi.fn(() => {
+      throw new Error("linkage unavailable");
+    });
+    const plugin = {
+      id: "quietchat",
+      meta: { label: "QuietChat" },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => false,
+        isLinked,
+      },
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const status = (await buildProviderStatusIndex({} as OpenClawConfig)).get("quietchat:default");
+
+    expect(status?.state).toBe("not configured");
+    expect(isLinked).not.toHaveBeenCalled();
+  });
+
+  it("uses the shipped custom state resolver when canonical linkage is unknown", async () => {
+    const resolveAccountState = vi.fn(() => "enabled" as const);
+    const plugin = {
+      id: "legacychat",
+      meta: { label: "LegacyChat" },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        isConfigured: () => true,
+      },
+      status: { resolveAccountState },
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const status = (await buildProviderStatusIndex({} as OpenClawConfig)).get("legacychat:default");
+
+    expect(status?.state).toBe("enabled");
+    expect(resolveAccountState).toHaveBeenCalledOnce();
+  });
+
   it("rethrows unexpected read-only account resolution errors", async () => {
     const plugin = {
       id: "quietchat",

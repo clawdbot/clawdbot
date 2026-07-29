@@ -49,6 +49,7 @@ import {
   resolveConfiguredModelRef,
   resolveConfiguredOpenRouterCompatAlias,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
   type ModelRefStatus,
@@ -78,6 +79,7 @@ export {
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 };
 export { isCliProvider } from "./model-selection-cli.js";

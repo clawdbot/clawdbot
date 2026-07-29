@@ -369,7 +369,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalsListParams,
-      run: (_parsedParams, resolved) => listSkillProposals({ workspaceDir: resolved.workspaceDir }),
+      run: (_parsedParams, resolved) =>
+        listSkillProposals({ agentId: resolved.agentId, workspaceDir: resolved.workspaceDir }),
     });
   },
   "skills.proposals.inspect": async ({ params, respond, context }) => {
@@ -381,6 +382,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       validate: validateSkillsProposalInspectParams,
       run: async (parsedParams, resolved) => {
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
+          agentId: resolved.agentId,
           workspaceDir: resolved.workspaceDir,
         });
         if (!proposal) {
@@ -408,6 +410,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         proposeCreateSkill({
           workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
           config: resolved.cfg,
           name: parsedParams.name,
           description: parsedParams.description,
@@ -451,6 +454,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         reviseSkillProposal({
           workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           content: parsedParams.content,
@@ -471,6 +475,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       validate: validateSkillsProposalRequestRevisionParams,
       run: async (parsedParams, resolved) => {
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
+          agentId: resolved.agentId,
           workspaceDir: resolved.workspaceDir,
         });
         if (!proposal) {
@@ -520,6 +525,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         applySkillProposal({
           workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
@@ -536,6 +542,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         rejectSkillProposal({
           workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
         }),
@@ -551,6 +558,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         quarantineSkillProposal({
           workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
         }),

@@ -30,6 +30,7 @@ import {
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  buildDefaultOllamaCloudModelDefinition,
   buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
@@ -42,7 +43,10 @@ import {
 export { buildOllamaProvider };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = [...OLLAMA_CLOUD_DEFAULT_MODELS];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map((model) => model.id);
+const OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map(
+  (model) => `${model.id}:cloud`,
+);
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
@@ -50,6 +54,8 @@ const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const OLLAMA_RECOMMENDED_TOOLS_MODEL = "gemma4:e4b";
 const OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE = "about 9.6 GB";
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
+
+type OllamaCloudDefaultModel = (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number];
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -428,14 +434,21 @@ async function promptForOllamaCloudCredential(params: {
 function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
+  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    // Suggested cloud models may be injected before `/api/tags` exposes them,
-    // so keep Kimi vision-capable during setup even without discovered metadata.
+    const defaultModel = defaultModels.find((model) => model.id === name);
+    if (defaultModel && !discovered) {
+      return buildDefaultOllamaCloudModelDefinition(defaultModel);
+    }
     const capabilities =
-      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
-    return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
+      discovered?.capabilities ?? (defaultModel ? [...defaultModel.capabilities] : undefined);
+    return buildOllamaModelDefinition(
+      name,
+      discovered?.contextWindow ?? defaultModel?.contextWindow,
+      capabilities,
+    );
   });
 }
 
@@ -489,6 +502,7 @@ function applyOllamaProviderConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
   apiKey: SecretInput = "OLLAMA_API_KEY",
+  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ): OpenClawConfig {
   return {
     ...cfg,
@@ -501,7 +515,7 @@ function applyOllamaProviderConfig(
           baseUrl,
           api: "ollama",
           apiKey,
-          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
+          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName, defaultModels),
         },
       },
     },
@@ -542,7 +556,10 @@ async function resolveHostBackedSuggestedModelNames(params: {
 
   const auth = await checkOllamaCloudAuth(params.baseUrl);
   if (auth.signedIn) {
-    return mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, OLLAMA_SUGGESTED_MODELS_CLOUD);
+    return mergeUniqueModelNames(
+      OLLAMA_SUGGESTED_MODELS_LOCAL,
+      OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD,
+    );
   }
 
   await params.prompter.note(
@@ -795,6 +812,7 @@ export async function promptAndConfigureOllama(params: {
         modelNames,
         undefined,
         credential,
+        OLLAMA_CLOUD_DEFAULT_MODELS,
       ),
     };
   }
@@ -825,15 +843,20 @@ export async function configureOllamaNonInteractive(params: {
     return params.nextConfig;
   }
 
-  await storeOllamaCredential(params.agentDir);
-
   const enrichedModels = await enrichOllamaModelsWithContext(
     baseUrl,
     models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
   );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
-  const orderedModelNames = mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, modelNames);
+  // Configured local models are advertised as available, so suggested models
+  // belong in the inventory only when Ollama actually reports them as installed.
+  const orderedModelNames = mergeUniqueModelNames(
+    OLLAMA_SUGGESTED_MODELS_LOCAL.filter(
+      (modelName) => findAvailableOllamaModelName(modelName, modelNames) !== undefined,
+    ),
+    modelNames,
+  );
 
   const requestedDefaultModelId =
     explicitModel ??
@@ -887,6 +910,22 @@ export async function configureOllamaNonInteractive(params: {
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
     );
   }
+
+  if (!requestedCloudModel && !discoveredModelsByName.has(defaultModelId)) {
+    // Explicit and newly pulled models can fall outside the bounded catalog scan.
+    const selectedModel = expectDefined(
+      (
+        await enrichOllamaModelsWithContext(baseUrl, [
+          models.find((model) => model.name === defaultModelId) ?? { name: defaultModelId },
+        ])
+      )[0],
+      "selected Ollama setup model",
+    );
+    discoveredModelsByName.set(defaultModelId, selectedModel);
+  }
+
+  // Failed setup must not leave a durable local profile behind.
+  await storeOllamaCredential(params.agentDir);
 
   const config = applyOllamaProviderConfig(
     params.nextConfig,

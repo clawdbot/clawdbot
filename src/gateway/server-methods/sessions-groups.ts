@@ -10,6 +10,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   deleteSessionGroup,
+  listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
@@ -26,7 +27,11 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    respond(true, { groups: listSessionGroups() }, undefined);
+    respond(
+      true,
+      { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
+      undefined,
+    );
   },
   "sessions.groups.put": async ({ params, respond, context }) => {
     if (
@@ -34,7 +39,8 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    respond(true, { ok: true, groups: putSessionGroups(params.names) }, undefined);
+    const groups = putSessionGroups(params.names, params.sectionOrder);
+    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
     // Catalog-only changes still need to reach other open clients.
     emitSessionsChanged(context, { reason: "groups" });
   },

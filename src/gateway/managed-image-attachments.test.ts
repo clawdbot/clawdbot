@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
@@ -55,10 +56,12 @@ vi.mock("./session-transcript-readers.js", () => ({
 
 const {
   DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS,
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
   handleManagedOutgoingImageHttpRequest,
+  resolveManagedOutgoingImageArtifactDownload,
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
 
@@ -101,8 +104,10 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 type ManagedImageBlock = {
   type?: string;
+  artifactId?: string;
   alt?: string;
   mimeType?: string;
+  sizeBytes?: number;
   url?: string;
   openUrl?: string;
 };
@@ -317,6 +322,50 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
+  });
+
+  it("serves an exact transcript image through a short-lived artifact ticket", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+    expect(download?.url).toContain("mediaTicket=");
+
+    vi.clearAllMocks();
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: download?.url ?? "",
+      denyAuth: true,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body.toString("utf-8")).toBe("original-image");
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+
+    const wrongAttachmentId = "22222222-2222-4222-8222-222222222222";
+    const wrong = await requestManagedImage({
+      stateDir,
+      pathName: (download?.url ?? "").replace(attachmentId, wrongAttachmentId),
+      denyAuth: true,
+    });
+    expect(wrong.result.statusCode).toBe(401);
+    expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {
@@ -653,6 +702,8 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(String(block.url)).toMatch(/\/full$/);
 
     const attachmentId = requireAttachmentIdFromUrl(block.url);
+    expect(block.artifactId).toBe(`${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`);
+    expect(block.sizeBytes).toBe(Buffer.from(TINY_PNG_BASE64, "base64").byteLength);
     const record = readManagedImageRecord(attachmentId, stateDir);
     expect(record?.original.mediaSubdir).toBe(MANAGED_OUTGOING_ORIGINALS_SUBDIR);
     expect(record?.original.mediaId).toMatch(/\.png$/);
@@ -729,35 +780,52 @@ describe("createManagedOutgoingImageBlocks", () => {
     ).rejects.toThrow("Invalid image data URL");
   });
 
-  it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
-    const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+  it.each([
+    { name: "local paths", sourceForPath: (sourcePath: string) => sourcePath },
+    {
+      name: "file URLs",
+      sourceForPath: (sourcePath: string) => {
+        const sourceUrl = pathToFileURL(sourcePath);
+        sourceUrl.searchParams.set("sig", "secret");
+        sourceUrl.hash = "preview";
+        return sourceUrl.href;
+      },
+    },
+  ])(
+    "rewrites $name into managed display blocks without leaking the source path",
+    async ({ sourceForPath }) => {
+      const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const blocks = await createManagedOutgoingImageBlocks({
-        stateDir,
-        sessionKey: "agent:main:main",
-        mediaUrls: [sourcePath],
-        localRoots: [path.join(stateDir, "workspace")],
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const blocks = await createManagedOutgoingImageBlocks({
+          stateDir,
+          sessionKey: "agent:main:main",
+          mediaUrls: [sourceForPath(sourcePath)],
+          localRoots: [path.join(stateDir, "workspace")],
+        });
+
+        expect(blocks).toHaveLength(1);
+        const block = requireBlock(blocks);
+        expect(block.type).toBe("image");
+        expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+        expect(block.openUrl).toContain("/full");
+        expect(block.url).toBe(block.openUrl);
+        expect(block.alt).toBe("dot.png");
+        expect(JSON.stringify(block)).not.toContain(sourcePath);
+        expect(JSON.stringify(block)).not.toContain("sig=secret");
+        expect(JSON.stringify(block)).not.toContain("preview");
+
+        const attachmentId = requireAttachmentIdFromUrl(block.url);
+        const record = readManagedImageRecord(attachmentId, stateDir);
+        const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
+        expect(record?.original.filename).toMatch(/\.png$/);
+        expect(originalPath).not.toBe(sourcePath);
+        expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
       });
-
-      expect(blocks).toHaveLength(1);
-      const block = requireBlock(blocks);
-      expect(block.type).toBe("image");
-      expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
-      expect(block.openUrl).toContain("/full");
-      expect(block.url).toBe(block.openUrl);
-      expect(JSON.stringify(block)).not.toContain(sourcePath);
-
-      const attachmentId = requireAttachmentIdFromUrl(block.url);
-      const record = readManagedImageRecord(attachmentId, stateDir);
-      const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
-      expect(record?.original.filename).toMatch(/\.png$/);
-      expect(originalPath).not.toBe(sourcePath);
-      expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
-    });
-  });
+    },
+  );
 
   it("ingests external image URLs into managed storage instead of hotlinking them", async () => {
     const imageBuffer = Buffer.from(TINY_PNG_BASE64, "base64");

@@ -3,6 +3,129 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
+  it.each([0, 3_000])(
+    "accepts the documented global exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        tools: {
+          exec: {
+            approvalRunningNoticeMs,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.tools?.exec?.approvalRunningNoticeMs).toBe(approvalRunningNoticeMs);
+      }
+    },
+  );
+
+  it.each([0, 3_000])(
+    "preserves the per-agent exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.agents?.entries?.main?.tools?.exec?.approvalRunningNoticeMs).toBe(
+          approvalRunningNoticeMs,
+        );
+      }
+    },
+  );
+
+  it.each([-1, 1.5, "3000"])(
+    "rejects invalid global exec approval running notice delay %s",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        tools: {
+          exec: {
+            approvalRunningNoticeMs,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.path)).toContain(
+          "tools.exec.approvalRunningNoticeMs",
+        );
+      }
+    },
+  );
+
+  it.each([-1, 1.5, "3000"])(
+    "rejects invalid per-agent exec approval running notice delay %s",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.path)).toContain(
+          "agents.entries.main.tools.exec.approvalRunningNoticeMs",
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
+      scope: "global",
+      config: {
+        tools: {
+          exec: {
+            approvalRunningNoticeMs: 0,
+            unknownApprovalRunningNoticeMs: 0,
+          },
+        },
+      },
+    },
+    {
+      scope: "per-agent",
+      config: {
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs: 0,
+                  unknownApprovalRunningNoticeMs: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  ])("keeps $scope exec configuration strict", ({ config }) => {
+    expect(validateConfigObject(config).ok).toBe(false);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       memory: {
@@ -179,21 +302,6 @@ describe("config schema regressions", () => {
             experimental: {
               localModelLean: true,
             },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          compaction: {
-            truncateAfterCompaction: true,
-            maxActiveTranscriptBytes: "20mb",
           },
         },
       },
@@ -400,7 +508,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("skips binding agentId check when agents.entries is absent", () => {
+  it("rejects non-default bindings when the implicit-main roster is materialized", () => {
     const res = validateConfigObject({
       bindings: [
         {
@@ -411,7 +519,7 @@ describe("config schema regressions", () => {
       ],
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 
   it("accepts a microsoft-foundry model entry carrying thinkingLevelMap (openclaw#91011)", () => {

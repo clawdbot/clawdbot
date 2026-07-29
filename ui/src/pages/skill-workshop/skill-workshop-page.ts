@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task } from "@lit/task";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
@@ -8,7 +9,8 @@ import { loadSettings } from "../../app/settings.ts";
 import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -27,7 +29,6 @@ import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
-  loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
@@ -108,6 +109,7 @@ function renderSkillWorkshopPage(
     selfLearning,
     onSelfLearningToggle,
     onHistoryScan,
+    onRetry,
   } = renderContext;
   const pageClass =
     state.skillWorkshopMode === "today"
@@ -204,12 +206,7 @@ function renderSkillWorkshopPage(
               historyScan: state.skillWorkshopHistoryScan,
               counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
               onRetry: () => {
-                // Force past the loaded/error latch; the loading guard still
-                // prevents duplicate in-flight requests.
-                void loadSkillWorkshopProposals(state, context, { force: true }).finally(
-                  requestUpdate,
-                );
-                requestUpdate();
+                onRetry();
               },
               onStatusFilterChange: (status) => {
                 state.skillWorkshopStatusFilter = status;
@@ -307,7 +304,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   @property({ attribute: false }) onRevisionRequest?: SkillWorkshopRevisionRequest;
 
   private state?: SkillWorkshopState;
-  private sourceEpoch = 0;
+  private operationEpoch = 0;
   private hasBoundContext = false;
   private contextSource?: SkillWorkshopPageContext;
   private gatewaySource?: SkillWorkshopPageContext["gateway"];
@@ -320,6 +317,25 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private sessionsSource?: SkillWorkshopPageContext["sessions"];
   private selfLearningBusy = false;
   private selfLearningError: string | null = null;
+  private readonly proposalsTask = new Task(this, {
+    autoRun: false,
+    // State and context identities isolate helper mutations after any source reset.
+    args: () =>
+      [
+        this.gatewayConnected ? (this.context ?? null) : null,
+        this.gatewayConnected ? (this.state ?? null) : null,
+        this.selectedAgentId ?? null,
+        false as boolean,
+      ] as const,
+    task: ([context, state, _agentId, force]) =>
+      context && state ? loadSkillWorkshopPageData({ state, context, force }) : initialState,
+    onComplete: () => {
+      this.requestPageUpdate();
+    },
+    onError: () => {
+      this.requestPageUpdate();
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context,
@@ -467,7 +483,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!this.isCurrentSourceScope(scope)) {
       return;
     }
-    scope.navigate("chat", { search: searchForSession(sessionKey) });
+    scope.navigate(
+      "chat",
+      sessionNavigationTarget({ context: scope.context, face: "chat", sessionKey }).options,
+    );
   };
 
   override willUpdate() {
@@ -512,7 +531,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   };
 
   private resetSourceState() {
-    this.sourceEpoch += 1;
+    this.operationEpoch += 1;
+    void this.proposalsTask.run([null, null, null, false]);
     const previous = this.state;
     if (!previous) {
       return;
@@ -553,7 +573,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     return captureSkillWorkshopSourceScope({
       state: this.state,
       context: this.context,
-      epoch: this.sourceEpoch,
+      epoch: this.operationEpoch,
     });
   }
 
@@ -561,7 +581,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     return isCurrentSkillWorkshopSourceScope(scope, {
       state: this.state,
       context: this.context,
-      epoch: this.sourceEpoch,
+      epoch: this.operationEpoch,
     });
   }
 
@@ -571,7 +591,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!state || !context || context.gateway.snapshot.phase !== "connected") {
       return;
     }
-    void loadSkillWorkshopPageData({ state, context, force }).finally(this.requestPageUpdate);
+    void this.proposalsTask.run([context, state, context.agentSelection.state.selectedId, force]);
   }
 
   private readonly handleHistoryScan = () => {
@@ -642,6 +662,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
             ),
             onSelfLearningToggle: this.handleSelfLearningToggle,
             onHistoryScan: this.handleHistoryScan,
+            onRetry: () => this.loadProposals(true),
           },
           this.requestPageUpdate,
         )

@@ -352,7 +352,7 @@ const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
   runEmbeddedAttemptMock
     .mockResolvedValueOnce(
       makeAttempt({
-        promptError: new Error(errorMessage),
+        terminal: { kind: "failed", source: "prompt", error: new Error(errorMessage) },
       }),
     )
     .mockResolvedValueOnce(
@@ -753,7 +753,11 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         )
         .mockResolvedValueOnce(
           makeAttempt({
-            promptError: new Error("supported values are: low, medium"),
+            terminal: {
+              kind: "failed",
+              source: "prompt",
+              error: new Error("supported values are: low, medium"),
+            },
           }),
         )
         .mockResolvedValueOnce(
@@ -1003,9 +1007,12 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
       runEmbeddedAttemptMock.mockResolvedValueOnce(
         makeAttempt({
-          aborted: true,
-          timedOut: true,
-          timedOutDuringCompaction: true,
+          terminal: {
+            kind: "timeout",
+            phase: "compaction",
+            source: "runtime",
+            aborted: true,
+          },
           assistantTexts: ["partial"],
           lastAssistant: buildAssistant({
             stopReason: "stop",
@@ -1043,8 +1050,11 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
       runEmbeddedAttemptMock.mockResolvedValueOnce(
         makeAttempt({
-          promptError: new Error("rate limit exceeded"),
-          promptErrorSource: "compaction",
+          terminal: {
+            kind: "failed",
+            source: "compaction",
+            error: new Error("rate limit exceeded"),
+          },
           assistantTexts: ["partial"],
           lastAssistant: buildAssistant({
             stopReason: "stop",

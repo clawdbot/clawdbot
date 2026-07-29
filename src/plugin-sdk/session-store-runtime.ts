@@ -8,8 +8,13 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -25,10 +30,6 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
@@ -50,6 +51,15 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+
+export {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
@@ -247,7 +257,7 @@ export function loadSessionStore(
     }).map(({ sessionKey, entry }) => {
       const sessionId = entry.sessionId?.trim();
       const projectedEntry = projectPluginSessionEntry(entry as InternalSessionEntry);
-      if (projectedEntry.sessionFile || !sessionId) {
+      if (!sessionId) {
         return [sessionKey, projectedEntry];
       }
       return [
@@ -574,7 +584,7 @@ export {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
   type SqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
+} from "../config/sessions/legacy-sqlite-marker.js";
 export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,

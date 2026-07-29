@@ -1,3 +1,4 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   defineChannelSetupContract,
   type ChannelSetupInput,
@@ -12,7 +13,6 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   defineTokenCredential,
-  mergeAllowFromEntries,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
@@ -23,11 +23,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   buildSlackManifest,
@@ -114,46 +110,6 @@ function setSlackSetupIdentity(params: {
       },
     },
   } as OpenClawConfig;
-}
-
-function hasSlackInteractiveRepliesConfig(cfg: OpenClawConfig, accountId: string): boolean {
-  const capabilities = inspectSlackAccount({ cfg, accountId }).config.capabilities;
-  if (Array.isArray(capabilities)) {
-    return capabilities.some(
-      (entry) => normalizeLowercaseStringOrEmpty(entry) === "interactivereplies",
-    );
-  }
-  if (!capabilities || typeof capabilities !== "object") {
-    return false;
-  }
-  return "interactiveReplies" in capabilities;
-}
-
-function setSlackInteractiveReplies(
-  cfg: OpenClawConfig,
-  accountId: string,
-  interactiveReplies: boolean,
-): OpenClawConfig {
-  const capabilities = inspectSlackAccount({ cfg, accountId }).config.capabilities;
-  const nextCapabilities = Array.isArray(capabilities)
-    ? interactiveReplies
-      ? uniqueStrings([...capabilities, "interactiveReplies"])
-      : capabilities.filter(
-          (entry) => normalizeLowercaseStringOrEmpty(entry) !== "interactivereplies",
-        )
-    : {
-        ...((capabilities && typeof capabilities === "object" ? capabilities : {}) as Record<
-          string,
-          unknown
-        >),
-        interactiveReplies,
-      };
-  return patchChannelConfigForAccount({
-    cfg,
-    channel,
-    accountId,
-    patch: { capabilities: nextCapabilities },
-  });
 }
 
 function createSlackTokenCredential(params: {
@@ -329,44 +285,20 @@ export function createSlackSetupWizardBase(handlers: {
     NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
   >;
 }) {
-  const slackDmPolicy: ChannelSetupDmPolicy = {
+  const slackDmPolicy = createChannelDmPolicy({
     label: "Slack",
     channel,
-    policyKey: "channels.slack.dmPolicy",
-    allowFromKey: "channels.slack.allowFrom",
-    resolveConfigKeys: (_cfg, accountId) =>
-      accountId && accountId !== DEFAULT_ACCOUNT_ID
-        ? {
-            policyKey: `channels.slack.accounts.${accountId}.dmPolicy`,
-            allowFromKey: `channels.slack.accounts.${accountId}.allowFrom`,
-          }
-        : {
-            policyKey: "channels.slack.dmPolicy",
-            allowFromKey: "channels.slack.allowFrom",
-          },
-    getCurrent: (cfg, accountId) =>
-      inspectSlackAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
-    setPolicy: (cfg, policy, accountId) => {
-      const account = inspectSlackAccount({ cfg, accountId });
-      return patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId: account.accountId,
-        patch: {
-          dmPolicy: policy,
-          ...(policy === "open"
-            ? { allowFrom: mergeAllowFromEntries(account.config.allowFrom ?? [], ["*"]) }
-            : {}),
-          dm: {
-            ...account.config.dm,
-            enabled:
-              typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
-          },
-        },
-      });
-    },
+    resolveAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
+    buildPatch: ({ account, policy, allowFrom }) => ({
+      dmPolicy: policy,
+      ...(allowFrom === undefined ? {} : { allowFrom }),
+      dm: {
+        ...account.config.dm,
+        enabled: typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+      },
+    }),
     promptAllowFrom: handlers.promptAllowFrom,
-  };
+  });
 
   return {
     channel,
@@ -544,23 +476,6 @@ export function createSlackSetupWizardBase(handlers: {
         resolved: unknown;
       }) => setSlackChannelAllowlist(cfg, accountId, resolved as string[]),
     }),
-    finalize: async ({ cfg, accountId, options, prompter }) => {
-      if (hasSlackInteractiveRepliesConfig(cfg, accountId)) {
-        return undefined;
-      }
-      if (options?.quickstartDefaults) {
-        return {
-          cfg: setSlackInteractiveReplies(cfg, accountId, true),
-        };
-      }
-      const enableInteractiveReplies = await prompter.confirm({
-        message: t("wizard.slack.interactiveRepliesPrompt"),
-        initialValue: true,
-      });
-      return {
-        cfg: setSlackInteractiveReplies(cfg, accountId, enableInteractiveReplies),
-      };
-    },
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }

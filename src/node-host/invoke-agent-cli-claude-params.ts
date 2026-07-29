@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 const MAX_ARG_COUNT = 128;
@@ -124,12 +125,6 @@ export type ClaudeCliNodeRunResult = {
   truncated: boolean;
   timeoutKind?: "hard" | "idle";
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function decodeJson(raw?: string | null): unknown {
   if (!raw) {

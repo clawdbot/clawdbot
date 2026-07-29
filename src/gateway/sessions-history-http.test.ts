@@ -542,8 +542,13 @@ describe("session history HTTP endpoints", () => {
           throw new Error(`append failed: ${appended.reason}`);
         }
         emitSessionTranscriptUpdate({
-          sessionFile: appended.sessionFile,
+          sessionFile: appended.target.sessionKey,
           sessionKey: "agent:main:main",
+          target: {
+            agentId: appended.target.agentId ?? "main",
+            sessionId: appended.target.sessionId,
+            sessionKey: appended.target.sessionKey,
+          },
           message: activeMessage,
           messageId: appended.messageId,
           messageSeq: 2,
@@ -958,8 +963,12 @@ describe("session history HTTP endpoints", () => {
       await expectHistoryEventTexts(stream, ["first message", "second message"]);
 
       emitSessionTranscriptUpdate({
-        sessionFile: `sqlite:main:sess-main:${storePath}`,
-        sessionKey: "agent:main:main",
+        target: {
+          agentId: AGENT_ID,
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
         message: makeTranscriptAssistantMessage({ text: "rewound branch message" }),
         messageId: "msg-rewound",
         messageSeq: 1,
