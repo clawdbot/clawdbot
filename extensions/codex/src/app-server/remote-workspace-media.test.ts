@@ -2,11 +2,12 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexCommandExecParams, CodexCommandExecResponse } from "./protocol.js";
+import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import {
   prepareCodexRemoteWorkspaceMessageMedia,
   readBoundedCodexRemoteWorkspaceFile,
@@ -430,7 +431,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     const first = `${remoteWorkspaceRoot}/reports/first.txt`;
     const second = `${remoteWorkspaceRoot}/reports/second.txt`;
     const readRemoteFile = vi.fn<CodexRemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      await delay(20);
       return {
         dataBase64: Buffer.from(remotePath === first ? "first" : "second").toString("base64"),
       };

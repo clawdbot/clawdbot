@@ -7,6 +7,7 @@ import type {
   CodexAppsReadParams,
   CodexAppsReadResponse,
 } from "./app-inventory-protocol.js";
+import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
@@ -79,20 +80,6 @@ export type CodexInitializeResponse = {
   codexHome?: string;
   platformFamily?: string;
   platformOs?: string;
-};
-
-/** Bounded, sandboxed argv execution over the existing app-server connection. */
-export type CodexCommandExecParams = {
-  command: string[];
-  env?: Record<string, string | null>;
-  outputBytesCap?: number;
-  timeoutMs?: number;
-};
-
-export type CodexCommandExecResponse = {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
 };
 
 export type CodexUserInput =

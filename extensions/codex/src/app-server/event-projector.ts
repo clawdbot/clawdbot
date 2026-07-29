@@ -24,6 +24,7 @@ import {
 } from "./event-projector-items.js";
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
@@ -55,8 +56,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
-import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
@@ -74,20 +73,6 @@ type CodexAppServerToolTelemetry = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
-};
-
-type CodexAppServerEventProjectorOptions = {
-  nativePostToolUseRelayEnabled?: boolean;
-  onNativeToolResultRecorded?: () => void | Promise<void>;
-  prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
-  readRecentRateLimits?: () => JsonValue | undefined;
-  runAbortSignal?: AbortSignal;
-  remoteWorkspaceRoot?: string;
-  readRemoteWorkspaceFile?: CodexRemoteWorkspaceFileReader;
-  remoteWorkspaceRequestTimeoutMs?: number;
-  trajectoryRecorder?: CodexTrajectoryRecorder | null;
-  onContextCompacted?: () => void;
-  upstreamUserText?: string;
 };
 
 export class CodexAppServerEventProjector {
