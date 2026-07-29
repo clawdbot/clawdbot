@@ -966,6 +966,13 @@ function resolveOpenShellPluginConfigFromConfig(
 
 function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
+  if (/:workspace:[a-f0-9]{32}$/i.test(trimmed)) {
+    // OpenShell's 19-character DNS-label cap leaves 16 payload characters.
+    // Base36 retains 80 hash bits within that cap.
+    const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 20);
+    const encoded = BigInt(`0x${hash}`).toString(36).padStart(16, "0");
+    return `oc-${encoded}`;
+  }
   // OpenShell reserves 19 characters so workspace--sandbox--service remains
   // a valid DNS label. Keep 64 hash bits to make opaque scope names collision-resistant.
   const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
