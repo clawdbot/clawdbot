@@ -13,6 +13,7 @@ import {
   nextBooleanToolOverrides,
   nextMcpToolsDenyOverrides,
   nextWebSearchToolOverrides,
+  readOwnEntry,
   resolveToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { clickComposerInput, type ChatAttachmentControlsProps } from "./chat-attachments.ts";
@@ -87,7 +88,10 @@ function renderBackRow() {
 
 function renderRootView(props: ChatComposerPlusMenuProps) {
   const connectorCount = props.mcpServers.filter((server) =>
-    resolveToolOverrideState(server.enabled, props.toolOverrides?.mcpServers?.[server.name]),
+    resolveToolOverrideState(
+      server.enabled,
+      readOwnEntry(props.toolOverrides?.mcpServers, server.name),
+    ),
   ).length;
   const hasSkillOverrides = Object.keys(props.toolOverrides?.skills ?? {}).length > 0;
   const enabledSkillCount = props.skills?.filter((skill) => skill.enabled).length ?? 0;
@@ -232,7 +236,7 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
           ${t("chat.composer.menu.noConnectors")}
         </div>`
       : props.mcpServers.map((server, index) => {
-          const override = props.toolOverrides?.mcpServers?.[server.name];
+          const override = readOwnEntry(props.toolOverrides?.mcpServers, server.name);
           const enabled = resolveToolOverrideState(server.enabled, override);
           return html`
             <wa-dropdown-item
@@ -321,7 +325,9 @@ function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntr
     return false;
   }
   if (props.toolOverrides != null) {
-    return props.toolOverrides.mcpToolsDeny?.[serverName]?.includes(rawToolName) ?? false;
+    return (
+      readOwnEntry(props.toolOverrides.mcpToolsDeny, serverName)?.includes(rawToolName) ?? false
+    );
   }
   return tool.deniedBySession === true;
 }
@@ -450,7 +456,7 @@ function handleMenuSelection(
     if (server && !props.mutationBlockedReason) {
       const enabled = resolveToolOverrideState(
         server.enabled,
-        props.toolOverrides?.mcpServers?.[server.name],
+        readOwnEntry(props.toolOverrides?.mcpServers, server.name),
       );
       props.onPatchToolOverrides(
         nextBooleanToolOverrides(

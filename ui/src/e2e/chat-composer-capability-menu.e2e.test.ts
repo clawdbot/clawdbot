@@ -87,7 +87,7 @@ function configResponse(
   };
 }
 
-function effectiveToolsResponse() {
+function effectiveToolsResponse(serverName = "github") {
   return {
     agentId: "main",
     profile: "full",
@@ -103,7 +103,7 @@ function effectiveToolsResponse() {
             description: "List issues",
             rawDescription: "List issues",
             source: "mcp",
-            mcpServer: "github",
+            mcpServer: serverName,
             mcpToolName: "list-issues",
           },
           {
@@ -112,7 +112,7 @@ function effectiveToolsResponse() {
             description: "Search items",
             rawDescription: "Search items",
             source: "mcp",
-            mcpServer: "github",
+            mcpServer: serverName,
             mcpToolName: "search-items",
           },
           {
@@ -121,7 +121,7 @@ function effectiveToolsResponse() {
             description: "Search items",
             rawDescription: "Search items",
             source: "mcp",
-            mcpServer: "github",
+            mcpServer: serverName,
             mcpToolName: "search_items",
             deniedBySession: true,
           },
@@ -416,6 +416,37 @@ describeControlUiE2e("Control UI composer capability menu", () => {
 
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('renders tool access for a server named "constructor"', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      methodResponses: {
+        "config.get": configResponse({
+          constructor: { url: "https://mcp.example.test", enabled: true },
+        }),
+        "sessions.list": sessionsList({
+          mcpToolsDeny: { github: ["search_items"] },
+        }),
+        "tools.effective": effectiveToolsResponse("constructor"),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:constructor");
+      await expect.poll(() => menu.getByText("3 of 3 tools on").isVisible()).toBe(true);
+      await expect.poll(() => menu.locator('wa-dropdown-item[value^="mcp-tool:"]').count()).toBe(3);
     } finally {
       await context.close();
     }

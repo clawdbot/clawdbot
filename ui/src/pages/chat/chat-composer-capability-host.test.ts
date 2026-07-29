@@ -294,6 +294,46 @@ describe("ChatComposerCapabilityHost", () => {
     expect(props.webSearchBaseEnabled).toBe(true);
   });
 
+  it("refetches effective tools when the active connector set changes", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const context = createContext({
+      runtimeConfig: {
+        mcp: { servers: { github: { url: "https://mcp.example.test", enabled: true } } },
+      },
+    });
+    context.gateway.snapshot.hello = {
+      features: { methods: ["tools.effective"] },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    const firstResult = { agentId: "main", groups: [], profile: "full" };
+    const secondResult = { agentId: "main", groups: [], profile: "minimal" };
+    const request = vi.fn().mockResolvedValueOnce(firstResult).mockResolvedValueOnce(secondResult);
+    const state = createState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(firstResult);
+    });
+
+    context.runtimeConfig.state.configSnapshot = {
+      runtimeConfig: {
+        mcp: {
+          servers: {
+            github: { url: "https://mcp.example.test", enabled: true },
+            notion: { command: "notion-mcp", enabled: true },
+          },
+        },
+      },
+    };
+    host.props(context, state, session, "main").onEnsureToolAccess?.();
+
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(secondResult);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("records an unexpected effective-tools loader rejection", async () => {
     const notify = vi.fn();
     const host = new ChatComposerCapabilityHost(notify);

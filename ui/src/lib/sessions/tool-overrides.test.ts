@@ -4,6 +4,7 @@ import {
   nextBooleanToolOverrides,
   nextMcpToolsDenyOverrides,
   nextWebSearchToolOverrides,
+  readOwnEntry,
   resolveToolOverrideState,
   sessionToolOverrideNames,
 } from "./tool-overrides.ts";
@@ -14,6 +15,11 @@ describe("session tool overrides", () => {
     expect(resolveToolOverrideState(false, undefined)).toBe(false);
     expect(resolveToolOverrideState(true, false)).toBe(false);
     expect(resolveToolOverrideState(false, true)).toBe(true);
+  });
+
+  it("reads only own dynamic-key entries", () => {
+    expect(readOwnEntry({ github: false }, "constructor")).toBeUndefined();
+    expect(readOwnEntry({ constructor: false }, "constructor")).toBe(false);
   });
 
   it("adds and removes named overrides without disturbing sibling groups", () => {

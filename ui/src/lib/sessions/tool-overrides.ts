@@ -18,8 +18,11 @@ function copyDynamicKeyRecord<T>(
   return copy;
 }
 
-function ownValue<T>(values: Record<string, T> | undefined, name: string): T | undefined {
-  return values && Object.hasOwn(values, name) ? values[name] : undefined;
+export function readOwnEntry<T>(
+  values: Readonly<Record<string, T>> | null | undefined,
+  name: string,
+): T | undefined {
+  return values != null && Object.hasOwn(values, name) ? values[name] : undefined;
 }
 
 function setOwnValue<T>(values: Record<string, T>, name: string, value: T): void {
@@ -92,7 +95,7 @@ export function nextMcpToolsDenyOverrides(
 ): SessionToolOverrides {
   const next = copyOverrides(current);
   const currentDeny = Object.hasOwn(next, "mcpToolsDeny") ? next.mcpToolsDeny : undefined;
-  const deniedTools = new Set(ownValue(currentDeny, server) ?? []);
+  const deniedTools = new Set(readOwnEntry(currentDeny, server) ?? []);
   if (denied) {
     deniedTools.add(rawToolName);
   } else {

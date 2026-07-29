@@ -26,7 +26,10 @@ import {
 } from "../../lib/sessions/index.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
+import {
+  nextBooleanToolOverrides,
+  readOwnEntry,
+} from "../../lib/sessions/tool-overrides.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -62,6 +65,12 @@ function webSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
 }
 
+function mcpConnectorSetFingerprint(config: Record<string, unknown> | null): string {
+  return JSON.stringify(
+    (summarizeMcpServers(config) ?? []).map(({ name, enabled }) => [name, enabled] as const),
+  );
+}
+
 function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
   const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
   const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter === true;
@@ -81,8 +90,8 @@ export class ChatComposerCapabilityHost {
   private readonly loading = new Set<string>();
   private readonly loadErrors = new Set<string>();
   private readonly patchTokens = new Map<string, symbol>();
-  private readonly effectiveTools = new Map<string, ToolsEffectiveResult>();
-  private readonly effectiveToolsErrors = new Set<string>();
+  private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
+  private effectiveToolsErrorKey: string | null = null;
   private effectiveToolsLoadingKey: string | null = null;
   private client: GatewayBrowserClient | null = null;
   private addDialogOpen = false;
@@ -182,12 +191,12 @@ export class ChatComposerCapabilityHost {
       });
   }
 
-  private effectiveToolsKey(
+  private effectiveToolsKeys(
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
-  ): string {
-    return buildToolsEffectiveRequestKey(
+  ): { cacheKey: string; requestKey: string } {
+    const requestKey = buildToolsEffectiveRequestKey(
       {
         chatModelCatalog: state.chatModelCatalog,
         sessions: context.sessions,
@@ -195,6 +204,9 @@ export class ChatComposerCapabilityHost {
       },
       { agentId, sessionKey: state.sessionKey },
     );
+    const runtimeConfig = context.runtimeConfig.state.configSnapshot?.runtimeConfig ?? null;
+    const connectorSet = mcpConnectorSetFingerprint(runtimeConfig);
+    return { cacheKey: `${requestKey}\0mcp=${connectorSet}`, requestKey };
   }
 
   private loadEffectiveTools(
@@ -205,13 +217,13 @@ export class ChatComposerCapabilityHost {
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
-    const requestKey = this.effectiveToolsKey(context, state, agentId);
+    const { cacheKey, requestKey } = this.effectiveToolsKeys(context, state, agentId);
     if (
       !state.connected ||
       !client ||
-      this.effectiveTools.has(requestKey) ||
-      this.effectiveToolsLoadingKey === requestKey ||
-      (!retryError && this.effectiveToolsErrors.has(requestKey))
+      this.effectiveTools?.key === cacheKey ||
+      this.effectiveToolsLoadingKey === cacheKey ||
+      (!retryError && this.effectiveToolsErrorKey === cacheKey)
     ) {
       return;
     }
@@ -231,9 +243,10 @@ export class ChatComposerCapabilityHost {
       this.client === client &&
       state.client === client &&
       state.connected &&
-      state.sessionKey === sessionKey;
-    this.effectiveToolsErrors.delete(requestKey);
-    this.effectiveToolsLoadingKey = requestKey;
+      state.sessionKey === sessionKey &&
+      this.effectiveToolsKeys(context, state, agentId).cacheKey === cacheKey;
+    this.effectiveToolsErrorKey = null;
+    this.effectiveToolsLoadingKey = cacheKey;
     this.notify();
     void loadToolsEffective(loader, { agentId, sessionKey }, { isCurrent })
       .then(() => {
@@ -241,18 +254,18 @@ export class ChatComposerCapabilityHost {
           return;
         }
         if (loader.toolsEffectiveResult && loader.toolsEffectiveResultKey === requestKey) {
-          this.effectiveTools.set(requestKey, loader.toolsEffectiveResult);
+          this.effectiveTools = { key: cacheKey, result: loader.toolsEffectiveResult };
         } else if (loader.toolsEffectiveError) {
-          this.effectiveToolsErrors.add(requestKey);
+          this.effectiveToolsErrorKey = cacheKey;
         }
       })
       .catch(() => {
         if (isCurrent()) {
-          this.effectiveToolsErrors.add(requestKey);
+          this.effectiveToolsErrorKey = cacheKey;
         }
       })
       .finally(() => {
-        if (this.effectiveToolsLoadingKey === requestKey) {
+        if (this.effectiveToolsLoadingKey === cacheKey) {
           this.effectiveToolsLoadingKey = null;
         }
         if (this.client === client) {
@@ -541,8 +554,8 @@ export class ChatComposerCapabilityHost {
       this.loading.clear();
       this.loadErrors.clear();
       this.patchTokens.clear();
-      this.effectiveTools.clear();
-      this.effectiveToolsErrors.clear();
+      this.effectiveTools = null;
+      this.effectiveToolsErrorKey = null;
       this.effectiveToolsLoadingKey = null;
     }
     // Sparse session overrides resolve against active runtime defaults, so display and key
@@ -553,14 +566,16 @@ export class ChatComposerCapabilityHost {
     const effectiveToolsAvailable =
       isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
     const effectiveToolsKey = effectiveToolsAvailable
-      ? this.effectiveToolsKey(context, state, agentId)
+      ? this.effectiveToolsKeys(context, state, agentId).cacheKey
       : null;
     const toolsEffectiveResult =
-      effectiveToolsKey === null ? null : (this.effectiveTools.get(effectiveToolsKey) ?? null);
+      effectiveToolsKey !== null && this.effectiveTools?.key === effectiveToolsKey
+        ? this.effectiveTools.result
+        : null;
     const toolsEffectiveLoading =
       effectiveToolsKey !== null && this.effectiveToolsLoadingKey === effectiveToolsKey;
     const toolsEffectiveError =
-      effectiveToolsKey !== null && this.effectiveToolsErrors.has(effectiveToolsKey);
+      effectiveToolsKey !== null && this.effectiveToolsErrorKey === effectiveToolsKey;
     const capabilitiesReady = gatewayAvailable && session !== undefined && runtimeConfig !== null;
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
@@ -591,7 +606,7 @@ export class ChatComposerCapabilityHost {
             enabled:
               skill.missingDeps || skill.blocked
                 ? false
-                : (session?.toolOverrides?.skills?.[skill.key] ?? skill.baseEnabled),
+                : (readOwnEntry(session?.toolOverrides?.skills, skill.key) ?? skill.baseEnabled),
           }),
         ) ?? null,
       skillsLoading: this.loading.has(agentId),
