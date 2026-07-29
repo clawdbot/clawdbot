@@ -290,9 +290,9 @@ Diary view gains two more sub-tabs next to Dreams:
   imports (for example `openclaw wiki chatgpt import`), for review before any
   of it graduates into durable memory
 - **Memory Wiki**: the compiled wiki the memory system can search and reason
-  over — pages grouped by kind (syntheses, entities, concepts, sources,
-  reports) with claim, open-question, and contradiction counts, and inline
-  page previews
+  over — synthesis, entity, and concept pages (plus sources and reports that
+  carry claims, open questions, or contradictions) with per-page counts, a
+  full-vault breakdown, and inline page previews
 
 Both sub-tabs show an enable hint instead when `memory-wiki` is off.
 

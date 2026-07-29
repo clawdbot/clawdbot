@@ -286,17 +286,19 @@ plugin supports corpus selection.
 ## Browsing the wiki in the Control UI
 
 The [Control UI](/web/control-ui) can browse the compiled wiki directly: open
-the Memory page, then **Dreams → Diary → Memory Wiki**. The tab shows the
-vault clustered by page kind (syntheses, entities, concepts, sources,
-reports) with per-page claim, open-question, and contradiction counts, and
-opens full page content inline. The neighboring **Imported Insights** sub-tab
+the Memory page, then **Dreams → Diary → Memory Wiki**. The tab clusters
+synthesis, entity, and concept pages — plus source and report pages that
+carry claims, open questions, or contradictions — with per-page counts and a
+full-vault page breakdown, and opens full page content inline. Raw sources
+and reports without that metadata count toward the breakdown but are not
+listed as cards; open them from the **Imported Insights** sub-tab, which
 reviews what external-history imports surfaced before promotion.
 
 Both sub-tabs appear once the plugin is enabled; in agent-scoped vault setups
 they show the selected agent's own vault. The UI reads through the plugin's
-gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`), so what
-you browse is exactly the corpus agents reach through `wiki_search` and
-`wiki_get`.
+gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`); inline
+page previews use `wiki.get`, the same lookup agents reach through the
+`wiki_get` tool.
 
 ## Prompt and context behavior
 
