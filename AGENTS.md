@@ -52,7 +52,7 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Changelog findings: see Docs / Changelog.
 - Public ClawSweeper comments prefer `https://docs.openclaw.ai/...` when a public docs page exists; structured evidence still cites repo files, lines, SHAs.
 - Findings need current source, shipped/current behavior, tests/CI evidence, and dependency contract proof when dependency-backed behavior is involved. Validation is judged against touched and sibling surfaces plus this file's commands; clear evidence matters for user-visible changes, with Telegram/Desktop proof for Telegram-visible behavior when feasible.
-- Real-behavior-proof gate: a mock-gateway harness run — mock channel API + mock provider + ephemeral gateway, with the verdict JSON in the PR body — satisfies it for channel-visible changes; live-channel proof is not required when the harness covers the changed path.
+- Real-behavior-proof gate: a mock-gateway harness run — mock channel API + mock provider + ephemeral gateway, with the verdict JSON in the PR body — satisfies it for channel-visible changes when it covers the changed path. Live-channel proof is always welcome and counts as stronger evidence.
 - Prefer findings for concrete behavior regressions, missing changed-surface proof, owner-boundary violations, security/API contract issues, or docs/config mismatches.
 - Do not file findings for repo policy preference when changed code follows the relevant scoped guide and no user-visible, runtime, security, or maintainer-risk impact is shown.
 
