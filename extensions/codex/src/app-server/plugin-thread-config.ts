@@ -30,6 +30,7 @@ import {
   readConfigLayersForAppAdmission,
   readThreadAdmissibleAccountApps,
   refreshAppInventoryNow,
+  resolveAccountAppThreadAdmission,
   resolveExplicitAppEnablement,
   resolvePluginAppThreadAdmission,
   resolveThreadConfigAppsForRecord,
@@ -361,7 +362,7 @@ export async function buildCodexPluginThreadConfig(
     if (pluginOwnedAppIds.has(app.id)) {
       continue;
     }
-    const admission = resolveAppInfoThreadAdmission(app, accountAppsResult.source);
+    const admission = resolveAccountAppThreadAdmission(app, accountAppsResult.source);
     const accountApp = toOwnedAccountApp(app);
     if (
       policy.destructiveApprovalMode === "ask" &&

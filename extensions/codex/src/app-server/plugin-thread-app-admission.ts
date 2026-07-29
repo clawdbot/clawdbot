@@ -91,7 +91,7 @@ export async function readThreadAdmissibleAccountApps(
     apps: snapshot.apps
       // Account-wide discovery must preserve Codex's effective enablement policy.
       // Only an explicitly configured plugin may provisionally enable its owned app.
-      .filter((app) => resolveAppInfoThreadAdmission(app, snapshot.source) === "ready")
+      .filter((app) => resolveAccountAppThreadAdmission(app, snapshot.source) === "ready")
       .toSorted((left, right) => left.id.localeCompare(right.id)),
     source: snapshot.source,
   };
@@ -118,6 +118,13 @@ export function resolveThreadConfigAppsForRecord(params: {
 }
 
 type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";
+
+export function resolveAccountAppThreadAdmission(
+  app: v2.AppInfo,
+  source: CodexAppInventorySnapshot["source"] | undefined,
+): CodexPluginAppThreadAdmission {
+  return resolveAppInfoThreadAdmission(app, source);
+}
 
 export function resolvePluginAppThreadAdmission(
   app: CodexPluginOwnedApp,
