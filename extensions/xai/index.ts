@@ -175,7 +175,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: (api) => ({
+  provider: (pluginApi) => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -256,7 +256,7 @@ export default defineSingleProviderPluginEntry({
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
     wrapStreamFn: (ctx) =>
       wrapXaiProviderStream(ctx, {
-        clientVersion: api.runtime.version,
+        clientVersion: pluginApi.runtime.version,
       }),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
