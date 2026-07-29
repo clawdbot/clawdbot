@@ -1,3 +1,4 @@
+import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
  */
@@ -268,9 +269,11 @@ async function summarizeWithFallbackResult(params: {
 
   // Try full summarization first
   let partialSummaryFallback: string | undefined;
+  let fullError: unknown;
   try {
     return { kind: "summary", text: await summarizeChunks(params) };
-  } catch (fullError) {
+  } catch (err) {
+    fullError = err;
     if (params.signal.aborted) {
       throw fullError;
     }
@@ -311,16 +314,20 @@ async function summarizeWithFallbackResult(params: {
     }
   }
 
-  // Final fallback: use best available partial summary, otherwise generic note
+  // Final fallback: use best available partial summary, otherwise throw error
   if (partialSummaryFallback) {
     return { kind: "summary", text: partialSummaryFallback };
   }
-  return {
-    kind: "generic-fallback",
-    text:
-      `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-      `Summary unavailable due to size limits.`,
-  };
+
+  // All summarization attempts failed — throw error so caller knows compaction
+  // did not succeed. This prevents silent infinite retry loops where "Compaction
+  // complete" is reported but no tokens are reclaimed.
+  throw new CompactionError(
+    "summarization_failed",
+    `All summarization attempts failed for ${messages.length} messages. ` +
+      `Last error: ${fullError instanceof Error ? fullError.message : String(fullError)}`,
+    fullError instanceof Error ? fullError : undefined,
+  );
 }
 
 async function summarizeWithFallback(
@@ -393,34 +400,35 @@ export async function summarizeInStages(params: {
   }
 
   const partialSummaries: string[] = [];
-  let consecutiveGenericFallbacks = 0;
-  // Caller-owned leading context lives in the oldest split. Only losing that
-  // split requires restoration; later fallback placeholders remain in the merge.
   let oldestChunkDegraded = false;
   for (const [index, chunk] of plan.chunks.entries()) {
-    const result = await summarizeWithFallbackResult({
-      ...params,
-      messages: chunk,
-      previousSummary: undefined,
-    });
-    consecutiveGenericFallbacks =
-      result.kind === "generic-fallback" ? consecutiveGenericFallbacks + 1 : 0;
-    if (index === 0) {
-      oldestChunkDegraded = result.kind === "generic-fallback";
+    let result: CompactionSummaryResult;
+    try {
+      result = await summarizeWithFallbackResult({
+        ...params,
+        messages: chunk,
+        previousSummary: undefined,
+      });
+    } catch (err) {
+      // A chunk summarization failed — fail the whole stages compaction.
+      // This prevents silent infinite retry loops where compaction reports
+      // success but no tokens are reclaimed.
+      if (err instanceof CompactionError) {
+        throw err;
+      }
+      // Wrap non-CompactionError failures for consistent error handling
+      throw new CompactionError(
+        "summarization_failed",
+        `Chunk ${index + 1} summarization failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err : undefined,
+      );
     }
 
-    // Keep one placeholder to mark the missing split, but stop before repeated
-    // placeholders trigger more split requests or a doomed merge request.
-    if (consecutiveGenericFallbacks >= MAX_CONSECUTIVE_GENERIC_FALLBACKS) {
-      log.warn("compaction staged summarization stopped after repeated generic fallbacks", {
-        attemptedSplits: index + 1,
-        consecutiveGenericFallbacks,
-        totalSplits: plan.chunks.length,
-      });
-      // The remaining chunks were never attempted. Abort the whole compaction
-      // so the caller keeps the source transcript instead of committing a gap.
-      throw new Error(CIRCUIT_OPEN_ERROR);
+    // Track if the oldest chunk failed to produce a real summary
+    if (index === 0 && result.kind !== "summary") {
+      oldestChunkDegraded = true;
     }
+
     partialSummaries.push(result.text);
   }
 
@@ -471,9 +479,7 @@ export async function summarizeInStages(params: {
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
-  return oldestChunkDegraded && mergedResult.kind === "summary"
-    ? { kind: "generic-fallback", text: mergedResult.text }
-    : mergedResult;
+  return mergedResult;
 }
 
 /** Resolves a positive context-window token count from model metadata. */
