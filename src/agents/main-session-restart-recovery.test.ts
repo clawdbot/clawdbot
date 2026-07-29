@@ -166,6 +166,7 @@ function loadSessionEntry(
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.mocked(callGateway).mockReset();
   vi.mocked(callGateway).mockImplementation(async () => ({ runId: "run-resumed" }));
   runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockReturnValue(undefined);
   resetAgentEventsForTest();
@@ -2328,7 +2329,11 @@ describe("main-session-restart-recovery", () => {
         createdAt: Date.now(),
       },
     });
-    vi.mocked(callGateway).mockRejectedValueOnce(new Error("transient startup failure"));
+    const firstDispatch = createDeferred();
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      firstDispatch.resolve();
+      throw new Error("transient startup failure");
+    });
 
     vi.useFakeTimers();
     let recovery: ReturnType<typeof scheduleRestartAbortedMainSessionRecovery> | undefined;
@@ -2339,6 +2344,7 @@ describe("main-session-restart-recovery", () => {
         maxRetries: 2,
         stateDir: tmpDir,
       });
+      await firstDispatch.promise;
       await vi.advanceTimersByTimeAsync(0);
       const initialGatewayCalls = vi.mocked(callGateway).mock.calls.length;
       expect(initialGatewayCalls).toBeGreaterThan(0);
