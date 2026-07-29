@@ -552,18 +552,14 @@ describe("SessionManager.open", () => {
 
   it("preserves distinct keyed user turns with the same visible text", () => {
     const sessionManager = SessionManager.inMemory();
-    const first = sessionManager.appendMessage({
-      role: "user",
+    const makeMessage = (idempotencyKey: string, timestamp: number) => ({
+      role: "user" as const,
       content: "same question",
-      idempotencyKey: "first-run:user",
-      timestamp: 1,
+      idempotencyKey,
+      timestamp,
     });
-    const second = sessionManager.appendMessage({
-      role: "user",
-      content: "same question",
-      idempotencyKey: "second-run:user",
-      timestamp: 2,
-    });
+    const first = sessionManager.appendMessage(makeMessage("first-run:user", 1));
+    const second = sessionManager.appendMessage(makeMessage("second-run:user", 2));
 
     expect(second).not.toBe(first);
     expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
