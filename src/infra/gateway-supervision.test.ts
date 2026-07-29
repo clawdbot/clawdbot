@@ -44,7 +44,9 @@ describe("gateway supervision", () => {
         HOME: "/home/operator",
         ...override,
       }),
-    ).toThrow(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON);
+    ).toThrow(
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home and without OPENCLAW_HOME, OPENCLAW_STATE_DIR, or OPENCLAW_CONFIG_PATH overrides to restart the gateway.`,
+    );
   });
 
   it("explains why self-update must be delegated", () => {
