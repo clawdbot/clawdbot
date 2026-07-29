@@ -10,7 +10,7 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import { chunkTextForOutbound, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
@@ -23,7 +23,7 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
+  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "chunker" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
 };
@@ -312,6 +312,10 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  // Without a chunker the declared textChunkLimit is ignored and oversized
+  // encrypted DMs are rejected by every relay, dropping the whole reply.
+  // Mirrors msteams/zalouser/irc, which use the shared chunkTextForOutbound.
+  chunker: chunkTextForOutbound,
   deliveryCapabilities: {
     durableFinal: {
       text: true,

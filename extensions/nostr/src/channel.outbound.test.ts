@@ -202,4 +202,24 @@ describe("nostr outbound cfg threading", () => {
 
     await cleanup.stop();
   });
+
+  it("declares a chunker so textChunkLimit splits oversized replies instead of dropping them", () => {
+    const { chunker, textChunkLimit } = nostrOutboundAdapter;
+    expect(chunker).toBeTypeOf("function");
+    expect(textChunkLimit).toBe(4000);
+
+    // Text longer than the limit must be split into bounded chunks so each
+    // encrypted DM stays under relay event-size limits. Without a chunker the
+    // deliver pipeline ignores textChunkLimit and sends the whole reply in one
+    // event, which relays reject as oversized and the reply is lost.
+    const longText = `${"word ".repeat(1200)}final`;
+    const chunks = chunker!(longText, textChunkLimit!);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(textChunkLimit!);
+    }
+    // No content is dropped across the split.
+    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(longText.replace(/\s+/g, " ").trim());
+  });
 });
