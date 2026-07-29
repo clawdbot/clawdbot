@@ -239,6 +239,7 @@ export function createMeetingPluginConfigSchema(options: MeetingPluginConfigOpti
     defaultAudioInputCommand: defaultSoxCommands.inputCommand,
     defaultAudioOutputCommand: defaultSoxCommands.outputCommand,
     resolveConfig,
-    resolveGatewayOperationTimeoutMs: (config) => options.resolveGatewayOperationTimeoutMs(config),
+    resolveGatewayOperationTimeoutMs: (config: MeetingPluginConfig) =>
+      options.resolveGatewayOperationTimeoutMs(config),
   };
 }
