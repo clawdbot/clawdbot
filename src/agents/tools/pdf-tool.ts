@@ -89,7 +89,7 @@ const PdfToolSchema = Type.Object({
   ),
   password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0, maximum: MAX_PDF_MB_CAP }),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
 
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
@@ -461,7 +461,7 @@ export function createPdfTool(options?: {
         message: "maxBytesMb must be greater than 0",
       });
       // Model-supplied maxBytesMb is clamped to prevent pathological allocations
-      // in PDF processing pipelines. Operator config (mediaMaxMb) is not clamped.
+      // in PDF processing pipelines. Operator config (pdfMaxMb) is not clamped.
       const maxBytesMb =
         maxBytesMbRaw === undefined
           ? configuredMaxBytesMb

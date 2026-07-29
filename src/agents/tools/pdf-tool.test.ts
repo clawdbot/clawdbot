@@ -352,6 +352,42 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("real pdf invocation clamps oversized maxBytesMb without schema rejection", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      const pdfPath = path.join(workspaceDir, "doc.pdf");
+      await fs.writeFile(pdfPath, FAKE_PDF_MEDIA.buffer);
+      try {
+        const { loadSpy } = await stubPdfToolInfra(agentDir, {
+          mockLoad: false,
+          provider: "anthropic",
+          input: ["text", "document"],
+        });
+        vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+        const tool = requirePdfTool(
+          (await loadCreatePdfTool())({
+            config: withPdfModel(ANTHROPIC_PDF_MODEL),
+            agentDir,
+            workspaceDir,
+          }),
+        );
+
+        const result = await tool.execute("t1", {
+          prompt: "summarize",
+          pdf: pdfPath,
+          maxBytesMb: "1000000000",
+        });
+
+        expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+        expect(loadRef).toBe(pdfPath);
+        expectFields(loadOptions, { maxBytes: 100 * 1024 * 1024 });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("uses configuredMaxBytesMb when omitted and passes below-cap through", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, {
@@ -1034,7 +1070,6 @@ describe("createPdfTool", () => {
       expect(schema.properties?.maxBytesMb).toMatchObject({
         type: "number",
         exclusiveMinimum: 0,
-        maximum: 100,
       });
     });
   });
