@@ -638,11 +638,15 @@ describe("resolveAdcFileCredentials", () => {
       await fs.mkdir(gcloudDir, { recursive: true });
       await fs.writeFile(
         path.join(gcloudDir, "application_default_credentials.json"),
-        JSON.stringify({ client_id: "well-known" }),
+        JSON.stringify({ type: "authorized_user", client_id: "well-known" }),
         "utf8",
       );
       const envPath = path.join(homeDir, "env-adc.json");
-      await fs.writeFile(envPath, JSON.stringify({ client_id: "env" }), "utf8");
+      await fs.writeFile(
+        envPath,
+        JSON.stringify({ type: "authorized_user", client_id: "env" }),
+        "utf8",
+      );
       vi.stubEnv("HOME", homeDir);
       vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", envPath);
 
@@ -663,6 +667,88 @@ describe("resolveAdcFileCredentials", () => {
       await expect(resolveAdcFileCredentials()).resolves.toBeNull();
     } finally {
       await fs.rm(emptyHome, { force: true, recursive: true });
+    }
+  });
+
+  it("resolves service_account ADC files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "googlechat-adc-sa-"));
+    try {
+      const credPath = path.join(tempDir, "adc.json");
+      await fs.writeFile(
+        credPath,
+        JSON.stringify({ type: "service_account", client_email: "a@b.iam.gserviceaccount.com" }),
+        "utf8",
+      );
+      vi.stubEnv("HOME", tempDir);
+      vi.stubEnv("APPDATA", tempDir);
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credPath);
+
+      const creds = await resolveAdcFileCredentials();
+      expect(creds?.type).toBe("service_account");
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects external_account (federation) ADC files from the env path", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "googlechat-adc-ext-"));
+    try {
+      const credPath = path.join(tempDir, "adc.json");
+      // An external_account file whose credential_source is an executable would
+      // run a local command outside the SSRF guard; it must be rejected.
+      await fs.writeFile(
+        credPath,
+        JSON.stringify({
+          type: "external_account",
+          audience: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p",
+          credential_source: { executable: { command: "/usr/bin/attacker" } },
+        }),
+        "utf8",
+      );
+      vi.stubEnv("HOME", tempDir);
+      vi.stubEnv("APPDATA", tempDir);
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credPath);
+
+      await expect(resolveAdcFileCredentials()).rejects.toThrow(/external_account|not supported/);
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects external_account ADC files discovered via the well-known gcloud file", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "googlechat-adc-ext-wk-"));
+    try {
+      const gcloudDir = path.join(homeDir, ".config", "gcloud");
+      await fs.mkdir(gcloudDir, { recursive: true });
+      await fs.writeFile(
+        path.join(gcloudDir, "application_default_credentials.json"),
+        JSON.stringify({
+          type: "external_account",
+          credential_source: { executable: { command: "/usr/bin/attacker" } },
+        }),
+        "utf8",
+      );
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+      vi.stubEnv("HOME", homeDir);
+
+      await expect(resolveAdcFileCredentials()).rejects.toThrow(/external_account|not supported/);
+    } finally {
+      await fs.rm(homeDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an ADC file that declares no type", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "googlechat-adc-notype-"));
+    try {
+      const credPath = path.join(tempDir, "adc.json");
+      await fs.writeFile(credPath, JSON.stringify({ client_id: "x" }), "utf8");
+      vi.stubEnv("HOME", tempDir);
+      vi.stubEnv("APPDATA", tempDir);
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credPath);
+
+      await expect(resolveAdcFileCredentials()).rejects.toThrow(/type/);
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
 });
