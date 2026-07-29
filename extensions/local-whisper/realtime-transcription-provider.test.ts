@@ -19,6 +19,8 @@ import type {
 } from "./worker.js";
 import { spawnLocalWhisperWorker } from "./worker.js";
 
+const TEST_PYTHON = process.env.LOCAL_WHISPER_PYTHON ?? process.env.PYTHON ?? "python3";
+
 class MockWorker implements LocalWhisperWorker {
   readonly pid = 4242;
   readonly audio: Buffer[] = [];
@@ -284,7 +286,7 @@ worker.feed(frame(1) * (35_000 // module.FRAME_MS))
 assert captured
 assert len(captured[0]) == 30_000 * module.SAMPLE_RATE * 2 // 1000
 `;
-    execFileSync("/home/o/.venvs/local-whisper/bin/python", ["-c", script], {
+    execFileSync(TEST_PYTHON, ["-c", script], {
       stdio: "pipe",
     });
   });
@@ -304,7 +306,7 @@ assert len(captured[0]) == 30_000 * module.SAMPLE_RATE * 2 // 1000
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     try {
       const worker = spawnLocalWhisperWorker({
-        pythonPath: "/home/o/.venvs/local-whisper/bin/python",
+        pythonPath: TEST_PYTHON,
         workerScript,
         model: "test",
         language: "no",
