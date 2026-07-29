@@ -1,6 +1,6 @@
-export type OpenAIRealtimeVoiceLifecyclePhase = "connecting" | "ready" | "retry-wait" | "terminal";
+type OpenAIRealtimeVoiceLifecyclePhase = "connecting" | "ready" | "retry-wait" | "terminal";
 
-export type OpenAIRealtimeVoiceTerminalOutcome = "completed" | "error";
+type OpenAIRealtimeVoiceTerminalOutcome = "completed" | "error";
 
 export type OpenAIRealtimeVoiceConnection = Readonly<{
   id: symbol;
