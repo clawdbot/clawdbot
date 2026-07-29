@@ -325,7 +325,7 @@ Values:
 
 ### `agents.defaults.userTimezone`
 
-Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+Timezone for the system prompt's local date context (not message timestamps). Falls back to host timezone.
 
 ```json5
 {
@@ -335,7 +335,7 @@ Timezone for system prompt context (not message timestamps). Falls back to host 
 
 ### `agents.defaults.timeFormat`
 
-Time format in system prompt. Default: `auto` (OS preference).
+Time format for envelope and other rendered clock values. The system prompt's temporal context has no live clock. Default: `auto` (OS preference).
 
 ```json5
 {

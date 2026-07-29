@@ -10,13 +10,13 @@ OpenClaw standardizes timestamps so the model sees a **single reference time** i
 
 ## Three timezone surfaces
 
-| Surface           | What it shows                                                                                              | Default                               | Configured via                                         |
-| ----------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------ |
-| Message envelopes | Wraps inbound channel messages: `[Signal +1555 Sun 2026-01-18 00:19:42 PST] hello`                         | Host-local                            | `agents.defaults.envelopeTimezone`                     |
-| Tool payloads     | Channel `readMessages`-style tools return raw provider time plus normalized `timestampMs` / `timestampUtc` | UTC fields always present             | Not configurable; preserves provider-native timestamps |
-| System prompt     | A small `Current Date & Time` block with the **time zone only** (no clock value, for cache stability)      | Host timezone if `userTimezone` unset | `agents.defaults.userTimezone`                         |
+| Surface           | What it shows                                                                                               | Default                               | Configured via                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------ |
+| Message envelopes | Wraps inbound channel messages: `[Signal +1555 Sun 2026-01-18 00:19:42 PST] hello`                          | Host-local                            | `agents.defaults.envelopeTimezone`                     |
+| Tool payloads     | Channel `readMessages`-style tools return raw provider time plus normalized `timestampMs` / `timestampUtc`  | UTC fields always present             | Not configurable; preserves provider-native timestamps |
+| System prompt     | A small volatile `Temporal Context` block with the local date and time zone; exact time remains tool-backed | Host timezone if `userTimezone` unset | `agents.defaults.userTimezone`                         |
 
-The system prompt deliberately omits the live clock to keep prompt caching stable across turns. When the agent needs the current time, it calls `session_status`.
+The date and zone live below the system-prompt cache boundary, so day rollover does not invalidate the stable prefix. The prompt deliberately omits the live clock; when the agent needs exact current time and `session_status` is available, it calls that tool.
 
 ## Setting the user timezone
 
@@ -30,7 +30,7 @@ The system prompt deliberately omits the live clock to keep prompt caching stabl
 }
 ```
 
-If `userTimezone` is unset, OpenClaw resolves the host timezone at runtime via `Intl.DateTimeFormat().resolvedOptions().timeZone` (no config write). `agents.defaults.timeFormat` (`auto` | `12` | `24`) controls 12h/24h rendering in envelopes and downstream surfaces, not in the system prompt section.
+If `userTimezone` is unset, OpenClaw resolves the host timezone at runtime via `Intl.DateTimeFormat().resolvedOptions().timeZone` (no config write). `agents.defaults.timeFormat` (`auto` | `12` | `24`) controls 12h/24h rendering in envelopes and downstream surfaces, not in the system prompt section because that section has no clock value.
 
 ## Envelope timezone values
 

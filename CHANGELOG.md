@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent temporal grounding:** include the user-local calendar date and time zone in the volatile system-prompt suffix while keeping exact time tool-backed, so date reasoning survives long-running sessions without invalidating the stable prompt-cache prefix. Fixes #63181. Thanks @deepujain for the earlier investigation.
 - **Control UI Talk session isolation:** stop active realtime Talk media and retire its callbacks before chat session changes, Gateway disconnects, or pane disposal so previous-session audio, transcript, camera, and status updates cannot leak into the next view. Thanks @shakkernerd.
 - **Gateway reconnect event ordering:** reset the shared TypeScript client's outer event-sequence baseline for each replacement WebSocket, preventing gap recovery from comparing unrelated connection generations across Control UI, TUI, SDK, and browser extension clients. Thanks @shakkernerd.
 - **Skill Workshop offline apply:** preserve configless local proposal apply after upgrades under exclusive Gateway startup ownership, while keeping running Gateway snapshot invalidation fail-closed when CLI credentials are unavailable.

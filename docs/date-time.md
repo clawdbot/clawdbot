@@ -6,9 +6,9 @@ read_when:
 title: "Date and time"
 ---
 
-OpenClaw uses **host-local time for transport timestamps** and puts **only the time zone** in the system prompt.
-Provider timestamps are preserved so tools keep their native semantics. When the agent needs the current
-time, it runs the `session_status` tool.
+OpenClaw uses **host-local time for transport timestamps** and puts the **local date plus time zone** in the system prompt.
+Provider timestamps are preserved so tools keep their native semantics. When the agent needs the exact current
+time and `session_status` is available, it runs that tool.
 
 ## Message envelopes (local by default)
 
@@ -59,18 +59,19 @@ Override under `agents.defaults`:
 [WhatsApp +1555 +30s Sun 2026-01-18T05:19:00Z] follow-up
 ```
 
-## System prompt: current date and time
+## System prompt: temporal context
 
-The system prompt includes a **Current Date & Time** section with the **time zone only**
-(no clock or time format) so prompt caching stays stable:
+The system prompt includes a volatile **Temporal Context** section with the local calendar date
+and time zone, but no live clock:
 
 ```
+Current date: 2026-01-05
 Time zone: America/Chicago
 ```
 
 The zone is `agents.defaults.userTimezone` when configured, otherwise the host timezone.
-The prompt also instructs the agent to run the `session_status` tool whenever it needs the
-current date, time, or day of week.
+The section lives below the prompt-cache boundary, so date rollover and timezone changes do not
+invalidate the stable prefix. When available, `session_status` remains the source for exact current time.
 
 ## System event lines (local by default)
 
