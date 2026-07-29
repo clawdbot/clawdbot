@@ -1653,7 +1653,9 @@ exit 0
     const transports = readFileSync(TS_PATHS.guestTransports, "utf8");
 
     expect(script).toContain('this.guest.shBackground(\n      "macos-update-dev"');
-    expect(transports).toContain("/usr/bin/nohup /bin/bash");
+    expect(transports).toContain('spawn("/bin/bash"');
+    expect(transports).toContain("detached: true");
+    expect(transports).toContain("child.unref()");
     expect(transports).toContain("POSIX_BACKGROUND_LOG_MAX_BYTES");
     expect(transports).toContain('runGuest(["/bin/test", "-f", donePath]');
     expect(transports).toContain('runGuest(["/bin/cat", exitPath]');
@@ -1667,7 +1669,7 @@ exit 0
     const output: string[] = [];
     let exitReads = 0;
     const runCommand = vi.fn((_command: string, args: string[]) => {
-      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
         return { status: 124, stderr: "", stdout: "" };
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
@@ -1704,7 +1706,7 @@ exit 0
 
   it("propagates a detached POSIX background exit failure", async () => {
     const runCommand = vi.fn((_command: string, args: string[]) => {
-      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
@@ -1734,7 +1736,7 @@ exit 0
   it("reads the POSIX background exit after log drain consumes the deadline", async () => {
     let exitRead = false;
     const runCommand = vi.fn((_command: string, args: string[]) => {
-      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
@@ -1769,7 +1771,7 @@ exit 0
   it("cleans up an ambiguous POSIX launch when PID materialization is missed", async () => {
     let cleanupRun = false;
     const runCommand = vi.fn((_command: string, args: string[]) => {
-      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
         return { status: 124, stderr: "", stdout: "" };
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
@@ -1801,7 +1803,7 @@ exit 0
       if (args[0] === "/bin/dd" && args[1]?.includes("/cleanup.sh")) {
         cleanupPayload = options?.input ?? "";
       }
-      if (args[0] === "/bin/bash" && args[1]?.endsWith("/launcher.sh")) {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {

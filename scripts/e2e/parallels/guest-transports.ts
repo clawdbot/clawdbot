@@ -122,7 +122,7 @@ export async function runPosixBackgroundShell(options: PosixBackgroundShellOptio
   const runDir = `/tmp/openclaw-parallels/${nonce}`;
   const scriptPath = `${runDir}/run.sh`;
   const runnerPath = `${runDir}/runner.sh`;
-  const launcherPath = `${runDir}/launcher.sh`;
+  const launcherPath = `${runDir}/launcher.mjs`;
   const cleanupPath = `${runDir}/cleanup.sh`;
   const logPath = `${runDir}/run.log`;
   const donePath = `${runDir}/done`;
@@ -160,9 +160,17 @@ printf 'done\n' >"$done_path.tmp"
 /bin/mv -f "$done_path.tmp" "$done_path"
 exit 0
 `;
-  const launcher = `#!/bin/bash
-/usr/bin/nohup /bin/bash ${posixSingleQuote(runnerPath)} </dev/null >/dev/null 2>&1 &
-printf 'started\n'
+  const launcher = `import { spawn } from "node:child_process";
+const child = spawn("/bin/bash", [${JSON.stringify(runnerPath)}], {
+  detached: true,
+  stdio: "ignore",
+});
+await new Promise((resolve, reject) => {
+  child.once("spawn", resolve);
+  child.once("error", reject);
+});
+child.unref();
+process.stdout.write("started\\n");
 `;
   const cleanup = `#!/bin/bash
 if [ ! -f ${posixSingleQuote(donePath)} ] && [ -f ${posixSingleQuote(pidPath)} ]; then
@@ -222,7 +230,7 @@ fi
     }
 
     launchAttempted = true;
-    const launch = runGuest(["/bin/bash", launcherPath], 8_000);
+    const launch = runGuest(["node", launcherPath], 8_000);
     launched = launch.status === 0 && launch.stdout.includes("started");
     if (!launched && (launch.status === 0 || launch.status === 124)) {
       const materializeDeadline = Math.min(Date.now() + 45_000, deadline);
