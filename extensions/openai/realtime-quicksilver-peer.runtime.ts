@@ -268,13 +268,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     if (!this.connected || this.closed) {
       return;
     }
-    const hasRelayAudio = this.pendingAudio.length >= RELAY_FRAME_BYTES;
-    const frame = hasRelayAudio
-      ? this.pendingAudio.subarray(0, RELAY_FRAME_BYTES)
-      : Buffer.alloc(RELAY_FRAME_BYTES);
-    if (hasRelayAudio) {
-      this.pendingAudio = this.pendingAudio.subarray(RELAY_FRAME_BYTES);
-    }
+    const frame = this.takeNextRelayFrame();
     try {
       const opusPacket = this.state.encoder.encode(convertRelayPcmToQuicksilverPcm(frame), {
         frameSize: OPUS_FRAME_SAMPLES,
@@ -298,5 +292,17 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     } catch (error) {
       this.state.callbacks.onError(toError(error));
     }
+  }
+
+  private takeNextRelayFrame(): Buffer {
+    // Relay ticks are framing boundaries: pad partial PCM now, or its tail survives
+    // silence and is prepended to a later utterance as stale audio.
+    const frame = Buffer.alloc(RELAY_FRAME_BYTES);
+    const queuedBytes = Math.min(this.pendingAudio.length, RELAY_FRAME_BYTES);
+    if (queuedBytes > 0) {
+      this.pendingAudio.copy(frame, 0, 0, queuedBytes);
+      this.pendingAudio = this.pendingAudio.subarray(queuedBytes);
+    }
+    return frame;
   }
 }

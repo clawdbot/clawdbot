@@ -945,6 +945,28 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
         cfg,
+        providerConfig: {
+          model: "gpt-realtime-2.1",
+          apiKey: "sk-platform",
+          azureEndpoint: "https://example.openai.azure.com",
+        },
+        agentId: "main",
+      }),
+    ).toBeUndefined();
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
+        cfg,
+        providerConfig: {
+          model: "gpt-live-1-codex",
+          apiKey: "sk-platform",
+          azureEndpoint: "https://example.openai.azure.com",
+        },
+        agentId: "main",
+      }),
+    ).toBe(false);
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
+        cfg,
         providerConfig: { model: "gpt-live-1-mini", apiKey: "sk-platform" },
         agentId: "main",
       }),
@@ -963,6 +985,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         agentId: "main",
       }),
     ).toBe(true);
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
+        cfg,
+        providerConfig: { model: "gpt-live-1-codex" },
+        agentId: "voice-agent",
+      }),
+    ).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: expect.stringContaining("voice-agent"),
+        profileTypes: ["oauth"],
+      }),
+    );
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isBrowserSessionConfigured({
         cfg,

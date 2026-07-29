@@ -1859,6 +1859,7 @@ describe("talk.session unified handlers", () => {
     mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementationOnce((input) => {
       expect(input).toEqual(
         expect.objectContaining({
+          agentId: "voice-agent",
           providerConfigOverrides: { model: "gpt-live-1-codex" },
           defaultModel: testCase.configuredModel,
           surface: "gateway-relay",
@@ -1891,6 +1892,7 @@ describe("talk.session unified handlers", () => {
         transport: "gateway-relay",
         brain: "agent-consult",
         provider: "openai",
+        sessionKey: "agent:voice-agent:main",
         ...(testCase.requestedModel ? { model: testCase.requestedModel } : {}),
       },
       respond,
@@ -1914,8 +1916,13 @@ describe("talk.session unified handlers", () => {
         provider,
         providerConfig: { model: "gpt-live-1-codex" },
         model: "gpt-live-1-codex",
+        sessionKey: "agent:voice-agent:main",
       }),
     );
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
+      agentId: "voice-agent",
+      sessionKey: "agent:voice-agent:main",
+    });
     expectRespondOk(respond, { relaySessionId: "relay-effective-model" });
   });
 

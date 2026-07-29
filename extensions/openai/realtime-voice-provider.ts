@@ -2046,11 +2046,11 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     },
     isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (config.azureEndpoint || config.azureDeployment) {
-        return false;
-      }
       if (!isOpenAIGptLiveModel(config.model)) {
         return undefined;
+      }
+      if (config.azureEndpoint || config.azureDeployment) {
+        return false;
       }
       return (
         isSupportedOpenAIGptLiveModel(config.model) &&

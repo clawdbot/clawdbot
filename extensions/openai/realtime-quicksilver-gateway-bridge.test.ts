@@ -34,6 +34,7 @@ type TestableAudioPeer = {
   sequenceNumber: number;
   timestamp: number;
   sendNextAudioFrame(): void;
+  takeNextRelayFrame(): Buffer;
   state: {
     peer: {
       connectionStateChange: {
@@ -136,6 +137,34 @@ describe("GPT-Live werift audio peer", () => {
         (initialSequenceNumber + 1) & 0xffff,
         (initialSequenceNumber + 2) & 0xffff,
       ]);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("consumes and zero-pads a sub-frame audio tail on the next tick", async () => {
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+      iceServers: [],
+    });
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const tail = Buffer.alloc(200);
+    tail.writeInt16LE(1_234, 0);
+    tail.writeInt16LE(-2_345, 2);
+    const takeNextRelayFrame = testPeer.takeNextRelayFrame.bind(testPeer);
+    let producedFrame: Buffer | undefined;
+    vi.spyOn(testPeer, "takeNextRelayFrame").mockImplementation(() => {
+      producedFrame = takeNextRelayFrame();
+      return producedFrame;
+    });
+    try {
+      peer.sendAudio(tail);
+      testPeer.connected = true;
+      testPeer.sendNextAudioFrame();
+
+      expect(testPeer.pendingAudio).toHaveLength(0);
+      expect(producedFrame?.subarray(0, tail.length)).toEqual(tail);
+      expect(producedFrame?.subarray(tail.length).every((byte) => byte === 0)).toBe(true);
     } finally {
       peer.close();
     }

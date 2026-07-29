@@ -66,6 +66,7 @@ export function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: stri
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
+  agentId?: string;
   configuredInstructions?: string;
   sessionKey?: unknown;
   /** Relay sessions bind their agent lazily; injecting a guessed profile would mix agents. */
@@ -76,9 +77,11 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   const defaultAgentId = resolveTalkTargetAgentId(params.config);
   // Older clients can prefetch without a key. Client-owned creates bind to the
   // default agent immediately, so its workspace profile stays consistent there.
-  const agentId = requestedSessionKey
-    ? resolveTalkSessionAgentId(params.config, requestedSessionKey)
-    : defaultAgentId;
+  const agentId =
+    params.agentId ??
+    (requestedSessionKey
+      ? resolveTalkSessionAgentId(params.config, requestedSessionKey)
+      : defaultAgentId);
   const bootstrapContext =
     params.requireSessionKeyForProfile && !requestedSessionKey
       ? undefined

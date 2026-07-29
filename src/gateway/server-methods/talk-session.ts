@@ -1,4 +1,3 @@
-// Talk session methods manage realtime, transcription, handoff, turns, and cleanup.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -20,6 +19,7 @@ import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -248,7 +248,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           token: handoff.token,
           roomId: handoff.roomId,
         });
-        respondOk(respond, {
+        return respondOk(respond, {
           sessionId: handoff.id,
           provider: handoff.provider,
           mode: handoff.mode,
@@ -262,7 +262,6 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           voice: handoff.voice,
           expiresAt: handoff.expiresAt,
         });
-        return;
       }
 
       const connId = client?.connId;
@@ -273,11 +272,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
 
       if (mode === "realtime") {
         if (transport !== "gateway-relay" || brain !== "agent-consult") {
-          respondInvalidRequest(
+          return respondInvalidRequest(
             respond,
             `realtime talk.session.create requires transport="gateway-relay" and brain="agent-consult"`,
           );
-          return;
         }
         const runtimeConfig = context.getRuntimeConfig();
         const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
@@ -285,14 +283,15 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requested: params,
           defaults: realtimeConfig,
         });
+        const agentId = resolveTalkSessionAgentId(runtimeConfig, params.sessionKey);
         const resolution = resolveConfiguredRealtimeVoiceProvider({
           configuredProviderId: realtimeConfig.provider,
           providerConfigs: realtimeConfig.providers,
           providerConfigOverrides: launchOptions.model ? { model: launchOptions.model } : {},
           cfg: runtimeConfig,
+          agentId,
           defaultModel: realtimeConfig.model,
           surface: "gateway-relay",
-          noRegisteredProviderMessage: "No realtime voice provider registered",
         });
         const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
           ...resolution,
@@ -302,11 +301,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         });
         if (relayLaunch.error) {
           // GPT-Live delegates natively; forced transcript consults are a GA-model mode.
-          respondInvalidRequest(respond, relayLaunch.error);
-          return;
+          return respondInvalidRequest(respond, relayLaunch.error);
         }
         const realtimeContext = await resolveTalkRealtimeProviderInstructions({
           config: runtimeConfig,
+          agentId,
           configuredInstructions: realtimeConfig.instructions,
           sessionKey: params.sessionKey,
           requireSessionKeyForProfile: true,
@@ -341,7 +340,6 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         respondOk(respond, {
           ...session,
           sessionId: session.relaySessionId,
-          // The relay session is the logical voice call; clients need not synthesize it.
           voiceSessionId: session.relaySessionId,
           mode,
           brain,
