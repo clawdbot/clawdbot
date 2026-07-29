@@ -319,51 +319,6 @@ export function listCrossChannelSchemaSupportedMessageActions(
 }
 
 /**
- * Lists message capabilities advertised across registered channel plugins.
- */
-function listChannelMessageCapabilities(params: {
-  cfg: OpenClawConfig;
-  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-}): ChannelMessageCapability[] {
-  const capabilities = new Set<ChannelMessageCapability>();
-  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
-  for (const plugin of channels) {
-    for (const capability of resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: { cfg: params.cfg },
-      includeCapabilities: true,
-    }).capabilities) {
-      capabilities.add(capability);
-    }
-  }
-  return Array.from(capabilities);
-}
-
-/**
- * Lists message capabilities advertised by the current channel.
- */
-function listChannelMessageCapabilitiesForChannel(
-  params: ChannelMessageActionDiscoveryParams,
-): ChannelMessageCapability[] {
-  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
-    params.channel,
-    params.preparedMessageToolCatalog,
-  );
-  if (!pluginActions) {
-    return [];
-  }
-  return Array.from(
-    resolveMessageActionDiscoveryForPlugin({
-      pluginId: pluginActions.pluginId,
-      actions: pluginActions.actions,
-      context: createMessageActionDiscoveryContext(params),
-      includeCapabilities: true,
-    }).capabilities,
-  );
-}
-
-/**
  * Merges schema properties while preserving the first plugin to define a key.
  */
 function mergeToolSchemaProperties(
@@ -474,10 +429,18 @@ export function channelSupportsMessageCapability(
   capability: ChannelMessageCapability,
   preparedMessageToolCatalog?: PreparedMessageToolCatalog,
 ): boolean {
-  return listChannelMessageCapabilities({
-    cfg,
-    preparedMessageToolCatalog,
-  }).includes(capability);
+  const discoveredCapabilities = listMessageActionDiscoveryChannels(preparedMessageToolCatalog).map(
+    (plugin) =>
+      resolveMessageActionDiscoveryForPlugin({
+        pluginId: plugin.id,
+        actions: plugin.actions,
+        context: { cfg },
+        includeCapabilities: true,
+      }).capabilities,
+  );
+  return discoveredCapabilities.some((pluginCapabilities) =>
+    pluginCapabilities.includes(capability),
+  );
 }
 
 /**
@@ -487,5 +450,17 @@ export function channelSupportsMessageCapabilityForChannel(
   params: ChannelMessageActionDiscoveryParams,
   capability: ChannelMessageCapability,
 ): boolean {
-  return listChannelMessageCapabilitiesForChannel(params).includes(capability);
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
+    params.channel,
+    params.preparedMessageToolCatalog,
+  );
+  if (!pluginActions) {
+    return false;
+  }
+  return resolveMessageActionDiscoveryForPlugin({
+    pluginId: pluginActions.pluginId,
+    actions: pluginActions.actions,
+    context: createMessageActionDiscoveryContext(params),
+    includeCapabilities: true,
+  }).capabilities.includes(capability);
 }

@@ -72,6 +72,14 @@ export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLoca
   };
 }
 
+export function createPluginsRouteData(
+  gateway: ApplicationGateway,
+  result: PluginListResult | null = createResult(),
+  location = createPluginsRouteLocation(),
+): PluginsRouteData {
+  return { gateway, gatewaySnapshot: gateway.snapshot, location, result, error: null };
+}
+
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
   return {
@@ -186,7 +194,7 @@ export function createRuntimeConfigHarness(
 
 export function createContext(
   gateway: ApplicationGateway,
-  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
+  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"] = vi.fn(async () => undefined),
   runtimeConfigState: RuntimeConfigTestState = {
     configFormDirty: false,
     lastError: null,

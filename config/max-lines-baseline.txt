@@ -144,7 +144,6 @@ extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
-extensions/matrix/src/onboarding.ts
 extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
@@ -519,7 +518,6 @@ src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
 src/auto-reply/reply/commands-approve.test.ts
 src/auto-reply/reply/commands-models.ts
-src/auto-reply/reply/commands-session.ts
 src/auto-reply/reply/commands-status.test.ts
 src/auto-reply/reply/directive-handling.impl.ts
 src/auto-reply/reply/directive-handling.model.test.ts

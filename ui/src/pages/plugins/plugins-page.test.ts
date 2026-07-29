@@ -11,6 +11,7 @@ import {
   createContext,
   createGateway,
   createPlugin,
+  createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
@@ -38,21 +39,9 @@ describe("PluginsPage", () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
     const result = createResult();
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      location: createPluginsRouteLocation(),
-      result,
-      error: null,
-    };
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
 
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     expect(page.result).toBe(result);
     expect(request).not.toHaveBeenCalled();
@@ -65,12 +54,7 @@ describe("PluginsPage", () => {
       throw new Error("catalog unavailable");
     });
     const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-    );
+    const { page } = await mountPage(createContext(harness.gateway));
 
     await waitForFast(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
@@ -121,21 +105,9 @@ describe("PluginsPage", () => {
     const result = createResult(
       createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
     );
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      location: createPluginsRouteLocation(),
-      result,
-      error: null,
-    };
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
 
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     await waitForFast(() => {
       expect(
@@ -187,17 +159,8 @@ describe("PluginsPage", () => {
     );
 
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result,
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, result),
     );
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -216,20 +179,8 @@ describe("PluginsPage", () => {
       throw new Error(`Unexpected method ${method}`);
     });
     const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      location: createPluginsRouteLocation(),
-      result: createResult(),
-      error: null,
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway);
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     harness.emit(client, false);
     harness.emit(client, true);
@@ -252,17 +203,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     clickHubTab(page, "discover");
@@ -298,17 +240,12 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
+      createContext(harness.gateway),
+      createPluginsRouteData(
         harness.gateway,
-        vi.fn(async () => undefined),
+        createResult(),
+        createPluginsRouteLocation("/settings/plugins/discover"),
       ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation("/settings/plugins/discover"),
-        result: createResult(),
-        error: null,
-      },
     );
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "first";
@@ -364,13 +301,7 @@ describe("PluginsPage", () => {
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
@@ -393,17 +324,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
@@ -435,17 +357,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     clickHubTab(page, "discover");
@@ -485,17 +398,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
@@ -537,13 +441,7 @@ describe("PluginsPage", () => {
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
@@ -587,13 +485,10 @@ describe("PluginsPage", () => {
     const refreshConfig = vi.fn(async () => {
       await replacementClient.request("config.get", {});
     });
-    const { page } = await mountPage(createContext(harness.gateway, refreshConfig), {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      location: createPluginsRouteLocation(),
-      result: disabledResult,
-      error: null,
-    });
+    const { page } = await mountPage(
+      createContext(harness.gateway, refreshConfig),
+      createPluginsRouteData(harness.gateway, disabledResult),
+    );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
@@ -638,17 +533,12 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
     );
 
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
