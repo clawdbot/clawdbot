@@ -20,6 +20,77 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it.each(["active", "side", "setup-metadata"] as const)(
+    "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
+    (branch) => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+
+      const sm = SessionManager.inMemory();
+      const preparedUserTurnMessage = {
+        role: "user" as const,
+        content: "canonical prompt",
+        idempotencyKey: "canonical-run:user",
+        timestamp: Date.now(),
+      };
+      const existingId = sm.appendMessage(preparedUserTurnMessage);
+      if (branch === "side") {
+        const visibleLeafId = sm.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "visible branch" }],
+          timestamp: Date.now(),
+        } as Parameters<typeof sm.appendMessage>[0]);
+        sm.appendLeafControl({
+          targetId: visibleLeafId,
+          appendParentId: existingId,
+          appendMode: "side",
+        });
+      } else if (branch === "setup-metadata") {
+        sm.appendModelChange("openai", "gpt-5.5");
+        sm.appendThinkingLevelChange("off");
+        sm.appendCustomEntry("model-snapshot", {
+          modelApi: "openai-responses",
+          modelId: "gpt-5.5",
+          provider: "openai",
+        });
+      }
+      const appendParentId = sm.getAppendParentId();
+      Object.assign(sm, {
+        getSessionFile: () => "/tmp/openclaw-canonical-user-events.jsonl",
+      });
+      const markRuntimePersisted = vi.fn();
+      const recorder = {
+        markBlocked: vi.fn(),
+        markRuntimePersisted,
+      } as unknown as UserTurnTranscriptRecorder;
+      const guarded = guardSessionManager(sm, {
+        agentId: "main",
+        sessionKey: "agent:main:canonical",
+        preparedUserTurnMessage,
+        preparedUserTurnTranscriptRecorder: recorder,
+      });
+
+      const runtimeId = guarded.appendMessage({
+        role: "user",
+        content: "canonical prompt",
+        timestamp: preparedUserTurnMessage.timestamp,
+      });
+
+      expect(runtimeId).toBe(existingId);
+      expect(sm.getAppendParentId()).toBe(appendParentId);
+      expect(
+        sm
+          .getEntries()
+          .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+      ).toHaveLength(1);
+      expect(updates).toEqual([]);
+      expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
+      expect(markRuntimePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({ idempotencyKey: "canonical-run:user" }),
+      );
+    },
+  );
+
   it("persists and broadcasts memory-maintenance messages as hidden", () => {
     const updates: InternalSessionTranscriptUpdate[] = [];
     listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));

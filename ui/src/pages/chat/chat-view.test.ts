@@ -28,6 +28,7 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -38,6 +39,7 @@ import {
   stubAnimationFrames,
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
 import {
@@ -45,8 +47,8 @@ import {
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import {
-  isChatThreadSearchOpen,
   resetChatThreadPresentationState,
+  resetChatThreadSessionPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
@@ -437,7 +439,6 @@ function createChatHeaderState(
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "dark",
-      splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
       sidebarEntries: [],
@@ -587,7 +588,15 @@ function getThinkingSliderValues(container: Element): string[] {
 }
 
 function getThinkingReasoningValueLabel(container: Element): string {
-  return container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ?? "";
+  const preview = container.querySelector(
+    "[data-chat-thinking-preview-committed]:not([hidden]), " +
+      "[data-chat-thinking-preview-index]:not([hidden])",
+  );
+  return (
+    preview?.textContent?.trim() ??
+    container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ??
+    ""
+  );
 }
 
 function getThinkingResetButton(container: Element): HTMLButtonElement | null {
@@ -637,7 +646,6 @@ function createChatProps(
     compactionStatus: null,
     fallbackStatus: null,
     messages: [],
-    sideChatTurns: [],
     toolMessages: [],
     streamSegments: [],
     stream: null,
@@ -654,9 +662,6 @@ function createChatProps(
     error: null,
     runError: null,
     sessions: null,
-    sidebarOpen: false,
-    sidebarContent: null,
-    splitRatio: 0.6,
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
@@ -684,8 +689,6 @@ function createChatProps(
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onSideChatClose: () => undefined,
-    onSideChatClear: () => undefined,
     onNewSession: () => undefined,
     onClearHistory: () => undefined,
     onOpenSessionCheckpoints: () => undefined,
@@ -695,8 +698,6 @@ function createChatProps(
     onNavigateToAgent: () => undefined,
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
-    onCloseSidebar: () => undefined,
-    onSplitRatioChange: () => undefined,
     onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
@@ -718,6 +719,38 @@ function createDeferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+describe("chat Swarm progress", () => {
+  it("stays visible during an active run between the transcript and composer", () => {
+    const parentSessionKey = "agent:main:parent";
+    const container = renderChatView({
+      sessionKey: parentSessionKey,
+      canAbort: true,
+      showNewMessages: true,
+      swarmSessions: [
+        {
+          key: "agent:main:subagent:worker",
+          kind: "direct",
+          updatedAt: 1,
+          parentSessionKey,
+          swarmGroupId: "swarm:agent:main:parent:turn-42",
+          label: "Worker A",
+          status: "running",
+        },
+      ],
+    });
+
+    const widget = container.querySelector("[data-test-id=chat-swarm]");
+    expect(widget).not.toBeNull();
+    const scrollAnchor = widget?.previousElementSibling;
+    expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
+    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(container.querySelector(".chat-swarm__dot--running")?.getAttribute("title")).toBe(
+      "Worker A: Running",
+    );
+  });
+});
 
 describe("inline approval card", () => {
   it("renders between the transcript and composer and forwards its decision id", () => {
@@ -1631,26 +1664,7 @@ describe("chat composer workbench", () => {
     expect(container.querySelector('button[aria-label="Thread workspace"]')).toBeNull();
   });
 
-  it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
-    const sidebarProps = {
-      sidebarOpen: true,
-      sidebarContent: { kind: "markdown", content: "Stacked detail" } as const,
-      onCloseSidebar: () => undefined,
-    };
-    const wide = renderChatView(sidebarProps);
-    const wideContainer = wide.querySelector(".chat-split-container");
-    expect(wideContainer?.classList.contains("chat-split-container--open")).toBe(true);
-    expect(wideContainer?.classList.contains("chat-split-container--stacked")).toBe(false);
-    // Attribute reflection is async; the property binding lands synchronously.
-    expect(wide.querySelector("resizable-divider")?.orientation).toBe("vertical");
-
-    const stacked = renderChatView({ ...sidebarProps, sidebarStacked: true });
-    const stackedContainer = stacked.querySelector(".chat-split-container");
-    expect(stackedContainer?.classList.contains("chat-split-container--stacked")).toBe(true);
-    expect(stacked.querySelector("resizable-divider")?.orientation).toBe("horizontal");
-  });
-
-  it("opens inline Markdown images and renders the active lightbox", () => {
+  it("opens inline Markdown images", () => {
     const onOpenImage = vi.fn();
     const src = "data:image/png;base64,cG5n";
     const container = renderChatView({ onOpenImage });
@@ -1673,64 +1687,6 @@ describe("chat composer workbench", () => {
     fallbackTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(openSpy).toHaveBeenCalledWith(src, "_blank", "noopener,noreferrer");
     openSpy.mockRestore();
-
-    const onCloseImage = vi.fn();
-    const lightboxContainer = renderChatView({
-      imageLightbox: { src, title: "Artifact preview" },
-      onCloseImage,
-    });
-    const lightbox = lightboxContainer.querySelector("openclaw-image-lightbox");
-    expect(lightbox?.src).toBe(src);
-    expect(lightbox?.title).toBe("Artifact preview");
-    lightbox?.dispatchEvent(new CustomEvent("image-lightbox-close", { bubbles: true }));
-    expect(onCloseImage).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps lightbox Escape from clearing the pending reply", () => {
-    const onClearReply = vi.fn();
-    const container = renderChatView({
-      replyTarget: { messageId: "reply-1", text: "Keep this reply" },
-      onClearReply,
-      imageLightbox: {
-        src: "data:image/png;base64,cG5n",
-        title: "Artifact preview",
-      },
-      onCloseImage: vi.fn(),
-    });
-    const lightbox = container.querySelector("openclaw-image-lightbox");
-
-    lightbox?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
-    );
-
-    expect(onClearReply).not.toHaveBeenCalled();
-  });
-
-  it("opens sidebar Markdown images once", async () => {
-    const onOpenImage = vi.fn();
-    const container = renderChatView({
-      sidebarOpen: true,
-      sidebarContent: {
-        kind: "markdown",
-        content: "![Preview](data:image/png;base64,cG5n)",
-      },
-      onCloseSidebar: vi.fn(),
-      onOpenImage,
-    });
-    document.body.append(container);
-    const panel = container.querySelector("openclaw-chat-detail-panel") as
-      | (Element & { updateComplete: Promise<unknown> })
-      | null;
-    await panel?.updateComplete;
-
-    panel?.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
-
-    expect(onOpenImage).toHaveBeenCalledOnce();
-    expect(onOpenImage).toHaveBeenCalledWith({
-      src: "data:image/png;base64,cG5n",
-      title: "Preview",
-    });
-    container.remove();
   });
 
   it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
@@ -1767,7 +1723,7 @@ describe("chat composer workbench", () => {
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
     const backgroundTasks = {
-      agentId: "main",
+      sessionKey: "agent:main:main",
       statusRowId: "chat-tasks-status-test",
       collapsed: false,
       narrowLayout: false,
@@ -1786,7 +1742,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
 
@@ -1804,7 +1761,7 @@ describe("chat composer workbench", () => {
 
   it("shows the running-tasks status row after the turn settles, not while working", () => {
     const backgroundTasks = {
-      agentId: "main",
+      sessionKey: "agent:main:main",
       statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,
@@ -1832,7 +1789,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
@@ -1924,15 +1882,24 @@ describe("per-pane chat presentation state", () => {
   });
 
   it("keeps thread search independent and resets only the targeted pane", () => {
+    const paneA = document.createElement("div");
+    const paneB = document.createElement("div");
+    const renderPane = (container: HTMLElement, paneId: string, draft: string) => {
+      render(renderChat(createChatProps({ paneId, draft, getDraft: () => draft })), container);
+    };
+
     toggleChatThreadSearch("pane-a", vi.fn());
-    expect(isChatThreadSearchOpen("pane-a")).toBe(true);
-    expect(isChatThreadSearchOpen("pane-b")).toBe(false);
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    expect(paneA.querySelector(".agent-chat__search-bar")).not.toBeNull();
+    expect(paneB.querySelector(".agent-chat__search-bar")).toBeNull();
 
     toggleChatThreadSearch("pane-b", vi.fn());
-    resetChatThreadPresentationState("pane-a");
-
-    expect(isChatThreadSearchOpen("pane-a")).toBe(false);
-    expect(isChatThreadSearchOpen("pane-b")).toBe(true);
+    resetChatThreadSessionPresentationState("pane-a");
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    expect(paneA.querySelector(".agent-chat__search-bar")).toBeNull();
+    expect(paneB.querySelector(".agent-chat__search-bar")).not.toBeNull();
   });
 });
 
@@ -2066,13 +2033,14 @@ describe("chat loading skeleton", () => {
       present: { ".chat-reading-indicator": null },
     },
     {
-      name: "keeps the working spark below a rendered response while the run continues",
+      name: "keeps continuing-run status inside the rendered response",
       props: {
         canAbort: true,
         messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
         stream: null,
       },
-      present: { ".chat-reading-indicator": null, ".chat-group": "Finished answer" },
+      present: { ".chat-group": "Finished answer" },
+      counts: { ".chat-group": 1, ".chat-stream-run": 0 },
     },
     {
       name: "drops the working spark once the run reaches a terminal status",
@@ -2131,6 +2099,263 @@ describe("chat loading skeleton", () => {
     for (const [selector, count] of Object.entries(counts)) {
       expect(container.querySelectorAll(selector)).toHaveLength(count);
     }
+  });
+
+  it("routes live and completed status into the existing assistant turn", () => {
+    renderChatView({
+      canAbort: true,
+      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+      stream: null,
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      activeContinuation: {
+        parts: [{ kind: "reading-indicator", key: "reading:test", startedAt: 1 }],
+      },
+    });
+
+    renderMessageGroupMock.mockClear();
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+    const container = renderChatView({
+      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
+    });
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+  });
+
+  it("keeps a completed recap after later tool content", () => {
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
+      {
+        kind: "group",
+        key: "group:assistant:test",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:test",
+            message: { role: "assistant", content: "Interim answer", timestamp: 1 },
+          },
+        ],
+        timestamp: 1,
+        isStreaming: false,
+      },
+      {
+        kind: "group",
+        key: "group:tool:test",
+        role: "tool",
+        messages: [
+          {
+            key: "message:tool:test",
+            message: { role: "tool", content: "Later tool result", timestamp: 2 },
+          },
+        ],
+        timestamp: 2,
+        isStreaming: false,
+      },
+    ]);
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+
+    const container = renderChatView({
+      messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
+    });
+
+    expect(renderMessageGroupMock.mock.calls[0]?.[1].turnRecap).toBeUndefined();
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in");
+  });
+
+  it("releases the embedded status when later work steals ownership from an unchanged reply", () => {
+    // Rows memoize on their own item identity, so an unchanged reply that
+    // stops owning the status must still re-render without it.
+    const replyGroup = {
+      kind: "group",
+      key: "group:assistant:reply",
+      role: "assistant",
+      messages: [
+        {
+          key: "message:assistant:reply",
+          message: { role: "assistant", content: "Interim answer", timestamp: 1 },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const readingIndicator = { kind: "reading-indicator", key: "reading:test", startedAt: 1 };
+    const toolGroup = {
+      kind: "group",
+      key: "group:tool:later",
+      role: "tool",
+      messages: [
+        {
+          key: "message:tool:later",
+          message: { role: "tool", content: "Later tool result", timestamp: 2 },
+        },
+      ],
+      timestamp: 2,
+      isStreaming: false,
+    };
+    const props = {
+      canAbort: true,
+      messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
+      stream: null,
+    };
+    const container = document.createElement("div");
+
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      replyGroup,
+      readingIndicator,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    render(renderChat(createChatProps(props)), container);
+    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation).toBeDefined();
+
+    renderMessageGroupMock.mockClear();
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      replyGroup,
+      toolGroup,
+      readingIndicator,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    render(renderChat(createChatProps(props)), container);
+
+    const replyCall = renderMessageGroupMock.mock.calls.find(
+      ([group]) => group.key === replyGroup.key,
+    );
+    expect(replyCall).toBeDefined();
+    expect(replyCall?.[1].activeContinuation).toBeUndefined();
+  });
+
+  it("keeps the live token counter current when only run usage changes", () => {
+    // Run usage arrives on its own patches, so the transcript items, the
+    // shared render context, and this row's own identity all stay put while
+    // the counter ticks.
+    const readingIndicator = { kind: "reading-indicator", key: "reading:test", startedAt: 1 };
+    const reply = {
+      kind: "group",
+      key: "group:assistant:reply",
+      role: "assistant",
+      messages: [
+        {
+          key: "message:assistant:reply",
+          message: { role: "assistant", content: "Interim answer", timestamp: 1 },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const renderWithUsage = (container: HTMLElement, runOutputTokens: number) => {
+      render(
+        renderChat(createChatProps({ canAbort: true, runOutputTokens, stream: null })),
+        container,
+      );
+    };
+
+    const streamGroupSpy = vi.fn(renderStreamGroupMock);
+    vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(streamGroupSpy);
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([readingIndicator] as ReturnType<
+      typeof chatThread.buildCachedChatItems
+    >);
+    const standalone = document.createElement("div");
+    renderWithUsage(standalone, 5_500);
+    renderWithUsage(standalone, 7_200);
+    expect(streamGroupSpy.mock.calls.at(-1)?.[1]?.runOutputTokens).toBe(7_200);
+
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      reply,
+      readingIndicator,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const embedded = document.createElement("div");
+    renderWithUsage(embedded, 5_500);
+    renderMessageGroupMock.mockClear();
+    renderWithUsage(embedded, 7_200);
+    expect(
+      renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation?.options.runOutputTokens,
+    ).toBe(7_200);
+  });
+
+  it("releases the embedded recap when a later reply becomes the settled turn", () => {
+    const firstReply = {
+      kind: "group",
+      key: "group:assistant:first",
+      role: "assistant",
+      messages: [
+        {
+          key: "message:assistant:first",
+          message: { role: "assistant", content: "First answer", timestamp: 1 },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const secondReply = {
+      ...firstReply,
+      key: "group:assistant:second",
+      messages: [
+        {
+          key: "message:assistant:second",
+          message: { role: "assistant", content: "Second answer", timestamp: 2 },
+        },
+      ],
+      timestamp: 2,
+    };
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+    const props = { messages: [{ role: "assistant", content: "First answer", timestamp: 1 }] };
+    const container = document.createElement("div");
+
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([firstReply] as ReturnType<
+      typeof chatThread.buildCachedChatItems
+    >);
+    render(renderChat(createChatProps(props)), container);
+    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1].turnRecap).toBeDefined();
+
+    renderMessageGroupMock.mockClear();
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      firstReply,
+      secondReply,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    render(renderChat(createChatProps(props)), container);
+
+    const firstCall = renderMessageGroupMock.mock.calls.find(
+      ([group]) => group.key === firstReply.key,
+    );
+    expect(firstCall).toBeDefined();
+    expect(firstCall?.[1].turnRecap).toBeUndefined();
+    expect(
+      renderMessageGroupMock.mock.calls.find(([group]) => group.key === secondReply.key)?.[1]
+        .turnRecap,
+    ).toBeDefined();
+  });
+
+  it("keeps live status standalone when the preceding response is hidden", () => {
+    const sessionKey = "deleted-active-status";
+    renderChatView({
+      sessionKey,
+      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
+    });
+    const onDelete = renderMessageGroupMock.mock.calls[0]?.[1].onDelete;
+    expect(onDelete).toBeTypeOf("function");
+    onDelete?.();
+    renderMessageGroupMock.mockClear();
+
+    const container = renderChatView({
+      canAbort: true,
+      sessionKey,
+      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
+      stream: null,
+    });
+
+    expect(renderMessageGroupMock).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
@@ -3417,6 +3642,143 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
+  it.each(["clipboard", "file picker", "drop"] as const)(
+    "waits for an in-flight %s attachment before accepting an immediate send",
+    async (entry) => {
+      const readers: FileReader[] = [];
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+        function (this: FileReader) {
+          readers.push(this);
+        },
+      );
+      const container = document.createElement("div");
+      const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
+      const draft = "Send the attachment with this message";
+      let attachments: ChatAttachment[] = [];
+      const onSend = vi.fn(() => {
+        expect(attachments.map((attachment) => attachment.fileName)).toEqual(["proof.png"]);
+      });
+      const redraw = () => {
+        const readSignal = reads.readSignal;
+        render(
+          renderChat(
+            createChatProps({
+              attachments,
+              draft,
+              getAttachments: () => attachments,
+              getDraft: () => draft,
+              getPendingAttachmentReads: () => reads.pendingReads,
+              onAttachmentsChange: (next) => {
+                attachments = next;
+              },
+              onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
+              onSend,
+              pendingAttachmentReads: reads.pendingReads,
+              readSignal,
+            }),
+          ),
+          container,
+        );
+      };
+      const reads = new ChatAttachmentReadLifecycle(redraw);
+      redraw();
+
+      if (entry === "clipboard") {
+        const paste = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(paste, "clipboardData", {
+          value: {
+            items: [{ type: file.type, getAsFile: () => file }],
+            getData: () => "",
+          },
+        });
+        getComposerTextarea(container).dispatchEvent(paste);
+      } else if (entry === "file picker") {
+        const input = requireElement(
+          container,
+          ".agent-chat__file-input",
+          "attachment file input",
+        ) as HTMLInputElement;
+        Object.defineProperty(input, "files", { configurable: true, value: [file] });
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        const drop = new Event("drop", { bubbles: true, cancelable: true });
+        Object.defineProperty(drop, "dataTransfer", {
+          value: { files: [file], types: ["Files"] },
+        });
+        requireElement(container, "section.card.chat", "chat drop target").dispatchEvent(drop);
+      }
+
+      expect(readers).toHaveLength(1);
+      expect(reads.pendingReads).toBe(1);
+      expect(getComposerTextarea(container).disabled).toBe(false);
+      const send = requireElement(
+        container,
+        'button[aria-label="Send message"]',
+        "send button",
+      ) as HTMLButtonElement;
+      expect(send.disabled).toBe(true);
+      getComposerTextarea(container).dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+      );
+      expect(onSend).not.toHaveBeenCalled();
+
+      const reader = expectDefined(readers[0], "deferred attachment reader");
+      Object.defineProperty(reader, "result", {
+        configurable: true,
+        value: `data:image/png;base64,${btoa("attachment proof")}`,
+      });
+      reader.dispatchEvent(new ProgressEvent("load"));
+
+      await waitForFast(() => {
+        expect(reads.pendingReads).toBe(0);
+        expect(attachments.map((attachment) => attachment.fileName)).toEqual(["proof.png"]);
+      });
+      const readySend = requireElement(
+        container,
+        'button[aria-label="Send message"]',
+        "ready send button",
+      ) as HTMLButtonElement;
+      expect(readySend.disabled).toBe(false);
+      readySend.click();
+      expect(onSend).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not attach an aborted file read to a newly selected session", async () => {
+    const readers: FileReader[] = [];
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+      readers.push(this);
+    });
+    const reads = new ChatAttachmentReadLifecycle(() => undefined);
+    const oldSignal = reads.readSignal;
+    const onAttachmentsChange = vi.fn();
+    const file = new File(["private session A"], "private.png", { type: "image/png" });
+    const container = renderChatView({
+      getPendingAttachmentReads: () => reads.pendingReads,
+      onAttachmentsChange,
+      onPendingReadsChange: (delta) => reads.updatePending(oldSignal, delta),
+      pendingAttachmentReads: reads.pendingReads,
+      readSignal: oldSignal,
+      sessionKey: "agent:main:session-a",
+    });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { files: [file], types: ["Files"] },
+    });
+    requireElement(container, "section.card.chat", "session A drop target").dispatchEvent(drop);
+
+    expect(readers).toHaveLength(1);
+    expect(reads.pendingReads).toBe(1);
+    reads.abortReads();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(oldSignal.aborted).toBe(true);
+    expect(reads.pendingReads).toBe(0);
+    expect(reads.readSignal).not.toBe(oldSignal);
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
   it("highlights only the chat pane receiving a file drag", () => {
     const first = renderChatView();
     const second = renderChatView();
@@ -4265,7 +4627,7 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models by provider and switches the visible provider section", () => {
+  it("previews provider models on hover and keyboard focus", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -4276,6 +4638,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = renderModelControls(state);
+    document.body.append(container);
 
     const providerButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
@@ -4293,7 +4656,7 @@ describe("chat model controls", () => {
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="anthropic"]')?.hidden,
     ).toBe(true);
 
-    providerButtons[1]?.click();
+    providerButtons[1]?.dispatchEvent(new MouseEvent("mouseenter"));
 
     expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("false");
     expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
@@ -4305,6 +4668,32 @@ describe("chat model controls", () => {
     );
     expect(anthropicModels?.hidden).toBe(false);
     expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
+
+    const browser = container.querySelector<HTMLElement>(".chat-controls__model-browser");
+    browser?.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(anthropicModels?.hidden).toBe(true);
+
+    providerButtons[2]?.dispatchEvent(new FocusEvent("focus"));
+    expect(providerButtons[2]?.getAttribute("aria-pressed")).toBe("true");
+    expect(providerButtons.map((button) => button.tabIndex)).toEqual([-1, -1, 0]);
+    expect(
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')?.hidden,
+    ).toBe(false);
+
+    providerButtons[2]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft" }));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(providerButtons.map((button) => button.tabIndex)).toEqual([-1, 0, -1]);
+    providerButtons[2]?.dispatchEvent(new MouseEvent("mouseenter"));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+    browser?.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+
+    browser?.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: document.body }),
+    );
+    expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("true");
+    container.remove();
   });
 
   it("groups legacy Codex model references under OpenAI", () => {
@@ -4338,6 +4727,9 @@ describe("chat model controls", () => {
         { id: "sonnet", name: "OpenCode Sonnet", provider: "opencode" },
         { id: "kimi", name: "OpenCode Kimi", provider: "opencode-go" },
         { id: "glm", name: "OpenCode GLM", provider: "opencode-zen" },
+        { id: "kimi-k3", name: "Kimi K3", provider: "moonshot" },
+        { id: "kimi-k2.7", name: "Kimi K2.7", provider: "moonshot-ai" },
+        { id: "kimi-k2.6", name: "Kimi K2.6", provider: "moonshotai" },
       ],
     });
     const container = renderModelControls(state);
@@ -4346,7 +4738,7 @@ describe("chat model controls", () => {
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
     const providerLabels = providerButtons.map((button) => button.textContent?.trim());
-    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode"]);
+    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode", "Moonshot AI"]);
     expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
       container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,
@@ -4363,6 +4755,38 @@ describe("chat model controls", () => {
     ).toBeNull();
     expect(container.querySelector('[data-chat-model-provider-group="opencode-go"]')).toBeNull();
     expect(container.querySelector('[data-chat-model-provider-group="opencode-zen"]')).toBeNull();
+    const moonshotModels = container.querySelector(
+      '[data-chat-model-provider-group="moonshot"]',
+    )?.textContent;
+    expect(moonshotModels).toContain("Kimi K3");
+    expect(moonshotModels).toContain("Kimi K2.7");
+    expect(moonshotModels).toContain("Kimi K2.6");
+    expect(container.querySelector('[data-chat-model-provider-group="moonshot-ai"]')).toBeNull();
+    expect(container.querySelector('[data-chat-model-provider-group="moonshotai"]')).toBeNull();
+  });
+
+  it("shows model context size inline without a redundant tooltip", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextWindow: 1_050_000,
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
+
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "1.1M context",
+    );
+    expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
   it("shows canonical OpenAI model names instead of command aliases", () => {
@@ -4613,11 +5037,16 @@ describe("chat model controls", () => {
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
-      // Drag preview is attribute-only: mutating rendered text would eject
-      // Lit's ChildPart markers and freeze later menu renders.
       expect(slider.getAttribute("aria-valuetext")).toBe("Low");
-      expect(getThinkingReasoningValueLabel(container)).toBe("High");
+      expect(getThinkingReasoningValueLabel(container)).toBe("Low");
       slider.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
+
+      slider.value = "0";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("pointercancel"));
+      expect(slider.value).toBe(String(getThinkingSliderValues(container).indexOf("high")));
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
 
@@ -4674,6 +5103,7 @@ describe("chat model controls", () => {
       ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
     };
     const host = {
       client: {},
@@ -4743,6 +5173,7 @@ describe("chat model controls", () => {
       ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
     };
     const host = {
       client: {},
@@ -4795,6 +5226,7 @@ describe("chat model controls", () => {
       ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
     };
     const host = {
       client: {},
@@ -4860,6 +5292,7 @@ describe("chat model controls", () => {
           });
         },
         refresh: async () => {},
+        patchRowLocal: () => {},
       },
     } as unknown as Parameters<typeof switchChatFastMode>[0];
 

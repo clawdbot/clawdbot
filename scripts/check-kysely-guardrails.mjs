@@ -47,6 +47,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-wal.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
+    "src/state/openclaw-agent-db-registry-listing.ts",
     "src/state/openclaw-agent-db-schema-helpers.ts",
     "src/state/openclaw-agent-db-schema.ts",
     "src/state/openclaw-agent-db-session-nodes-migration.ts",
@@ -76,6 +77,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],
+  "cold-process read-only relay lookup avoids the shared state writer lifecycle": [
+    "src/agents/harness/native-hook-relay-client-store.ts",
+  ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
@@ -102,8 +106,13 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.meeting-transcripts-detection.ts",
     "src/infra/state-migrations.meeting-transcripts-files.ts",
     "src/infra/state-migrations.meeting-transcripts-verify.ts",
+    "src/infra/state-migrations.media-persistence.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
+  "session entry cache connection-local validity counters": [
+    "src/config/sessions/session-accessor.sqlite-entry-cache.ts",
+  ],
+  "device pairing cache connection-local validity counters": ["src/infra/device-pairing-store.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/state/user-profiles.ts",

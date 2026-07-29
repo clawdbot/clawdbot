@@ -110,6 +110,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ).resolves.toEqual([]);
   });
 
+  it("does not create a database for a missing explicit SQLite session key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-missing-"));
+    tempDirs.push(dir);
+    const sessionId = "missing-codex-session";
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+        sessionId,
+        sessionKey: "agent:main:missing-codex",
+      }),
+    ).resolves.toEqual([]);
+    expect(await fs.readdir(dir)).toEqual([]);
+  });
+
   it("returns [] for transcripts that do not open with a Codex session marker", async () => {
     // A non-Codex-shaped transcript (e.g. a non-Codex model run reusing this
     // hook) is an empty mirror, not a read failure, so callers must not warn.
@@ -160,6 +177,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         agentId: "main",
         sessionFile: marker,
         sessionId: "codex-sqlite-session",
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it("falls back from an unregistered requested key to the marker's verified session key", async () => {
+    const { marker } = await writeSqliteSession();
+    const staleSessionKey = "agent:main:stale-codex-session";
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey: staleSessionKey,
       }),
     ).resolves.toMatchObject([
       { role: "user", content: "sqlite prompt" },

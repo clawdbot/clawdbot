@@ -15,6 +15,7 @@ import {
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
   resolveRequestClientIp,
@@ -28,6 +29,7 @@ export {
   resolveGatewayAuth,
   type ResolvedGatewayAuth,
 } from "./auth-resolve.js";
+export { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
 
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
@@ -147,38 +149,6 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
   });
-}
-
-/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
-/** Return true when forwarded headers make loopback direct-local auth unsafe. */
-export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
-  const headers = req.headers ?? {};
-
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
-}
-
-/** Return whether a request is a clean loopback request without forwarded identity headers. */
-export function isLocalDirectRequest(
-  req?: IncomingMessage,
-  _trustedProxies?: string[],
-  _allowRealIpFallback = false,
-): boolean {
-  if (!req) {
-    return false;
-  }
-  if (!hasForwardedRequestHeaders(req)) {
-    return isLoopbackAddress(req.socket?.remoteAddress);
-  }
-  return false;
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {

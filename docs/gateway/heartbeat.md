@@ -65,18 +65,30 @@ Example config:
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
-- The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeats" section when heartbeats are enabled for the default agent, and the run is flagged internally.
+- The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the default agent; that guidance has no separate heartbeat toggle.
 - When heartbeats are disabled with `0m`, the monitor cron job stays but is disabled, and its scratch is retained for when you re-enable the cadence.
 - When cron itself is disabled, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
-- Heartbeats automatically defer while cron work is active or queued, or while that agent's session-keyed subagent or nested command lanes are busy. Sibling agents do not pause each other.
+- Scheduled heartbeats defer while the main queue or cron work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, cron, and target-session busy guards. Sibling agents do not pause each other.
 
 ## What the heartbeat prompt is for
 
-The default prompt is intentionally broad:
+The default prompt is intentionally narrow: follow the heartbeat monitor scratch
+context when provided, keep recurring work in cron jobs, and reply
+`HEARTBEAT_OK` when nothing needs attention. It explicitly tells the agent
+**not** to infer or repeat old tasks from prior chats, so a default install stays
+quiet instead of rehashing stale conversation context.
 
-- **Background tasks**: "Consider outstanding tasks" nudges the agent to review follow-ups (inbox, calendar, reminders, queued work) and surface anything urgent.
-- **Human check-in**: "Checkup sometimes on your human during day time" nudges an occasional lightweight "anything you need?" message, but avoids night-time spam by using your configured local timezone (see [Timezone](/concepts/timezone)).
+Proactive heartbeat behavior is opt-in:
+
+- **Recurring checks**: create [scheduled jobs](/automation/cron-jobs) for inbox
+  review, calendar sweeps, or queued follow-ups. Each job executes its configured
+  payload on its own schedule; the default heartbeat does not infer recurring
+  work from prior chats.
+- **Human check-in**: create a scheduled job if you want an occasional
+  lightweight "anything you need?" message, and constrain its schedule to avoid
+  night-time pings in your configured local timezone (see
+  [Timezone](/concepts/timezone)).
 
 Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
 
@@ -87,9 +99,11 @@ If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub 
 - If nothing needs attention, reply with **`HEARTBEAT_OK`**.
 - Heartbeat runs may instead call `heartbeat_respond` with `notify: false` for no visible update, or `notify: true` plus `notificationText` for an alert. When present, the structured tool response takes precedence over the text fallback.
 - A meaningful `heartbeat_respond` result with `notify: false` remains silent but is remembered as bounded internal context for the next user turn in that session. `no_change` acknowledgments and visible notifications are not stored this way.
-- During heartbeat runs, OpenClaw treats `HEARTBEAT_OK` as an ack when it appears at the **start or end** of the reply. The token is stripped and the reply is dropped if the remaining content is at most 300 characters.
+- During heartbeat runs, OpenClaw treats `HEARTBEAT_OK` as an ack when it appears at the **start or end** of the reply. The token is stripped and the reply is dropped if the remaining content is at most 300 characters. This suppression budget is fixed, not configurable per heartbeat.
 - If `HEARTBEAT_OK` appears in the **middle** of a reply, it is not treated specially.
 - For alerts, **do not** include `HEARTBEAT_OK`; return only the alert text.
+- Delivery selects the last outbound-capable non-reasoning payload. Separate reasoning or thinking payloads remain internal; a reasoning-only result produces no alert.
+- Tool error warnings remain enabled during heartbeat turns.
 
 Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripped and logged; a message that is only `HEARTBEAT_OK` is dropped.
 
@@ -277,6 +291,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 </ParamField>
 
+<Note>
+Heartbeat configuration is strict: only the fields listed above are accepted. Acknowledgment suppression, reasoning visibility, system-prompt guidance, busy deferral, and tool-error warning behavior are fixed runtime policies rather than heartbeat configuration fields.
+</Note>
+
 ## Delivery behavior
 
 <AccordionGroup>
@@ -285,7 +303,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `session` only affects the run context; delivery is controlled by `target` and `to`.
     - To deliver to a specific channel/recipient, set `target` + `to`. With `target: "last"`, delivery uses the last external channel for that session.
     - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
-    - If the main queue, target session lane, cron lane, or an active cron job is busy, the heartbeat is skipped and retried later.
+    - Scheduled heartbeats are skipped and retried later when the main queue or cron work is busy, any reply or embedded run for the same agent is active, or the resolved target session has active or queued work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
     - If `target` resolves to no external destination, the run still happens but no outbound message is sent.
 
   </Accordion>

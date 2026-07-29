@@ -12,7 +12,7 @@ import {
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
 } from "./client.js";
-import { mapMattermostChannelTypeToChatType } from "./monitor-auth.js";
+import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostOpaqueTargetResolution = {
@@ -205,7 +205,9 @@ export async function resolveMattermostOpaqueTarget(params: {
   try {
     const channel = await fetchMattermostChannel(client, input);
     const channelKind =
-      mapMattermostChannelTypeToChatType(channel.type) === "group" ? "group" : "channel";
+      resolveMattermostTrustedChatKind({ channelType: channel.type }) === "group"
+        ? "group"
+        : "channel";
     cacheMattermostOpaqueTarget(key, channelKind);
     return { kind: channelKind, id: input, to: `channel:${input}` };
   } catch {

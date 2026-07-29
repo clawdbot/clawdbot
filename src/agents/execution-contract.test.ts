@@ -6,7 +6,9 @@ import { isStrictAgenticExecutionContractActive } from "./execution-contract.js"
 describe("isStrictAgenticExecutionContractActive", () => {
   const supportedProvider = "openai";
   const unsupportedProvider = "anthropic";
-  const emptyConfig: OpenClawConfig = {};
+  const emptyConfig: OpenClawConfig = {
+    agents: { entries: { main: { default: true } } },
+  };
 
   describe("supported provider + model detection", () => {
     it("auto-activates on bare gpt-5 model ids", () => {
@@ -136,6 +138,7 @@ describe("isStrictAgenticExecutionContractActive", () => {
     it("honors explicit strict-agentic on the supported lane", () => {
       const config: OpenClawConfig = {
         agents: {
+          entries: { main: { default: true } },
           defaults: {
             embeddedAgent: {
               executionContract: "strict-agentic",
@@ -155,6 +158,7 @@ describe("isStrictAgenticExecutionContractActive", () => {
     it("honors explicit default opt-out even on the supported lane", () => {
       const config: OpenClawConfig = {
         agents: {
+          entries: { main: { default: true } },
           defaults: {
             embeddedAgent: {
               executionContract: "default",
@@ -174,6 +178,7 @@ describe("isStrictAgenticExecutionContractActive", () => {
     it("collapses explicit strict-agentic to default on an unsupported lane", () => {
       const config: OpenClawConfig = {
         agents: {
+          entries: { main: { default: true } },
           defaults: {
             embeddedAgent: {
               executionContract: "strict-agentic",

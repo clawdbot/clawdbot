@@ -13,6 +13,7 @@ import {
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
@@ -67,6 +68,7 @@ type PendingSupervisionMaterializationParams = {
   webSearchAllowed?: boolean;
   environmentSelection?: CodexTurnEnvironmentParams[];
   signal?: AbortSignal;
+  provisionalAppIds?: readonly string[];
   throwIfAborted: () => void;
   lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "measure" | "mark" | "logSummary">;
   normalizeBindingModelProvider: (
@@ -203,6 +205,38 @@ export async function materializePendingSupervisionBranch(
       modelProvider: nativeModelProvider,
       operation: "thread/start response",
     });
+    if (params.provisionalAppIds?.length) {
+      try {
+        await params.lifecycleTiming.measure("plugin-app-attestation", () =>
+          attestCodexPluginThreadApps({
+            client: params.client,
+            threadId: finalThreadId,
+            appIds: params.provisionalAppIds ?? [],
+            signal: params.signal,
+          }),
+        );
+      } catch (error) {
+        // The canonical branch has not reached a turn, so persistent threads
+        // require delete rather than archive; the forked probe has a rollout.
+        const finalCleanupConfirmed = await cleanUnmaterializedSupervisionThread(
+          params.client,
+          finalThreadId,
+          startParams.ephemeral === true,
+        );
+        if (
+          !finalCleanupConfirmed ||
+          !(await archiveSupervisionArtifact(params.client, probeThreadId))
+        ) {
+          provisionalCleanupSafe = false;
+          throw new CodexAppServerUnsafeSubscriptionError(
+            "Codex supervised plugin app attestation cleanup failed",
+            { cause: error },
+          );
+        }
+        pending = await trackPendingSupervisionArtifacts(params, pending, []);
+        throw error;
+      }
+    }
     if (history.responseItems.length > 0) {
       await params.lifecycleTiming.measure("supervision-history-inject", () =>
         params.client.request(
@@ -637,6 +671,37 @@ async function archiveSupervisionArtifact(
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
     });
     embeddedAgentLog.warn("failed to archive temporary Codex supervision thread", {
+      threadId,
+      error,
+    });
+    return false;
+  }
+}
+
+async function cleanUnmaterializedSupervisionThread(
+  client: CodexAppServerClient,
+  threadId: string,
+  ephemeral: boolean,
+): Promise<boolean> {
+  if (ephemeral) {
+    return unsubscribeCodexThreadBestEffort(client, {
+      threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+    });
+  }
+  try {
+    await client.request(
+      "thread/delete",
+      { threadId },
+      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
+    );
+    return true;
+  } catch (error) {
+    await unsubscribeCodexThreadBestEffort(client, {
+      threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+    });
+    embeddedAgentLog.warn("failed to delete unmaterialized Codex supervision thread", {
       threadId,
       error,
     });

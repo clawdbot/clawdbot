@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 import Testing
@@ -84,6 +85,25 @@ private final class GatewayTLSFakeKeychain: @unchecked Sendable {
     }
 }
 
+private let gatewayTLSTestCertificateDER =
+    Data(
+        base64Encoded: "MIIDMTCCAhmgAwIBAgIUY2qs5gTY9AYGcm5Ba8TG3ooCnyowDQYJKoZIhvcNAQELBQAwGjEYMBYGA1UEAwwPZ2F0ZXdheS5leGFtcGxlMB4XDTI2MDcyNTIxNDkxM1oXDTM2MDcyMjIxNDkxM1owGjEYMBYGA1UEAwwPZ2F0ZXdheS5leGFtcGxlMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtT4Nw7/K1v8hp5+rrtbfhgB3pnLGnjCi53n95Yisv1WH4osvd5oxjoS3OocLzdX5L8Czz66Caq3zX+Bd6FTtWiaAPek7Gc5hJ6lDf+UR2TBhJGgLcIZbrJz2GQGItqJl0XlkShqnhhAXw/8wScG0QdEeEq3OGm2z2IQYagtbYWB2ugb65GuTxjgIHryDISrY1pKAw3UhwhsftqpUQ5e+gVj1qTMUkj8o6+qEBqzKRWAah1mBbjBuv1/dn6dLXSJDM/XFxqQGOStpywQGHIi0EPZBNiPAE2QL9gRQg4YtgbX2gFcIdrrGUVmbDMEY+FVC4q6zsRyVmnxndDlTx791UwIDAQABo28wbTAdBgNVHQ4EFgQUjd+huKP5/FHbm0h2Tgmnjb8c2dowHwYDVR0jBBgwFoAUjd+huKP5/FHbm0h2Tgmnjb8c2dowDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgg9nYXRld2F5LmV4YW1wbGUwDQYJKoZIhvcNAQELBQADggEBAASZeHqh26eec0U30QJmI2I8+60HAGDd1Cd9XpA/13eFXqCGfev8Rk1gfZ+m0NvBDlBlary4jKGYnVA4QNzP23jL4mBEEAqlmO0QMFg4ucKiKtOLmzdnk2utCY7oMw3/Nt1tD0+qBhayL+d2e5t33fYUwEm5s832xONGJUkpJ1MIldXqMovKomlMUgzSNnkGiTv8yY/J1b2W2/LWjL/ZDLd7E/pyLwvfKY5QXlfEKFp2K+brfkkk1tFLRPir6VNm9wXz3HTZTnj2CAHchitY87MXgDVliYpsQD4AIiycrsHOcRkBF/CBX9XH1LL3iolkk8WaLHeDk2jd6+vd3FRrlsU=")!
+
+private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
+    let certificate = try #require(SecCertificateCreateWithData(nil, gatewayTLSTestCertificateDER as CFData))
+    let policy = systemTrusted
+        ? SecPolicyCreateBasicX509()
+        : SecPolicyCreateSSL(true, "gateway.example" as CFString)
+    var trust: SecTrust?
+    try #require(SecTrustCreateWithCertificates(certificate, policy, &trust) == errSecSuccess)
+    let trustValue = try #require(trust)
+    if systemTrusted {
+        try #require(SecTrustSetAnchorCertificates(trustValue, [certificate] as CFArray) == errSecSuccess)
+        try #require(SecTrustSetAnchorCertificatesOnly(trustValue, true) == errSecSuccess)
+    }
+    return trustValue
+}
+
 struct GatewayTLSPinningTests {
     private func withFakeKeychain<T>(_ operation: (GatewayTLSFakeKeychain) throws -> T) rethrows -> T {
         let keychain = GatewayTLSFakeKeychain()
@@ -127,6 +147,90 @@ struct GatewayTLSPinningTests {
             fingerprint: "expected",
             enforcePin: true,
             saveFirstUse: false))
+    }
+
+    @Test func `server trust evaluator accepts matching pin and rejects mismatch`() throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: false)
+        let fingerprint = SHA256.hash(data: gatewayTLSTestCertificateDER)
+            .map { String(format: "%02x", $0) }.joined()
+        let matching = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: fingerprint,
+            allowTOFU: false,
+            storeKey: "profile:matching")
+        let mismatch = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: String(repeating: "0", count: 64),
+            allowTOFU: false,
+            storeKey: "profile:mismatch")
+
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "gateway.example",
+            port: 443,
+            params: matching) == .accept)
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "gateway.example",
+            port: 443,
+            params: mismatch) == .reject)
+    }
+
+    @Test func `server trust evaluator claims trusted first use`() throws {
+        try self.withFakeKeychain { _ in
+            let trust = try gatewayTLSTestTrust(systemTrusted: true)
+            let fingerprint = SHA256.hash(data: gatewayTLSTestCertificateDER)
+                .map { String(format: "%02x", $0) }.joined()
+            let params = GatewayTLSParams(
+                required: true,
+                expectedFingerprint: nil,
+                allowTOFU: true,
+                storeKey: "profile:first-use")
+
+            #expect(GatewayTLSServerTrust.evaluate(
+                trust: trust,
+                host: "gateway.example",
+                port: 443,
+                params: params) == .accept)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "profile:first-use") == fingerprint)
+        }
+    }
+
+    @Test func `server trust evaluator reuses persisted first use pin`() throws {
+        try self.withFakeKeychain { _ in
+            let trust = try gatewayTLSTestTrust(systemTrusted: false)
+            let fingerprint = SHA256.hash(data: gatewayTLSTestCertificateDER)
+                .map { String(format: "%02x", $0) }.joined()
+            let storeKey = "profile:reconnect"
+            let params = GatewayTLSParams(
+                required: true,
+                expectedFingerprint: nil,
+                allowTOFU: true,
+                storeKey: storeKey)
+            let claimed = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
+            #expect(claimed == fingerprint)
+
+            #expect(GatewayTLSServerTrust.evaluate(
+                trust: trust,
+                host: "gateway.example",
+                port: 443,
+                params: params) == .accept)
+        }
+    }
+
+    @Test func `server trust evaluator rejects required untrusted first use`() throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: false)
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: nil,
+            allowTOFU: true,
+            storeKey: "profile:untrusted")
+
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "gateway.example",
+            port: 443,
+            params: params) == .reject)
     }
 
     @Test func `explicit pin mismatch and unavailable certificate fail closed`() {

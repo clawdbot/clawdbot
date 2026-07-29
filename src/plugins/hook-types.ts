@@ -259,11 +259,15 @@ export type PluginHookAgentContext = {
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
+  /** Run-prepared repository identities; empty when the turn is outside a repository. */
+  activeProjectKeys?: string[];
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
   /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
   channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  accountId?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */

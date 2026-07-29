@@ -2,6 +2,7 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import { shouldLoadRequesterScopedMcpHarnessRuntime } from "../agents/agent-bundle-mcp-runtime-shared.js";
 import {
   mergeAgentRunAttemptTerminal,
   normalizeAgentRunAttemptTerminal,
@@ -28,6 +29,11 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import {
+  buildWatchedSessionsPromptLines,
+  prepareWatchedSessionsPrompt,
+} from "../agents/watched-sessions-prompt.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -35,6 +41,25 @@ import { truncateUtf16Safe } from "../utils.js";
 
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+/**
+ * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
+ * Harness runtimes that assemble their own instruction layers (e.g. Codex)
+ * must surface the same watched-session facts as the embedded prompt, or the
+ * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
+ */
+export function buildWatchedSessionsHarnessContext(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sandboxed?: boolean;
+  toolNames: Iterable<string>;
+  capabilityToolNames?: Iterable<string>;
+}): string | undefined {
+  const lines = buildWatchedSessionsPromptLines(
+    prepareWatchedSessionsPrompt({ enabled: true, ...params }),
+  );
+  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
+}
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
 export {
@@ -369,6 +394,10 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     >
   >
 > {
+  const shouldLoad = shouldLoadRequesterScopedMcpHarnessRuntime(params);
+  if (!shouldLoad) {
+    return undefined;
+  }
   const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);

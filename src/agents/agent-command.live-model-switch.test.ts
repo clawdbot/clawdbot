@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -21,6 +22,7 @@ import {
   normalizeTestProviderId,
   resolveTestConfiguredModelRef,
   resolveTestDefaultModelForAgent,
+  resolveTestModelAliasFromPair,
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import {
@@ -109,7 +111,7 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
 }));
 
-vi.mock("./model-fallback.js", () => ({
+vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 
@@ -547,6 +549,7 @@ vi.mock("./model-selection.js", () => ({
       : { provider, model };
   },
   resolveModelRefFromString: resolveTestModelRefFromString,
+  resolveModelAliasFromPair: resolveTestModelAliasFromPair,
   resolveConfiguredModelRef: resolveTestConfiguredModelRef,
   resolveDefaultModelForAgent: resolveTestDefaultModelForAgent,
   resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
@@ -1161,6 +1164,23 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         modelSelectionLocked: true,
       }),
     });
+  });
+
+  it("uses an explicit per-run fallback chain with an explicit model", async () => {
+    setupSingleAttemptFallback();
+    const fallbacks = ["openai/gpt-5.6-terra", "anthropic/claude-sonnet-4-6"];
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "anthropic/claude",
+      modelFallbacksOverride: fallbacks,
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.fallbacksOverride).toEqual(fallbacks);
+    expect(state.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
   });
 
   it("skips legacy override repair when continuing an ordinary locked harness session", async () => {
@@ -2008,17 +2028,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       kind: "persisted",
       sessionEntry: state.sessionEntryMock,
     });
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "hello", idempotencyKey: "canonical-user:user" },
+      target: () => undefined,
+    });
 
     await (canonicalUserRecorder
       ? agentCommand({
           message: "hello",
           to: "+1234567890",
-          userTurnTranscriptRecorder: {} as NonNullable<
-            Parameters<typeof agentCommand>[0]["userTurnTranscriptRecorder"]
-          >,
+          userTurnTranscriptRecorder,
         })
       : runBasicAgentCommand());
 
+    if (canonicalUserRecorder) {
+      expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
+        userTurnTranscriptRecorder,
+      });
+    }
     expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
       embeddedAssistantGapFill,
     });
@@ -2418,14 +2445,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       mockCallArg(state.deliverAgentCommandResultMock),
       "delivery params",
     );
-    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual([
-      { text: "ready" },
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
-    ]);
-    expect(deliveryParams.payloads).toEqual([
-      { text: "ready" },
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
-    ]);
+    const expectedRecoveryPayloads = [
+      {
+        text: "ready",
+        mediaUrl: "/tmp/missing.png",
+        mediaUrls: ["/tmp/missing.png"],
+        audioAsVoice: undefined,
+        trustedLocalMedia: true,
+      },
+    ];
+    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual(
+      expectedRecoveryPayloads,
+    );
+    expect(deliveryParams.payloads).toEqual(expectedRecoveryPayloads);
     expect(
       state.persistSessionEntryMock.mock.calls.some((call) => {
         const params = call[0] as { entry?: SessionEntry };
@@ -2853,15 +2885,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     const pendingEntries = state.persistSessionEntryMock.mock.calls
       .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery === true);
+      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
     expect(pendingEntries).toContainEqual(
       expect.objectContaining({
-        pendingFinalDeliveryText: "ok",
-        pendingFinalDeliveryContext: {
-          channel: "discord",
-          to: "channel:1524410080953634829",
-          accountId: "main",
-        },
+        pendingFinalDelivery: expect.objectContaining({
+          kind: "replayable",
+          text: "ok",
+          context: {
+            channel: "discord",
+            to: "channel:1524410080953634829",
+            accountId: "main",
+          },
+        }),
       }),
     );
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
@@ -2927,18 +2962,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
-  it("clears stale flag-only pending final delivery when there is no final payload", async () => {
+  it("clears a pre-existing transport-only pending delivery after an empty delivered run", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-
     setupBareStoredSession({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryCreatedAt: 2,
-      pendingFinalDeliveryLastAttemptAt: 3,
-      pendingFinalDeliveryAttemptCount: 4,
-      pendingFinalDeliveryLastError: "previous failure",
-      pendingFinalDeliveryContext: { channel: "tui" },
-      pendingFinalDeliveryIntentId: "intent-1",
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: 2,
+        context: { channel: "tui" },
+        intentId: "intent-1",
+      },
     });
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
 
@@ -2951,16 +2984,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        entry: expect.objectContaining({
-          pendingFinalDelivery: undefined,
-          pendingFinalDeliveryText: undefined,
-          pendingFinalDeliveryCreatedAt: undefined,
-          pendingFinalDeliveryLastAttemptAt: undefined,
-          pendingFinalDeliveryAttemptCount: undefined,
-          pendingFinalDeliveryLastError: undefined,
-          pendingFinalDeliveryContext: undefined,
-          pendingFinalDeliveryIntentId: undefined,
-        }),
+        entry: expect.objectContaining({ pendingFinalDelivery: undefined }),
       }),
     );
   });
@@ -3357,6 +3381,42 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(thinkingArgs.level).toBe("xhigh");
   });
 
+  it("keeps a legacy auto-fallback route ahead of a colliding model alias", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude" },
+          models: {
+            "anthropic/claude": {},
+            "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
+            "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "cloudflare-ai-gateway",
+      modelOverride: "gemini-2.5-flash-lite",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    setupSuccessfulAttempt("cloudflare-ai-gateway", "gemini-2.5-flash-lite");
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runWithModelFallbackMock), {
+      provider: "cloudflare-ai-gateway",
+      model: "gemini-2.5-flash-lite",
+      requestedRouteResolution: "resolved",
+    });
+  });
+
   it("records fallback steps to the session trajectory runtime", async () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.onFallbackStep?.({
@@ -3572,10 +3632,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
-      MediaPath: "/media/inbound/image-1.png",
-      MediaPaths: ["/media/inbound/image-1.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: {
+        media: [
+          expect.objectContaining({ path: "/media/inbound/image-1.png", contentType: "image/png" }),
+        ],
+      },
     });
   });
 
@@ -4014,9 +4075,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ],
     }));
 
-    await runBasicAgentCommand();
+    const onModelFallbackExhausted = vi.fn();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      onModelFallbackExhausted,
+    });
 
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    expect(onModelFallbackExhausted).toHaveBeenCalledTimes(1);
     const lifecycleEvents = state.emitAgentEventMock.mock.calls
       .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
       .filter((event) => event.stream === "lifecycle");
@@ -4073,9 +4140,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       attempts: [],
     }));
 
-    await runBasicAgentCommand();
+    const onResultErrorPayload = vi.fn();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      onResultErrorPayload,
+    });
 
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    expect(onResultErrorPayload).toHaveBeenCalledWith("Command may have changed state");
     const lifecycleEvents = state.emitAgentEventMock.mock.calls
       .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
       .filter((event) => event.stream === "lifecycle");

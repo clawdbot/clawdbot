@@ -83,7 +83,7 @@ export async function runClawsUpdateCommand(
 
   let source = opts.from;
   if (!source) {
-    const database = openExistingOpenClawStateDatabaseReadOnly();
+    const database = await openExistingOpenClawStateDatabaseReadOnly();
     let status: Awaited<ReturnType<typeof readClawStatus>> | { records: never[] } = {
       records: [],
     };
@@ -169,6 +169,7 @@ export async function runClawsUpdateCommand(
   const plan = await buildClawUpdatePlan({
     agentId: target,
     targetManifest: loaded.manifest,
+    targetClawMarkdownBody: loaded.clawMarkdownBody,
     targetOpenClawProfile: loaded.openClawProfile,
     targetSource: loaded.source,
     config,
@@ -198,6 +199,7 @@ export async function runClawsUpdateCommand(
       plan,
       {
         targetManifest: loaded.manifest,
+        targetClawMarkdownBody: loaded.clawMarkdownBody,
         targetOpenClawProfile: loaded.openClawProfile,
         targetSource: loaded.source,
       },

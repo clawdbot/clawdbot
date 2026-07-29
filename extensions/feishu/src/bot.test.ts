@@ -1,3 +1,4 @@
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 // Feishu tests cover bot plugin behavior.
 import type {
   ensureConfiguredBindingRouteReady,
@@ -3383,15 +3384,23 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
         debounce: {
           resolveInboundDebounceMs: vi.fn(() => 10),
           createInboundDebouncer: vi.fn(
-            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => {
+            (options: {
+              onFlush: (
+                entries: FeishuMessageEvent[],
+                createFlush: typeof createTestInboundDebounceFlush,
+              ) => { completion: Promise<void> };
+            }) => {
               const entries: FeishuMessageEvent[] = [];
               return {
                 enqueue: async (event: FeishuMessageEvent) => {
                   entries.push(event);
                   if (entries.length === 2) {
-                    await options.onFlush(entries);
+                    await options.onFlush(entries, createTestInboundDebounceFlush).completion;
                   }
                 },
+                flushKey: async () => {},
+                cancelKey: () => false,
+                drain: async () => {},
               };
             },
           ),
@@ -3441,10 +3450,18 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
         debounce: {
           resolveInboundDebounceMs: vi.fn(() => 0),
           createInboundDebouncer: vi.fn(
-            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => ({
+            (options: {
+              onFlush: (
+                entries: FeishuMessageEvent[],
+                createFlush: typeof createTestInboundDebounceFlush,
+              ) => { completion: Promise<void> };
+            }) => ({
               enqueue: async (event: FeishuMessageEvent) => {
-                await options.onFlush([event]);
+                await options.onFlush([event], createTestInboundDebounceFlush).completion;
               },
+              flushKey: async () => {},
+              cancelKey: () => false,
+              drain: async () => {},
             }),
           ),
         },

@@ -391,6 +391,21 @@ describe("readClawManifestFile", () => {
       throw new Error("expected package to parse");
     }
     expect(result.source).not.toHaveProperty("manifestFormatPath");
+    expect(result.clawMarkdownBody?.toString("utf8")).toBe("\n# GitHub Triage");
+    const plan = await buildClawAddPlan({
+      manifest: result.manifest,
+      clawMarkdownBody: result.clawMarkdownBody,
+      source: result.source,
+      context: { workspace: join(root, "workspace-triage") },
+    });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        sourceKind: "clawMarkdownBody",
+        digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+    );
   });
 
   it("accepts a UTF-8 BOM and includes its bytes in snapshot integrity", async () => {
@@ -484,7 +499,7 @@ describe("readClawManifestFile", () => {
     );
   });
 
-  it("hashes original CLAW.md bytes rather than decoded text", async () => {
+  it("rejects a CLAW.md body that is not valid UTF-8", async () => {
     const root = tempDirs.make("openclaw-claw-markdown-original-bytes-");
     const path = join(root, "CLAW.md");
     const frontmatter = Buffer.from(
@@ -501,15 +516,41 @@ describe("readClawManifestFile", () => {
       ].join("\n"),
     );
     await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x80])]));
-    const first = await readClawManifestFile(path);
-    await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x81])]));
-    const second = await readClawManifestFile(path);
+    const result = await readClawManifestFile(path);
 
-    expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok) {
-      throw new Error("expected CLAW.md bodies to parse");
-    }
-    expect(second.source.integrity).not.toBe(first.source.integrity);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "invalid_claw_markdown_utf8" }),
+    );
+  });
+
+  it("rejects two competing SOUL.md sources", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-soul-conflict-");
+    const path = join(root, "CLAW.md");
+    await writeFile(
+      path,
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent: { id: triage }",
+        "workspace:",
+        "  bootstrapFiles:",
+        "    SOUL.md: { source: workspace/SOUL.md }",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+        "Portable soul",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "claw_body_soul_conflict" }),
+    );
   });
 
   it("synthesizes explicit development identity for a standalone manifest", async () => {
@@ -741,6 +782,7 @@ describe("buildClawAddPlan", () => {
 
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
     const { source, workspace } = await createPlanSource();
+    const canonicalWorkspace = join(await realpath(source.packageRoot), "new-workspace");
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       openClawProfile: baseOpenClawProfile,
@@ -755,7 +797,11 @@ describe("buildClawAddPlan", () => {
       dryRun: true,
       mutationAllowed: false,
       planIntegrity: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      agent: { requestedId: "github-triage", finalId: "github-triage", workspace },
+      agent: {
+        requestedId: "github-triage",
+        finalId: "github-triage",
+        workspace: canonicalWorkspace,
+      },
       readiness: {
         ready: false,
         requirements: [{ kind: "environment", mcpServer: "github", name: "GITHUB_TOKEN" }],
@@ -922,7 +968,7 @@ describe("buildClawAddPlan", () => {
         context: { workspace: join(aliasParent, "workspace-canonical-agent") },
       });
 
-      const canonicalWorkspace = join(realParent, "workspace-canonical-agent");
+      const canonicalWorkspace = join(await realpath(realParent), "workspace-canonical-agent");
       expect(plan.agent.workspace).toBe(canonicalWorkspace);
       expect(plan.agent.config.workspace).toBe(canonicalWorkspace);
       expect(plan.actions.find((action) => action.kind === "workspace")?.target).toBe(

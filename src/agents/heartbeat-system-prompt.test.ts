@@ -9,6 +9,7 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
         config: {
           agents: {
             defaults: { heartbeat: {} },
+            entries: { main: { default: true } },
           },
         },
         agentId: "main",
@@ -27,6 +28,7 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
                 every: "0m",
               },
             },
+            entries: { main: { default: true } },
           },
         },
         agentId: "main",

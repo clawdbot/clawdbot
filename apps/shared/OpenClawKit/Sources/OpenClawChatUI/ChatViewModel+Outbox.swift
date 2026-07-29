@@ -26,6 +26,11 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
+    /// True when this view model owns a gateway-scoped durable text outbox.
+    public var supportsOfflineTextOutbox: Bool {
+        self.outbox != nil
+    }
+
     struct OutboxDeliveryTarget: Hashable {
         let presentationSessionKey: String
         let deliverySessionKey: String

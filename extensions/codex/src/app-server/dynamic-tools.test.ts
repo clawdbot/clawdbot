@@ -282,6 +282,55 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
   });
 
+  it("keeps model-visible tools stable when plugin discovery order changes", () => {
+    const tools = [
+      createTool({ name: "web_search" }),
+      createTool({ name: "sessions_yield" }),
+      createTool({ name: "message" }),
+      createTool({ name: "computer", catalogMode: "direct-only" }),
+      createTool({ name: "agents_list" }),
+      createTool({ name: "browser", catalogMode: "direct-only" }),
+      createTool({ name: "openclaw" }),
+    ];
+    const createBridge = (orderedTools: AnyAgentTool[]) =>
+      createCodexDynamicToolBridge({
+        tools: orderedTools,
+        registeredTools: orderedTools,
+        signal: new AbortController().signal,
+        directToolNames: ["openclaw"],
+      });
+    const forward = createBridge(tools);
+    const reversed = createBridge(tools.toReversed());
+
+    expect(forward.availableSpecs).toEqual(reversed.availableSpecs);
+    expect(forward.specs).toEqual(reversed.specs);
+    expect(specNames(forward.specs)).toEqual([
+      "agents_list",
+      "openclaw",
+      "sessions_yield",
+      "message",
+      "web_search",
+      "browser",
+      "computer",
+    ]);
+    expect(forward.specs.filter((spec) => spec.type === "namespace")).toEqual([
+      expect.objectContaining({
+        name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        tools: [
+          expect.objectContaining({ name: "message", deferLoading: true }),
+          expect.objectContaining({ name: "web_search", deferLoading: true }),
+        ],
+      }),
+      expect.objectContaining({
+        name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        tools: [
+          expect.objectContaining({ name: "browser" }),
+          expect.objectContaining({ name: "computer" }),
+        ],
+      }),
+    ]);
+  });
+
   it("can register a durable tool schema while denying execution for the current turn", async () => {
     const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
     const onAgentToolResult = vi.fn();
@@ -297,7 +346,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual(["message", HEARTBEAT_RESPONSE_TOOL_NAME]);
+    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
 
     const result = await bridge.handleToolCall(
       {

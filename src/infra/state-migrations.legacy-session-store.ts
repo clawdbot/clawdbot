@@ -94,26 +94,12 @@ const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
   () => import("../trajectory/cleanup.js"),
 );
 
-function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeOptionalAttemptCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeOptionalStringOrNull(value: unknown): string | null | undefined {
-  return value === null || typeof value === "string" ? value : undefined;
-}
-
 function normalizeRecordKey(value: string): string | undefined {
   const key = value.trim();
   return key.length > 0 ? key : undefined;
 }
 
-function normalizeOptionalDeliveryContext(
-  value: unknown,
-): SessionEntry["pendingFinalDeliveryContext"] {
+function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -130,8 +116,8 @@ function normalizeOptionalDeliveryContext(
 }
 
 function sameDeliveryContext(
-  left: SessionEntry["pendingFinalDeliveryContext"],
-  right: SessionEntry["pendingFinalDeliveryContext"],
+  left: DeliveryContext | undefined,
+  right: DeliveryContext | undefined,
 ): boolean {
   return (
     (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
@@ -141,7 +127,7 @@ function sameDeliveryContext(
   );
 }
 
-function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry {
+function normalizeRestartRecoveryFields(entry: SessionEntry): SessionEntry {
   let next = entry;
   const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
     if (entry[key] === value) {
@@ -157,32 +143,6 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
     }
   };
 
-  assign("pendingFinalDelivery", entry.pendingFinalDelivery === true ? true : undefined);
-  assign("pendingFinalDeliveryText", normalizeOptionalStringOrNull(entry.pendingFinalDeliveryText));
-  assign(
-    "pendingFinalDeliveryCreatedAt",
-    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryCreatedAt),
-  );
-  assign(
-    "pendingFinalDeliveryLastAttemptAt",
-    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryLastAttemptAt),
-  );
-  assign(
-    "pendingFinalDeliveryAttemptCount",
-    normalizeOptionalAttemptCount(entry.pendingFinalDeliveryAttemptCount),
-  );
-  assign(
-    "pendingFinalDeliveryLastError",
-    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryLastError),
-  );
-  const pendingContext = normalizeOptionalDeliveryContext(entry.pendingFinalDeliveryContext);
-  if (!sameDeliveryContext(entry.pendingFinalDeliveryContext, pendingContext)) {
-    assign("pendingFinalDeliveryContext", pendingContext);
-  }
-  assign(
-    "pendingFinalDeliveryIntentId",
-    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
-  );
   const restartContext = normalizeOptionalDeliveryContext(entry.restartRecoveryDeliveryContext);
   if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartContext)) {
     assign("restartRecoveryDeliveryContext", restartContext);
@@ -297,7 +257,7 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
   applySessionStoreMigrations(store);
   for (const [key, entry] of Object.entries(store)) {
     const modelSelectionLocked = isRecord(entry) && entry.modelSelectionLocked === true;
-    const shaped = normalizePersistedSessionEntryShape(entry);
+    const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey: key });
     if (!shaped) {
       if (modelSelectionLocked) {
         throw new Error(`Invalid model-selection-locked session entry: ${key}`);
@@ -312,7 +272,7 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     store[key] = stripPersistedSkillsCache(
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
-          normalizePendingFinalDeliveryFields(
+          normalizeRestartRecoveryFields(
             normalizeLegacySessionEntryDelivery(modelSelectionLocked ? shaped : runtimeFields),
           ),
         ),

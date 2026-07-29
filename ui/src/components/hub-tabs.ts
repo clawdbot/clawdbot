@@ -24,16 +24,6 @@ type HubTabsProps<T extends string> = {
 // from stealing focus later.
 const PENDING_FOCUS_WINDOW_MS = 2000;
 let pendingFocus: { hubId: string; tab: string; at: number } | null = null;
-let pointerActivation: { hubId: string; tab: string } | null = null;
-
-function selectHubTab<T extends string>(tab: T, props: HubTabsProps<T>) {
-  const activatedByPointer = pointerActivation?.hubId === props.id && pointerActivation.tab === tab;
-  pointerActivation = null;
-  if (!activatedByPointer && tab !== props.active) {
-    pendingFocus = { hubId: props.id, tab, at: Date.now() };
-  }
-  props.onSelect(tab);
-}
 
 function reclaimFocus(hubId: string, tab: string, element: Element | undefined) {
   if (!element || pendingFocus?.hubId !== hubId || pendingFocus.tab !== tab) {
@@ -62,7 +52,6 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
       .active=${props.active}
       activation="manual"
       without-scroll-controls
-      @wa-tab-show=${(event: CustomEvent<{ name: T }>) => selectHubTab(event.detail.name, props)}
     >
       ${props.tabs.map((tab) => {
         const selected = props.active === tab.value;
@@ -74,10 +63,20 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             class="hub-tab"
             ?active=${selected}
             @click=${(event: MouseEvent) => {
-              pointerActivation = event.detail > 0 ? { hubId: props.id, tab: tab.value } : null;
+              if ((event.detail > 0 || event.isTrusted) && tab.value !== props.active) {
+                props.onSelect(tab.value);
+              }
             }}
-            @keydown=${() => {
-              pointerActivation = null;
+            @keydown=${(event: KeyboardEvent) => {
+              if (
+                !event.repeat &&
+                (event.key === "Enter" || event.key === " ") &&
+                tab.value !== props.active
+              ) {
+                event.preventDefault();
+                pendingFocus = { hubId: props.id, tab: tab.value, at: Date.now() };
+                props.onSelect(tab.value);
+              }
             }}
             ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}
           >

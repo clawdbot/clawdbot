@@ -1,5 +1,6 @@
 // Message hook mapper tests cover mapping runtime messages into hook payloads.
 import { beforeEach, describe, expect, it } from "vitest";
+import { finalizeInboundContextForSdk } from "../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -330,6 +331,58 @@ describe("message hook mappers", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "legacy-only",
+      input: { media: undefined, MediaPath: "/tmp/legacy.png", MediaType: "image/png" },
+      expectedPath: "/tmp/legacy.png",
+    },
+    {
+      name: "facts-only",
+      input: { media: [{ path: "/tmp/fact.png", contentType: "image/png" }] },
+      expectedPath: "/tmp/fact.png",
+    },
+    {
+      name: "both-equal",
+      input: {
+        MediaPath: "/tmp/equal.png",
+        media: [{ path: "/tmp/equal.png", contentType: "image/png" }],
+      },
+      expectedPath: "/tmp/equal.png",
+    },
+    {
+      name: "both-conflict",
+      input: {
+        MediaPath: "/tmp/legacy-conflict.png",
+        media: [{ path: "/tmp/canonical.png", contentType: "image/png" }],
+      },
+      expectedPath: "/tmp/canonical.png",
+    },
+    {
+      name: "sparse",
+      input: { media: [{}, { path: "/tmp/sparse.png", contentType: "image/png" }] },
+      expectedPath: "/tmp/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      input: { media: [{ contentType: "image/png" }] },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      input: { Body: "", media: [{ path: "/tmp/media-only.png", kind: "image" as const }] },
+      expectedPath: "/tmp/media-only.png",
+    },
+  ])("dual-emits $name hook media from canonical facts", (testCase) => {
+    const ctx = finalizeInboundContextForSdk(makeInboundCtx(testCase.input));
+    const event = toPluginInboundClaimEvent(deriveInboundMessageHookContext(ctx));
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+
+    expect(event.media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
+    expect(event.metadata?.mediaPath).toBe(testCase.expectedPath);
+  });
+
   it("withholds pending remote media from every inbound hook event", () => {
     const canonical = {
       ...deriveInboundMessageHookContext(
@@ -415,16 +468,18 @@ describe("message hook mappers", () => {
 
   it("uses complete staged compatibility projections in hook media metadata", () => {
     const canonical = deriveInboundMessageHookContext(
-      makeInboundCtx({
-        media: [
-          { path: "/remote/tree.jpg", contentType: "image/jpeg", messageId: "tree" },
-          { path: "/remote/ramp.jpg", contentType: "image/jpeg", messageId: "ramp" },
-        ],
-        MediaPaths: ["/tmp/staged/tree.jpg", "/tmp/staged/ramp.jpg"],
-        MediaUrls: ["file:///tmp/staged/tree.jpg", "file:///tmp/staged/ramp.jpg"],
-        MediaTypes: ["image/jpeg", "image/jpeg"],
-        MediaStaged: true,
-      }),
+      finalizeInboundContextForSdk(
+        makeInboundCtx({
+          media: [
+            { path: "/remote/tree.jpg", contentType: "image/jpeg", messageId: "tree" },
+            { path: "/remote/ramp.jpg", contentType: "image/jpeg", messageId: "ramp" },
+          ],
+          MediaPaths: ["/tmp/staged/tree.jpg", "/tmp/staged/ramp.jpg"],
+          MediaUrls: ["file:///tmp/staged/tree.jpg", "file:///tmp/staged/ramp.jpg"],
+          MediaTypes: ["image/jpeg", "image/jpeg"],
+          MediaStaged: true,
+        }),
+      ),
     );
 
     expect(canonical).toMatchObject({

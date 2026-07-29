@@ -10,6 +10,7 @@ import {
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listAgentEntries } from "../agent-scope-config.js";
 
 /** Provider/profile ids that may need external CLI auth discovery. */
 export type ExternalCliAuthScope = {
@@ -123,7 +124,7 @@ export function resolveExternalCliAuthScopeFromConfig(
     }
   }
 
-  for (const agent of Object.values(cfg.agents?.entries ?? {})) {
+  for (const agent of listAgentEntries(cfg)) {
     addProviderScopeFromModelConfig(providerIds, agent.model);
     addProviderScopeFromModelConfig(providerIds, agent.subagents?.model);
     addExternalCliRuntimeScopeFromModelMap(providerIds, agent.models);

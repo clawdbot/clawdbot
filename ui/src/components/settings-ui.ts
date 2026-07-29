@@ -6,6 +6,7 @@ import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -43,6 +44,12 @@ export function renderSettingsPage(
       ${children}
     </div>
   `;
+}
+
+export function renderDocsLink(url: string, label: unknown): TemplateResult {
+  return html`<a href=${url} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
+    >${label}</a
+  >`;
 }
 
 /** Section = plain text heading + one group surface containing rows. */
@@ -208,15 +215,16 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string }>;
+  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
+  className?: string;
 }): TemplateResult {
   return html`
     <wa-radio-group
-      class="settings-segmented"
+      class="settings-segmented ${props.className ?? ""}"
       size="s"
       orientation="horizontal"
       .value=${props.value}
@@ -245,6 +253,7 @@ export function renderSettingsSegmented<T extends string>(props: {
             value=${option.value}
             .checked=${option.value === props.value}
             title=${option.title ?? nothing}
+            data-test-id=${option.testId ?? nothing}
           >
             ${option.label}
           </wa-radio>

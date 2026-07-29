@@ -156,6 +156,61 @@ describe("AppSidebar interleaved zone", () => {
     expect(iconFor("agent:main:unknown")?.querySelector('path[d^="M21 15"]')).not.toBeNull();
   });
 
+  it("rings a running pinned icon instead of trailing the row", async () => {
+    const keys = ["agent:main:main", "agent:main:page"];
+    const sessions = createSessionsHarness("main", keys);
+    const result = sessions.sessions.state.result;
+    expect(result).not.toBeNull();
+    if (!result) {
+      return;
+    }
+    for (const row of result.sessions) {
+      if (row.key === "agent:main:page") {
+        Object.assign(row, { pinned: true, icon: "🦞", hasActiveRun: true, unread: true });
+      }
+    }
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+
+    const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
+    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph--running");
+    expect(glyph?.querySelector(".sidebar-pinned-session__icon")?.textContent).toContain("🦞");
+    expect(glyph?.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(glyph?.querySelector(".session-glyph__badge--unread")).not.toBeNull();
+    expect(row?.querySelector(".nav-item__state")).toBeNull();
+    expect(row?.querySelector(".sidebar-recent-session__state")).toBeNull();
+  });
+
+  it("keeps unread on a pinned attention row's glyph", async () => {
+    const keys = ["agent:main:main", "agent:main:page"];
+    const sessions = createSessionsHarness("main", keys);
+    const result = sessions.sessions.state.result;
+    expect(result).not.toBeNull();
+    if (!result) {
+      return;
+    }
+    for (const row of result.sessions) {
+      if (row.key === "agent:main:page") {
+        Object.assign(row, {
+          pinned: true,
+          icon: "🦞",
+          unread: true,
+          status: "failed",
+          lastRunError: "boom",
+          updatedAt: 10,
+        });
+      }
+    }
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+
+    const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
+    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
+    expect(glyph?.querySelector(".sidebar-session-attention__icon")).not.toBeNull();
+    expect(glyph?.querySelector(".session-glyph__badge--unread")).not.toBeNull();
+    expect(row?.querySelector(".nav-item__state")).toBeNull();
+  });
+
   it("keeps many pinned sessions always visible", async () => {
     const keys = [
       "agent:main:pinned-0",

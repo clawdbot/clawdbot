@@ -13,6 +13,7 @@ import {
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
 import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
+import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
@@ -116,6 +117,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
       protocolCommandPath: getActionCommandPath(actionCommand),

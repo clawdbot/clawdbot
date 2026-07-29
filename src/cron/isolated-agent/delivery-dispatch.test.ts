@@ -35,6 +35,21 @@ describe("selectCronRouteCurrentSessionKey", () => {
     );
   });
 
+  it.each([
+    ["telegram", "agent:main:telegram:group:-100123:thread:42"],
+    ["signal", "agent:main:signal:direct:15550001111"],
+    ["discord", "agent:main:discord:channel:channel-123:thread:thread-456"],
+  ])("reuses a canonical same-provider %s conversation", (provider, bound) => {
+    expect(selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY, provider)).toBe(bound);
+  });
+
+  it("rejects a matching-provider conversation bound to a different agent", () => {
+    const bound = "agent:other:mattermost:group:private-channel:thread:root";
+    expect(selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY, "mattermost")).toBe(
+      ISOLATED_RUN_KEY,
+    );
+  });
+
   it("falls back to the isolated run key when the job has no bound session", () => {
     expect(selectCronRouteCurrentSessionKey(job(undefined), ISOLATED_RUN_KEY, "mattermost")).toBe(
       ISOLATED_RUN_KEY,

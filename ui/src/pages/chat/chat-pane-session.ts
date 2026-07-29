@@ -1,45 +1,295 @@
+import type {
+  SessionCatalogTranscriptItem,
+  SessionsCatalogReadResult,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { clampText } from "../../lib/format.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   buildCatalogSessionKey,
-  catalogMessageId,
-  clampText,
-  dismissConfirmedActionPopovers,
-  flushChatQueueAfterIdleSessionReconciliation,
-  flushChatQueueForEvent,
-  loadChatComposerSnapshot,
-  loadChatHistory,
   lookupCatalogSession,
-  parseAgentSessionKey,
   parseCatalogSessionKey,
-  refreshChatAvatar,
-  refreshChatMetadata,
-  refreshRouteSessionOptions,
-  resetChatStateForRouteSession,
-  resetChatThreadPresentationState,
-  retryChatComposerMemoryFallback,
-  resolveChatAgentId,
-  resolveSessionDisplayName,
-  resolveSessionKey,
-  resolveStoredChatOutboxScope,
-  saveRouteSessionSettings,
-  scheduleChatScroll,
-  storedChatOutboxScopeKey,
-  syncSelectedSessionMessageSubscription,
   type CatalogSessionKey,
-  type ChatPageHost,
-  type GatewaySessionRow,
-  type SessionCatalogTranscriptItem,
-  type SessionsCatalogReadResult,
-} from "./chat-pane-deps.ts";
+} from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { catalogMessageId } from "./catalog-message-id.ts";
+import { refreshChatAvatar } from "./chat-avatar.ts";
+import {
+  loadChatBranches,
+  loadChatHistory,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
   catalogRawString,
   nativeHistoryMessageIdentity,
+  summarizeSessionPullRequests,
 } from "./chat-pane-shared.ts";
-import { ChatPaneSuggestions } from "./chat-pane-suggestions.ts";
+import { ChatPaneSharing } from "./chat-pane-sharing.ts";
+import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import { flushChatQueueForEvent } from "./chat-send-actions.ts";
+import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatMetadata } from "./chat-state-refresh.ts";
+import {
+  refreshRouteSessionOptions,
+  resetChatStateForRouteSession,
+  retryChatComposerMemoryFallback,
+  resolveChatAgentId,
+  saveRouteSessionSettings,
+} from "./chat-state-route.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
+import {
+  dismissChatPullRequest,
+  listDismissedChatPullRequests,
+} from "./components/chat-pull-requests.ts";
+import { resetChatThreadSessionPresentationState } from "./components/chat-thread.ts";
+import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerSnapshot,
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 
-export abstract class ChatPaneSession extends ChatPaneSuggestions {
+export abstract class ChatPaneSession extends ChatPaneSharing {
+  protected async refreshTaskSuggestions(): Promise<void> {
+    const requestVersion = ++this.taskSuggestionsRequestVersion;
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list")
+    ) {
+      this.taskSuggestions = [];
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    if (parseCatalogSessionKey(sessionKey)) {
+      this.taskSuggestions = [];
+      this.requestUpdate();
+      return;
+    }
+    const agentId = resolveChatAgentId(scope.state);
+    try {
+      const result = await scope.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
+        agentId,
+      });
+      if (
+        requestVersion !== this.taskSuggestionsRequestVersion ||
+        !this.isConnectionScopeCurrent(scope) ||
+        sessionKey !== scope.state.sessionKey
+      ) {
+        return;
+      }
+      this.taskSuggestions = result.suggestions.filter((suggestion) =>
+        this.suggestionMatchesCurrentSession(suggestion),
+      );
+      this.requestUpdate();
+    } catch {
+      // Suggestions are an optional ephemeral affordance; chat remains usable
+      // when an older Gateway or a reconnect loses the process-local registry.
+      // Keep event-delivered cards when a background reconciliation fails.
+    }
+  }
+
+  protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
+    const requestVersion = ++this.sessionPullRequestsRequestVersion;
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "controlUi.sessionPullRequests")
+    ) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
+      this.sessionPullRequestsRateLimited = false;
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
+      this.sessionPullRequestsRateLimited = false;
+      this.requestUpdate();
+      return;
+    }
+    const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
+    try {
+      const result = await scope.client.requestSessionPullRequests({
+        sessionKey,
+        ...scopedAgentParamsForSession(scope.state, sessionKey),
+        ...(options.refresh ? { refresh: true } : {}),
+      });
+      if (!result) {
+        return;
+      }
+      if (
+        requestVersion !== this.sessionPullRequestsRequestVersion ||
+        !this.isConnectionScopeCurrent(scope) ||
+        sessionKey !== scope.state.sessionKey
+      ) {
+        return;
+      }
+      this.sessionPullRequests = result.pullRequests;
+      if (!result.rateLimited || result.pullRequests.length > 0) {
+        scope.context.sessions.setPullRequestSummary(
+          sessionKey,
+          summarizeSessionPullRequests(result.pullRequests),
+          pullRequestEpoch,
+        );
+      }
+      this.sessionPullRequestsBranch = result.branch;
+      this.sessionPullRequestsRateLimited = result.rateLimited;
+      this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
+      this.requestUpdate();
+    } catch {
+      // PR chips are an optional affordance; keep the last snapshot so a
+      // transient gateway or GitHub failure does not clear the row.
+    }
+  }
+
+  protected resetSessionPullRequests(): void {
+    this.sessionPullRequestsRequestVersion += 1;
+    this.sessionPullRequests = [];
+    this.sessionPullRequestsBranch = undefined;
+    this.sessionPullRequestsRateLimited = false;
+    this.sessionPullRequestsExpanded = false;
+    this.dismissedSessionPullRequestIds = new Set();
+  }
+
+  protected readonly dismissSessionPullRequest = (
+    pullRequest: ControlUiSessionPullRequest,
+  ): void => {
+    const sessionKey = this.state?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
+    this.requestUpdate();
+  };
+
+  protected handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
+    if (event.action === "created") {
+      if (!this.suggestionMatchesCurrentSession(event.suggestion)) {
+        return;
+      }
+      this.taskSuggestions = [
+        event.suggestion,
+        ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
+      ];
+    } else {
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== event.taskId);
+      this.taskSuggestionBusyIds.delete(event.taskId);
+    }
+    this.requestUpdate();
+    // The replacement snapshot includes the event plus unrelated suggestions;
+    // its request version prevents any older snapshot from overwriting either.
+    void this.refreshTaskSuggestions();
+  }
+
+  protected readonly acceptTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
+    this.resolveTaskSuggestion(suggestion, "accept");
+
+  protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
+    this.resolveTaskSuggestion(suggestion, "dismiss");
+
+  protected async resolveTaskSuggestion(
+    suggestion: TaskSuggestion,
+    action: "accept" | "dismiss",
+  ): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !this.suggestionMatchesCurrentSession(suggestion) ||
+      this.taskSuggestionOperations.has(suggestion.id)
+    ) {
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const operation = Symbol();
+    const isCurrent = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      scope.state.sessionKey === sessionKey &&
+      this.taskSuggestionOperations.get(suggestion.id) === operation;
+    this.taskSuggestionOperations.set(suggestion.id, operation);
+    this.taskSuggestionBusyIds.add(suggestion.id);
+    this.requestUpdate();
+    try {
+      const result = await scope.client.request<TaskSuggestionsAcceptResult>(
+        action === "accept" ? "taskSuggestions.accept" : "taskSuggestions.dismiss",
+        { taskId: suggestion.id },
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
+      if (action === "accept") {
+        this.onPaneSessionChange?.(this.paneId, result.key);
+      }
+    } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
+      scope.state.lastError = error instanceof Error ? error.message : String(error);
+      scope.state.chatError = scope.state.lastError;
+    } finally {
+      if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
+        this.taskSuggestionOperations.delete(suggestion.id);
+        this.taskSuggestionBusyIds.delete(suggestion.id);
+        if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+          this.requestUpdate();
+        }
+      }
+    }
+  }
+
+  protected deferSessionHydrationUntilTranscript(
+    sessionKey: string,
+    transcriptLoad: Promise<unknown>,
+  ): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const requestVersion = ++this.deferredSessionHydrationRequestVersion;
+    const connectionGeneration = this.connectionGeneration;
+    const client = state.client;
+    const isCurrent = () =>
+      this.deferredSessionHydrationRequestVersion === requestVersion &&
+      this.connectionGeneration === connectionGeneration &&
+      this.state === state &&
+      state.connected &&
+      state.client === client &&
+      state.sessionKey === sessionKey;
+    const scheduleAfterTranscript = () => {
+      if (!isCurrent()) {
+        return;
+      }
+      // These affordances do not shape the transcript. Start them together only
+      // after the authoritative history has committed so they cannot delay chat paint.
+      state.renderLifecycle.afterCommit((complete) => {
+        if (isCurrent()) {
+          void loadChatBranches(state);
+          void this.probeSessionDiscussion(sessionKey);
+          this.hydrateSessionCompanion(sessionKey);
+          void this.refreshSessionPullRequests();
+        }
+        complete();
+      });
+    };
+    void transcriptLoad.then(scheduleAfterTranscript, scheduleAfterTranscript);
+  }
+
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
     if (!state?.connected || !row) {
@@ -120,11 +370,11 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     }
     const nextSessionKey = state.sessionKey;
     saveRouteSessionSettings(state, nextSessionKey);
-    this.context.gateway.setSessionKey(nextSessionKey);
-    const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
-    if (agentId) {
-      this.context.agentSelection.set(agentId);
-    }
+    selectApplicationSession({
+      selection: this.context.agentSelection,
+      gateway: this.context.gateway,
+      sessionKey: nextSessionKey,
+    });
   }
 
   protected switchPaneSession(nextSessionKey: string) {
@@ -135,14 +385,15 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     // Close old-session listener owners before the next render detaches their
     // DOM; thread-global portals and caches are reset separately.
     dismissConfirmedActionPopovers(this);
-    resetChatThreadPresentationState(this.paneId);
+    resetChatThreadSessionPresentationState(this.paneId);
     this.sessionDiscussionOpenUrls.clear();
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
     this.cancelHeaderRename();
-    this.resetOlderMessagesViewport();
+    const restoredPosition = this.resetOlderMessagesViewport(nextSessionKey);
     const catalogKey = parseCatalogSessionKey(nextSessionKey);
+    const previousAgentId = resolveChatAgentId(state);
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
@@ -177,6 +428,9 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
       previousDraftRetry,
       previousComposerScope,
     });
+    // The sidebar row is already authoritative enough for first paint: it supplies
+    // the header and run controls while the reset restores any cached transcript.
+    applySelectedSessionProjection(state, nextSessionRow);
     this.reconcileWaitingApprovalSnapshot();
     retryChatComposerMemoryFallback(state, nextSessionKey);
     // Route restoration is the new persistence baseline. An untouched pane
@@ -202,10 +456,15 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state).finally(() => this.requestUpdate());
-    void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
+    const nextAgentId = resolveChatAgentId(state);
+    // Agent-scoped catalogs remain valid across same-agent sessions. Cross-agent
+    // failures must clear instead of retaining models owned by the previous agent.
+    void refreshChatMetadata(state, {
+      preserveModelCatalogOnFallback: Boolean(previousAgentId && previousAgentId === nextAgentId),
+    }).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    const historyLoad = loadChatHistory(state);
+    const historyLoad = loadChatHistory(state, { deferBranches: true });
     if (composerStorageError) {
       // History loading clears the shared error slot synchronously. Restore the
       // pane-local storage warning unless the retry above made the draft durable.
@@ -215,31 +474,37 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     state.requestUpdate();
     void this.refreshTaskSuggestions();
     void this.refreshSessionSuggestions();
-    void this.refreshSessionPullRequests();
+    this.deferSessionHydrationUntilTranscript(nextSessionKey, historyLoad);
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
         return;
       }
       state.requestUpdate();
-      scheduleChatScroll(state, true);
+      if (restoredPosition === null || restoredPosition.anchorToEnd) {
+        scheduleChatScroll(state, true);
+      } else {
+        this.restoreOlderMessagesViewport(nextSessionKey, restoredPosition.scrollTop);
+      }
     };
     void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
     void historyLoad.then(
       () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
       () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
     );
-    const sessionsRefresh = refreshRouteSessionOptions(state);
-    flushChatQueueAfterIdleSessionReconciliation(
-      state,
-      nextSessionKey,
-      historyLoad,
-      sessionsRefresh,
-      previousSessionsResult,
-      () => void flushChatQueueForEvent(state),
-    );
+    if (state.chatQueue.length > 0) {
+      const sessionsRefresh = refreshRouteSessionOptions(state);
+      flushChatQueueAfterIdleSessionReconciliation(
+        state,
+        nextSessionKey,
+        historyLoad,
+        sessionsRefresh,
+        previousSessionsResult,
+        () => void flushChatQueueForEvent(state),
+      );
+      void sessionsRefresh;
+    }
     void subscriptionSync;
     void historyLoad;
-    void sessionsRefresh;
   }
 
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {

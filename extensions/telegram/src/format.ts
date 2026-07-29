@@ -685,12 +685,32 @@ function clampToSurrogateBoundary(text: string, index: number): number {
   return index > 1 ? index - 1 : index + 1;
 }
 
+// Prefer a word/paragraph boundary inside the entity-safe window so long text
+// runs break between words instead of mid-word. Whitespace never falls inside
+// an HTML entity, so this keeps entities intact; the caller falls back to the
+// entity-safe hard cut only when the window has no interior whitespace.
+function findTelegramHtmlWordSafeSplitIndex(text: string, end: number): number {
+  let lastNewline = 0;
+  let lastWhitespace = 0;
+  for (let index = 1; index < end; index += 1) {
+    const char = text[index];
+    if (char === "\n") {
+      lastNewline = index + 1;
+    } else if (char !== undefined && /\s/.test(char)) {
+      lastWhitespace = index + 1;
+    }
+  }
+  return lastNewline > 0 ? lastNewline : lastWhitespace;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
-  const splitIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  const entitySafeIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  const wordSafeIndex = findTelegramHtmlWordSafeSplitIndex(text, entitySafeIndex);
+  const splitIndex = wordSafeIndex > 0 ? wordSafeIndex : entitySafeIndex;
   return clampToSurrogateBoundary(text, splitIndex);
 }
 

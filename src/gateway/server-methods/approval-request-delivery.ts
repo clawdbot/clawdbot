@@ -17,6 +17,26 @@ type ApprovalRequestDelivery = readonly [
 
 type ApprovalDeliveryLogContext = { logGateway?: { error?: (message: string) => void } };
 
+function resolveFirstSuccessfulApprovalDelivery(
+  deliveryTasks: readonly Promise<boolean>[],
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let remaining = deliveryTasks.length;
+    for (const delivery of deliveryTasks) {
+      void delivery.then((delivered) => {
+        if (delivered) {
+          resolve(true);
+          return;
+        }
+        remaining -= 1;
+        if (remaining === 0) {
+          resolve(false);
+        }
+      });
+    }
+  });
+}
+
 /** Runs external approval deliveries concurrently and reports whether any route accepted. */
 export function runApprovalRequestDeliveries<TPayload>(params: {
   context: ApprovalDeliveryLogContext;
@@ -50,5 +70,7 @@ export function runApprovalRequestDeliveries<TPayload>(params: {
   if (deliveryTasks.length === 0) {
     return false;
   }
-  return Promise.all(deliveryTasks).then((results) => results.some(Boolean));
+  // A delivered route must unblock approval while other started routes keep
+  // their error handlers and can finish without delaying the requester.
+  return resolveFirstSuccessfulApprovalDelivery(deliveryTasks);
 }

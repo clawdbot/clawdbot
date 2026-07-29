@@ -1,6 +1,7 @@
 // Defines the top-level OpenClaw configuration type.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { TranscriptsConfig } from "../transcripts/config.js";
+import type { ConfigIncludeOwnership } from "./includes.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
@@ -174,8 +175,6 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
-      /** Expand advanced settings in schema-driven Control UI forms. */
-      showAdvancedSettings?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */
@@ -279,12 +278,18 @@ export type ConfigFileSnapshot = {
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
+  /** Exact authored ownership for every successfully resolved $include directive. */
+  includeProvenance?: readonly ConfigIncludeOwnership[];
+  /** Temporary roster-only projection retained until write preparation uses generic ownership. */
+  agentRosterIncludeOwned?: boolean;
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Include/env-resolved source before raw compatibility migrations. */
+  sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.

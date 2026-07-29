@@ -17,7 +17,7 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -63,6 +63,10 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;
+  deferSessionHydrationUntilTranscript: (
+    sessionKey: string,
+    transcriptLoad: Promise<unknown>,
+  ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
@@ -169,7 +173,9 @@ export function createTestChatPane(params: {
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarFocusPanelId: "",
+    sidebarFocusVersion: 0,
+    sidebarLayout: { columns: [] },
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
@@ -178,6 +184,13 @@ export function createTestChatPane(params: {
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
+  state.updateSidebarLayout = (layout) => {
+    state.sidebarLayout = layout;
+  };
+  state.updateSidebarActivePanel = (panelId) => {
+    state.sidebarFocusPanelId = panelId;
+    state.sidebarFocusVersion += 1;
+  };
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
   pane.connectedClient = params.client;

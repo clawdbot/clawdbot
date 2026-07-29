@@ -36,6 +36,12 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+When `openclaw_direct.sessions_yield` is available, those instructions also
+tell a native Codex parent to end the current turn when a child's result should
+arrive in a later turn. Native `wait_agent` remains for an intentional same-turn
+wait when the immediate next step is blocked on the child; completion polling
+loops are not a substitute.
+
 Most OpenClaw dynamic tools use the searchable `openclaw` namespace. Tools
 marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
@@ -124,8 +130,8 @@ Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat initiative guidance is sent as a Codex collaboration-mode
 developer instruction scoped to the heartbeat turn; ordinary chat turns stay
-in Codex Default mode. When `HEARTBEAT.md` is non-empty, the heartbeat
-instructions point Codex at the file instead of inlining its contents.
+in Codex Default mode. The heartbeat monitor's cron scratch is appended to the
+heartbeat prompt when present.
 
 ## Hook boundaries
 

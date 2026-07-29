@@ -107,11 +107,13 @@ export async function reportPreMutationUpdateFailure(params: {
     steps: [],
     durationMs: 0,
   };
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result,
-    jsonMode: Boolean(params.opts.json),
-  });
+  if (params.opts.dryRun !== true) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
   printResult(result, params.opts);
   defaultRuntime.exit(1);
 }
@@ -136,6 +138,15 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   if (timeoutMs === null) {
     return;
   }
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel !== undefined && !requestedChannel) {
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
   assertConfigWriteAllowedInCurrentMode();
 
   const root = await resolveUpdateRoot();
@@ -153,14 +164,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             : configSnapshot.sourceConfig,
         }
       : undefined);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
   if (requestedChannel === "extended-stable") {
     const updateStatus = await checkUpdateStatus({
       root,
@@ -633,8 +636,15 @@ export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
 export function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
+  installKindChanged?: boolean;
 }): boolean {
-  return !params.downgradeRisk && didCoreUpdateChangeInstall(params.result);
+  // A package-to-git switch can land on the same version already cloned at its
+  // target SHA. The package root still changed, so old hashed chunks are unsafe.
+  return (
+    params.result.status === "ok" &&
+    !params.downgradeRisk &&
+    (params.installKindChanged === true || didCoreUpdateChangeInstall(params.result))
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

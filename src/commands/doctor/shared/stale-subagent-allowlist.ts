@@ -1,7 +1,8 @@
 // Doctor scanner and repair for subagent allowlists that reference missing agents.
-import { listAgentIds } from "../../../agents/agent-scope-config.js";
+import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 
 type StaleSubagentAllowlistHit = {
   /** Config path containing the stale allowAgents entry. */
@@ -14,7 +15,7 @@ type StaleSubagentAllowlistHit = {
 
 function collectConfiguredSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>(listAgentIds(cfg));
-  for (const agent of cfg.agents?.list ?? []) {
+  for (const agent of listAgentEntries(cfg)) {
     if (agent.runtime?.type !== "acp") {
       continue;
     }
@@ -88,12 +89,14 @@ export function scanStaleSubagentAllowlistReferences(
       configuredTargetIds,
     }),
   );
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
     hits.push(
       ...collectStaleAllowlistEntries({
-        allowAgents: agent?.subagents?.allowAgents,
-        pathLabel: `agents.list.${index}.subagents.allowAgents`,
+        allowAgents:
+          agent.subagents && typeof agent.subagents === "object"
+            ? (agent.subagents as { allowAgents?: unknown }).allowAgents
+            : undefined,
+        pathLabel: `${path}.subagents.allowAgents`,
         configuredTargetIds,
       }),
     );
@@ -153,16 +156,19 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
     });
   }
 
-  const agents = Array.isArray(next.agents?.list) ? next.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const pathLabel = `agents.list.${index}.subagents.allowAgents`;
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(next)) {
+    const pathLabel = `${path}.subagents.allowAgents`;
     const agentHits = hitsByPath.get(pathLabel) ?? [];
-    if (agentHits.length === 0 || !Array.isArray(agent?.subagents?.allowAgents)) {
+    const subagents =
+      agent.subagents && typeof agent.subagents === "object"
+        ? (agent.subagents as { allowAgents?: string[] })
+        : undefined;
+    if (agentHits.length === 0 || !Array.isArray(subagents?.allowAgents)) {
       continue;
     }
     const staleTargetIds = new Set(agentHits.map((hit) => hit.normalizedAgentId));
-    agent.subagents.allowAgents = filterAllowAgents({
-      allowAgents: agent.subagents.allowAgents,
+    subagents.allowAgents = filterAllowAgents({
+      allowAgents: subagents.allowAgents,
       staleTargetIds,
     });
   }

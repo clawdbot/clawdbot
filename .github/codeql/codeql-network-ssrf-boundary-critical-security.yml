@@ -20,7 +20,7 @@ paths:
   - src/agents/tools/web-shared.ts
   - src/plugin-sdk/ssrf-policy.ts
   - src/web-fetch
-  - packages/web-content-core/src/provider-runtime-shared.ts
+  - src/web/provider-runtime-shared.ts
   - packages/memory-host-sdk/src/host/ssrf-policy.ts
   - packages/net-policy/src
 

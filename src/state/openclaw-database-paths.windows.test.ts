@@ -118,14 +118,34 @@ describe("OpenClaw database paths on Windows", () => {
           },
         }),
       ).toEqual({ incompatible: [], indeterminate: [] });
-      const immutableState = openExistingOpenClawStateDatabaseReadOnly({ env });
-      expect(immutableState?.path).toBe(statePath);
+      fs.rmSync(`${statePath}-wal`, { force: true });
+      fs.rmSync(`${statePath}-shm`, { force: true });
+      const stateBytesBeforeReadOnly = fs.readFileSync(statePath);
+      const stateEntriesBeforeReadOnly = fs
+        .readdirSync(path.dirname(statePath), { withFileTypes: true })
+        .map((entry) => entry.name)
+        .toSorted();
+      const readOnlyState = await openExistingOpenClawStateDatabaseReadOnly({ env });
+      expect(readOnlyState?.path).toBe(statePath);
       expect(
-        immutableState?.db
+        readOnlyState?.db
           .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
       ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-      immutableState?.walMaintenance.close();
+      const openedStatePath = readOnlyState?.db.prepare("PRAGMA database_list").get() as
+        | { file?: unknown }
+        | undefined;
+      expect(path.resolve(String(openedStatePath?.file))).not.toBe(path.resolve(statePath));
+      const privateDirectory = path.dirname(String(openedStatePath?.file));
+      expect(readOnlyState?.walMaintenance.close()).toBe(true);
+      expect(fs.existsSync(privateDirectory)).toBe(false);
+      expect(fs.readFileSync(statePath)).toEqual(stateBytesBeforeReadOnly);
+      expect(
+        fs
+          .readdirSync(path.dirname(statePath), { withFileTypes: true })
+          .map((entry) => entry.name)
+          .toSorted(),
+      ).toEqual(stateEntriesBeforeReadOnly);
 
       await expect(runDoctorStateSqliteCompact({ env })).resolves.toMatchObject({
         integrityCheck: "ok",

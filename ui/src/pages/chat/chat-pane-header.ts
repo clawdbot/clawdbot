@@ -1,28 +1,215 @@
+import { html, nothing } from "lit";
+import type {
+  SessionDiscussionInfo,
+  SessionDiscussionState,
+  SessionsFilesRevealResult,
+  SystemInfoResult,
+  WorktreesBranchesResult,
+  WorktreesListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { hasOperatorWriteAccess, hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { readPresenceEntries, resolveActorIdentityUsers } from "../../app/user-profile.ts";
+import { icons } from "../../components/icons.ts";
+import { listSessionCreators } from "../../components/session-owner-chip.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { t } from "../../i18n/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { renderBoardDockMenu, renderBoardFaceToggle } from "./board-session-surface.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
-import {
-  copyToClipboard,
-  hasOperatorWriteAccess,
-  html,
-  icons,
-  isCloudWorkerPlacementState,
-  isGatewayMethodAdvertised,
-  parseAgentSessionKey,
-  nothing,
-  t,
-  type ChatPaneHeaderAction,
-  type GatewayBrowserClient,
-  type GatewaySessionRow,
-  type SessionDiscussionInfo,
-  type SessionDiscussionState,
-  type SessionsFilesRevealResult,
-  type SidebarContent,
-  type SystemInfoResult,
-  type WorktreesBranchesResult,
-  type WorktreesListResult,
-} from "./chat-pane-deps.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
+import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
+import {
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
+import { isChatRunWorking } from "./components/chat-composer.ts";
+import {
+  type ChatPaneHeaderAction,
+  canRevealSessionWorkspace,
+  renderChatPaneHeader,
+  resolveChatPaneWorkspace,
+} from "./components/chat-pane-header.ts";
+import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
+import {
+  renderSessionDiffToggle,
+  renderSessionWorkspaceToggle,
+  type SessionWorkspaceProps,
+} from "./components/chat-session-workspace.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  fitSidebarLayout,
+  openSlot,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneContext {
+  protected renderPaneHeader(
+    sessionWorkspace: SessionWorkspaceProps,
+    backgroundTasks: BackgroundTasksProps,
+    row: GatewaySessionRow | undefined,
+    catalog: boolean,
+    agentWorkspace: string | undefined,
+    workspaceGit: boolean,
+  ) {
+    const board = this.resolveBoardView();
+    const workspace = resolveChatPaneWorkspace({
+      session: row,
+      agentWorkspace: row?.worktree ? undefined : agentWorkspace,
+      worktreePath: row?.worktree ? this.headerWorktreePaths.get(row.worktree.id)?.path : undefined,
+    });
+    // Managed worktree sessions copy the worktree record's branch — the same
+    // source the sidebar subtitle and preserved-worktree prompts use. Live
+    // HEAD is only resolved for plain checkouts, where no record exists.
+    // Cached HEAD is keyed by the resolved root and masked while the session
+    // runs remotely, so reused keys, root transitions, open menus, and
+    // in-flight lookups racing a dispatch can never surface a wrong branch.
+    const rowRemote = Boolean(row?.execNode) || isCloudWorkerPlacementState(row?.placement?.state);
+    const branch =
+      row?.worktree?.branch ||
+      (rowRemote || !workspace.root ? null : this.headerBranches.get(workspace.root)?.value) ||
+      null;
+    const canReveal = canRevealSessionWorkspace({
+      session: row,
+      workspaceRoot: workspace.root,
+      methodAdvertised:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.files.reveal") === true,
+      hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+    });
+    const branchSwitchWorking = this.state
+      ? this.state.chatSending ||
+        isChatRunWorking({
+          canAbort: hasAbortableSessionRun(this.state),
+          onAbort: () => undefined,
+          queue: this.state.chatQueue,
+          runStatus: this.state.chatRunStatus,
+          sessionKey: this.state.sessionKey,
+        })
+      : false;
+    const branchSwitchDisabledReason = !hasOperatorAdminAccess(
+      this.context.gateway.snapshot.hello?.auth ?? null,
+    )
+      ? t("chat.sessionHeader.branchSwitchRequiresAdmin")
+      : branchSwitchWorking
+        ? t("chat.sessionHeader.branchSwitchUnavailable")
+        : null;
+    const ownerActorId = row?.createdActor?.id?.trim();
+    const ownerUser = ownerActorId
+      ? resolveActorIdentityUsers({
+          snapshotUser: this.context.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
+        }).get(ownerActorId)
+      : undefined;
+    return renderChatPaneHeader({
+      paneId: this.paneId,
+      narrow: this.narrow,
+      mergedChrome: this.mergedChrome,
+      navDrawerOpen: this.navDrawerOpen,
+      title: this.paneTitle,
+      session: row,
+      showOwnerChip:
+        (
+          this.state?.sessionsResult?.creators ??
+          listSessionCreators(this.state?.sessionsResult?.sessions ?? [])
+        ).length >= 2,
+      ownerUser,
+      catalog,
+      editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
+      renameValue: this.headerRenameValue,
+      workspaceRoot: workspace.root,
+      workspaceLabel: workspace.label,
+      branch,
+      branches:
+        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
+          ? (this.state.chatBranches ?? [])
+          : [],
+      branchSwitchDisabledReason,
+      platform: this.headerPlatform,
+      canReveal,
+      copiedAction: this.headerCopiedAction,
+      canRename:
+        this.state?.connected === true &&
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
+      discussionAction: this.renderSessionDiscussionAction(),
+      diffAction: renderSessionDiffToggle(sessionWorkspace),
+      backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
+      workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      presence:
+        !catalog &&
+        hasSessionPresenceViewers(
+          this.presencePayload,
+          this.context.gateway.snapshot.client?.instanceId,
+          this.state?.sessionKey ?? "",
+        )
+          ? html`<openclaw-viewer-facepile
+              class="chat-pane__presence"
+              .presencePayload=${this.presencePayload}
+              .selfInstanceId=${this.context.gateway.snapshot.client?.instanceId}
+              .sessionKey=${this.state?.sessionKey}
+              .maxVisible=${4}
+              variant="session"
+            ></openclaw-viewer-facepile>`
+          : nothing,
+      faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
+        this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
+        this.persistBoardSessionView({ face });
+      }),
+      sharingControl:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.visibility.set") === true
+          ? renderChatSessionSharing({
+              session: row,
+              state: row
+                ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
+                : undefined,
+              onOpen: () => row && void this.loadSessionSharing(row),
+              onVisibilityChange: (visibility) =>
+                row && void this.setSessionVisibility(row, visibility),
+              onMemberChange: (identityId, member) =>
+                row && void this.setSessionMember(row, identityId, member),
+            })
+          : nothing,
+      boardDockAction: renderBoardDockMenu(
+        board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
+        board.face,
+        board.dock,
+        (dock) => this.handleBoardDockChange(dock),
+      ),
+      nativeGateways: this.nativeGateways,
+      gatewaysSnapshot: this.gatewaysSnapshot,
+      onboarding: this.onboarding,
+      onBeginRename: () => row && this.beginHeaderRename(row),
+      onRenameInput: (value) => {
+        this.headerRenameValue = value;
+      },
+      onCommitRename: () => this.commitHeaderRename(),
+      onCancelRename: () => this.cancelHeaderRename(),
+      onMenuOpenChange: (open) => {
+        if (open && row) {
+          void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
+        }
+      },
+      onMenuAction: (action) => {
+        if (row) {
+          this.handleHeaderMenuAction(action, row, workspace.root, branch);
+        }
+      },
+      onBranchSelect: (leafEntryId) => void this.switchToBranch(leafEntryId),
+      onOpenSplitView: this.onOpenSplitView,
+      onSplitDown: this.onSplitDown,
+      onSplitRight: this.onSplitRight,
+      onClosePane: this.onClosePane,
+    });
+  }
+
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -286,7 +473,7 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
   // key's cached state on every session switch (and reconnect clears all), so
   // each activation resolves a fresh probe and reaches this. Within one
   // activation the cache dedupes — closing the sidebar sticks, and an
-  // already-open sidebar is never stolen.
+  // already-open discussion column is never duplicated.
   protected maybeAutoShowSessionDiscussion(
     sessionKey: string,
     discussionState: SessionDiscussionState,
@@ -296,20 +483,19 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       discussionState !== "open" ||
       !state ||
       state.sessionKey.trim() !== sessionKey ||
-      state.sidebarOpen
+      state.sidebarLayout.columns.some((column) =>
+        column.panels.some((panel) => panel.slot === "discussion"),
+      )
     ) {
       return;
     }
-    const content = this.buildSessionDiscussionContent(state, sessionKey);
-    if (content) {
-      state.handleOpenSidebar(content);
-    }
+    this.openSessionDiscussionSlot();
   }
 
-  protected buildSessionDiscussionContent(
+  protected buildSessionDiscussionPanel(
     state: NonNullable<typeof this.state>,
     sessionKey: string,
-  ): SidebarContent | null {
+  ): SessionDiscussionPanelConfig | null {
     if (!state.connected || !state.client) {
       return null;
     }
@@ -317,8 +503,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
     const contentGeneration = this.connectionGeneration;
-    const content: SidebarContent = {
-      kind: "session-discussion",
+    const cached = this.sessionDiscussionPanels.get(sessionKey);
+    if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
+      cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
+      return cached.config;
+    }
+    const config: SessionDiscussionPanelConfig = {
       sessionKey,
       canOpen,
       openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
@@ -352,26 +542,45 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         if (discussionState === "none") {
           this.sessionDiscussionOpenUrls.delete(key);
         }
-        const current = state.sidebarContent;
-        if (
-          discussionState === "none" &&
-          current?.kind === "session-discussion" &&
-          current.sessionKey === key
-        ) {
-          state.handleCloseSidebar();
+        if (discussionState === "none" && isCurrentSession) {
+          state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"));
           return;
-        }
-        if (
-          isCurrentSession &&
-          current?.kind === "session-discussion" &&
-          current.sessionKey === key
-        ) {
-          state.sidebarContent = { ...current, openUrl };
         }
         state.requestUpdate();
       },
     };
-    return content;
+    this.sessionDiscussionPanels.set(sessionKey, {
+      generation: contentGeneration,
+      canOpen,
+      config,
+    });
+    return config;
+  }
+
+  protected openSessionDiscussionSlot(): boolean {
+    const state = this.state;
+    if (!state) {
+      return false;
+    }
+    let opened = openSlot(state.sidebarLayout, "discussion", "right");
+    const discussionPanel = opened.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "discussion");
+    if (discussionPanel) {
+      opened = activatePanel(opened, discussionPanel.id);
+    }
+    const newColumn = opened.columns.find(
+      (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
+    );
+    const fitted =
+      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(opened, this.paneWidth, newColumn?.id) ?? opened)
+        : opened;
+    state.updateSidebarLayout(fitted);
+    if (discussionPanel) {
+      state.updateSidebarActivePanel(discussionPanel.id);
+    }
+    return true;
   }
 
   protected renderSessionDiscussionAction() {
@@ -388,14 +597,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     ) {
       return nothing;
     }
-    const content = this.buildSessionDiscussionContent(state, sessionKey);
-    if (!content) {
+    if (!this.buildSessionDiscussionPanel(state, sessionKey)) {
       return nothing;
     }
-    const active =
-      state.sidebarOpen &&
-      state.sidebarContent?.kind === "session-discussion" &&
-      state.sidebarContent.sessionKey === sessionKey;
+    const active = state.sidebarLayout.columns.some((column) =>
+      column.panels.some((panel) => panel.slot === "discussion"),
+    );
     const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return html`
       <openclaw-tooltip .content=${label}>
@@ -404,7 +611,10 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
           type="button"
           aria-label=${label}
           aria-pressed=${String(active)}
-          @click=${() => (active ? state.handleCloseSidebar() : state.handleOpenSidebar(content))}
+          @click=${() =>
+            active
+              ? state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
+              : this.openSessionDiscussionSlot()}
         >
           ${icons.messageSquare}
         </button>

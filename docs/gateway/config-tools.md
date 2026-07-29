@@ -84,17 +84,23 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 
 ### `tools.codeMode`
 
-`tools.codeMode` enables the generic OpenClaw code-mode surface. When enabled
+`tools.codeMode` gates the generic OpenClaw code-mode surface. When engaged
 for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
 catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
+`enabled` defaults to `"auto"`, which engages code mode only for models whose
+catalog entry flags `compat.codeMode: "preferred"`. See
+[Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
+
+To opt out for every run:
+
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: true,
+      enabled: false,
     },
   },
 }
@@ -104,9 +110,12 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: true },
+  tools: { codeMode: false },
 }
 ```
+
+`enabled: true` forces code mode on for every tool-capable run, regardless of
+model.
 
 MCP declarations are exposed through the read-only virtual API file surface in
 code mode. Guest code can call `API.list("mcp")` and
@@ -403,25 +412,25 @@ Controls inline attachment support for `sessions_spawn`.
   </Accordion>
 </AccordionGroup>
 
-<a id="toolsexperimental"></a>
+<a id="toolsupdateplan"></a>
 
-### `tools.experimental`
+### `tools.updatePlan`
 
-Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
+Kill switch for the structured `update_plan` checklist tool used for non-trivial multi-step work tracking.
 
 ```json5
 {
   tools: {
-    experimental: {
-      planTool: true, // enable experimental update_plan
-    },
+    updatePlan: false, // hide update_plan from every run
   },
 }
 ```
 
-- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an `openai` provider run against a GPT-5-family model id (this covers OpenAI Codex CLI runs too, since Codex auth/model routing lives under the `openai` provider). Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
-- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- Default: `true` for every provider and model. Set `false` to keep the tool off; there is no model-specific auto-enable rule.
+- The tool description adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- `tools.deny: ["update_plan"]` also removes the tool, so use whichever surface already carries your tool policy.
+
+Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to move the value to `tools.updatePlan`.
 
 ### `agents.defaults.subagents`
 

@@ -68,6 +68,7 @@ function createContext(
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -408,6 +409,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
     );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
     await waitForSkillWorkshop(() =>
@@ -471,6 +478,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
     );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
@@ -555,6 +568,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     );
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
     );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();

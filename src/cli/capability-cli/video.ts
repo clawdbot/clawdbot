@@ -109,6 +109,7 @@ async function runVideoGenerate(params: {
   watermark?: boolean;
   timeoutMs?: number;
 }) {
+  requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),

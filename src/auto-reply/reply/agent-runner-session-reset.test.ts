@@ -4,17 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
 const refreshQueuedFollowupSessionMock = vi.fn();
+const resetRegisteredAgentHarnessSessionsMock = vi.fn();
 const errorMock = vi.fn();
 
 async function writeFileTranscript(filePath: string, sessionId: string): Promise<void> {
@@ -55,10 +56,12 @@ describe("resetReplyRunSession", () => {
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-run-"));
     refreshQueuedFollowupSessionMock.mockReset();
+    resetRegisteredAgentHarnessSessionsMock.mockReset();
     errorMock.mockReset();
     setAgentRunnerSessionResetTestDeps({
       generateSecureUuid: () => "00000000-0000-0000-0000-000000000123",
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
+      resetRegisteredAgentHarnessSessions: resetRegisteredAgentHarnessSessionsMock,
       error: errorMock,
     });
   });
@@ -99,16 +102,14 @@ describe("resetReplyRunSession", () => {
         unwindowedMessageCount: 10,
         sessionId: "session",
       },
-      fallbackNoticeSelectedModel: "anthropic/claude",
-      fallbackNoticeActiveModel: "openai/gpt",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude",
+        activeModel: "openai/gpt",
+        reason: "rate limit",
+      },
       compactionCount: 4,
-      memoryFlushAt: 50,
-      memoryFlushCompactionCount: 3,
-      memoryFlushContextHash: "context-hash",
-      memoryFlushFailureCount: 2,
-      memoryFlushLastFailedAt: 60,
-      memoryFlushLastFailureError: "memory failed",
+      memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -155,41 +156,33 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeActiveModel).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeReason).toBeUndefined();
+    expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
-    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
-    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
-      nextSessionFile: activeSessionEntry?.sessionFile,
+      nextSessionFile: "main",
+    });
+    expect(resetRegisteredAgentHarnessSessionsMock).toHaveBeenCalledWith({
+      agentId: followupRun.run.agentId,
+      sessionId: "session",
+      sessionKey: "main",
+      sessionFile: "main",
+      reason: "reset",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");
 
     const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted?.contextBudgetStatus).toBeUndefined();
-    expect(persisted?.fallbackNoticeReason).toBeUndefined();
+    expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
-    expect(persisted?.memoryFlushAt).toBeUndefined();
-    expect(persisted?.memoryFlushFailureCount).toBeUndefined();
-    expect(persisted?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted?.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted?.memoryFlush).toBeUndefined();
   });
 
   it("rejects automatic recovery rotation for a model-locked session", async () => {
@@ -342,13 +335,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: oldSessionId,
-        storePath,
-      }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     const replayed = await loadTranscriptEvents({
       agentId: "main",
       sessionId: oldSessionId,
@@ -399,9 +386,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId: "old-session", storePath }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -447,9 +432,6 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
-    );
-    expect(activeSessionEntry?.sessionFile).not.toBe(staleMarker);
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
   });
 });

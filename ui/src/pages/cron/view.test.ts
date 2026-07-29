@@ -25,7 +25,9 @@ function createJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
 function createProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
     basePath: "",
+    agentId: "main",
     loading: false,
+    canManage: true,
     jobsLoadingMore: false,
     status: null,
     failingCount: null,
@@ -188,7 +190,9 @@ describe("cron view list pane", () => {
       HTMLElement,
     ) as HTMLElement & { checked: boolean };
     expect(active.checked).toBe(true);
-    expect(active.closest("wa-radio-group")?.getAttribute("label")).toBe("Automation status");
+    expect(active.closest("wa-radio-group")?.querySelector('[slot="label"]')?.textContent).toBe(
+      "Automation status",
+    );
 
     selectSegmented(getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement));
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
@@ -842,7 +846,7 @@ describe("cron view editor", () => {
     expect(systemEvent.querySelector("#cron-payload-model")).toBeNull();
   });
 
-  it("renders script payloads as read-only without exposing script authoring", () => {
+  it("renders script payloads as highlighted read-only code without exposing script authoring", () => {
     const script = "const result = await agent('check status')";
     const job = createJob("job-script", {
       name: "Status script",
@@ -860,15 +864,51 @@ describe("cron view editor", () => {
       },
     });
 
-    const payload = getElement(container, "#cron-payload-text", HTMLTextAreaElement);
-    expect(payload.readOnly).toBe(true);
-    expect(payload.value).toBe(script);
+    const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
+    expect(payload.textContent).toBe(script);
+    expect(payload.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(payload.querySelector(".hljs-string")?.textContent).toBe("'check status'");
+    expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
     expect(container.querySelector("#cron-payload-kind")?.getAttribute("value")).toBeNull();
     expect((container.querySelector("#cron-payload-kind") as HTMLInputElement).value).toBe(
       "Script",
     );
     expect(container.textContent).toContain("contents stay read-only");
     expect(container.querySelector('option[value="script"]')).toBeNull();
+  });
+
+  it("highlights locked command payloads as shell and keeps heartbeat payloads plain", () => {
+    const job = createJob("job-command", {
+      name: "Backup",
+      payload: { kind: "script", script: "" },
+    });
+    const command = renderView({
+      jobs: [job],
+      editingJobId: job.id,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        name: job.name,
+        payloadKind: "command",
+        payloadLocked: true,
+        payloadText: "echo $HOME",
+      },
+    });
+    const payload = getElement(command, "#cron-payload-text", HTMLPreElement);
+    expect(payload.textContent).toBe("echo $HOME");
+    expect(payload.querySelector(".hljs-built_in")?.textContent).toBe("echo");
+
+    const heartbeat = renderView({
+      jobs: [job],
+      editingJobId: job.id,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        name: job.name,
+        payloadKind: "heartbeat",
+        payloadLocked: true,
+        payloadText: "",
+      },
+    });
+    expect(heartbeat.querySelector("#cron-payload-text")).toBeInstanceOf(HTMLTextAreaElement);
   });
 
   it("disables submit and lists blocking fields when validation fails", () => {
@@ -950,6 +990,46 @@ describe("cron view editor", () => {
         new CustomEvent("wa-tab-show", { detail: { name: "history" }, bubbles: true }),
       );
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
+  });
+
+  it.each([true, false])("preserves task browsing for canManage=%s", (canManage) => {
+    const job = createJob("permission-job");
+    const onSelectJob = vi.fn();
+    const container = renderView({ canManage, jobs: [job], onSelectJob });
+
+    expect(Boolean(container.querySelector('[data-test-id="cron-new-task"]'))).toBe(canManage);
+    expect(Boolean(container.querySelector('[data-test-id="cron-row-run-permission-job"]'))).toBe(
+      canManage,
+    );
+    expect(Boolean(container.querySelector("wa-dropdown.cron-job-menu"))).toBe(canManage);
+    getElement(container, '[data-test-id="cron-row-permission-job"]', HTMLDivElement).click();
+    expect(onSelectJob).toHaveBeenCalledWith(job);
+  });
+
+  it("keeps read-only operators on browse surfaces without mutation controls", () => {
+    const onSelectJob = vi.fn();
+    const job = createJob("job-1", { name: "Nightly digest" });
+    const list = renderView({ canManage: false, jobs: [job], jobsTotal: 1, onSelectJob });
+
+    expect(list.textContent).toContain("Browsing only");
+    expect(list.querySelector('[data-test-id="cron-new-task"]')).toBeNull();
+    expect(list.querySelector('[data-test-id="cron-row-run-job-1"]')).toBeNull();
+    expect(list.querySelector('[data-test-id="cron-row-toggle-job-1"]')).toBeNull();
+    expect(list.querySelector("wa-dropdown.cron-job-menu")).toBeNull();
+    expect(list.querySelector("[data-suggestion]")).toBeNull();
+
+    getElement(list, '[data-test-id="cron-row-job-1"]', HTMLDivElement).click();
+    expect(onSelectJob).toHaveBeenCalledWith(job);
+
+    const detail = renderView({ canManage: false, jobs: [job], editingJobId: job.id });
+    expect(detail.textContent).toContain("Browsing only");
+    expect(detail.querySelector('[data-test-id="cron-run-now"]')).toBeNull();
+    expect(detail.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
+    expect(detail.querySelector("wa-dropdown.cron-job-menu")).toBeNull();
+    expect(detail.querySelector('[data-test-id="cron-submit"]')).toBeNull();
+    expect(detail.querySelector(".cron-editor-actions")).toBeNull();
+    expect(getElement(detail, ".cron-editor", HTMLFieldSetElement).disabled).toBe(true);
+    expect(detail.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
   });
 
   it("locks the editor and back navigation while a save is pending", () => {

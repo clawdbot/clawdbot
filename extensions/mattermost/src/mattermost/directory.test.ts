@@ -18,7 +18,7 @@ const {
 vi.mock("./accounts.js", () => {
   return {
     listMattermostAccountIds: listMattermostAccountIdsMock,
-    resolveMattermostAccount: resolveMattermostAccountMock,
+    inspectMattermostAccount: resolveMattermostAccountMock,
   };
 });
 
@@ -40,6 +40,26 @@ describe("mattermost directory", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("skips an unavailable account while retaining a healthy directory client", async () => {
+    const client = {
+      token: "token-healthy",
+      request: vi.fn().mockResolvedValueOnce([]),
+    };
+    listMattermostAccountIdsMock.mockReturnValue(["broken", "healthy"]);
+    resolveMattermostAccountMock.mockImplementation(({ accountId }) =>
+      accountId === "broken"
+        ? { enabled: true, botToken: undefined, baseUrl: "https://chat.example.com" }
+        : { enabled: true, botToken: "token-healthy", baseUrl: "https://chat.example.com" },
+    );
+    createMattermostClientMock.mockReturnValue(client);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryGroups({ cfg: {} as never, runtime: {} as never }),
+    ).resolves.toEqual([]);
+    expect(createMattermostClientMock).toHaveBeenCalledOnce();
   });
 
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {

@@ -61,6 +61,19 @@ describe("anthropic Claude model refs", () => {
     );
   });
 
+  it("resolves the bare opus family alias to the current default Opus", () => {
+    // Bare family aliases and retired-ref upgrades both land on the current
+    // default Opus; only an explicitly pinned ref keeps its own target.
+    expect(resolveKnownAnthropicModelRef("opus")).toBe("anthropic/claude-opus-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/opus")).toBe("anthropic/claude-opus-5");
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5")).toBe(
+      "anthropic/claude-opus-5",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-8")).toBe(
+      "anthropic/claude-opus-4-8",
+    );
+  });
+
   it("canonicalizes fable family aliases in bare and provider-qualified forms", () => {
     // "fable-5" must map to the full model id, not the family name: the
     // canonicalizer only accepts alias values that already start with

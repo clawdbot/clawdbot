@@ -34,6 +34,7 @@ function completeResult(params?: {
       didSendDeterministicApprovalPrompt: () => false,
       didSendViaMessagingTool: () => false,
       getAcceptedSessionSpawns: () => [],
+      getAssistantTurnCount: () => 0,
       getCompactionCount: () => 0,
       getHeartbeatToolResponse: () => undefined,
       getItemLifecycle: () => undefined,

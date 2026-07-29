@@ -4,23 +4,26 @@ import type { CronJob } from "../types.js";
 /**
  * Picks the session-key identity used to resolve a cron delivery's outbound route.
  *
- * An isolated cron run does not carry the source conversation's namespace. Prefer
- * a bound canonical Mattermost conversation so private channels retain `group:<id>`.
- * Keep this provider-specific because other adapters have their own current-session
- * semantics and are outside #95646.
+ * An isolated run does not carry its bound source conversation's namespace.
+ * Reuse only a canonical conversation belonging to the same agent and actual
+ * delivery provider; otherwise cross-channel jobs can adopt the wrong session.
  */
 export function selectCronRouteCurrentSessionKey(
   job: CronJob,
   agentSessionKey: string,
   deliveryProvider: string,
 ): string {
-  if (deliveryProvider.trim().toLowerCase() !== "mattermost") {
+  const bound = (job.sessionKey ?? "").trim();
+  const parsedBound = parseAgentSessionKey(bound);
+  const parsedRun = parseAgentSessionKey(agentSessionKey);
+  if (!parsedBound || !parsedRun || parsedBound.agentId !== parsedRun.agentId) {
     return agentSessionKey;
   }
-  const bound = (job.sessionKey ?? "").trim();
-  const parsed = parseAgentSessionKey(bound);
-  if (parsed && /^mattermost:(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.test(parsed.rest)) {
-    return bound;
+  const conversation = /^([^:]+):(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.exec(
+    parsedBound.rest,
+  );
+  if (conversation?.[1]?.toLowerCase() !== deliveryProvider.trim().toLowerCase()) {
+    return agentSessionKey;
   }
-  return agentSessionKey;
+  return bound;
 }

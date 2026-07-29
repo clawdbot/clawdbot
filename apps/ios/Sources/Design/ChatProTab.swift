@@ -285,12 +285,12 @@ struct ChatProTab: View {
     }
 
     private var headerAgentIdentity: some View {
-        HStack {
-            self.headerAgentIdentityControl
-        }
-        .frame(minHeight: 44)
-        .accessibilityIdentifier("chat-agent-identity")
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        HStack { self.headerAgentIdentityControl }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
+            .accessibilityIdentifier("chat-agent-identity")
+            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     @ViewBuilder
