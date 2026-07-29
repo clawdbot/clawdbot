@@ -275,6 +275,111 @@ suite.define(() => {
     }
   });
 
+  it("previews reasoning and provider choices before committing them", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:session-a";
+    const session = {
+      key: sessionKey,
+      kind: "direct",
+      label: "Session A",
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      thinkingDefault: "high",
+      thinkingLevel: "high",
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+        { id: "ultra", label: "ultra" },
+      ],
+      updatedAt: 2,
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([session]),
+      },
+      models: [
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
+      ],
+      sessionKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const main = page.getByRole("main");
+      const picker = main.locator('[data-chat-model-select="true"]').first();
+      await picker.click();
+      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      const visibleReasoning = main.locator(
+        "[data-chat-thinking-preview-committed]:not([hidden]), " +
+          "[data-chat-thinking-preview-index]:not([hidden])",
+      );
+
+      for (const value of ["low", "medium", "ultra"]) {
+        await thinkingSlider.evaluate((input, nextValue) => {
+          const slider = input as HTMLInputElement;
+          const values = (slider.dataset.chatThinkingValues ?? "").split(",");
+          slider.value = String(values.indexOf(nextValue));
+          slider.dispatchEvent(new Event("input", { bubbles: true }));
+        }, value);
+        await expect
+          .poll(() => visibleReasoning.evaluate((element) => element.textContent?.trim()))
+          .toBe(value.charAt(0).toUpperCase() + value.slice(1));
+      }
+      await expectRequestCountStable(gateway, "sessions.patch", 0);
+
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
+      );
+      await thinkingSlider.evaluate((input) => {
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      const thinkingPatch = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(thinkingPatch.params)).toMatchObject({
+        key: sessionKey,
+        thinkingLevel: "ultra",
+      });
+      await expect.poll(() => picker.getAttribute("data-chat-thinking-value")).toBe("ultra");
+      await picker.click();
+      await expect.poll(() => picker.textContent()).toContain("Ultra");
+      await picker.click();
+
+      const anthropicProvider = main.locator('[data-chat-model-provider="anthropic"]');
+      const openaiProvider = main.locator('[data-chat-model-provider="openai"]');
+      const anthropicModels = main.locator('[data-chat-model-provider-group="anthropic"]');
+      await anthropicProvider.hover();
+      await expect.poll(() => anthropicModels.isVisible()).toBe(true);
+      await expectRequestCountStable(gateway, "sessions.patch", 1);
+
+      await openaiProvider.focus();
+      await expect.poll(() => anthropicModels.isHidden()).toBe(true);
+      await anthropicProvider.focus();
+      await expect.poll(() => anthropicModels.isVisible()).toBe(true);
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => page.locator(":focus").getAttribute("data-chat-model-option"))
+        .toBe("anthropic/claude-fable-5");
+
+      await main.locator('[data-chat-model-option="anthropic/claude-fable-5"]').click();
+      const patches = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patches[1]?.params)).toMatchObject({
+        key: sessionKey,
+        model: "anthropic/claude-fable-5",
+      });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("applies provider-specific reasoning after the selected model is saved", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
